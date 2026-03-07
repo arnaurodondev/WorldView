@@ -32,6 +32,8 @@ Given one planning prompt and one planning response, generate multiple execution
 11. Use the same planning `Prompt ID` as the execution prompt filename prefix for all waves in that run.
 12. Minimize the number of waves while respecting dependency order, coherence, and tasks-per-wave bounds.
 13. Every generated wave prompt must explicitly require the execution agent to update documentation for any behavior/API/event/config/schema/test-surface change and list exact docs files updated.
+14. Every generated wave prompt must require a post-wave commit message proposal: a concise commit title plus 1-2 sentences describing what was implemented and validated.
+15. Every generated wave prompt must require a highly detailed PR description only for the final wave of that scope.
 
 ## Chunking heuristic (mandatory)
 
@@ -119,8 +121,11 @@ Each generated file must contain exactly these sections:
    - mandatory instruction: if implementation changes behavior/contracts/config/schema/API/tests, update docs in the same wave
 12. `## Required handoff evidence`
    - changed files, tests run/results, docs changed (exact files + summary), unresolved blockers
+   - commit message proposal (title + 1-2 sentence body)
+   - final wave only: highly detailed PR description covering scope summary, task IDs, changed files grouped by area, tests/lint/typecheck evidence, docs/ADR updates, migration/compatibility notes, risks, and rollback/next steps
 13. `## Definition of done`
    - includes documentation updates completed (or explicit N/A justification)
+   - includes commit message proposal for every wave and final-wave PR description when applicable
 
 ## Quality checks before finalizing
 
@@ -132,6 +137,7 @@ For each generated wave prompt, validate:
 - wave size within configured bounds
 - docs/test obligations explicitly listed
 - each wave includes mandatory documentation update rule and evidence requirement
+- each wave includes commit-message requirement and only the final wave includes a highly detailed PR-description requirement
 
 Global validation (mandatory):
 

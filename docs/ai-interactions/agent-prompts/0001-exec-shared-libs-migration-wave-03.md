@@ -63,6 +63,8 @@ Execute only these task IDs: `T-030`..`T-038`.
 - Preserve event/schema compatibility and topic naming conventions.
 - Do not introduce duplicate/competing `AvroDictable` protocol definitions.
 - Keep `messaging` hard dependency on observability only as specified by task backlog decisions.
+- Include a post-wave commit message proposal with a title and 1-2 sentences summarizing implementation and validation.
+- Because this is the final wave for scope `0001`, include a highly detailed PR description in the handoff.
 
 ## Required tests
 - `cd libs/messaging && python -m pytest tests/test_errors.py tests/test_producer.py tests/test_schemas.py tests/test_serializer.py tests/test_valkey.py tests/test_topics.py -v`
@@ -88,9 +90,13 @@ Pass criteria:
 - Full changed-file list.
 - Test commands executed with pass/fail outcomes.
 - Docs changed: exact file paths + concise summary of each update.
+- Commit message proposal: title + 1-2 sentence body.
+- Highly detailed PR description covering scope summary, completed task IDs, grouped changed files, test/lint/type evidence, docs/ADR updates, compatibility/migration notes, risks, rollback guidance, and follow-up items.
 - Any unresolved blockers/assumptions.
 
 ## Definition of done
 - Every task in this wave (`T-030`..`T-038`) is complete and validated.
 - Required tests/lint/type checks pass for touched modules.
 - Documentation updates are completed in-wave for all relevant changes, or each non-update is explicitly justified as N/A.
+- A commit message proposal (title + 1-2 sentence body) is included in the handoff.
+- A highly detailed final PR description is included in the handoff.

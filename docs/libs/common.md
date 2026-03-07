@@ -44,8 +44,12 @@
 ## Usage
 
 ```python
+# All public symbols are re-exported from the package root:
+from common import utc_now, to_iso8601, new_uuid, TenantId
+
+# Or from sub-modules directly:
 from common.time import utc_now, to_iso8601
-from common.ids import new_uuid
+from common.ids import new_uuid, new_uuid_str, new_ulid
 from common.types import TenantId
 
 now = utc_now()
