@@ -3,7 +3,7 @@
 ## Metadata
 
 - **Prompt ID**: 0002
-- **Prompt file**: `docs/ai-interactions/agent-prompts/0002-portfolio-migration-detailed-plan-and-atomic-tasks.md`
+- **Prompt file**: `docs/ai-interactions/agent-planning/0002-portfolio-migration-detailed-plan-and-atomic-tasks.md`
 - **Execution date**: 2026-03-06
 - **Agent role(s)**: Backend Engineer + Architecture Decision Lead
 - **Scope**: Complete migration/completion plan for Portfolio service from `platform_repo/apps/backend-portfolio` → `worldview/services/portfolio`, including shared library gaps

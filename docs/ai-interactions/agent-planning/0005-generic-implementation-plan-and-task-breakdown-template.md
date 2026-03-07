@@ -28,7 +28,7 @@ Produce a highly detailed implementation plan (NO code unless explicitly request
 - Include test tasks (unit + container/service + platform QA impact).
 - Include explicit documentation update tasks for behavior/API/event/config/schema changes.
 - Include acceptance criteria, risks, dependencies, and effort per task.
-- Include manifest-ready metadata per task: status, depends_on, can_run_with, read_paths, write_paths, required commands, pass criteria.
+- Include execution-ready metadata per task: status, depends_on, can_run_with, scope paths, required commands, pass criteria.
 
 ## Output format (strict)
 
@@ -47,7 +47,7 @@ Produce a highly detailed implementation plan (NO code unless explicitly request
    - Effort estimate
 5. Milestones and release gates
 6. Open questions and assumptions
-7. Draft execution manifest excerpt (`YAML`) for first 5 tasks
+7. Draft first execution-wave prompt excerpt for first 5 tasks
 
 ## Response artifact required
 
@@ -57,8 +57,14 @@ After execution, create:
 
 Include: what was implemented, how, why, tests run/results, docs updated.
 
-Also create or update:
+Also create implementation prompt files in:
 
-- `worldview/docs/ai-interactions/execution-manifests/<manifest-id>.yaml`
+- `worldview/docs/ai-interactions/agent-prompts/`
 
-and ensure it follows `execution-manifests/0000-execution-manifest-template.yaml`.
+Each implementation prompt must include:
+
+- source references to the planning prompt and response
+- exact task IDs for the current execution wave
+- explicit parallelizable group and sequential group
+- required test commands and documentation update requirements
+- completion evidence requirements for handoff

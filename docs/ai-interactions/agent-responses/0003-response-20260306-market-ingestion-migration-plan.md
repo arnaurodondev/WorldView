@@ -3,7 +3,7 @@
 ## Metadata
 
 - **Prompt ID**: 0003
-- **Prompt file**: `agent-prompts/0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md`
+- **Prompt file**: `agent-planning/0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md`
 - **Execution date**: 2026-03-06
 - **Agent role(s)**: Data Platform Engineer + Architecture Decision Lead
 - **Scope**: Full migration plan for Market Ingestion service from `platform_repo` to `worldview`, decomposed into independent atomic tasks

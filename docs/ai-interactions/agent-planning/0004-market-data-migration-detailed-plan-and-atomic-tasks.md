@@ -87,8 +87,13 @@ Using filename:
 
 The response must include: what was implemented, how it was implemented, and why decisions were made.
 
-Also create or update:
+Also generate implementation prompt files in:
 
-- `worldview/docs/ai-interactions/execution-manifests/<manifest-id>.yaml`
+- `worldview/docs/ai-interactions/agent-prompts/`
 
-The manifest must include atomic task states, dependencies, allowed parallelism, required test commands, and evidence requirements.
+Each generated implementation prompt must:
+
+- reference the response file as authoritative context
+- specify exact task IDs to execute
+- separate tasks into parallelizable and sequential groups
+- include required test commands, docs update requirements, and evidence to report

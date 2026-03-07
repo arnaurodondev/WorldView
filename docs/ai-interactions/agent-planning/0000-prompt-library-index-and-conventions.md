@@ -17,13 +17,23 @@ Every prompt must instruct the agent to:
 1. Read relevant documentation before coding/planning.
 2. Update docs when any implementation changes behavior, API, events, config, or schema.
 3. Produce a response report in `docs/ai-interactions/agent-responses/` using the prompt ID.
-4. Produce or update an execution manifest in `docs/ai-interactions/execution-manifests/`.
+4. Produce implementation prompt files in `docs/ai-interactions/agent-prompts/` for the next execution agent.
+
+## Execution Prompt Requirements
+
+Generated execution prompts must:
+
+- reference the source response file as authoritative context
+- include exact task IDs to implement
+- explicitly mark parallelizable vs sequential task groups
+- include required test commands and documentation update obligations
+- include completion/evidence requirements for handoff
 
 ## Execution Standard
 
 - Use orchestration model: 1 orchestrator + N workers.
-- Enforce task state transitions per `../EXECUTION_STATE_MODEL.md`.
-- Require manifest evidence and checklist pass before task closure.
+- Enforce task state transitions per `../ORCHESTRATOR_RUNBOOK.md`.
+- Require execution evidence and checklist pass before task closure.
 
 ## Current Prompt Set
 

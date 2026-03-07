@@ -3,7 +3,7 @@
 ## Metadata
 
 - **Prompt ID**: 0001
-- **Prompt file**: `docs/ai-interactions/agent-prompts/0001-shared-libs-migration-detailed-plan-and-atomic-tasks.md`
+- **Prompt file**: `docs/ai-interactions/agent-planning/0001-shared-libs-migration-detailed-plan-and-atomic-tasks.md`
 - **Execution date**: 2026-03-06
 - **Agent role(s)**: Data Platform Engineer + Architecture Decision Lead
 - **Scope**: `common`, `contracts`, `observability` (new), `storage`, `messaging`
@@ -1088,22 +1088,21 @@
 
 ## 9. Open Questions Requiring Human Decision
 
-| # | Question | Options | Impact | Blocking |
-|---|----------|---------|--------|----------|
-| Q1 | Should `CanonicalOHLCVBar` use `Decimal` (legacy) or `float` (current target)? | A) Keep float (simpler), B) Revert to Decimal (precision), C) Provide both via property | Field type affects all OHLCV consumers | T-007 |
-| Q2 | Should `parse_bar_date` return `date` (legacy) or `datetime` at midnight UTC (current target)? | A) Keep datetime (consistent), B) Revert to date (semantic accuracy) | Affects Market Data materializer date handling | T-004 |
-| Q3 | Should the `AvroDictable` protocol require `event_type` property (legacy serializer), `to_dict`/`from_dict` (current schemas.py), or both? | A) event_type only, B) to_dict + from_dict only, C) Unified with all three | Protocol shape affects every event class | T-032 |
-| Q4 | Should `messaging` depend on `observability` (for structlog + metrics) or keep stdlib logging with optional observability integration? | A) Hard dependency (cleaner), B) Optional dependency (less coupling) | Import chains and deployment flexibility | T-031, T-033 |
-| Q5 | Integration test strategy: testcontainers (per-test isolation) or shared Docker Compose (faster, less isolation)? | A) testcontainers, B) Docker Compose, C) Both (unit = mock, integration = compose) | CI runtime and test reliability | T-040 |
-| Q6 | Should `ValkeyClient` remain inside `messaging` lib or move to its own `libs/cache/` package? | A) Stay in messaging (simpler), B) Separate lib (cleaner boundaries) | Package structure and dependency graph | T-034 |
+| # | Question | Options | Impact | Blocking | Response |
+|---|----------|---------|--------|----------|----------|
+| Q1 | Should `CanonicalOHLCVBar` use `Decimal` (legacy) or `float` (current target)? | A) Keep float (simpler), B) Revert to Decimal (precision), C) Provide both via property | Field type affects all OHLCV consumers | T-007 | A, float32 or float64 has sufficient precision for OHLCV; Decimal adds complexity without material benefit |
+| Q2 | Should `parse_bar_date` return `date` (legacy) or `datetime` at midnight UTC (current target)? | A) Keep datetime (consistent), B) Revert to date (semantic accuracy) | Affects Market Data materializer date handling | T-004 | A) Keep datetime (consistent) |
+| Q3 | Should the `AvroDictable` protocol require `event_type` property (legacy serializer), `to_dict`/`from_dict` (current schemas.py), or both? | A) event_type only, B) to_dict + from_dict only, C) Unified with all three | Protocol shape affects every event class | T-032 | C) Unified with all three |
+| Q4 | Should `messaging` depend on `observability` (for structlog + metrics) or keep stdlib logging with optional observability integration? | A) Hard dependency (cleaner), B) Optional dependency (less coupling) | Import chains and deployment flexibility | T-031, T-033 | A) Hard dependency (cleaner) |
+| Q5 | Integration test strategy: testcontainers (per-test isolation) or shared Docker Compose (faster, less isolation)? | A) testcontainers, B) Docker Compose, C) Both (unit = mock, integration = compose) | CI runtime and test reliability | T-040 | C) Both (unit = mock, integration = compose) |
+| Q6 | Should `ValkeyClient` remain inside `messaging` lib or move to its own `libs/cache/` package? | A) Stay in messaging (simpler), B) Separate lib (cleaner boundaries) | Package structure and dependency graph | T-034 | B) Separate lib (cleaner boundaries) |
 
 ---
 
 ## Summary
 
 - **40 atomic tasks** (T-001 through T-040) organized into 5 milestones + cross-cutting
-- **17 estimated working days** (3.5 weeks)
+- **Estimated working effor** (low - medium)
 - **~4,884 lines** of legacy code to migrate, with ~60% reuse
 - **3 ADRs** required (observability stack, Valkey taxonomy, error classification)
-- **6 open questions** requiring human decision before implementation begins
 - **Zero runtime risk** — library migration is code-only; no deployment, no data changes

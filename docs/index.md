@@ -87,15 +87,18 @@
 |------|-------------|
 | [AI Interactions README](ai-interactions/README.md) | Canonical workflow for prompts and response reports |
 | [Orchestrator Runbook](ai-interactions/ORCHESTRATOR_RUNBOOK.md) | Operating procedure for 1 orchestrator + N worker agents |
-| [Execution State Model](ai-interactions/EXECUTION_STATE_MODEL.md) | Task states, transitions, and ownership rules |
-| [Execution Manifests Guide](ai-interactions/execution-manifests/README.md) | How to build and run manifest-driven executions |
 | [Interactions Registry](ai-interactions/INTERACTIONS_REGISTRY.md) | Audit log of prompt and response executions |
-| [Prompt Library Index](ai-interactions/agent-prompts/0000-prompt-library-index-and-conventions.md) | Naming conventions and prompt catalog |
-| [0005 Generic implementation template](ai-interactions/agent-prompts/0005-generic-implementation-plan-and-task-breakdown-template.md) | Reusable prompt template for non-migration work |
+| [Planning Prompt Index](ai-interactions/agent-planning/0000-prompt-library-index-and-conventions.md) | Naming conventions and planning prompt catalog |
+| [0005 Generic planning template](ai-interactions/agent-planning/0005-generic-implementation-plan-and-task-breakdown-template.md) | Reusable planning prompt template for non-migration work |
+| [Execution Prompt Index](ai-interactions/agent-prompts/0000-execution-prompt-index-and-conventions.md) | Naming conventions and implementation prompt catalog |
+| [0001 Exec shared libs wave 01](ai-interactions/agent-prompts/0001-exec-shared-libs-wave-01.md) | First implementation wave for shared libs |
+| [0002 Exec portfolio wave 01](ai-interactions/agent-prompts/0002-exec-portfolio-wave-01.md) | First implementation wave for portfolio |
+| [0003 Exec market-ingestion wave 01](ai-interactions/agent-prompts/0003-exec-market-ingestion-wave-01.md) | First implementation wave for market-ingestion |
+| [0004 Exec market-data wave 01](ai-interactions/agent-prompts/0004-exec-market-data-wave-01.md) | First implementation wave for market-data |
 | [Response Template](ai-interactions/agent-responses/0000-response-template.md) | Required implementation report format |
 | [Response Review Checklist](ai-interactions/agent-responses/0001-review-checklist.md) | Validation checklist for response quality and compliance |
 | [Response Evidence Add-on](ai-interactions/agent-responses/0002-response-evidence-addon-template.md) | Optional per-task evidence section for responses |
-| [0001 Shared libs migration](ai-interactions/agent-prompts/0001-shared-libs-migration-detailed-plan-and-atomic-tasks.md) | Generate shared libs migration plan and atomic tasks |
-| [0002 Portfolio migration](ai-interactions/agent-prompts/0002-portfolio-migration-detailed-plan-and-atomic-tasks.md) | Generate portfolio migration plan and atomic tasks |
-| [0003 Market Ingestion migration](ai-interactions/agent-prompts/0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md) | Generate ingestion migration plan and atomic tasks |
-| [0004 Market Data migration](ai-interactions/agent-prompts/0004-market-data-migration-detailed-plan-and-atomic-tasks.md) | Generate market data migration plan and atomic tasks |
+| [0001 Shared libs migration](ai-interactions/agent-planning/0001-shared-libs-migration-detailed-plan-and-atomic-tasks.md) | Generate shared libs migration plan and atomic tasks |
+| [0002 Portfolio migration](ai-interactions/agent-planning/0002-portfolio-migration-detailed-plan-and-atomic-tasks.md) | Generate portfolio migration plan and atomic tasks |
+| [0003 Market Ingestion migration](ai-interactions/agent-planning/0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md) | Generate ingestion migration plan and atomic tasks |
+| [0004 Market Data migration](ai-interactions/agent-planning/0004-market-data-migration-detailed-plan-and-atomic-tasks.md) | Generate market data migration plan and atomic tasks |

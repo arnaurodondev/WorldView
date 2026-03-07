@@ -4,20 +4,21 @@ This directory is the canonical location for AI-driven execution artifacts.
 
 ## Structure
 
-- `agent-prompts/`: reusable prompts for AI agents
-- `agent-responses/`: execution responses linked to a prompt ID
-- `execution-manifests/`: machine-operable task plans for orchestrator + workers
+- `agent-planning/`: planning prompts that produce detailed plans/task backlogs
+- `agent-responses/`: planning responses linked to a prompt ID
+- `agent-prompts/`: execution prompts for implementation agents (derived from plans)
 - `INTERACTIONS_REGISTRY.md`: audit log of prompt/response executions
 
 ## Required Workflow
 
-1. Select a prompt in `agent-prompts/`.
-2. Execute it with an AI agent.
-3. Store outputs in code/docs as needed.
-4. Add a response report in `agent-responses/` with the same prompt ID prefix.
-5. Register the run in `INTERACTIONS_REGISTRY.md`.
-6. Validate the response using `agent-responses/0001-review-checklist.md`.
-7. Attach or link an execution manifest for atomic task execution.
+1. Select or create a planning prompt in `agent-planning/`.
+2. Execute the planning prompt with an AI agent.
+3. Store the planning output as an agent response in `agent-responses/`.
+4. Generate execution prompts in `agent-prompts/` using that planning response as source context.
+5. Execute implementation prompts with AI agent(s).
+6. Append implementation evidence/results to the corresponding response artifact in `agent-responses/`.
+7. Register the run in `INTERACTIONS_REGISTRY.md`.
+8. Validate the final response using `agent-responses/0001-review-checklist.md`.
 
 ## Orchestration Model
 
@@ -28,8 +29,6 @@ This directory is the canonical location for AI-driven execution artifacts.
 Reference docs:
 
 - `ORCHESTRATOR_RUNBOOK.md`
-- `EXECUTION_STATE_MODEL.md`
-- `execution-manifests/README.md`
 
 ## Response Naming Rule
 
@@ -51,8 +50,8 @@ All agents must:
 
 ## Useful Templates
 
-- Generic prompt template: `agent-prompts/0005-generic-implementation-plan-and-task-breakdown-template.md`
+- Generic planning template: `agent-planning/0005-generic-implementation-plan-and-task-breakdown-template.md`
+- Execution prompt index: `agent-prompts/0000-execution-prompt-index-and-conventions.md`
 - Response template: `agent-responses/0000-response-template.md`
 - Review checklist: `agent-responses/0001-review-checklist.md`
 - Evidence add-on template: `agent-responses/0002-response-evidence-addon-template.md`
-- Execution manifest template: `execution-manifests/0000-execution-manifest-template.yaml`

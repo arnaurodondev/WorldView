@@ -127,5 +127,6 @@ The following agents already exist in `.claude/agents/`:
 9. `data-platform-engineer.md` — data contracts, Kafka, storage, lineage
 10. `devops-platform-engineer.md` — infra, CI/CD, observability, operability
 11. `qa-test-engineer.md` — test strategy, coverage, quality gates
+12. `agent-orchestrator.md` — execution wave planning, task decomposition, worker coordination, quality gating, and coverage validation via `docs/ai-interactions/` workflow
 
 Before generating new agents or modifying existing ones, inspect the codebase and documentation deeply enough to justify each role.

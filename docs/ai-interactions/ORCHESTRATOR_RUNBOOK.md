@@ -9,8 +9,8 @@
 ## Lifecycle
 
 1. Select prompt + response pair.
-2. Create an execution manifest.
-3. Normalize tasks to atomic units.
+2. Normalize tasks to atomic units from the response backlog.
+3. Create execution wave prompt(s).
 4. Mark executable tasks `ready`.
 5. Assign each ready task to a worker and branch.
 6. Workers execute, test, and submit evidence.
@@ -30,7 +30,7 @@
 ## Assignment rules
 
 - One worker, one task, one branch.
-- Worker edits only `write_paths` in manifest.
+- Worker edits only paths required by the assigned task scope.
 - No nested execution delegation.
 - Read-only subagents are allowed for analysis.
 
@@ -71,5 +71,5 @@ Run tasks in parallel only when:
 
 ## Merge policy
 
-- Merge only after orchestrator confirms checklist and manifest DoD.
+- Merge only after orchestrator confirms checklist and task Definition of Done.
 - Merge dependent tasks in topological order.

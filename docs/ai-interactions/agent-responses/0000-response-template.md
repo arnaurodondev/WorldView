@@ -7,7 +7,6 @@
 - Execution date:
 - Agent role(s):
 - Scope:
-- Manifest file:
 - Orchestrator:
 - Worker(s):
 
@@ -46,7 +45,7 @@
 	- Changed files:
 	- Commands run:
 	- Required tests and outcomes:
-	- Manifest state transition:
+	- Task status recommendation:
 
 ## Documentation Updates
 
