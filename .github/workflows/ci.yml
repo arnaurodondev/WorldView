@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint & Type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install tools
+        run: pip install ruff mypy
+
+      - name: Ruff check
+        run: ruff check libs/ services/
+
+      - name: Ruff format
+        run: ruff format --check libs/ services/
+
+      - name: Install libs for type-checking
+        run: |
+          for dir in libs/*/; do
+            pip install -e "$dir[dev]" --quiet
+          done
+
+      - name: mypy
+        run: |
+          for src in libs/*/src services/*/src; do
+            if [ -d "$src" ]; then
+              echo "=== mypy $src ==="
+              mypy "$src" || true
+            fi
+          done
+
+  validate-schemas:
+    name: Validate Avro Schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install fastavro
+        run: pip install fastavro
+
+      - name: Validate schemas
+        run: |
+          python3 -c "
+          import json, pathlib, fastavro, sys
+          failed = False
+          for f in sorted(pathlib.Path('infra/kafka/schemas').glob('*.avsc')):
+              try:
+                  schema = json.loads(f.read_text())
+                  fastavro.parse_schema(schema)
+                  print(f'  OK: {f.name}')
+              except Exception as e:
+                  print(f'  FAIL: {f.name}: {e}')
+                  failed = True
+          if failed:
+              sys.exit(1)
+          "
+
+  test-libs:
+    name: Test Libraries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lib: [common, contracts, messaging, storage, observability]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install library
+        run: pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
+
+      - name: Run tests
+        run: pytest "libs/${{ matrix.lib }}/tests" -m unit -v --tb=short
+
+  test-services:
+    name: Test Services
+    runs-on: ubuntu-latest
+    needs: [test-libs]
+    strategy:
+      matrix:
+        service: [portfolio, market-ingestion, market-data, content-ingestion, content-store, nlp-pipeline, knowledge-graph, rag-chat, api-gateway]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          for dir in libs/*/; do
+            pip install -e "$dir" --quiet
+          done
+          pip install -e "services/${{ matrix.service }}[dev]" --quiet
+
+      - name: Run tests
+        run: pytest "services/${{ matrix.service }}/tests" -m unit -v --tb=short
+
+  test-frontend:
+    name: Frontend Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@9 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint || true
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

@@ -1,0 +1,45 @@
+# Ruff configuration — single source of truth for the entire monorepo.
+# Services and libs inherit this via `extend = "../../ruff.toml"` or rely on
+# ruff's config-file discovery (walks up to repo root).
+
+target-version = "py311"
+line-length = 120
+fix = true
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez (enforce UTC)
+    "T20",  # flake8-print (no stray prints)
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "S101",  # assert is fine in tests
+    "B008",  # Depends() in FastAPI signatures
+]
+unfixable = ["F841"]  # don't auto-remove unused variables
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S106", "T20"]
+"alembic/**/*.py" = ["E501"]
+"scripts/**/*.py" = ["T20"]
+
+[lint.isort]
+known-first-party = [
+    "common",
+    "contracts",
+    "messaging",
+    "storage",
+    "observability",
+]

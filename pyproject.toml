@@ -1,0 +1,57 @@
+[project]
+name = "worldview"
+version = "0.1.0"
+description = "Thesis Market Intelligence Platform — monorepo root"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+skip-excluded-dirs = true
+
+# ---------------------------------------------------------------------------
+# Ruff — see ruff.toml for full config; this section only for editor plugins
+# ---------------------------------------------------------------------------
+[tool.ruff]
+extend = "ruff.toml"
+
+# ---------------------------------------------------------------------------
+# Pytest — root-level defaults (each service/lib can override via pytest.ini)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra -q --strict-markers"
+markers = [
+    "unit: fast, isolated unit tests",
+    "integration: tests that require infrastructure (DB, Kafka, MinIO)",
+    "contract: Avro / OpenAPI schema compatibility tests",
+    "slow: long-running tests excluded from CI fast path",
+]
+
+# ---------------------------------------------------------------------------
+# MyPy — see mypy.ini for full config
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["services", "libs"]
+omit = ["*/tests/*", "*/alembic/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 60

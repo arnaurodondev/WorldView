@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "InstrumentCreatedV1",
+  "namespace": "com.worldview.market",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "market.instrument.created"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "instrument_id", "type": "string"},
+    {"name": "symbol", "type": "string"},
+    {"name": "exchange", "type": ["null", "string"], "default": null},
+    {"name": "instrument_type", "type": ["null", "string"], "default": null},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

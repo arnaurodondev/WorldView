@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "MarketDatasetFetchedV1",
+  "namespace": "market.events",
+  "doc": "Emitted when a dataset has been fetched and stored in object storage (claim-check).",
+  "fields": [
+    {"name": "event_id", "type": "string", "doc": "Unique event identifier (ULID)"},
+    {"name": "timestamp", "type": "string", "doc": "ISO-8601 UTC timestamp"},
+    {"name": "topic", "type": "string", "doc": "Kafka topic name"},
+    {"name": "bucket", "type": "string", "doc": "Object storage bucket"},
+    {"name": "key", "type": "string", "doc": "Object storage key"},
+    {"name": "symbol", "type": "string"},
+    {"name": "exchange", "type": "string"},
+    {"name": "from_date", "type": "string", "doc": "Start date YYYY-MM-DD"},
+    {"name": "to_date", "type": "string", "doc": "End date YYYY-MM-DD"},
+    {"name": "row_count", "type": "int"},
+    {"name": "schema_version", "type": "int", "default": 2}
+  ]
+}

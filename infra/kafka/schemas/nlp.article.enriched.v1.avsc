@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "ArticleEnrichedV1",
+  "namespace": "com.worldview.nlp",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "nlp.article.enriched"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "article_id", "type": "string"},
+    {"name": "embedding_model", "type": "string", "default": "all-MiniLM-L6-v2"},
+    {"name": "entity_count", "type": "int", "default": 0},
+    {"name": "event_count", "type": "int", "default": 0},
+    {"name": "sentiment_label", "type": ["null", "string"], "default": null},
+    {"name": "sentiment_score", "type": ["null", "float"], "default": null},
+    {"name": "topic_cluster_id", "type": ["null", "string"], "default": null},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

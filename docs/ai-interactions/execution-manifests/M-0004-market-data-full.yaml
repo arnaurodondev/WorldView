@@ -1,0 +1,161 @@
+manifest_id: "M-0004"
+prompt_id: "0004"
+response_file: "docs/ai-interactions/agent-responses/0004-response-20260306-market-data-migration-plan.md"
+created_at: "2026-03-07"
+owner: "orchestrator"
+default_branch_base: "main"
+state_model:
+  allowed: [planned, ready, in-progress, review, blocked, done, cancelled]
+  terminal: [done, cancelled]
+quality_gates:
+  require_response_artifact: true
+  require_docs_update_if_behavior_changes: true
+  require_review_checklist: true
+  max_worker_retries: 2
+  block_merge_on_failed_required_tests: true
+workers:
+  max_parallel: 4
+  conflict_strategy: "file-lock"
+  allowed_subagent_mode: "read-only"
+
+tasks:
+  - task_id: "MD-001"
+    title: "Implement CanonicalQuote contract"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-002"
+    title: "Implement CanonicalFundamentals contract"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-003"
+    title: "Implement contracts parsing"
+    status: "planned"
+    depends_on: ["MD-001", "MD-002"]
+  - task_id: "MD-004"
+    title: "Implement messaging error hierarchy"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-005"
+    title: "Implement BaseKafkaConsumer"
+    status: "planned"
+    depends_on: ["MD-004"]
+  - task_id: "MD-006"
+    title: "Implement Kafka producer + factory"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-007"
+    title: "Implement BaseOutboxDispatcher"
+    status: "planned"
+    depends_on: ["MD-006"]
+  - task_id: "MD-008"
+    title: "Implement ValkeyClient"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-009"
+    title: "Implement ObjectStorage + S3ObjectStorage"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-010"
+    title: "Implement observability metrics"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-011"
+    title: "Implement observability tracing"
+    status: "planned"
+    depends_on: ["MD-010"]
+  - task_id: "MD-012"
+    title: "Implement market-data domain entities + VOs"
+    status: "planned"
+    depends_on: []
+  - task_id: "MD-013"
+    title: "Implement domain events + errors"
+    status: "planned"
+    depends_on: ["MD-004", "MD-012"]
+  - task_id: "MD-014"
+    title: "Implement SQLAlchemy ORM models"
+    status: "planned"
+    depends_on: ["MD-012"]
+  - task_id: "MD-015"
+    title: "Create Alembic migrations + hypertable"
+    status: "planned"
+    depends_on: ["MD-014"]
+  - task_id: "MD-016"
+    title: "Implement repositories"
+    status: "planned"
+    depends_on: ["MD-012", "MD-014"]
+  - task_id: "MD-017"
+    title: "Implement Unit of Work"
+    status: "planned"
+    depends_on: ["MD-016"]
+  - task_id: "MD-018"
+    title: "Implement Timescale query utilities"
+    status: "planned"
+    depends_on: ["MD-014", "MD-015", "MD-016"]
+  - task_id: "MD-019"
+    title: "Implement OHLCV materializer consumer"
+    status: "planned"
+    depends_on: ["MD-003", "MD-005", "MD-009", "MD-012", "MD-013", "MD-016", "MD-017"]
+  - task_id: "MD-020"
+    title: "Implement quotes consumer"
+    status: "planned"
+    depends_on: ["MD-001", "MD-003", "MD-005", "MD-008", "MD-009", "MD-016", "MD-017"]
+  - task_id: "MD-021"
+    title: "Implement fundamentals consumer"
+    status: "planned"
+    depends_on: ["MD-002", "MD-003", "MD-005", "MD-009", "MD-016", "MD-017"]
+  - task_id: "MD-022"
+    title: "Implement instruments APIs"
+    status: "planned"
+    depends_on: ["MD-012", "MD-016", "MD-017"]
+  - task_id: "MD-023"
+    title: "Implement OHLCV APIs"
+    status: "planned"
+    depends_on: ["MD-016", "MD-017", "MD-018"]
+  - task_id: "MD-024"
+    title: "Implement quotes APIs"
+    status: "planned"
+    depends_on: ["MD-008", "MD-016", "MD-017"]
+  - task_id: "MD-025"
+    title: "Implement fundamentals APIs"
+    status: "planned"
+    depends_on: ["MD-016", "MD-017"]
+  - task_id: "MD-026"
+    title: "Implement caching + invalidation"
+    status: "planned"
+    depends_on: ["MD-008", "MD-020", "MD-024"]
+  - task_id: "MD-027"
+    title: "Implement market-data outbox dispatcher"
+    status: "planned"
+    depends_on: ["MD-007", "MD-013", "MD-014", "MD-017"]
+  - task_id: "MD-028"
+    title: "Set up integration test infrastructure"
+    status: "planned"
+    depends_on: ["MD-015"]
+  - task_id: "MD-029"
+    title: "Implement service container tests"
+    status: "planned"
+    depends_on: ["MD-028", "MD-019", "MD-020", "MD-021", "MD-022", "MD-023", "MD-024", "MD-025", "MD-026", "MD-027"]
+  - task_id: "MD-030"
+    title: "Implement platform QA scenarios"
+    status: "planned"
+    depends_on: ["MD-029"]
+  - task_id: "MD-031"
+    title: "Wire app lifespan + service composition"
+    status: "planned"
+    depends_on: ["MD-005", "MD-006", "MD-007", "MD-008", "MD-009", "MD-010", "MD-011", "MD-012", "MD-013", "MD-014", "MD-015", "MD-016", "MD-017", "MD-018", "MD-019", "MD-020", "MD-021", "MD-022", "MD-023", "MD-024", "MD-025", "MD-026", "MD-027"]
+  - task_id: "MD-032"
+    title: "Comprehensive docs update"
+    status: "planned"
+    depends_on: ["MD-031"]
+  - task_id: "MD-033"
+    title: "Performance validation plan"
+    status: "planned"
+    depends_on: ["MD-029", "MD-031"]
+  - task_id: "MD-034"
+    title: "Contract/schema version verification"
+    status: "planned"
+    depends_on: ["MD-001", "MD-002", "MD-003", "MD-022", "MD-023", "MD-024", "MD-025"]
+  - task_id: "MD-035"
+    title: "Release prep + rollback plan"
+    status: "planned"
+    depends_on: ["MD-030", "MD-032", "MD-033", "MD-034"]

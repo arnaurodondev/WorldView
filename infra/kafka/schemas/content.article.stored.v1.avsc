@@ -1,0 +1,21 @@
+{
+  "type": "record",
+  "name": "ArticleStoredV1",
+  "namespace": "com.worldview.content",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "content.article.stored"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "article_id", "type": "string"},
+    {"name": "source_domain", "type": "string"},
+    {"name": "title", "type": "string"},
+    {"name": "url", "type": "string"},
+    {"name": "language", "type": "string", "default": "en"},
+    {"name": "word_count", "type": "int", "default": 0},
+    {"name": "is_duplicate", "type": "boolean", "default": false},
+    {"name": "duplicate_of", "type": ["null", "string"], "default": null},
+    {"name": "published_at", "type": ["null", "string"], "default": null},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

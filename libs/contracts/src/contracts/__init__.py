@@ -1,0 +1,19 @@
+"""contracts — Canonical data models for the worldview platform."""
+
+from contracts.versions import (
+    ARTICLE_SCHEMA_VERSION,
+    ENTITY_SCHEMA_VERSION,
+    FUNDAMENTAL_SCHEMA_VERSION,
+    OHLCV_SCHEMA_VERSION,
+    QUOTE_SCHEMA_VERSION,
+    SENTIMENT_SCHEMA_VERSION,
+)
+
+__all__ = [
+    "ARTICLE_SCHEMA_VERSION",
+    "ENTITY_SCHEMA_VERSION",
+    "FUNDAMENTAL_SCHEMA_VERSION",
+    "OHLCV_SCHEMA_VERSION",
+    "QUOTE_SCHEMA_VERSION",
+    "SENTIMENT_SCHEMA_VERSION",
+]

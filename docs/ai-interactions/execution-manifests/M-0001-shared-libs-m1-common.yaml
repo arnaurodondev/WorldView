@@ -1,0 +1,265 @@
+manifest_id: "M-0001"
+prompt_id: "0001"
+response_file: "docs/ai-interactions/agent-responses/0001-response-20260306-shared-libs-migration-plan.md"
+created_at: "2026-03-07"
+owner: "orchestrator"
+default_branch_base: "main"
+state_model:
+  allowed: [planned, ready, in-progress, review, blocked, done, cancelled]
+  terminal: [done, cancelled]
+quality_gates:
+  require_response_artifact: true
+  require_docs_update_if_behavior_changes: true
+  require_review_checklist: true
+  max_worker_retries: 2
+  block_merge_on_failed_required_tests: true
+workers:
+  max_parallel: 2
+  conflict_strategy: "file-lock"
+  allowed_subagent_mode: "read-only"
+
+tasks:
+  - task_id: "T-001"
+    title: "Wire ids and types exports"
+    status: "ready"
+    owner: "worker-1"
+    depends_on: []
+    can_run_with: ["T-004"]
+    blocked_by_questions: []
+    scope:
+      read_paths:
+        - "worldview/libs/common/**"
+      write_paths:
+        - "worldview/libs/common/src/common/__init__.py"
+      forbidden_write_paths:
+        - "worldview/services/**"
+    branch: "agent/T-001-wire-ids-types-exports"
+    implementation:
+      steps:
+        - "Add ids/types re-exports in common.__init__"
+        - "Update __all__"
+      commands:
+        - "cd worldview && ./scripts/lint.sh"
+      expected_changed_files:
+        - "libs/common/src/common/__init__.py"
+    tests:
+      required:
+        - layer: "unit"
+          command: "cd worldview/libs/common && pytest -m unit"
+          pass_criteria: "exit_code=0"
+    docs:
+      must_review:
+        - "worldview/AGENTS.md"
+        - "worldview/CLAUDE.md"
+      must_update_if_changed:
+        - "worldview/docs/libs/common.md"
+      expected_doc_changes: []
+    evidence:
+      required:
+        - "changed-files-list"
+        - "required-test-output"
+        - "response-update"
+    completion:
+      definition_of_done:
+        - "Exports work and tests pass"
+        - "Response artifact updated"
+      rollback:
+        - "git restore --source=HEAD --staged --worktree ."
+      escalation:
+        - "After 2 failed retries, mark blocked"
+
+  - task_id: "T-002"
+    title: "Add ids unit tests"
+    status: "ready"
+    owner: "worker-2"
+    depends_on: ["T-001"]
+    can_run_with: ["T-003"]
+    blocked_by_questions: []
+    scope:
+      read_paths:
+        - "worldview/libs/common/**"
+      write_paths:
+        - "worldview/libs/common/tests/test_ids.py"
+      forbidden_write_paths:
+        - "worldview/services/**"
+    branch: "agent/T-002-add-ids-tests"
+    implementation:
+      steps:
+        - "Create test_ids.py"
+        - "Add UUID/ULID behavior tests"
+      commands:
+        - "cd worldview/libs/common && pytest tests/test_ids.py -v"
+      expected_changed_files:
+        - "libs/common/tests/test_ids.py"
+    tests:
+      required:
+        - layer: "unit"
+          command: "cd worldview/libs/common && pytest tests/test_ids.py -v"
+          pass_criteria: "exit_code=0"
+    docs:
+      must_review:
+        - "worldview/AGENTS.md"
+        - "worldview/CLAUDE.md"
+      must_update_if_changed:
+        - "worldview/docs/libs/common.md"
+      expected_doc_changes: []
+    evidence:
+      required:
+        - "changed-files-list"
+        - "required-test-output"
+        - "response-update"
+    completion:
+      definition_of_done:
+        - "ids tests pass"
+      rollback:
+        - "git restore --source=HEAD --staged --worktree ."
+      escalation:
+        - "After 2 failed retries, mark blocked"
+
+  - task_id: "T-003"
+    title: "Add types unit tests"
+    status: "planned"
+    owner: "unassigned"
+    depends_on: ["T-001"]
+    can_run_with: ["T-002"]
+    blocked_by_questions: []
+    scope:
+      read_paths:
+        - "worldview/libs/common/**"
+      write_paths:
+        - "worldview/libs/common/tests/test_types.py"
+      forbidden_write_paths:
+        - "worldview/services/**"
+    branch: "agent/T-003-add-types-tests"
+    implementation:
+      steps:
+        - "Create test_types.py"
+        - "Add NewType runtime tests"
+      commands:
+        - "cd worldview/libs/common && pytest tests/test_types.py -v"
+      expected_changed_files:
+        - "libs/common/tests/test_types.py"
+    tests:
+      required:
+        - layer: "unit"
+          command: "cd worldview/libs/common && pytest tests/test_types.py -v"
+          pass_criteria: "exit_code=0"
+    docs:
+      must_review:
+        - "worldview/AGENTS.md"
+        - "worldview/CLAUDE.md"
+      must_update_if_changed:
+        - "worldview/docs/libs/common.md"
+      expected_doc_changes: []
+    evidence:
+      required:
+        - "changed-files-list"
+        - "required-test-output"
+        - "response-update"
+    completion:
+      definition_of_done:
+        - "types tests pass"
+      rollback:
+        - "git restore --source=HEAD --staged --worktree ."
+      escalation:
+        - "After 2 failed retries, mark blocked"
+
+  - task_id: "T-004"
+    title: "Expand common.time tests"
+    status: "planned"
+    owner: "unassigned"
+    depends_on: []
+    can_run_with: ["T-001"]
+    blocked_by_questions:
+      - "Q2: parse_bar_date return type"
+    scope:
+      read_paths:
+        - "worldview/libs/common/**"
+        - "platform_repo/libs/common/**"
+      write_paths:
+        - "worldview/libs/common/tests/test_time.py"
+      forbidden_write_paths:
+        - "worldview/services/**"
+    branch: "agent/T-004-expand-time-tests"
+    implementation:
+      steps:
+        - "Port missing legacy test cases"
+        - "Resolve return-type assertion based on decision"
+      commands:
+        - "cd worldview/libs/common && pytest tests/test_time.py -v"
+      expected_changed_files:
+        - "libs/common/tests/test_time.py"
+    tests:
+      required:
+        - layer: "unit"
+          command: "cd worldview/libs/common && pytest tests/test_time.py -v"
+          pass_criteria: "exit_code=0"
+    docs:
+      must_review:
+        - "worldview/AGENTS.md"
+        - "worldview/CLAUDE.md"
+      must_update_if_changed:
+        - "worldview/docs/libs/common.md"
+      expected_doc_changes: []
+    evidence:
+      required:
+        - "changed-files-list"
+        - "required-test-output"
+        - "response-update"
+    completion:
+      definition_of_done:
+        - "time tests expanded and passing"
+      rollback:
+        - "git restore --source=HEAD --staged --worktree ."
+      escalation:
+        - "After 2 failed retries, mark blocked"
+
+  - task_id: "T-005"
+    title: "Mark common implementation complete"
+    status: "planned"
+    owner: "unassigned"
+    depends_on: ["T-001", "T-002", "T-003", "T-004"]
+    can_run_with: []
+    blocked_by_questions: []
+    scope:
+      read_paths:
+        - "worldview/libs/common/**"
+      write_paths:
+        - "worldview/libs/common/IMPLEMENTATION.md"
+      forbidden_write_paths:
+        - "worldview/services/**"
+    branch: "agent/T-005-mark-common-complete"
+    implementation:
+      steps:
+        - "Update implementation checklist and status"
+      commands:
+        - "cd worldview/libs/common && pytest -m unit"
+      expected_changed_files:
+        - "libs/common/IMPLEMENTATION.md"
+    tests:
+      required:
+        - layer: "unit"
+          command: "cd worldview/libs/common && pytest -m unit"
+          pass_criteria: "exit_code=0"
+    docs:
+      must_review:
+        - "worldview/AGENTS.md"
+        - "worldview/CLAUDE.md"
+      must_update_if_changed:
+        - "worldview/docs/libs/common.md"
+      expected_doc_changes:
+        - "worldview/docs/libs/common.md"
+    evidence:
+      required:
+        - "changed-files-list"
+        - "required-test-output"
+        - "response-update"
+        - "checklist-verification"
+    completion:
+      definition_of_done:
+        - "Implementation document updated"
+        - "All prerequisite tasks done"
+      rollback:
+        - "git restore --source=HEAD --staged --worktree ."
+      escalation:
+        - "After 2 failed retries, mark blocked"

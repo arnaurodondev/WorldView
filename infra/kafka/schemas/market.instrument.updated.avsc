@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "InstrumentUpdatedV1",
+  "namespace": "com.worldview.market",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "market.instrument.updated"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "instrument_id", "type": "string"},
+    {"name": "symbol", "type": "string"},
+    {"name": "fields_updated", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

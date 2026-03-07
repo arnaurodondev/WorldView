@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "PortfolioEventV1",
+  "namespace": "com.worldview.portfolio",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "payload", "type": "string", "doc": "JSON-encoded event payload"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "ArticleRawV1",
+  "namespace": "com.worldview.content",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "content.article.raw"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "url_hash", "type": "string"},
+    {"name": "source_id", "type": "string"},
+    {"name": "source_domain", "type": "string"},
+    {"name": "url", "type": "string"},
+    {"name": "title", "type": ["null", "string"], "default": null},
+    {"name": "minio_bucket", "type": "string"},
+    {"name": "minio_key", "type": "string"},
+    {"name": "content_type", "type": "string", "default": "text/html"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

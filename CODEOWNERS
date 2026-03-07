@@ -1,0 +1,21 @@
+# CODEOWNERS — GitHub will auto-request reviews from these owners.
+# Since this is a single-developer thesis project, all paths point to the author.
+# Expand as needed if collaborators join.
+
+# Default owner for everything
+*                       @arnaurodon
+
+# Shared libraries — extra caution on changes
+libs/                   @arnaurodon
+
+# Avro schemas — contract changes need explicit review
+infra/kafka/schemas/    @arnaurodon
+
+# Infrastructure changes
+infra/                  @arnaurodon
+.github/                @arnaurodon
+
+# Governance docs
+AGENTS.md               @arnaurodon
+CLAUDE.md               @arnaurodon
+RULES.md                @arnaurodon
