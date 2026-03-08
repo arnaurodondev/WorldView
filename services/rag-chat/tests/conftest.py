@@ -2,7 +2,6 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from rag_chat.app import create_app
 
 

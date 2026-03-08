@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _ISO_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _BAR_DATE_FORMAT = "%Y-%m-%d"
@@ -11,7 +11,7 @@ _BAR_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def utc_now() -> datetime:
     """Return the current UTC datetime (timezone-aware)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def ensure_utc(dt: datetime) -> datetime:
@@ -21,7 +21,7 @@ def ensure_utc(dt: datetime) -> datetime:
     """
     if dt.tzinfo is None:
         raise ValueError(f"Naive datetime not allowed: {dt!r}")
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 def to_iso8601(dt: datetime) -> str:
@@ -39,9 +39,9 @@ def from_iso8601(s: str) -> datetime:
 
 def parse_bar_date(s: str) -> datetime:
     """Parse ``YYYY-MM-DD`` → UTC midnight datetime."""
-    return datetime.strptime(s, _BAR_DATE_FORMAT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(s, _BAR_DATE_FORMAT).replace(tzinfo=UTC)
 
 
 def parse_bar_datetime(s: str) -> datetime:
     """Parse ``YYYY-MM-DD HH:MM:SS`` → UTC datetime."""
-    return datetime.strptime(s, _BAR_DATETIME_FORMAT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(s, _BAR_DATETIME_FORMAT).replace(tzinfo=UTC)

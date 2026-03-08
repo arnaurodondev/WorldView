@@ -12,10 +12,13 @@
 
 | Class | Purpose |
 |-------|---------|
-| `BaseKafkaConsumer[TFailure]` | Abstract generic base for all Kafka consumers. Provides Avro deserialization, idempotency checking, error classification (Retryable vs Fatal), exponential backoff, graceful shutdown. |
+| `BaseKafkaConsumer[TFailure]` | Abstract generic base for all Kafka consumers. Provides Avro deserialization, idempotency checking, error classification (Retryable vs Fatal), exponential back-off, graceful shutdown. |
 | `ConsumerConfig` | Typed consumer settings (bootstrap servers, group ID, auto offset reset, timeouts, retry tuning). |
-| `RetryableError` | Base for transient errors (network, storage, rate limit). |
-| `FatalError` | Base for permanent errors (schema validation, malformed data). |
+| `FailureInfo[TFailure]` | Carries per-message retry tracking state across retry attempts. |
+| `RetryableError` | Base for transient errors (network, storage, rate limit). Subclasses: `StorageUnavailableError`, `DatabaseConnectionError`, `NetworkTimeoutError`, `ServiceUnavailableError`, `RateLimitedError`. |
+| `FatalError` | Base for permanent errors (schema validation, malformed data). Subclasses: `SchemaVersionError`, `MalformedDataError`, `MissingRequiredFieldError`, `BusinessRuleViolationError`. |
+
+See ADR-0005 (`docs/architecture/decisions/0005-messaging-error-classification.md`) for retry strategy and alerting implications.
 
 ### Kafka Producer
 
@@ -39,18 +42,36 @@
 
 ### Valkey Client
 
-| Class | Purpose |
-|-------|---------|
-| `ValkeyClient` | Async Redis/Valkey client with connection pooling, JSON get/set, TTL operations, batch operations, hash operations. |
+| Class/Function | Purpose |
+|----------------|---------|
+| `ValkeyClient` | Async Redis/Valkey client with connection pooling, JSON get/set, TTL operations, batch operations, hash operations, list operations. |
+| `ValkeyConfig` | Connection configuration (host, port, db, password, SSL, pool size, timeouts). Includes `from_url(url)` classmethod and `url` property. |
+| `create_valkey_client(config)` | Factory from a `ValkeyConfig` instance. |
+| `create_valkey_client_from_url(url)` | Factory from a Redis-style URL string. |
+
+Key taxonomy: `<scope>:<version>:<resource>:<id>[:<qualifier>]` — see ADR-0004 (`docs/architecture/decisions/0004-valkey-key-taxonomy.md`).
 
 ### Schema Utilities
 
 | Function | Purpose |
 |----------|---------|
-| `load_schema(path)` | Load Avro schema from `.avsc` file. |
-| `serializer_for_schema(schema, registry)` | Build serializer for a specific schema. |
-| `decimal_to_str(d)` | Safe Decimal → string for Avro. |
-| `iso_datetime(dt)` | Datetime → ISO-8601 string for Avro. |
+| `load_schema(path)` | Load Avro schema from `.avsc` file (fastavro-parsed). |
+| `serialize_avro(schema, record)` | Schemaless Avro binary encoding. |
+| `deserialize_avro(schema, data)` | Schemaless Avro binary decoding. |
+| `serializer_for_schema(schema_str, registry)` | Build Confluent `AvroSerializer` for a specific schema. |
+| `decimal_to_str(d)` | Safe `Decimal` → string for Avro `string` fields. |
+| `iso_datetime(dt)` | `datetime` → ISO-8601 string for Avro `string` fields. |
+
+### Schema Registry
+
+| Class/Function | Purpose |
+|----------------|---------|
+| `SchemaRegistryConfig` | Confluent Schema Registry connection config (URL, auth, TLS). |
+| `build_schema_registry_client(config)` | Factory for `confluent_kafka.schema_registry.SchemaRegistryClient`. |
+
+> **Note on `AvroDictable`**: The canonical protocol lives in `messaging.kafka.serializer`.
+> It requires an `event_type: str` property (for subject-name routing) plus `to_dict() -> dict`.
+> `messaging.schemas` is a convenience re-export of the fastavro helpers only.
 
 ---
 

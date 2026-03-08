@@ -7,9 +7,10 @@ which provide typed method signatures and handle errors consistently.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
 
 class DownstreamError(Exception):
@@ -46,7 +47,7 @@ async def _checked_get(
     resp = await client.get(path, **kwargs)
     if resp.status_code >= 400:
         raise DownstreamError(service_name, resp.status_code, resp.text)
-    return resp.json()
+    return cast(dict[str, Any], resp.json())
 
 
 async def _checked_post(
@@ -59,7 +60,7 @@ async def _checked_post(
     resp = await client.post(path, **kwargs)
     if resp.status_code >= 400:
         raise DownstreamError(service_name, resp.status_code, resp.text)
-    return resp.json()
+    return cast(dict[str, Any], resp.json())
 
 
 # ── Typed wrappers ────────────────────────────────────────────────
@@ -73,12 +74,8 @@ async def get_company_overview(
     import asyncio
 
     fundamentals, ohlcv, news = await asyncio.gather(
-        _checked_get(
-            clients.market_data, "market-data", f"/v1/instruments/{company_id}/fundamentals"
-        ),
-        _checked_get(
-            clients.market_data, "market-data", f"/v1/instruments/{company_id}/ohlcv", params={"limit": 90}
-        ),
+        _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/fundamentals"),
+        _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/ohlcv", params={"limit": 90}),
         _checked_get(
             clients.content_store, "content-store", "/v1/articles", params={"symbol": company_id, "limit": 10}
         ),

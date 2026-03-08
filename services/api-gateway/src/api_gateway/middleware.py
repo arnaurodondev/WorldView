@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, cast
 
 import jwt
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ── Auth ──────────────────────────────────────────────────
 
@@ -18,7 +21,7 @@ def decode_jwt(token: str, secret: str, algorithm: str = "HS256") -> dict:
 
     Raises ``jwt.InvalidTokenError`` on any failure.
     """
-    return jwt.decode(token, secret, algorithms=[algorithm])
+    return cast(dict[str, Any], jwt.decode(token, secret, algorithms=[algorithm]))
 
 
 def get_current_user(request: Request) -> dict | None:
@@ -47,10 +50,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
-            try:
+            with suppress(jwt.InvalidTokenError):
                 request.state.user = decode_jwt(token, self.secret, self.algorithm)
-            except jwt.InvalidTokenError:
-                pass  # user stays None — route decides if that's an error
         return await call_next(request)
 
 
@@ -66,7 +67,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: FastAPI,
-        valkey_client,  # redis.asyncio.Redis | None
+        valkey_client: Any,  # redis.asyncio.Redis | None
         max_requests: int = 100,
         window_seconds: int = 60,
     ) -> None:
@@ -94,7 +95,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     media_type="application/json",
                 )
         except Exception:
-            pass  # fail-open
+            return await call_next(request)
 
         return await call_next(request)
 

@@ -1,9 +1,8 @@
 """Shared test fixtures for content-ingestion service."""
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from content_ingestion.app import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture

@@ -2,7 +2,6 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from nlp_pipeline.app import create_app
 
 

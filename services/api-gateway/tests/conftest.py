@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
 from dataclasses import fields
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from api_gateway.app import create_app
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
+from httpx import ASGITransport, AsyncClient
 
 
 def _mock_settings() -> Settings:
@@ -34,9 +33,7 @@ def app(settings):
     application = create_app(settings)
 
     # Build mock clients
-    mock_clients = ServiceClients(
-        **{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)}
-    )
+    mock_clients = ServiceClients(**{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)})
     application.state.clients = mock_clients
     application.state.valkey = None  # no rate limiting in tests
     return application

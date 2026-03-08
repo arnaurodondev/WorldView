@@ -85,3 +85,23 @@ STORAGE_USE_SSL=false
 
 - **Unit**: `KeyBuilder` validation, key format enforcement
 - **Integration**: `S3ObjectStorage` against MinIO (testcontainers)
+
+---
+
+## Implementation Status
+
+**Wave-02 (2026-03-07)**: All modules implemented and tested.
+
+- `storage.exceptions` — complete: `StorageError`, `ObjectNotFoundError`, `BucketNotFoundError`,
+  `StoragePermissionError`, `StorageUnavailableError`, `InvalidObjectKeyError`
+- `storage.interface` — `ObjectStorage` ABC with `put_json`/`get_json` helpers
+- `storage.s3_adapter` — `S3ObjectStorage` using `asyncio.to_thread` for async boto3 wrapping
+- `storage.settings` — expanded with `default_bucket`, `endpoint_url`, `is_aws` computed fields
+- `storage.key_builder` — `KeyBuilder` with build/validate/parse/build_prefix + `KeyComponents`
+- `storage.factory` — `build_object_storage()` factory
+- `storage.health` — `check_storage_health()` (never raises)
+
+`InvalidObjectKeyError` is now in `storage.exceptions`; it inherits from both `StorageError`
+and `ValueError` for backward compatibility.
+
+See `libs/storage/IMPLEMENTATION.md`.

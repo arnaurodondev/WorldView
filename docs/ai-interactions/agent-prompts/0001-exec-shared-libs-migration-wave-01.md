@@ -64,6 +64,7 @@ Execute only these task IDs: `T-001`..`T-014`, `T-039`.
 - Maintain backward compatibility unless the task explicitly changes behavior.
 - Keep Avro compatibility additive; do not rename/remove schema fields.
 - Preserve package public API conventions (`__init__` re-exports + `__all__`).
+- Include a post-wave commit message proposal with a title and 1-2 sentences summarizing implementation and validation.
 
 ## Required tests
 - `cd libs/common && python -m pytest tests/test_ids.py -v`
@@ -91,9 +92,11 @@ Pass criteria:
 - Full changed-file list.
 - Test commands executed with pass/fail outcomes.
 - Docs changed: exact file paths + concise summary of each update.
+- Commit message proposal: title + 1-2 sentence body.
 - Any unresolved blockers/assumptions.
 
 ## Definition of done
 - Every task in this wave (`T-001`..`T-014`, `T-039`) is complete and validated.
 - Tests/lint/type checks pass for this scope.
 - Documentation updates are completed in-wave for all relevant changes, or each non-update is explicitly justified as N/A.
+- A commit message proposal (title + 1-2 sentence body) is included in the handoff.

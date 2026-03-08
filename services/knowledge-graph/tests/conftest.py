@@ -2,7 +2,6 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from knowledge_graph.app import create_app
 
 
