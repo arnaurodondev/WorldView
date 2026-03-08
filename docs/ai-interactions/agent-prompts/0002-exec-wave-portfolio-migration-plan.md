@@ -12,7 +12,7 @@ Given one planning prompt and one planning response, generate multiple execution
 - Planning response file: `docs/ai-interactions/agent-responses/0002-response-20260306-portfolio-migration-plan.md`
 - Execution worker agent profile(s): `./claude/agents/backend-engineer.md`, `./claude/agents/architecture-decision-lead.md`
 - Coverage mode: `full` (mandatory)
-- Tasks per wave bounds: `min_tasks_per_wave=1`, `max_tasks_per_wave=20`
+- Tasks per wave bounds: `min_tasks_per_wave=1`, `max_tasks_per_wave=25`
 
 ## Hard constraints
 
@@ -30,7 +30,7 @@ Given one planning prompt and one planning response, generate multiple execution
 12. Minimize the number of waves while preserving dependency correctness and context coherence.
 13. Every generated wave prompt must explicitly require documentation updates for any behavior/API/event/config/schema/test-surface changes and must require listing exact docs files changed.
 14. Every generated wave prompt must require a post-wave commit message proposal: commit title + 1-2 sentences describing what was implemented and validated.
-15. Every generated wave prompt must require a highly detailed PR description only for the final wave of the scope.
+15. Every generated wave prompt must require a highly detailed PR description only for the final wave of the scope that includes all relevant information of the changes done in the entire wave.
 
 ## Chunking heuristic (mandatory)
 
@@ -57,11 +57,11 @@ Do not generate partial waves from a subset.
 
 ## Wave-count optimization (mandatory)
 
-Let `T` be total discovered tasks and `MAX=20`.
+Let `T` be total discovered tasks and `MAX=25`.
 
-- Compute `W_min = ceil(T / 20)`.
+- Compute `W_min = ceil(T / 25)`.
 - Target wave count should be as close as possible to `W_min`.
-- Fill waves near 20 tasks when dependency/coherence allows.
+- Fill waves near 25 tasks when dependency/coherence allows.
 - If generated waves are more than `W_min + 1`, add explicit justification per extra wave.
 
 ## Output files to create
