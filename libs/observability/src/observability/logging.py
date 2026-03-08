@@ -66,4 +66,4 @@ def configure_logging(
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a structlog logger bound with the given name."""
-    return structlog.get_logger(name)
+    return structlog.get_logger(name)  # type: ignore[no-any-return]

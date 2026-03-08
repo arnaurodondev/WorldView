@@ -1,9 +1,8 @@
 """Shared test fixtures for content-store service."""
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from content_store.app import create_app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture

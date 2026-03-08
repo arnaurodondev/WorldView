@@ -2,7 +2,6 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-
 from market_data.app import create_app
 
 

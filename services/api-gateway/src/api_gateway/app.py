@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI
 
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
-from api_gateway.middleware import AuthMiddleware, RateLimitMiddleware, add_cors
+from api_gateway.middleware import AuthMiddleware, add_cors
 from api_gateway.routes import router
 
 

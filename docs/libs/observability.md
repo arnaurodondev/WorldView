@@ -118,3 +118,16 @@ OTEL_SERVICE_NAME=          # auto-set by configure_tracing()
 
 - **Unit**: Logger output format assertions, metric label validation.
 - **Integration**: OTel span export to in-memory exporter, verify trace propagation.
+
+---
+
+## Implementation Status
+
+**Wave-02 (2026-03-07)**: All modules implemented and tested.
+
+- `observability.logging` — complete (wave-01)
+- `observability.metrics` — complete (wave-02)
+- `observability.tracing` — complete (wave-02); uses `SimpleSpanProcessor` when a custom
+  exporter is injected (test-friendly), `BatchSpanProcessor` for OTLP production path.
+
+See `libs/observability/IMPLEMENTATION.md` and `docs/architecture/decisions/0003-observability-stack.md`.

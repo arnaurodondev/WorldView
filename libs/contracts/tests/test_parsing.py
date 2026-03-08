@@ -13,11 +13,11 @@ if TYPE_CHECKING:
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.parsing import (
-    parse_ohlcv_from_parquet,
     parse_ohlcv_from_json,
     parse_ohlcv_from_jsonl,
-    to_parquet,
+    parse_ohlcv_from_parquet,
     to_jsonl,
+    to_parquet,
 )
 
 

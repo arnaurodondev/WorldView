@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
 from dataclasses import fields
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from api_gateway.app import create_app
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
+from httpx import ASGITransport, AsyncClient
 
 
 def _mock_settings() -> Settings:
