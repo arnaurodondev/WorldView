@@ -5,10 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from api_gateway.middleware import RateLimitMiddleware
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-
-from api_gateway.middleware import RateLimitMiddleware
 
 pytestmark = pytest.mark.unit
 

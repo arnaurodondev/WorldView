@@ -1,6 +1,6 @@
 # Architectural Rebuild Plan — Thesis Market Intelligence Platform
 
-> **Version**: 1.0 · **Date**: 2026-02-28  
+> **Version**: 1.0 · **Date**: 2026-02-28
 > **Scope**: Full rebuild plan upgrading the current event-driven platform by incorporating battle-tested patterns from WorldMonitor.
 
 ---
@@ -1113,7 +1113,7 @@ services:
     command: ["python", "-m", "app.consumer.main"]
     depends_on: [postgres, kafka, minio]
 
-  # Intelligence Service  
+  # Intelligence Service
   backend-intelligence:
     build: { context: ../.., dockerfile: apps/backend-intelligence/Dockerfile }
     profiles: [runtime]

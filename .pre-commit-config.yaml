@@ -30,7 +30,7 @@ repos:
           - pydantic>=2.5
           - pydantic-settings>=2.1
         pass_filenames: false
-        args: ["--config-file=mypy.ini"]
+        args: ["--config-file=mypy.ini", "--ignore-missing-imports", "libs", "services"]
 
   - repo: local
     hooks:

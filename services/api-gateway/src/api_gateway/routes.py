@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api_gateway.clients import (
     DownstreamError,
+    ServiceClients,
     get_company_overview,
     get_map_layers,
     get_relevant_news,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 router = APIRouter(prefix="/v1")
 
 
-def _clients(request: Request):
+def _clients(request: Request) -> ServiceClients:
     """Shortcut to get ServiceClients from app state."""
-    return request.app.state.clients
+    return cast(ServiceClients, request.app.state.clients)
 
 
 # ── Company ───────────────────────────────────────────────
@@ -30,7 +34,7 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     try:
         return await get_company_overview(_clients(request), company_id)
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 # ── News ──────────────────────────────────────────────────
@@ -45,7 +49,7 @@ async def relevant_news(
     try:
         return await get_relevant_news(_clients(request), limit=limit)
     except DownstreamError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 # ── Map ───────────────────────────────────────────────────
@@ -72,10 +76,8 @@ async def chat_stream(request: Request) -> Any:
     body = await request.json()
     clients = _clients(request)
 
-    async def event_generator():
-        async with clients.rag_chat.stream(
-            "POST", "/v1/chat", json=body
-        ) as resp:
+    async def event_generator() -> AsyncIterator[dict[str, str]]:
+        async with clients.rag_chat.stream("POST", "/v1/chat", json=body) as resp:
             async for line in resp.aiter_lines():
                 if line.strip():
                     yield {"data": line}

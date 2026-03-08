@@ -69,6 +69,7 @@ Execute only these task IDs: `T-015`..`T-029`, `T-040`.
 - Keep storage and observability APIs consistent with current docs unless task explicitly modifies them.
 - Use structured logging (`structlog`) across new modules.
 - Keep integration scaffold additive; do not break existing compose profiles.
+- Include a post-wave commit message proposal with a title and 1-2 sentences summarizing implementation and validation.
 
 ## Required tests
 - `cd libs/observability && python -m pytest tests/test_logging.py tests/test_metrics.py tests/test_tracing.py -v`
@@ -97,9 +98,11 @@ Pass criteria:
 - Full changed-file list.
 - Test commands executed with pass/fail outcomes.
 - Docs changed: exact file paths + concise summary of each update.
+- Commit message proposal: title + 1-2 sentence body.
 - Any unresolved blockers/assumptions.
 
 ## Definition of done
 - Every task in this wave (`T-015`..`T-029`, `T-040`) is complete and validated.
 - Required tests/lint/type checks pass for touched modules.
 - Documentation updates are completed in-wave for all relevant changes, or each non-update is explicitly justified as N/A.
+- A commit message proposal (title + 1-2 sentence body) is included in the handoff.

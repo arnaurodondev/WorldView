@@ -4,7 +4,7 @@ Act as an execution-orchestration planner (./claude/agents/agent-orchestrator.md
 
 Given one planning prompt and one planning response, generate multiple execution prompt files (wave-based) that optimize output quality by reducing context size while minimizing context switching.
 
-## Inputs 
+## Inputs
 
 - Scope name: `shared-libs-migration`
 - Prompt ID: `0001`
@@ -29,6 +29,8 @@ Given one planning prompt and one planning response, generate multiple execution
 11. Every generated wave filename must start with `0001-` (same ID as planning/response pair).
 12. Minimize the number of waves while preserving dependency correctness and context coherence.
 13. Every generated wave prompt must explicitly require documentation updates for any behavior/API/event/config/schema/test-surface changes and must require listing exact docs files changed.
+14. Every generated wave prompt must require a post-wave commit message proposal: commit title + 1-2 sentences describing what was implemented and validated.
+15. Every generated wave prompt must require a highly detailed PR description only for the final wave of the scope.
 
 ## Chunking heuristic (mandatory)
 
@@ -102,8 +104,11 @@ Each generated file must contain exactly these sections:
    - mandatory instruction: update docs in same wave for any implementation change affecting behavior/contracts/config/schema/API/tests
 12. `## Required handoff evidence`
    - changed files, tests run/results, docs changed (exact files + summary), unresolved blockers
+   - commit message proposal (title + 1-2 sentence body)
+   - final wave only: highly detailed PR description covering scope summary, task IDs, grouped changed files, test/lint/type evidence, docs/ADR updates, compatibility notes, risks, rollback, and follow-ups
 13. `## Definition of done`
    - includes documentation updates completed (or explicit N/A justification)
+   - includes commit message proposal for every wave and final-wave PR description when applicable
 
 ## Quality checks before finalizing
 
@@ -115,6 +120,7 @@ For each generated wave prompt, validate:
 - wave size within configured bounds
 - docs/test obligations explicitly listed
 - each wave includes mandatory documentation update rule and evidence requirement
+- each wave includes commit-message requirement and final-wave-only PR-description requirement
 
 Global validation (mandatory):
 
