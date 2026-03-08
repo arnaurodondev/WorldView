@@ -12,7 +12,7 @@ Given one planning prompt and one planning response, generate multiple execution
 - Planning response file: `docs/ai-interactions/agent-responses/0002-response-20260306-portfolio-migration-plan.md`
 - Execution worker agent profile(s): `./claude/agents/backend-engineer.md`, `./claude/agents/architecture-decision-lead.md`
 - Coverage mode: `full` (mandatory)
-- Tasks per wave bounds: `min_tasks_per_wave=1`, `max_tasks_per_wave=25`
+- Tasks per wave bounds: `min_tasks_per_wave=10`, `max_tasks_per_wave=25`
 
 ## Hard constraints
 
