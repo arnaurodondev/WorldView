@@ -123,9 +123,7 @@ class S3ObjectStorage(ObjectStorage):
     async def get_bytes(self, bucket: str, key: str) -> bytes:
         logger.debug("get_bytes", bucket=bucket, key=key)
         try:
-            response = await self._run(
-                lambda: self._client.get_object(Bucket=bucket, Key=key)
-            )
+            response = await self._run(lambda: self._client.get_object(Bucket=bucket, Key=key))
             return response["Body"].read()  # type: ignore[no-any-return]
         except Exception as exc:
             self._handle_client_error(exc, bucket, key)
@@ -134,9 +132,7 @@ class S3ObjectStorage(ObjectStorage):
     async def delete(self, bucket: str, key: str) -> None:
         logger.debug("delete", bucket=bucket, key=key)
         try:
-            await self._run(
-                lambda: self._client.delete_object(Bucket=bucket, Key=key)
-            )
+            await self._run(lambda: self._client.delete_object(Bucket=bucket, Key=key))
         except Exception as exc:
             self._handle_client_error(exc, bucket, key)
 
@@ -161,9 +157,7 @@ class S3ObjectStorage(ObjectStorage):
     async def exists(self, bucket: str, key: str) -> bool:
         logger.debug("exists", bucket=bucket, key=key)
         try:
-            await self._run(
-                lambda: self._client.head_object(Bucket=bucket, Key=key)
-            )
+            await self._run(lambda: self._client.head_object(Bucket=bucket, Key=key))
             return True
         except Exception as exc:
             try:

@@ -56,23 +56,21 @@ class TestCanonicalSentiment:
         assert 0.0 <= s.score <= 1.0
 
     def test_score_boundary_zero(self) -> None:
-        s = CanonicalSentiment(
-            article_id="x", label="neutral", score=0.0,
-            model_name="finbert", model_version="1.0"
-        )
+        s = CanonicalSentiment(article_id="x", label="neutral", score=0.0, model_name="finbert", model_version="1.0")
         assert s.score == 0.0
 
     def test_score_boundary_one(self) -> None:
-        s = CanonicalSentiment(
-            article_id="x", label="positive", score=1.0,
-            model_name="finbert", model_version="1.0"
-        )
+        s = CanonicalSentiment(article_id="x", label="positive", score=1.0, model_name="finbert", model_version="1.0")
         assert s.score == 1.0
 
     def test_to_dict_keys(self) -> None:
         d = self._make_sentiment().to_dict()
         expected_keys = {
-            "article_id", "label", "score",
-            "model_name", "model_version", "schema_version",
+            "article_id",
+            "label",
+            "score",
+            "model_name",
+            "model_version",
+            "schema_version",
         }
         assert set(d.keys()) == expected_keys

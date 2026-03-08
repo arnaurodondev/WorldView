@@ -31,7 +31,8 @@ ignore = [
 unfixable = ["F841"]  # don't auto-remove unused variables
 
 [lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S106", "T20"]
+"**/tests/**/*.py" = ["S101", "S106", "T20"]
+"services/*/src/*/config.py" = ["S104", "S105"]
 "alembic/**/*.py" = ["E501"]
 "scripts/**/*.py" = ["T20"]
 

@@ -23,6 +23,9 @@ COMPOSE_FILE="$ROOT_DIR/infra/compose/docker-compose.yml"
 
 # ── Resolve Python command ────────────────────────────────────────────────────
 PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" && -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+    PYTHON="${VIRTUAL_ENV}/bin/python"
+fi
 if [[ -z "$PYTHON" ]]; then
     for _py in python3.12 python3 python; do
         if command -v "$_py" &>/dev/null; then
@@ -35,6 +38,21 @@ if [[ -z "$PYTHON" ]]; then
     echo "ERROR: No Python interpreter found. Set PYTHON= or install python3." >&2
     exit 1
 fi
+
+python_install() {
+    if "$PYTHON" -m pip --version >/dev/null 2>&1; then
+        "$PYTHON" -m pip install "$@"
+        return
+    fi
+
+    if command -v uv >/dev/null 2>&1; then
+        uv pip install --python "$PYTHON" "$@"
+        return
+    fi
+
+    echo "ERROR: Neither pip nor uv pip is available for interpreter '$PYTHON'." >&2
+    return 1
+}
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 INTEGRATION=false
@@ -73,8 +91,13 @@ start_infra() {
         exit 1
     fi
     echo "=== Starting lib-test infra (MinIO) ==="
-    docker compose -f "$COMPOSE_FILE" --profile lib-test up -d --wait || {
+    docker compose -f "$COMPOSE_FILE" --profile lib-test up -d --wait minio || {
         echo "ERROR: Failed to start integration infra." >&2
+        exit 1
+    }
+    echo "=== Initializing MinIO buckets ==="
+    docker compose -f "$COMPOSE_FILE" --profile lib-test run --rm minio-init >/dev/null || {
+        echo "ERROR: Failed to initialize MinIO buckets." >&2
         exit 1
     }
     COMPOSE_STARTED=true
@@ -118,10 +141,14 @@ run_lib_tests() {
 
     # Install lib + dev extras if needed
     if [[ -f "$lib_dir/pyproject.toml" ]]; then
-        "$PYTHON" -m pip install -q -e "$lib_dir[dev]" 2>/dev/null || true
+        if ! python_install -q -e "$lib_dir[dev]"; then
+            echo "  [FAIL] $lib_name — failed to install test dependencies"
+            FAILED=$((FAILED + 1))
+            return
+        fi
     fi
 
-    if "$PYTHON" -m pytest "$lib_dir/tests" -v "${MARKER_ARGS[@]}" ${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}; then
+    if "$PYTHON" -m pytest "$lib_dir/tests" -v ${MARKER_ARGS[@]+"${MARKER_ARGS[@]}"} ${PYTEST_EXTRA_ARGS[@]+"${PYTEST_EXTRA_ARGS[@]}"}; then
         echo "  [PASS] $lib_name"
         PASSED=$((PASSED + 1))
     else

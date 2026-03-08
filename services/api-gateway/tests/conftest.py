@@ -33,9 +33,7 @@ def app(settings):
     application = create_app(settings)
 
     # Build mock clients
-    mock_clients = ServiceClients(
-        **{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)}
-    )
+    mock_clients = ServiceClients(**{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)})
     application.state.clients = mock_clients
     application.state.valkey = None  # no rate limiting in tests
     return application

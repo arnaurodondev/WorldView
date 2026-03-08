@@ -37,10 +37,15 @@ from contracts.canonical.sentiment import CanonicalSentiment
 _SCHEMAS_DIR = Path(__file__).parent.parent.parent.parent / "infra" / "kafka" / "schemas"
 
 # Envelope fields that appear in Avro schemas but NOT in canonical model to_dict()
-_ENVELOPE_FIELDS = frozenset({
-    "event_id", "event_type", "occurred_at", "correlation_id",
-    "schema_version",  # schema_version is on the model itself, not in all avsc
-})
+_ENVELOPE_FIELDS = frozenset(
+    {
+        "event_id",
+        "event_type",
+        "occurred_at",
+        "correlation_id",
+        "schema_version",  # schema_version is on the model itself, not in all avsc
+    }
+)
 
 
 def _load_avsc(filename: str) -> dict:
@@ -77,14 +82,21 @@ class TestCanonicalArticleAvroAlignment:
         avro_fields = _avro_data_fields(schema)
         model_dict = self._make_article().to_dict()
         for avro_field in avro_fields:
-            assert avro_field in model_dict, (
-                f"Avro field '{avro_field}' missing from CanonicalArticle.to_dict()"
-            )
+            assert avro_field in model_dict, f"Avro field '{avro_field}' missing from CanonicalArticle.to_dict()"
 
     def test_required_article_fields(self) -> None:
         d = self._make_article().to_dict()
-        for key in ("article_id", "source_domain", "title", "url", "language",
-                    "word_count", "is_duplicate", "duplicate_of", "published_at"):
+        for key in (
+            "article_id",
+            "source_domain",
+            "title",
+            "url",
+            "language",
+            "word_count",
+            "is_duplicate",
+            "duplicate_of",
+            "published_at",
+        ):
             assert key in d
 
 
@@ -189,8 +201,7 @@ class TestCanonicalEntityAvroAlignment:
 
     def test_entity_required_fields(self) -> None:
         d = self._make_entity().to_dict()
-        for key in ("entity_id", "entity_type", "name", "canonical_name",
-                    "source_article_id", "confidence"):
+        for key in ("entity_id", "entity_type", "name", "canonical_name", "source_article_id", "confidence"):
             assert key in d
 
 
@@ -210,8 +221,7 @@ class TestCanonicalQuoteFieldPresence:
 
     def test_required_fields_in_to_dict(self) -> None:
         d = self._make_quote().to_dict()
-        for key in ("symbol", "exchange", "bid", "ask", "last", "volume",
-                    "timestamp", "schema_version"):
+        for key in ("symbol", "exchange", "bid", "ask", "last", "volume", "timestamp", "schema_version"):
             assert key in d
 
 

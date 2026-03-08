@@ -84,9 +84,21 @@ class TestCanonicalQuote:
     def test_to_dict_keys(self) -> None:
         d = self._make_quote().to_dict()
         expected_keys = {
-            "symbol", "exchange", "bid", "ask", "last", "volume",
-            "timestamp", "bid_size", "ask_size", "high", "low", "open",
-            "prev_close", "source", "schema_version",
+            "symbol",
+            "exchange",
+            "bid",
+            "ask",
+            "last",
+            "volume",
+            "timestamp",
+            "bid_size",
+            "ask_size",
+            "high",
+            "low",
+            "open",
+            "prev_close",
+            "source",
+            "schema_version",
         }
         assert set(d.keys()) == expected_keys
 

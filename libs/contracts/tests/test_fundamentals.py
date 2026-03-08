@@ -76,9 +76,18 @@ class TestCanonicalFundamentals:
     def test_to_dict_keys(self) -> None:
         d = self._make_fundamentals().to_dict()
         expected_keys = {
-            "symbol", "exchange", "period", "report_date",
-            "revenue", "net_income", "eps", "pe_ratio",
-            "market_cap", "debt_to_equity", "source", "schema_version",
+            "symbol",
+            "exchange",
+            "period",
+            "report_date",
+            "revenue",
+            "net_income",
+            "eps",
+            "pe_ratio",
+            "market_cap",
+            "debt_to_equity",
+            "source",
+            "schema_version",
         }
         assert set(d.keys()) == expected_keys
 

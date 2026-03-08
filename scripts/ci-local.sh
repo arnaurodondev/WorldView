@@ -36,6 +36,21 @@ run_cmd() {
     "$@"
 }
 
+python_install() {
+    if "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+        run_cmd "$PYTHON_BIN" -m pip install "$@"
+        return
+    fi
+
+    if command -v uv >/dev/null 2>&1; then
+        run_cmd uv pip install --python "$PYTHON_BIN" "$@"
+        return
+    fi
+
+    echo "ERROR: Neither pip nor uv pip is available for '$PYTHON_BIN'."
+    return 1
+}
+
 ensure_venv() {
     cd "$ROOT_DIR"
 
@@ -59,13 +74,13 @@ run_lint() {
     cd "$ROOT_DIR"
     ensure_venv
 
-    run_cmd "$PYTHON_BIN" -m pip install ruff mypy
+    python_install ruff mypy
     run_cmd "$PYTHON_BIN" -m ruff check libs/ services/
     run_cmd "$PYTHON_BIN" -m ruff format --check libs/ services/
 
     echo "Installing libs with [dev] extras for type-checking..."
     for dir in libs/*/; do
-        run_cmd "$PYTHON_BIN" -m pip install -e "$dir[dev]" --quiet
+        python_install -e "$dir[dev]" --quiet
     done
 
     echo "Running mypy (matching CI behavior)..."
@@ -83,7 +98,7 @@ run_validate_schemas() {
     cd "$ROOT_DIR"
     ensure_venv
 
-    run_cmd "$PYTHON_BIN" -m pip install fastavro
+    python_install fastavro
     run_cmd "$PYTHON_BIN" -c "
 import json
 import pathlib
@@ -113,7 +128,7 @@ run_test_libs() {
 
     for lib in "${LIBS[@]}"; do
         echo "--- Testing lib: $lib ---"
-        run_cmd "$PYTHON_BIN" -m pip install -e "libs/$lib[dev]" --quiet
+        python_install -e "libs/$lib[dev]" --quiet
         run_cmd "$PYTHON_BIN" -m pytest "libs/$lib/tests" -m unit -v --tb=short
     done
 }
@@ -127,9 +142,9 @@ run_test_services() {
     for service in "${SERVICES[@]}"; do
         echo "--- Testing service: $service ---"
         for dir in libs/*/; do
-            run_cmd "$PYTHON_BIN" -m pip install -e "$dir" --quiet
+            python_install -e "$dir" --quiet
         done
-        run_cmd "$PYTHON_BIN" -m pip install -e "services/$service[dev]" --quiet
+        python_install -e "services/$service[dev]" --quiet
         run_cmd "$PYTHON_BIN" -m pytest "services/$service/tests" -m unit -v --tb=short
     done
 }

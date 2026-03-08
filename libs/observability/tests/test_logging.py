@@ -107,6 +107,4 @@ class TestGetLogger:
 
         output = buf.getvalue()
         lines = [ln for ln in output.strip().splitlines() if ln.strip()]
-        assert any(
-            json.loads(ln)["event"] == "io_capture_event" for ln in lines
-        )
+        assert any(json.loads(ln)["event"] == "io_capture_event" for ln in lines)

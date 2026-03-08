@@ -30,7 +30,7 @@ def _make_settings() -> StorageSettings:
     return StorageSettings(
         endpoint="http://localhost:9000",
         access_key="test",
-        secret_key="test",  # noqa: S106
+        secret_key="test",
         region="us-east-1",
         use_ssl=False,
     )
@@ -153,9 +153,7 @@ class TestListKeys:
 
             paginator = MagicMock()
             mock_client.get_paginator.return_value = paginator
-            paginator.paginate.return_value = [
-                {"Contents": [{"Key": "svc/dom/b/v1.bin"}, {"Key": "svc/dom/a/v1.bin"}]}
-            ]
+            paginator.paginate.return_value = [{"Contents": [{"Key": "svc/dom/b/v1.bin"}, {"Key": "svc/dom/a/v1.bin"}]}]
 
             store = S3ObjectStorage(_make_settings())
             keys = await store.list_keys("bucket", "svc/")
@@ -185,9 +183,7 @@ class TestDeletePrefix:
 
             paginator = MagicMock()
             mock_client.get_paginator.return_value = paginator
-            paginator.paginate.return_value = [
-                {"Contents": [{"Key": "svc/a/v1.bin"}, {"Key": "svc/b/v1.bin"}]}
-            ]
+            paginator.paginate.return_value = [{"Contents": [{"Key": "svc/a/v1.bin"}, {"Key": "svc/b/v1.bin"}]}]
             mock_client.delete_objects.return_value = {}
 
             store = S3ObjectStorage(_make_settings())

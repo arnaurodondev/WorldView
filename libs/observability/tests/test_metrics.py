@@ -76,10 +76,7 @@ class TestCreateMetrics:
         reg = CollectorRegistry()
         m = create_metrics("market-data", registry=reg)
         # Prometheus metric name rules: no hyphens
-        output = [
-            metric.name
-            for metric in reg.collect()
-        ]
+        output = [metric.name for metric in reg.collect()]
         for name in output:
             assert "-" not in name, f"hyphen in metric name: {name}"
         assert m.service_name == "market-data"
@@ -91,7 +88,6 @@ class TestCreateMetrics:
             create_metrics("same-svc", registry=reg)  # must not raise
 
     def test_counter_value_increments(self) -> None:
-
         reg = CollectorRegistry()
         m = create_metrics("counter-test", registry=reg)
         m.outbox_dispatched_total.inc(5)

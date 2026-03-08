@@ -36,11 +36,7 @@ class CanonicalOHLCVBar:
         fetched_at: datetime | None = None
         raw_fetched = d.get("fetched_at")
         if raw_fetched is not None:
-            fetched_at = (
-                raw_fetched
-                if isinstance(raw_fetched, datetime)
-                else datetime.fromisoformat(str(raw_fetched))
-            )
+            fetched_at = raw_fetched if isinstance(raw_fetched, datetime) else datetime.fromisoformat(str(raw_fetched))
         return cls(
             symbol=d["symbol"],
             exchange=d["exchange"],

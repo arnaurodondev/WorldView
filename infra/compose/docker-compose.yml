@@ -34,7 +34,7 @@ services:
 
   # ── MinIO bucket initialisation ─────────────────────────────────────────────
   minio-init:
-    image: minio/mc:RELEASE.2024-01-16T16-07-38Z
+    image: minio/mc:latest
     profiles: [infra, lib-test]
     depends_on:
       minio:

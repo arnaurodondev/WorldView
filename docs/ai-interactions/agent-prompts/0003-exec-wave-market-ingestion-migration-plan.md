@@ -4,7 +4,7 @@ Act as an execution-orchestration planner (./claude/agents/agent-orchestrator.md
 
 Given one planning prompt and one planning response, generate multiple execution prompt files (wave-based) that optimize output quality by reducing context size while minimizing context switching.
 
-## Inputs 
+## Inputs
 
 - Scope name: `market-ingestion-migration`
 - Prompt ID: `0003`

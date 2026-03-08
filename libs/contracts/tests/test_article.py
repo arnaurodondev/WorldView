@@ -89,8 +89,14 @@ class TestCanonicalArticle:
         """to_dict() fields align with content.article.stored.v1.avsc."""
         d = self._make_full_article().to_dict()
         avro_aligned_keys = {
-            "article_id", "source_domain", "title", "url",
-            "language", "word_count", "is_duplicate", "duplicate_of",
+            "article_id",
+            "source_domain",
+            "title",
+            "url",
+            "language",
+            "word_count",
+            "is_duplicate",
+            "duplicate_of",
             "published_at",
         }
         for key in avro_aligned_keys:

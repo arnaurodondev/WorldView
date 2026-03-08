@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import io
 import json
-from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import fastavro
 
@@ -20,11 +19,11 @@ class AvroDictable(Protocol):
     def from_dict(cls, d: dict[str, Any]) -> AvroDictable: ...
 
 
-def load_schema(path: str | Path) -> dict[str, Any]:
+def load_schema(path: str) -> dict[str, Any]:
     """Load an Avro schema from a ``.avsc`` JSON file."""
     with open(path) as f:
         schema = json.load(f)
-    parsed = fastavro.parse_schema(schema)
+    parsed = cast(dict[str, Any], fastavro.parse_schema(schema))
     return parsed
 
 
@@ -38,4 +37,4 @@ def serialize_avro(schema: dict[str, Any], record: dict[str, Any]) -> bytes:
 def deserialize_avro(schema: dict[str, Any], data: bytes) -> dict[str, Any]:
     """Deserialize Avro binary to a dict using the given schema."""
     buf = io.BytesIO(data)
-    return fastavro.schemaless_reader(buf, schema)
+    return cast(dict[str, Any], fastavro.schemaless_reader(buf, schema))

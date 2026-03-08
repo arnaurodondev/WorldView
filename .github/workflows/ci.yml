@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install tools
-        run: pip install ruff mypy
+        run: python -m pip install ruff mypy
 
       - name: Ruff check
         run: ruff check libs/ services/
@@ -34,7 +34,7 @@ jobs:
       - name: Install libs for type-checking
         run: |
           for dir in libs/*/; do
-            pip install -e "$dir[dev]" --quiet
+            python -m pip install -e "$dir[dev]" --quiet
           done
 
       - name: mypy
@@ -58,7 +58,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install fastavro
-        run: pip install fastavro
+        run: python -m pip install fastavro
 
       - name: Validate schemas
         run: |
@@ -92,7 +92,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install library
-        run: pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
+        run: python -m pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
 
       - name: Run tests
         run: pytest "libs/${{ matrix.lib }}/tests" -m unit -v --tb=short
@@ -115,9 +115,9 @@ jobs:
       - name: Install dependencies
         run: |
           for dir in libs/*/; do
-            pip install -e "$dir" --quiet
+            python -m pip install -e "$dir" --quiet
           done
-          pip install -e "services/${{ matrix.service }}[dev]" --quiet
+          python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
       - name: Run tests
         run: pytest "services/${{ matrix.service }}/tests" -m unit -v --tb=short

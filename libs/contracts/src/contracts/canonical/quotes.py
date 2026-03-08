@@ -41,9 +41,7 @@ class CanonicalQuote:
             last=float(d["last"]),
             volume=int(d["volume"]),
             timestamp=(
-                d["timestamp"]
-                if isinstance(d["timestamp"], datetime)
-                else datetime.fromisoformat(str(d["timestamp"]))
+                d["timestamp"] if isinstance(d["timestamp"], datetime) else datetime.fromisoformat(str(d["timestamp"]))
             ),
             bid_size=int(d["bid_size"]) if d.get("bid_size") is not None else None,
             ask_size=int(d["ask_size"]) if d.get("ask_size") is not None else None,

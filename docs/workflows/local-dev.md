@@ -9,8 +9,8 @@
 | pnpm | 9+ | `corepack enable && corepack prepare pnpm@9 --activate` |
 | Docker & Compose | 27+ | Docker Desktop or `brew install docker` |
 | Make | any | ships with macOS |
-| Hatch | 1.12+ | `pip install hatch` |
-| pre-commit | 3+ | `pip install pre-commit` |
+| Hatch | 1.12+ | `python3 -m pip install hatch` |
+| pre-commit | 3+ | `python3 -m pip install pre-commit` |
 
 ---
 
@@ -33,6 +33,31 @@ docker compose --profile init up
 cd services/portfolio
 make run          # uvicorn on port 8001
 ```
+
+---
+
+## UV Workflow (Recommended)
+
+Use one root environment for repository tooling (`pre-commit`, helper scripts, lint/test commands), and keep optional per-lib/per-service environments for isolated development.
+
+```bash
+# From repo root: create/sync tooling environment
+uv sync --group dev
+
+# Install hooks using the root tooling environment
+uv run pre-commit install
+
+# Run repo scripts through uv
+uv run ./scripts/lint.sh
+uv run ./scripts/test-libs.sh --integration --lib storage
+
+# Optional: run service-local commands in that service directory
+cd services/portfolio && uv sync && uv run make test
+```
+
+Notes:
+- Root `uv sync` is configured as non-package at monorepo root; it installs tooling but does not build a `worldview` wheel.
+- If you use separate venvs per service/library, keep doing that for day-to-day coding; use root `uv run ...` for shared scripts.
 
 ---
 

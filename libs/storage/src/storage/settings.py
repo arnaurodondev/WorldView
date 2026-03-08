@@ -29,7 +29,7 @@ class StorageSettings(BaseSettings):
     access_key: str = "minioadmin"
     """AWS access key ID / MinIO access key."""
 
-    secret_key: str = "minioadmin"  # noqa: S105
+    secret_key: str = "minioadmin"
     """AWS secret access key / MinIO secret key."""
 
     region: str = "us-east-1"
