@@ -451,7 +451,20 @@ Example:
 
 List anything that could not be implemented as specified and why.
 
-### 5. Commit message proposal
+### 5. Documentation quality checklist
+
+| # | Criterion | Status | Notes |
+|---|-----------|--------|-------|
+| 1 | Accurate | ✅ / ⚠️ / ❌ | |
+| 2 | Complete | ✅ / ⚠️ / ❌ | |
+| 3 | Consistent | ✅ / ⚠️ / ❌ | |
+| 4 | Exemplified | ✅ / ⚠️ / ❌ | |
+| 5 | Diagrammed | ✅ / ⚠️ / ❌ | |
+| 6 | Tested | ✅ / ⚠️ / ❌ | |
+| 7 | Linked | ✅ / ⚠️ / ❌ | |
+| 8 | Versioned | ✅ / ⚠️ / ❌ | |
+
+### 6. Commit message proposal
 
 ```
 feat(libs+domain): complete contracts/storage/messaging/observability libs + market-ingestion domain layer (T-LIB-01..07, T-MI-01..08)
@@ -484,5 +497,6 @@ worldview envelope standard. 37+ unit tests added; ruff + mypy strict both clean
 - [ ] T-MI-08: `DomainEvent` base + `MarketDatasetFetched` with `AvroDictable` + 2 internal events, tests pass, lint clean.
 - [ ] All `IMPLEMENTATION.md` checklists updated for completed lib tasks.
 - [ ] Documentation updated for any API/behavior/contract changes (exact files listed in handoff).
+- [ ] Documentation quality checklist completed in handoff evidence — all 8 criteria assessed (✅ pass or ⚠️ with justification; no ❌ without a linked fix).
 - [ ] `./scripts/lint.sh` passes with zero errors.
 - [ ] Commit message proposal included.

@@ -479,7 +479,22 @@ For every task in this wave, update docs **in the same wave** if any of the foll
 | Topic constant added to messaging lib | `docs/libs/messaging.md` — update topics table |
 | Canonical serializer behavior documented | `docs/libs/contracts.md` — if serialization contract differs from spec |
 
-**Mandatory instruction**: If any implementation changes a behavior, contract, config, schema surface, or test surface described in documentation, you MUST update that documentation in this same wave. List every doc file changed in the handoff evidence.
+**Mandatory instruction**: If any implementation changes a behavior, contract, config, schema surface, or test surface described in documentation, you MUST update that documentation in this same wave. List every doc file changed in the handoff evidence. Documentation must satisfy the quality standard defined below.
+
+## Documentation quality standard
+
+Every task in this wave must produce documentation to the following standard. The executing agent must include a **Documentation quality checklist** in its handoff evidence, with one row per criterion.
+
+| # | Criterion | Requirement |
+|---|-----------|-------------|
+| 1 | **Accurate** | Every public API, endpoint, event, and config var in the code has a matching entry in the relevant `docs/` file. |
+| 2 | **Complete** | No "TODO", "TBD", or placeholder text remains in any documentation file touched by this wave. |
+| 3 | **Consistent** | Naming in docs matches naming in code (event types, topic names, field names, HTTP paths). |
+| 4 | **Exemplified** | Each public API or library surface has at least one usage example in the doc. |
+| 5 | **Diagrammed** | Any non-trivial flow (outbox dispatch, consumer lifecycle, request path, entity state machine) has a Mermaid or ASCII diagram in the relevant doc. |
+| 6 | **Tested** | Doc changes are verified against the running code — no doc describes behavior that is not covered by at least one test. |
+| 7 | **Linked** | Cross-references between service docs, lib docs, and ADRs are present and valid. |
+| 8 | **Versioned** | If a schema, topic, or API contract changed, the version bump is reflected in both code and docs. |
 
 ---
 
@@ -519,7 +534,20 @@ Mypy:   0 errors
 
 ### 4. Unresolved blockers
 
-### 5. Commit message proposal
+### 5. Documentation quality checklist
+
+| # | Criterion | Status | Notes |
+|---|-----------|--------|-------|
+| 1 | Accurate | ✅ / ⚠️ / ❌ | |
+| 2 | Complete | ✅ / ⚠️ / ❌ | |
+| 3 | Consistent | ✅ / ⚠️ / ❌ | |
+| 4 | Exemplified | ✅ / ⚠️ / ❌ | |
+| 5 | Diagrammed | ✅ / ⚠️ / ❌ | |
+| 6 | Tested | ✅ / ⚠️ / ❌ | |
+| 7 | Linked | ✅ / ⚠️ / ❌ | |
+| 8 | Versioned | ✅ / ⚠️ / ❌ | |
+
+### 6. Commit message proposal
 
 ```
 feat(market-ingestion): application layer + infra adapters + DB schema (T-MI-09..21)
@@ -548,5 +576,6 @@ alembic upgrade/downgrade roundtrip validated; ruff + mypy strict clean.
 - [ ] T-MI-20: `DefaultCanonicalSerializer` for quotes/OHLCV/fundamentals, JSONL output, `schema_version` embedded, tests pass.
 - [ ] T-MI-21: `market.dataset.fetched.avsc` in `infra/kafka/schemas/`, Avro mapper with flattened `ObjectRef`, serializer factory, roundtrip + forward-compat tests pass.
 - [ ] Documentation updated for API, schema, env, and topic changes (exact files listed).
+- [ ] Documentation quality checklist completed in handoff evidence — all 8 criteria assessed (✅ pass or ⚠️ with justification; no ❌ without a linked fix).
 - [ ] `./scripts/lint.sh` passes with zero errors.
 - [ ] Commit message proposal included.

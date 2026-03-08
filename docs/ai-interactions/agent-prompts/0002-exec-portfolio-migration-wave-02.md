@@ -339,7 +339,22 @@ cd services/portfolio && alembic upgrade head && alembic downgrade base
 | `docs/libs/messaging.md` | Mark `AvroDictable` canonical location; note reconciliation with `schemas.py`. |
 | `services/portfolio/IMPLEMENTATION.md` (if exists) | Update with layer completion status. |
 
-**Mandatory rule**: In this same wave, update every doc listed above for any behavior/contract/config/schema/API/test-surface change. List the exact file paths updated in your handoff evidence.
+**Mandatory rule**: In this same wave, update every doc listed above for any behavior/contract/config/schema/API/test-surface change. List the exact file paths updated in your handoff evidence. Documentation must satisfy the quality standard defined below.
+
+## Documentation quality standard
+
+Every task in this wave must produce documentation to the following standard. The executing agent must include a **Documentation quality checklist** in its handoff evidence, with one row per criterion.
+
+| # | Criterion | Requirement |
+|---|-----------|-------------|
+| 1 | **Accurate** | Every public API, endpoint, event, and config var in the code has a matching entry in the relevant `docs/` file. |
+| 2 | **Complete** | No "TODO", "TBD", or placeholder text remains in any documentation file touched by this wave. |
+| 3 | **Consistent** | Naming in docs matches naming in code (event types, topic names, field names, HTTP paths). |
+| 4 | **Exemplified** | Each public API or library surface has at least one usage example in the doc. |
+| 5 | **Diagrammed** | Any non-trivial flow (outbox dispatch, consumer lifecycle, request path, entity state machine) has a Mermaid or ASCII diagram in the relevant doc. |
+| 6 | **Tested** | Doc changes are verified against the running code — no doc describes behavior that is not covered by at least one test. |
+| 7 | **Linked** | Cross-references between service docs, lib docs, and ADRs are present and valid. |
+| 8 | **Versioned** | If a schema, topic, or API contract changed, the version bump is reflected in both code and docs. |
 
 ## Required handoff evidence
 
@@ -348,8 +363,21 @@ cd services/portfolio && alembic upgrade head && alembic downgrade base
 3. **Test results** — output summary for each test command (pass count, any skips).
 4. **Alembic verification** — confirm `upgrade head` / `downgrade base` both succeeded.
 5. **Docs changed** — exact file paths + one-sentence summary of each update.
-6. **Unresolved blockers** — any assumptions made or deferred items.
-7. **Commit message proposal:**
+6. **Documentation quality checklist** — complete the following table in your handoff:
+
+   | # | Criterion | Status | Notes |
+   |---|-----------|--------|-------|
+   | 1 | Accurate | ✅ / ⚠️ / ❌ | |
+   | 2 | Complete | ✅ / ⚠️ / ❌ | |
+   | 3 | Consistent | ✅ / ⚠️ / ❌ | |
+   | 4 | Exemplified | ✅ / ⚠️ / ❌ | |
+   | 5 | Diagrammed | ✅ / ⚠️ / ❌ | |
+   | 6 | Tested | ✅ / ⚠️ / ❌ | |
+   | 7 | Linked | ✅ / ⚠️ / ❌ | |
+   | 8 | Versioned | ✅ / ⚠️ / ❌ | |
+
+7. **Unresolved blockers** — any assumptions made or deferred items.
+8. **Commit message proposal:**
 
 ```
 feat(portfolio): domain, application, infrastructure, API, messaging layers (wave-02)
@@ -384,4 +412,5 @@ All unit tests pass; ruff and mypy strict clean; alembic upgrade/downgrade verif
 - [ ] TASK-034: `InstrumentEventConsumer` — unit tests pass; consumed-topics table in docs verified.
 - [ ] TASK-035: Alembic `env.py` wired; initial migration creates all 8 tables; upgrade + downgrade both verified.
 - [ ] Documentation updates completed for all impacted files listed above (or explicit N/A with justification).
+- [ ] Documentation quality checklist completed in handoff evidence — all 8 criteria assessed (✅ pass or ⚠️ with justification; no ❌ without a linked fix).
 - [ ] Commit message proposal included in handoff.

@@ -6,6 +6,28 @@
 
 ---
 
+## Where Contracts Fit
+
+Every event passing between services travels through a shared canonical shape:
+
+```
+External API / Provider
+        ↓
+  Market Ingestion (S2)  ───►  MinIO (claim-check pointer)
+        ↓ Kafka event                ↓
+  Market Data (S3)  ◄──────►  contracts.CanonicalOHLCVBar
+        ↓ Kafka event
+  NLP Pipeline (S5)  ◄─────►  contracts.CanonicalArticle
+        ↓ Kafka event
+  Intelligence (S6)  ◄─────►  contracts.CanonicalSentiment
+```
+
+`contracts` defines **what the data looks like** (field names, types, defaults).
+`infra/kafka/schemas/` defines **how it is encoded on the wire** (Avro).
+The two must be kept in sync. `scripts/gen-contracts.sh` validates this.
+
+---
+
 ## Public API
 
 ### Canonical Models
@@ -31,8 +53,22 @@ from contracts.versions import ENTITY_SCHEMA_VERSION                  # 1
 from contracts.versions import SENTIMENT_SCHEMA_VERSION               # 1
 ```
 
-Bump the version constant **before** changing the dataclass shape. Consumers
-use the version to decide whether they can handle the payload.
+**How to bump a schema version (step-by-step):**
+
+1. Add the new field(s) to the dataclass **with a default value** — never remove
+   or rename existing fields.
+2. Increment the corresponding `*_SCHEMA_VERSION` constant.
+3. Update the Avro `.avsc` file in `infra/kafka/schemas/` to add the field with
+   a `"default"` key — Avro requires defaults for forward compatibility.
+4. Run `scripts/gen-contracts.sh` to validate Python ↔ Avro parity.
+5. Update the `schema_version` field default in the dataclass `__post_init__`
+   or `field(default=N)` to the new version.
+6. Update `docs/libs/contracts.md` model table to reflect the new version.
+7. Consumers reading older events (version `N-1`) must handle the missing field
+   gracefully (the Avro default fills it in automatically during deserialization).
+
+> **Never**: remove a field, rename a field, or change a field's type.
+> These are breaking changes that require a new topic (`*.v2`).
 
 ### Parsing Utilities
 
@@ -105,6 +141,28 @@ own Decimal conversion.
    auto-populated from `contracts.versions`.
 4. **Backwards-compatible changes only**: Add fields with defaults. Never
    remove or rename fields — create a new version instead.
+5. **AvroDictable compliance**: Every canonical model's `to_dict()` output must
+   be accepted by `fastavro.validate(schema, output)` with no exception. Run
+   the contract tests in `libs/contracts/tests/` after every model change.
+
+---
+
+## Common Pitfalls
+
+1. **Removing or renaming a field** — this breaks every consumer that reads
+   old events from Kafka (topics are retained; old messages never disappear).
+   Always add new fields with defaults instead.
+2. **Forgetting to update the Avro schema** — the Python dataclass and the
+   `.avsc` file diverge silently. Run `scripts/gen-contracts.sh` every time.
+3. **Comparing `schema_version` in consumer logic** — don't branch on version
+   numbers in business logic. Avro defaults handle missing fields automatically.
+   Version numbers are for monitoring and alerting, not routing.
+4. **Using `Decimal` for price fields** — all price fields use `float`. The
+   decision was deliberate (see Model Anatomy). Introducing `Decimal` here would
+   break Avro serialization and require custom serializers.
+5. **Forgetting `frozen=True`** — if you add a mutable dataclass to this library
+   it will be accidentally mutated somewhere in a pipeline. All canonical models
+   must be `frozen=True`.
 
 ---
 
@@ -113,4 +171,4 @@ own Decimal conversion.
 - **Unit**: Round-trip `from_dict → to_dict` for every model, edge cases
   (missing optional fields, extra keys ignored).
 - **Contract tests**: Validate that `to_dict()` output matches the Avro
-  schema in `infra/kafka/schemas/`.
+  schema in `infra/kafka/schemas/` using `fastavro.validate`.

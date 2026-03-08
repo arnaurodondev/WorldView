@@ -31,9 +31,74 @@ Given one planning prompt and one planning response, generate multiple execution
 10. If a task is blocked by unresolved external dependency, place it in a dedicated blocked/deferred wave instead of omitting it.
 11. Use the same planning `Prompt ID` as the execution prompt filename prefix for all waves in that run.
 12. Minimize the number of waves while respecting dependency order, coherence, and tasks-per-wave bounds.
-13. Every generated wave prompt must explicitly require the execution agent to update documentation for any behavior/API/event/config/schema/test-surface change and list exact docs files updated.
+13. Every generated wave prompt must explicitly require documentation updates for any behavior/API/event/config/schema/test-surface change and list exact docs files updated. Documentation must conform to the **Documentation quality standard** defined below.
 14. Every generated wave prompt must require a post-wave commit message proposal: a concise commit title plus 1-2 sentences describing what was implemented and validated.
 15. Every generated wave prompt must require a highly detailed PR description only for the final wave of that scope.
+
+## Documentation quality standard
+
+All documentation written or updated in any wave must meet the following criteria.
+Agents must verify each criterion before marking documentation as done.
+
+### Quality criteria
+
+1. **Accuracy** — every documented API, parameter, config var, event type, or
+   data field must match the final implementation exactly. No stubs, no
+   "TBD", no copy-paste from earlier drafts that diverged.
+
+2. **Diagrams for non-trivial flows** — any control flow, data flow, or
+   interaction involving 3 or more components or 4 or more steps must include
+   a Mermaid diagram (sequence, flowchart, or ER as appropriate). Examples:
+   - Outbox publish lifecycle → sequence diagram
+   - Consumer retry/dead-letter flow → flowchart
+   - Service data model relationships → ER diagram
+   - Cross-service event chains → sequence diagram
+
+3. **Realistic code examples** — every new public class or function must have
+   at least one working usage example. Examples must be:
+   - Complete enough to copy-paste and run
+   - Not stubs (`pass`, `...`, `# TODO`)
+   - Showing realistic argument values, not `"foo"` / `None` everywhere
+
+4. **All abstract methods documented** — for any abstract base class, provide
+   a table mapping each abstract method to: when it is called, what it must do,
+   and what it must return.
+
+5. **Common pitfalls section** — every lib doc and every service doc must
+   include a `## Common Pitfalls` section listing at least 3 concrete mistakes
+   developers make and their consequences. Not generic advice — specific to
+   the component being documented.
+
+6. **Lib docs updated when lib surface changes** — if a wave touches any file
+   inside `libs/`, the corresponding `docs/libs/<lib>.md` must be updated in
+   the same wave. If no surface change occurred, state explicitly `N/A: no
+   public API surface changed`.
+
+7. **Service docs reflect final state** — `docs/services/<service>.md` must
+   match the final implementation: endpoint paths/methods, request/response
+   fields, HTTP status codes, outbox events, consumed topics, DB schema, and
+   env vars. The service doc is the contract reference; it must not lag behind
+   the code.
+
+8. **No orphan documentation** — do not create documentation for code that is
+   not yet implemented. Do not leave documentation for code that was deleted
+   or renamed without updating it.
+
+### Documentation evidence requirement
+
+In the `## Required handoff evidence` section of each wave response, the agent
+must provide a **Documentation quality checklist** with one row per criterion:
+
+| Criterion | Status | Notes |
+|-----------|--------|-------|
+| Accuracy verified | ✓ / N/A | |
+| Diagrams added for non-trivial flows | ✓ / N/A | List diagram titles |
+| Realistic code examples | ✓ / N/A | |
+| Abstract methods documented | ✓ / N/A | |
+| Common pitfalls section present | ✓ / N/A | |
+| Lib docs updated | ✓ / N/A | List files |
+| Service docs reflect final state | ✓ / N/A | List files |
+| No orphan documentation | ✓ | |
 
 ## Chunking heuristic (mandatory)
 
@@ -119,13 +184,16 @@ Each generated file must contain exactly these sections:
 11. `## Documentation requirements`
    - files likely impacted + update conditions
    - mandatory instruction: if implementation changes behavior/contracts/config/schema/API/tests, update docs in the same wave
+   - **mandatory**: explicitly reference the Documentation quality standard from this template — accuracy, diagrams, realistic examples, pitfalls section, lib and service doc updates
+   - list exact documentation files updated (or `N/A` with justification)
 12. `## Required handoff evidence`
    - changed files, tests run/results, docs changed (exact files + summary), unresolved blockers
    - commit message proposal (title + 1-2 sentence body)
    - final wave only: highly detailed PR description covering scope summary, task IDs, changed files grouped by area, tests/lint/typecheck evidence, docs/ADR updates, migration/compatibility notes, risks, and rollback/next steps
 13. `## Definition of done`
-   - includes documentation updates completed (or explicit N/A justification)
+   - includes documentation updates completed and quality-standard checklist verified (or explicit N/A justification per criterion)
    - includes commit message proposal for every wave and final-wave PR description when applicable
+   - **documentation quality gate**: all 8 quality criteria from the Documentation quality standard must be confirmed ✓ or explicitly N/A before the wave is considered done
 
 ## Quality checks before finalizing
 
@@ -137,6 +205,7 @@ For each generated wave prompt, validate:
 - wave size within configured bounds
 - docs/test obligations explicitly listed
 - each wave includes mandatory documentation update rule and evidence requirement
+- **each wave includes a reference to the Documentation quality standard and requires the quality checklist in handoff evidence**
 - each wave includes commit-message requirement and only the final wave includes a highly detailed PR-description requirement
 
 Global validation (mandatory):

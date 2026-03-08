@@ -265,7 +265,22 @@ mypy services/portfolio/src
 | `services/portfolio/configs/dev.local.env.example` | All settings fields have example values. |
 | `services/portfolio/configs/prod.env.example` | All settings fields have prod-safe placeholder values. |
 
-**Mandatory rule**: In this same wave, update every doc listed above for any behavior/contract/config/schema/API/test-surface change. List the exact file paths updated in your handoff evidence.
+**Mandatory rule**: In this same wave, update every doc listed above for any behavior/contract/config/schema/API/test-surface change. List the exact file paths updated in your handoff evidence. Documentation must satisfy the quality standard defined below.
+
+## Documentation quality standard
+
+Every task in this wave must produce documentation to the following standard. The executing agent must include a **Documentation quality checklist** in its handoff evidence, with one row per criterion.
+
+| # | Criterion | Requirement |
+|---|-----------|-------------|
+| 1 | **Accurate** | Every public API, endpoint, event, and config var in the code has a matching entry in the relevant `docs/` file. |
+| 2 | **Complete** | No "TODO", "TBD", or placeholder text remains in any documentation file touched by this wave. |
+| 3 | **Consistent** | Naming in docs matches naming in code (event types, topic names, field names, HTTP paths). |
+| 4 | **Exemplified** | Each public API or library surface has at least one usage example in the doc. |
+| 5 | **Diagrammed** | Any non-trivial flow (outbox dispatch, consumer lifecycle, request path, entity state machine) has a Mermaid or ASCII diagram in the relevant doc. |
+| 6 | **Tested** | Doc changes are verified against the running code — no doc describes behavior that is not covered by at least one test. |
+| 7 | **Linked** | Cross-references between service docs, lib docs, and ADRs are present and valid. |
+| 8 | **Versioned** | If a schema, topic, or API contract changed, the version bump is reflected in both code and docs. |
 
 ## Required handoff evidence
 
@@ -275,6 +290,19 @@ mypy services/portfolio/src
 4. **Security audit findings** — list of any gaps found + fixes applied (or "no issues found per audit").
 5. **Docker verification** — confirm `docker compose up portfolio` + `/healthz` + `/readyz` pass.
 6. **Docs changed** — exact file paths + one-sentence summary of each update.
+6. **Documentation quality checklist** — complete the following table in your handoff:
+
+   | # | Criterion | Status | Notes |
+   |---|-----------|--------|-------|
+   | 1 | Accurate | ✅ / ⚠️ / ❌ | |
+   | 2 | Complete | ✅ / ⚠️ / ❌ | |
+   | 3 | Consistent | ✅ / ⚠️ / ❌ | |
+   | 4 | Exemplified | ✅ / ⚠️ / ❌ | |
+   | 5 | Diagrammed | ✅ / ⚠️ / ❌ | |
+   | 6 | Tested | ✅ / ⚠️ / ❌ | |
+   | 7 | Linked | ✅ / ⚠️ / ❌ | |
+   | 8 | Versioned | ✅ / ⚠️ / ❌ | |
+
 7. **Unresolved blockers** — any deferred items or assumptions.
 8. **Commit message proposal:**
 

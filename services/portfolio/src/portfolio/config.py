@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "PORTFOLIO_"}
 
     # Server
+    service_name: str = "portfolio"
     host: str = "0.0.0.0"
     port: int = 8001
     debug: bool = False
@@ -20,7 +21,24 @@ class Settings(BaseSettings):
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
-    schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_basic_auth: str = ""
+    kafka_auto_register_schemas: bool = True
+
+    # Kafka topics (produced)
+    topic_portfolio_events: str = "portfolio.events.v1"
+
+    # Kafka topics (consumed)
+    topic_instrument_created: str = "market.instrument.created"
+    topic_instrument_updated: str = "market.instrument.updated"
+    consumer_group_instrument: str = "portfolio-instrument-sync"
+
+    # Outbox dispatcher
+    dispatcher_immediate_batch_size: int = 100
+    dispatcher_poll_interval_seconds: float = 5.0
+    dispatcher_lease_seconds: int = 30
+    dispatcher_max_attempts: int = 10
+    dispatcher_backoff_base_seconds: float = 1.0
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
@@ -29,3 +47,8 @@ class Settings(BaseSettings):
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
+
+    # Observability
+    log_level: str = "INFO"
+    log_format: str = "json"
+    otlp_endpoint: str | None = None
