@@ -81,6 +81,8 @@ src/<service>/
 - [ ] Check `docs/architecture/decisions/` for ADRs that may constrain your design
 - [ ] Search for existing patterns in `libs/` before creating new utilities
 - [ ] Verify the Avro schemas in `infra/kafka/schemas/` if your change involves events
+- [ ] **Read `docs/ai-interactions/BUG_PATTERNS.md`** — scan the index for categories
+      matching your task. If any pattern applies, read the full entry before writing code.
 
 ## 4. After You Code — Checklist
 
