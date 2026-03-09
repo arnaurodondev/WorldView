@@ -11,7 +11,7 @@ from portfolio.config import Settings
 
 
 def test_defaults() -> None:
-    s = Settings()
+    s = Settings(_env_file=None)  # bypass dev.local.env to test pure defaults
     assert s.service_name == "portfolio"
     assert s.host == "0.0.0.0"  # noqa: S104
     assert s.port == 8001

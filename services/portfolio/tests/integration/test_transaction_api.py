@@ -124,19 +124,37 @@ async def test_list_transactions(integration_client, db_session) -> None:
 
 
 async def _seed_instrument(db_session, symbol: str, exchange: str) -> uuid.UUID:
-    """Insert an instrument directly into the test DB and return its ID."""
+    """Upsert an instrument into the test DB and return its ID.
+
+    Uses ON CONFLICT DO NOTHING so repeated calls (across the shared session-scoped
+    testcontainer) don't raise UniqueViolationError.
+    """
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert
 
     inst_id = uuid.uuid4()
-    inst = InstrumentModel(
-        id=inst_id,
-        symbol=symbol,
-        exchange=exchange,
-        name=f"{symbol} Inc.",
-        currency="USD",
-        asset_class="equity",
-        source_event_id=uuid.uuid4(),
+    stmt = (
+        insert(InstrumentModel)
+        .values(
+            id=inst_id,
+            symbol=symbol,
+            exchange=exchange,
+            name=f"{symbol} Inc.",
+            currency="USD",
+            asset_class="equity",
+            source_event_id=uuid.uuid4(),
+        )
+        .on_conflict_do_nothing(constraint="uq_instruments_symbol_exchange")
     )
-    db_session.add(inst)
+    await db_session.execute(stmt)
     await db_session.commit()
-    return inst_id
+
+    # If the row already existed, fetch its actual ID
+    result = await db_session.execute(
+        select(InstrumentModel.id).where(
+            InstrumentModel.symbol == symbol,
+            InstrumentModel.exchange == exchange,
+        )
+    )
+    return result.scalar_one()

@@ -48,9 +48,10 @@ def postgres_container():
 
         # Run Alembic migrations via subprocess — pass the asyncpg URL so env.py can use it
         service_dir = os.path.join(os.path.dirname(__file__), "..")
+        alembic_bin = os.path.join(service_dir, ".venv", "bin", "alembic")
         env = os.environ.copy()
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            [alembic_bin, "upgrade", "head"],
             cwd=service_dir,
             capture_output=True,
             text=True,

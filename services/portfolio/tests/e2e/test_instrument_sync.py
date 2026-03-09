@@ -35,7 +35,7 @@ def kafka_available() -> bool:
 
 
 @pytest.mark.asyncio
-async def test_instrument_created_sync(integration_client, db_session, kafka_available) -> None:
+async def test_instrument_created_sync(integration_client, db_session, postgres_container, kafka_available) -> None:
     """Produce market.instrument.created → verify InstrumentRef upserted in DB.
 
     Skipped automatically when Kafka is not available.
@@ -60,9 +60,7 @@ async def test_instrument_created_sync(integration_client, db_session, kafka_ava
 
     from portfolio.infrastructure.db.session import create_session_factory
 
-    engine, session_factory = create_session_factory(
-        "postgresql+asyncpg://worldview:worldview@localhost:5432/worldview"
-    )
+    engine, session_factory = create_session_factory(postgres_container)
 
     consumer = InstrumentEventConsumer(config, session_factory)
 
@@ -95,7 +93,7 @@ async def test_instrument_created_sync(integration_client, db_session, kafka_ava
 
 
 @pytest.mark.asyncio
-async def test_instrument_sync_idempotent(integration_client, db_session, kafka_available) -> None:
+async def test_instrument_sync_idempotent(integration_client, db_session, postgres_container, kafka_available) -> None:
     """Duplicate market.instrument.created event (same event_id) does not create duplicate rows."""
     if not kafka_available:
         pytest.skip("Kafka not available — skipping e2e idempotency test")
@@ -114,9 +112,7 @@ async def test_instrument_sync_idempotent(integration_client, db_session, kafka_
         group_id="test-instrument-idem",
         topics=["market.instrument.created"],
     )
-    engine, session_factory = create_session_factory(
-        "postgresql+asyncpg://worldview:worldview@localhost:5432/worldview"
-    )
+    engine, session_factory = create_session_factory(postgres_container)
     consumer = InstrumentEventConsumer(config, session_factory)
 
     event_value = {"event_id": event_id, "symbol": symbol, "exchange": exchange}
