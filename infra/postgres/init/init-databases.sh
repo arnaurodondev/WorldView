@@ -12,6 +12,8 @@ DATABASES=(
     content_store_db
     nlp_db
     kg_db
+    rag_db
+    gateway_db
 )
 
 for DB in "${DATABASES[@]}"; do
