@@ -37,6 +37,7 @@ direct market data ingestion, cross-service DB queries.
 | GET | `/api/v1/transactions` | List transactions (by portfolio) | private |
 | GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio | private |
 | GET | `/api/v1/instruments` | List local instrument refs | private |
+| GET | `/api/v1/instruments/{id}` | Get instrument by ID | private |
 
 ### Request/Response Models
 

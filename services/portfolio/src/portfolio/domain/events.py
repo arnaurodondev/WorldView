@@ -26,6 +26,9 @@ class DomainEvent(ABC):
     ``schema_version`` defaults to 1 and can be overridden per subclass.
     """
 
+    EVENT_TYPE: ClassVar[str]
+    AGGREGATE_TYPE: ClassVar[str]
+
     tenant_id: UUID
     schema_version: int = 1
     event_id: UUID = field(default_factory=new_uuid)

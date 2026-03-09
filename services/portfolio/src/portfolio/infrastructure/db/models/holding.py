@@ -1,0 +1,29 @@
+"""SQLAlchemy ORM model for holdings."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from sqlalchemy import ForeignKey, Index, Numeric, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from portfolio.infrastructure.db.models import Base
+
+
+class HoldingModel(Base):
+    __tablename__ = "holdings"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "instrument_id", name="uq_holdings_portfolio_instrument"),
+        Index("ix_holdings_portfolio_id", "portfolio_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("portfolios.id"))
+    instrument_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
+    average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
+    currency: Mapped[str]
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -21,7 +21,7 @@ def decode_jwt(token: str, secret: str, algorithm: str = "HS256") -> dict:
 
     Raises ``jwt.InvalidTokenError`` on any failure.
     """
-    return cast(dict[str, Any], jwt.decode(token, secret, algorithms=[algorithm]))
+    return cast("dict[str, Any]", jwt.decode(token, secret, algorithms=[algorithm]))
 
 
 def get_current_user(request: Request) -> dict | None:
