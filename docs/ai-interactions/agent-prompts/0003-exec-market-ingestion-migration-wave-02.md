@@ -220,11 +220,15 @@ At the end of this wave:
      - All 27 fields present.
    - `to_kafka_key(event: MarketDatasetFetched) -> str`: returns `f"{event.provider}:{event.symbol}"`.
 7. Create `infrastructure/messaging/kafka/serialization.py`:
-   - Factory that builds `AvroSerializer` for `MarketDatasetFetched` using `libs/messaging.build_avro_serializer()`.
-   - Loads schema from `infra/kafka/schemas/market.dataset.fetched.avsc` (relative path from service root or embedded string).
+   - Build per-event-type `AvroSerializer` instances from `infra/kafka/schemas/market.dataset.fetched.avsc` via `libs/messaging`'s schema registry client.
+   - Expose a `build_market_ingestion_serializers(registry_client) -> dict[str, AvroSerializer]` factory returning a mapping of `event_type → AvroSerializer`.
+   - Expose a `build_market_ingestion_value_serializer(registry_client) -> OutboxEventValueSerializer` factory — this returns an `OutboxEventValueSerializer` (from `libs/messaging.kafka.producer`) initialised with the serializer dict.
+   - **CRITICAL — use `OutboxEventValueSerializer`, NOT `KafkaEventValueSerializer`**: `OutboxEventValueSerializer` overrides `__call__` to extract `value.payload` (a plain `dict`) before handing it to the per-type `AvroSerializer`. The base `KafkaEventValueSerializer` passes the full `OutboxKafkaValue` wrapper object directly to `AvroSerializer`, which causes `"a bytes-like object is required, not 'OutboxKafkaValue'"` at runtime.
    - References `messaging.topics.MARKET_DATASET_FETCHED` for topic name (no hardcoded strings).
+   - **CRITICAL — wire `value_serializer=` into the producer**: wherever `build_serializing_producer(producer_config, ...)` is called in the dispatcher wiring, `value_serializer=build_market_ingestion_value_serializer(registry_client)` **must** be passed explicitly. Omitting it leaves `SerializingProducer` with no serializer and causes the same bytes error silently until first dispatch.
 8. Create `tests/infrastructure/test_kafka_serialization.py`:
    - Unit: mapper produces correct dict structure, ObjectRef flattened correctly, all 27 fields present, kafka key format.
+   - **Serializer unit test**: construct `OutboxEventValueSerializer` with the Avro serializer dict; call it with `OutboxKafkaValue(event_type="market.dataset.fetched", payload={...full dict...})`; assert result is `bytes`. Also assert that passing the `OutboxKafkaValue` wrapper directly (not `.payload`) to the raw `AvroSerializer` raises a `TypeError` — this confirms the wrapper-extraction is required and not accidental.
    - Contract: Avro serialize → deserialize roundtrip using the `.avsc` schema; schema forward-compatibility test (add an optional field, re-parse old message).
 9. Run: `cd services/market-ingestion && make test -- tests/infrastructure/test_kafka_serialization.py && make lint`.
 
