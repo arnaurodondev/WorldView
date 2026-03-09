@@ -101,7 +101,7 @@ class RecordTransactionUseCase:
         # Validate currency matches portfolio
         if cmd.currency != portfolio.currency:
             raise CurrencyMismatchError(
-                f"Transaction currency {cmd.currency!r} does not match " f"portfolio currency {portfolio.currency!r}",
+                f"Transaction currency {cmd.currency!r} does not match portfolio currency {portfolio.currency!r}",
                 details={"expected": portfolio.currency, "got": cmd.currency},
             )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,4 +25,4 @@ class PortfolioModel(Base):
     name: Mapped[str]
     currency: Mapped[str] = mapped_column(default="USD")
     status: Mapped[str] = mapped_column(default="active")
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

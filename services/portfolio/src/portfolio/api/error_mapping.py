@@ -7,6 +7,7 @@ from portfolio.domain.errors import (
     BusinessRuleViolationError,
     ConcurrencyError,
     DomainError,
+    EntityAlreadyExistsError,
     EntityNotFoundError,
     IdempotencyKeyConflictError,
     ValidationError,
@@ -14,6 +15,7 @@ from portfolio.domain.errors import (
 
 ERROR_STATUS_MAP: dict[type[DomainError], int] = {
     EntityNotFoundError: 404,
+    EntityAlreadyExistsError: 409,
     AuthorizationError: 403,
     ValidationError: 422,
     BusinessRuleViolationError: 409,

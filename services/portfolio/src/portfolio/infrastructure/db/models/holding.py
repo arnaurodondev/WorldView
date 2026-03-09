@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Index, Numeric, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,4 +26,4 @@ class HoldingModel(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     currency: Mapped[str]
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

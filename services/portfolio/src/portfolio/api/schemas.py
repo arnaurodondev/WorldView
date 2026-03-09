@@ -6,7 +6,12 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_serializer, field_validator
+
+
+def _fmt_decimal(v: Decimal) -> str:
+    """Serialize Decimal to 8-decimal-place string (matches DB Numeric(18,8))."""
+    return f"{v:.8f}"
 
 
 def _validate_currency(v: str) -> str:
@@ -109,6 +114,10 @@ class RecordTransactionResponse(BaseModel):
     executed_at: datetime
     created_at: datetime
 
+    @field_serializer("quantity", "price", "fees")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
 
 class HoldingResponse(BaseModel):
     id: UUID
@@ -117,6 +126,10 @@ class HoldingResponse(BaseModel):
     quantity: Decimal
     average_cost: Decimal
     currency: str
+
+    @field_serializer("quantity", "average_cost")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
 
 
 class TransactionListItem(BaseModel):
@@ -132,6 +145,10 @@ class TransactionListItem(BaseModel):
     executed_at: datetime
     external_ref: str | None = None
     created_at: datetime
+
+    @field_serializer("quantity", "price", "fees")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
 
 
 class InstrumentResponse(BaseModel):

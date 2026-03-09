@@ -1,0 +1,33 @@
+feat(all-services+infra): dual-mode env config and portfolio wave-02 completion
+
+Dual-mode environment configuration for all 9 services:
+
+  Mode 1 — Full Docker Compose (--profile runtime):
+    cp services/<svc>/configs/docker.env.example services/<svc>/configs/docker.env
+    Compose mounts docker.env; all hostnames are Docker-internal.
+
+  Mode 2 — FastAPI dev server (make run) with infra from Compose:
+    cp services/<svc>/configs/dev.local.env.example services/<svc>/configs/dev.local.env
+    pydantic-settings loads the file automatically; all URLs point to localhost.
+
+Infrastructure fixes:
+- docker-compose.yml: expose dual Kafka listeners (PLAINTEXT_HOST:9092 for
+  host access, PLAINTEXT:29092 for container-to-container); update
+  schema-registry and kafka-ui to use the internal listener; switch all
+  runtime service env_file refs from configs/.env to configs/docker.env
+
+Per-service changes (all 9):
+- configs/docker.env.example: new template with Docker-internal hostnames
+- src/*/config.py: add env_file + env_file_encoding to BaseSettings
+- alembic/env.py: resolve DB URL via Settings().database_url with
+  ALEMBIC_URL override escape hatch for CI
+- Makefile: add .env-check guard on run/migrate; source dev.local.env
+  in migrate and migrate-new so alembic picks up the DB URL
+
+Repo-level:
+- .gitignore: ignore services/*/configs/*.env; keep *.env.example tracked
+- ruff.toml: fix TCH003 per-file-ignore for alembic generated migrations
+
+Portfolio wave-02 (included in this commit):
+- Dockerfile, initial Alembic migration, contract/e2e/integration/unit tests
+- Fix configure_logging call signature in app.py to match observability lib

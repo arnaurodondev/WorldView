@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration for the portfolio service."""
 
-    model_config = {"env_prefix": "PORTFOLIO_"}
+    model_config = {
+        "env_prefix": "PORTFOLIO_",
+        "env_file": "configs/dev.local.env",
+        "env_file_encoding": "utf-8",
+    }
 
     # Server
     service_name: str = "portfolio"

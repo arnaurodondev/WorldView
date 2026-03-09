@@ -79,7 +79,7 @@ def parse_ohlcv_from_parquet(path: str | Path) -> list[CanonicalOHLCVBar]:
     Requires ``pyarrow`` to be installed. Raises ``ImportError`` if not available.
     """
     if not _PARQUET_AVAILABLE:
-        raise ImportError("pyarrow is required for Parquet support. " "Install it with: pip install pyarrow")
+        raise ImportError("pyarrow is required for Parquet support. Install it with: pip install pyarrow")
     path = Path(path)
     table = _pq.read_table(str(path))  # type: ignore[union-attr]
     records = table.to_pylist()
@@ -111,7 +111,7 @@ def to_parquet(bars: list[CanonicalOHLCVBar], path: str | Path) -> None:
     Requires ``pyarrow`` to be installed.
     """
     if not _PARQUET_AVAILABLE:
-        raise ImportError("pyarrow is required for Parquet support. " "Install it with: pip install pyarrow")
+        raise ImportError("pyarrow is required for Parquet support. Install it with: pip install pyarrow")
     path = Path(path)
     records = [bar.to_dict() for bar in bars]
     table = _pa.Table.from_pylist(records)  # type: ignore[union-attr]

@@ -1,6 +1,10 @@
-.PHONY: run test test-integration lint migrate migrate-new
+.PHONY: run test test-integration lint migrate migrate-new .env-check
 
-run:
+.env-check:
+	@test -f configs/dev.local.env || \
+		(echo "ERROR: configs/dev.local.env missing - run: cp configs/dev.local.env.example configs/dev.local.env" && exit 1)
+
+run: .env-check
 	uvicorn portfolio.app:create_app --factory --reload --port 8001
 
 test:
@@ -13,8 +17,8 @@ lint:
 	ruff check src/ tests/
 	mypy src/
 
-migrate:
-	alembic upgrade head
+migrate: .env-check
+	set -a && . ./configs/dev.local.env && set +a && alembic upgrade head
 
-migrate-new:
-	alembic revision --autogenerate -m "$(MSG)"
+migrate-new: .env-check
+	set -a && . ./configs/dev.local.env && set +a && alembic revision --autogenerate -m "$(MSG)"

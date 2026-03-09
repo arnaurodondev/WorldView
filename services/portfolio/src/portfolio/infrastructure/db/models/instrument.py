@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import UniqueConstraint, func
+from sqlalchemy import DateTime, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,4 +23,4 @@ class InstrumentModel(Base):
     currency: Mapped[str | None] = mapped_column(default=None)
     asset_class: Mapped[str | None] = mapped_column(default=None)
     source_event_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True))
-    synced_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -185,11 +185,13 @@ CREATE TABLE idempotency (
 
 ```
 services/portfolio/src/portfolio/
+├── app.py                   # FastAPI app factory, lifespan, middleware, health endpoints
+├── config.py                # Pydantic-settings
 ├── api/
-│   ├── main.py              # FastAPI app factory, middleware, health endpoints
-│   ├── dependencies.py      # DI (UoW, repos, use cases)
-│   ├── schemas.py           # Pydantic request/response models
+│   ├── dependencies.py      # DI (UoW dependency)
+│   ├── error_mapping.py     # DomainError → HTTP status code map
 │   ├── exception_handlers.py
+│   ├── schemas.py           # Pydantic request/response models
 │   └── routes/
 │       ├── tenant.py
 │       ├── user.py
@@ -199,47 +201,43 @@ services/portfolio/src/portfolio/
 │       └── instrument.py
 ├── application/
 │   ├── ports/
-│   │   ├── repositories.py  # Abstract repos (TenantRepo, PortfolioRepo, etc.)
+│   │   ├── repositories.py  # Abstract repos (8 ABCs + OutboxRecord)
 │   │   └── unit_of_work.py  # Abstract UoW
 │   └── use_cases/
 │       ├── create_portfolio.py
 │       ├── record_transaction.py
-│       ├── portfolio_ops.py  # rename, archive
-│       ├── read_models.py    # query use cases
-│       ├── tenant.py
-│       ├── user.py
-│       └── instrument.py    # sync from Kafka
+│       ├── portfolio_ops.py  # rename, archive, get, list
+│       ├── read_models.py    # GetHoldings, ListTransactions
+│       ├── tenant.py         # CreateTenant, GetTenant
+│       ├── user.py           # CreateUser, GetUser
+│       └── instrument.py     # GetInstrument, ListInstruments
 ├── domain/
 │   ├── entities/
 │   │   ├── tenant.py
 │   │   ├── user.py
 │   │   ├── portfolio.py
 │   │   ├── transaction.py
-│   │   ├── holding.py
-│   │   └── instrument.py
-│   ├── enums.py
-│   ├── events.py            # domain events (TenantCreated, TransactionRecorded, etc.)
-│   ├── errors.py
-│   └── value_objects.py
+│   │   ├── holding.py        # apply_delta() for weighted-avg cost
+│   │   └── instrument.py     # InstrumentRef (read-only local ref)
+│   ├── enums.py              # 7 StrEnums (uppercase values)
+│   ├── events.py             # DomainEvent ABC + 10 concrete events
+│   ├── errors.py             # 15+ DomainError subclasses
+│   └── value_objects.py      # Money, InstrumentKey, Quantity
 ├── infrastructure/
-│   ├── config/settings.py   # Pydantic-settings
-│   ├── db/
-│   │   ├── models/          # SQLAlchemy ORM models
-│   │   ├── repositories/    # Concrete repo implementations
-│   │   ├── session.py       # Async session factory
-│   │   └── unit_of_work.py  # Concrete UoW with outbox dispatch hook
-│   └── messaging/
-│       ├── dispatcher.py    # Outbox dispatcher (BaseOutboxDispatcher)
-│       └── kafka/
-│           ├── mapper.py
-│           ├── outbox_mapper.py
-│           ├── serialization.py
-│           ├── topics.py
-│           └── schemas/     # .avsc files
+│   └── db/
+│       ├── models/           # SQLAlchemy 2.0 ORM models (8 tables)
+│       ├── repositories/     # 8 SqlAlchemy*Repository implementations
+│       ├── session.py        # create_session_factory(url)
+│       └── unit_of_work.py   # SqlAlchemyUnitOfWork with on_commit hook
 ├── consumers/
-│   └── instrument_consumer.py  # Kafka consumer for instrument sync
+│   └── instrument_consumer.py  # InstrumentEventConsumer(BaseKafkaConsumer)
 └── messaging/
-    └── dispatcher_main.py   # Standalone dispatcher entry point
+    ├── dispatcher.py         # OutboxDispatcher(BaseOutboxDispatcher)
+    ├── dispatcher_main.py    # Standalone dispatcher entry point
+    ├── mapper.py             # Domain events → Avro dicts
+    ├── outbox_mapper.py      # OutboxRecord → KafkaMessage
+    ├── serialization.py      # Avro schema loading
+    └── topics.py             # EVENT_TOPIC_MAP
 ```
 
 ---
@@ -267,6 +265,26 @@ sequenceDiagram
     UC->>UoW: commit (single transaction)
     API-->>C: 201 Created
 ```
+
+---
+
+## Docker
+
+The service ships as a multi-stage Docker image built from `services/portfolio/Dockerfile`.
+The image is registered in `infra/compose/docker-compose.yml` under the `infra` profile.
+
+```bash
+# Start portfolio + dependencies (Postgres, Kafka, Valkey)
+docker compose -f infra/compose/docker-compose.yml --profile infra up -d
+
+# One-time migration (runs alembic upgrade head then exits)
+docker compose -f infra/compose/docker-compose.yml --profile infra run --rm portfolio-migrate
+
+# Tail logs
+docker compose -f infra/compose/docker-compose.yml logs -f portfolio
+```
+
+The service is exposed on host port **8001** (container port 8000).
 
 ---
 
@@ -304,22 +322,42 @@ Service-level caching is minimal (instrument lookups cached in-memory for consum
 
 ## Testing Plan
 
-| Type | What to Test | Command |
-|------|-------------|---------|
-| Unit | Domain entities (holding calculation, transaction validation) | `make test` |
-| Unit | Use cases (mock repos) | `make test` |
-| Integration | API endpoints → DB round-trip | `make test-integration` |
-| Contract | Avro schema compatibility | `scripts/gen-contracts.sh` |
+| Type | Coverage | Command |
+|------|----------|---------|
+| Unit | Domain entities, value objects, use cases (FakeUoW), error hierarchy | `python -m pytest tests/unit/ -v` |
+| Contract | 8 Avro schemas validated against generated event dicts via `fastavro` | `python -m pytest tests/contract/ -v` |
+| Integration | All 16 API endpoints → Postgres round-trip (testcontainers) | `python -m pytest tests/integration/ -v` |
+| E2E | Full BUY/SELL flow, outbox assertions, idempotency | `python -m pytest tests/e2e/ -v -m e2e` |
+
+**Test counts (as of wave-03 completion)**: 253 tests passing (191 unit + contract, 24 integration, 2 e2e).
 
 ---
 
 ## Local Run
 
 ```bash
+# Install deps (from repo root)
+uv pip install -e libs/common -e libs/contracts -e libs/messaging \
+               -e libs/observability -e libs/storage \
+               -e services/portfolio
+
 cd services/portfolio
-cp configs/dev.local.env.example .env
-make run       # uvicorn with hot-reload on port 8000
-make test      # pytest
-make lint      # ruff + mypy
-make migrate   # alembic upgrade head
+make run              # uvicorn --factory on port 8001 with hot-reload
+make test             # unit tests only
+make test-integration # integration tests (requires Docker)
+make lint             # ruff check + mypy strict
+make migrate          # alembic upgrade head
+make migrate-new MSG="add_column_foo"  # generate new migration
 ```
+
+**Environment variables** (set via `.env` or shell):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | (required) | `postgresql+asyncpg://...` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker(s) |
+| `KAFKA_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Schema registry |
+| `VALKEY_URL` | `redis://localhost:6379` | Valkey/Redis URL |
+| `SERVICE_NAME` | `portfolio` | Used in logs and traces |
+| `OTLP_ENDPOINT` | (optional) | OpenTelemetry collector endpoint |
+| `LOG_LEVEL` | `info` | structlog level |

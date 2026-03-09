@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration for the content-ingestion service."""
 
-    model_config = {"env_prefix": "CONTENT_INGESTION_"}
+    model_config = {
+        "env_prefix": "CONTENT_INGESTION_",
+        "env_file": "configs/dev.local.env",
+        "env_file_encoding": "utf-8",
+    }
 
     # Server
     host: str = "0.0.0.0"

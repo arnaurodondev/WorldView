@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration for the market-data service."""
 
-    model_config = {"env_prefix": "MARKET_DATA_"}
+    model_config = {
+        "env_prefix": "MARKET_DATA_",
+        "env_file": "configs/dev.local.env",
+        "env_file_encoding": "utf-8",
+    }
 
     # Server
     host: str = "0.0.0.0"

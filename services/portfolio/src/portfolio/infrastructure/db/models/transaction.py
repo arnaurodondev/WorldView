@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Index, Numeric, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,6 +31,6 @@ class TransactionModel(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(18, 8))
     fees: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     currency: Mapped[str]
-    executed_at: Mapped[datetime]
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     external_ref: Mapped[str | None] = mapped_column(default=None)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
