@@ -10,7 +10,7 @@ services:
   postgres:
     build:
       context: infra/postgres
-    profiles: [infra, init]
+    profiles: [infra, init, runtime, tools]
     ports:
       - "5432:5432"
     environment:
@@ -27,7 +27,7 @@ services:
 
   kafka:
     image: apache/kafka:4.1.1
-    profiles: [infra, init]
+    profiles: [infra, init, runtime, tools]
     ports:
       - "9092:9092"   # host-facing: localhost:9092
     environment:
@@ -55,7 +55,7 @@ services:
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.3
-    profiles: [infra]
+    profiles: [infra, tools]
     ports:
       - "8081:8081"
     environment:
@@ -86,7 +86,7 @@ services:
 
   valkey:
     image: valkey/valkey:8-alpine
-    profiles: [infra]
+    profiles: [infra, runtime]
     ports:
       - "6379:6379"
     volumes:
@@ -99,7 +99,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    profiles: [infra]
+    profiles: [infra, runtime]
     ports:
       - "11434:11434"
     volumes:
