@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration for the rag-chat service."""
 
-    model_config = {"env_prefix": "RAG_CHAT_"}
+    model_config = {
+        "env_prefix": "RAG_CHAT_",
+        "env_file": "configs/dev.local.env",
+        "env_file_encoding": "utf-8",
+    }
 
     # Server
     host: str = "0.0.0.0"

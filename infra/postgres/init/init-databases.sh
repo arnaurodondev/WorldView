@@ -12,6 +12,8 @@ DATABASES=(
     content_store_db
     nlp_db
     kg_db
+    rag_db
+    gateway_db
 )
 
 for DB in "${DATABASES[@]}"; do
@@ -47,7 +49,7 @@ SQL
 echo "Enabling AGE in kg_db"
 psql -d kg_db -v ON_ERROR_STOP=0 <<SQL
     CREATE EXTENSION IF NOT EXISTS age;
-    SET search_path = ag_catalog, "$user", public;
+    SET search_path = ag_catalog, "\$user", public;
     SELECT create_graph('market_kg');
 SQL
 

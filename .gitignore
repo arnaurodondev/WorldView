@@ -18,6 +18,11 @@ env/
 .env.*
 !*.env.example
 
+# Service config env files (actual settings — copied from *.env.example; NOT committed)
+# Template files (*.env.example) ARE committed and tracked.
+services/*/configs/*.env
+apps/*/configs/*.env
+
 # IDE
 .idea/
 .vscode/

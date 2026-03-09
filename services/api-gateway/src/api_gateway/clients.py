@@ -47,7 +47,7 @@ async def _checked_get(
     resp = await client.get(path, **kwargs)
     if resp.status_code >= 400:
         raise DownstreamError(service_name, resp.status_code, resp.text)
-    return cast(dict[str, Any], resp.json())
+    return cast("dict[str, Any]", resp.json())
 
 
 async def _checked_post(
@@ -60,7 +60,7 @@ async def _checked_post(
     resp = await client.post(path, **kwargs)
     if resp.status_code >= 400:
         raise DownstreamError(service_name, resp.status_code, resp.text)
-    return cast(dict[str, Any], resp.json())
+    return cast("dict[str, Any]", resp.json())
 
 
 # ── Typed wrappers ────────────────────────────────────────────────

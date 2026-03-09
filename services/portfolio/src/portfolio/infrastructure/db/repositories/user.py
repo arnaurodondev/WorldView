@@ -1,0 +1,60 @@
+"""SQLAlchemy implementation of UserRepository."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+
+from portfolio.application.ports.repositories import UserRepository
+from portfolio.domain.entities.user import User
+from portfolio.domain.enums import UserStatus
+from portfolio.infrastructure.db.models.user import UserModel
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class SqlAlchemyUserRepository(UserRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    def _to_entity(self, row: UserModel) -> User:
+        return User(
+            id=row.id,
+            tenant_id=row.tenant_id,
+            email=row.email,
+            status=UserStatus(row.status),
+            created_at=row.created_at,
+        )
+
+    async def get(self, user_id: UUID, tenant_id: UUID) -> User | None:
+        result = await self._session.execute(
+            select(UserModel).where(UserModel.id == user_id, UserModel.tenant_id == tenant_id)
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
+    async def get_by_email(self, email: str, tenant_id: UUID) -> User | None:
+        result = await self._session.execute(
+            select(UserModel).where(UserModel.email == email, UserModel.tenant_id == tenant_id)
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
+    async def save(self, user: User) -> None:
+        row = await self._session.get(UserModel, user.id)
+        if row is None:
+            row = UserModel(
+                id=user.id,
+                tenant_id=user.tenant_id,
+                email=user.email,
+                status=str(user.status),
+                created_at=user.created_at,
+            )
+            self._session.add(row)
+        else:
+            row.email = user.email
+            row.status = str(user.status)

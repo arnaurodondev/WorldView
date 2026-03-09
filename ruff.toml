@@ -31,10 +31,16 @@ ignore = [
 unfixable = ["F841"]  # don't auto-remove unused variables
 
 [lint.per-file-ignores]
-"**/tests/**/*.py" = ["S101", "S106", "T20"]
+"**/tests/**/*.py" = ["S101", "S106", "S603", "S607", "T20"]
 "services/*/src/*/config.py" = ["S104", "S105"]
-"alembic/**/*.py" = ["E501"]
+"libs/*/src/*/settings.py" = ["S105"]
+"**/alembic/**/*.py" = ["E501", "TCH003"]
 "scripts/**/*.py" = ["T20"]
+# FastAPI, Pydantic, and SQLAlchemy call get_type_hints() at runtime, so
+# runtime-annotated imports cannot be moved into TYPE_CHECKING blocks.
+"services/*/src/*/api/*.py" = ["TCH001", "TCH002", "TCH003"]
+"services/*/src/*/api/**/*.py" = ["TCH001", "TCH002", "TCH003"]
+"services/*/src/*/infrastructure/db/models/*.py" = ["TCH003"]
 
 [lint.isort]
 known-first-party = [

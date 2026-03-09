@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Configuration for the knowledge-graph service."""
 
-    model_config = {"env_prefix": "KNOWLEDGE_GRAPH_"}
+    model_config = {
+        "env_prefix": "KNOWLEDGE_GRAPH_",
+        "env_file": "configs/dev.local.env",
+        "env_file_encoding": "utf-8",
+    }
 
     # Server
     host: str = "0.0.0.0"
