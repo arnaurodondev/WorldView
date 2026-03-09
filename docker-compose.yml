@@ -9,7 +9,7 @@ services:
 
   postgres:
     image: timescale/timescaledb:latest-pg16
-    profiles: [infra]
+    profiles: [infra, init]
     ports:
       - "5432:5432"
     environment:
@@ -26,7 +26,7 @@ services:
 
   kafka:
     image: apache/kafka:4.1.1
-    profiles: [infra]
+    profiles: [infra, init]
     ports:
       - "9092:9092"   # host-facing: localhost:9092
     environment:
@@ -67,7 +67,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    profiles: [infra]
+    profiles: [infra, init]
     ports:
       - "7480:9000"
       - "7481:9001"
