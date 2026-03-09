@@ -8,7 +8,8 @@ services:
   # ── Infrastructure ───────────────────────────────────────
 
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    build:
+      context: infra/postgres
     profiles: [infra, init]
     ports:
       - "5432:5432"
@@ -139,6 +140,18 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+
+  migrate-portfolio:
+    build:
+      context: .
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [init]
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    env_file:
+      - services/portfolio/configs/docker.env
+    depends_on:
+      init-databases:
+        condition: service_completed_successfully
 
   # ── Dev Tools ────────────────────────────────────────────
 
