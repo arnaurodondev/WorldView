@@ -3,7 +3,7 @@ PYTHON    := $(VENV)/bin/python
 UV        := uv
 LIBS_ROOT := ../../libs
 
-.PHONY: run test test-integration test-contract test-e2e test-all lint migrate migrate-new .env-check setup
+.PHONY: run run-dispatcher test test-integration test-contract test-e2e test-all lint migrate migrate-new .env-check setup
 
 setup:
 	@test -d $(VENV) || $(UV) venv --python 3.11 $(VENV)
@@ -21,6 +21,9 @@ setup:
 
 run: .env-check
 	$(VENV)/bin/uvicorn portfolio.app:create_app --factory --reload --port 8001
+
+run-dispatcher: .env-check
+	$(VENV)/bin/python -m portfolio.messaging.dispatcher_main
 
 test:
 	$(VENV)/bin/pytest tests/ -m unit -v

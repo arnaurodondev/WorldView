@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.dispatcher.base import BaseOutboxDispatcher, DispatcherConfig  # type: ignore[import-untyped]
-from messaging.kafka.producer import KafkaProducerConfig, build_serializing_producer  # type: ignore[import-untyped]
+from messaging.kafka.producer import (  # type: ignore[import-untyped]
+    KafkaProducerConfig,
+    OutboxEventValueSerializer,
+    build_serializing_producer,
+)
 from messaging.kafka.schema_registry import (  # type: ignore[import-untyped]
     SchemaRegistryConfig,
     build_schema_registry_client,
@@ -45,7 +49,8 @@ class OutboxDispatcher(BaseOutboxDispatcher):
         producer_config = KafkaProducerConfig(
             bootstrap_servers=self._settings.kafka_bootstrap_servers,
         )
-        return build_serializing_producer(producer_config)
+        value_serializer = OutboxEventValueSerializer(self._serializers)
+        return build_serializing_producer(producer_config, value_serializer=value_serializer)
 
     def get_producer(self) -> Any:
         if self._producer is None:

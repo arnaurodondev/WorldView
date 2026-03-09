@@ -104,6 +104,26 @@ class KafkaEventValueSerializer:
 class OutboxEventValueSerializer(KafkaEventValueSerializer):
     """Serializer for :class:`OutboxKafkaValue` messages dispatched via outbox."""
 
+    def __call__(self, value: Any, ctx: Any) -> bytes | None:
+        """Serialize *value* by extracting its payload and routing to the
+        per-event-type AvroSerializer.
+
+        Args:
+            value: :class:`OutboxKafkaValue` carrying event_type and payload.
+            ctx: :class:`confluent_kafka.serialization.SerializationContext`.
+
+        Returns:
+            Serialized bytes, or ``None`` if *value* is ``None``.
+        """
+        if value is None:
+            return None
+        event_type: str = value.event_type
+        serializer = self._serializers.get(event_type)
+        if serializer is None:
+            msg = f"No serializer registered for event_type={event_type!r}"
+            raise KeyError(msg)
+        return serializer(value.payload, ctx)  # type: ignore[no-any-return]
+
 
 def build_serializing_producer(
     config: KafkaProducerConfig,
