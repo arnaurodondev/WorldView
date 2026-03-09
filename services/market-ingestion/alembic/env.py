@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
+from market_ingestion.config import Settings as _Settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
+
+# DB URL resolution: ALEMBIC_URL → MARKET_INGESTION_DATABASE_URL → alembic.ini fallback
+_db_url = os.environ.get("ALEMBIC_URL") or _Settings().database_url
+if _db_url:
+    config.set_main_option("sqlalchemy.url", _db_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 

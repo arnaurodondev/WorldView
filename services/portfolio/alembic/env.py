@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
+from portfolio.config import Settings as _Settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
+
+# DB URL resolution: Settings (loads configs/dev.local.env or env vars) → ALEMBIC_URL override
+config.set_main_option(
+    "sqlalchemy.url",
+    os.environ.get("ALEMBIC_URL") or _Settings().database_url,
+)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+from portfolio.infrastructure.db.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
@@ -23,7 +34,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection):  # type: ignore[no-untyped-def]
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()

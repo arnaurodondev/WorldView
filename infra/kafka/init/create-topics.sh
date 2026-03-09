@@ -3,7 +3,7 @@
 set -euo pipefail
 
 KAFKA_BIN="/opt/kafka/bin"
-BOOTSTRAP="kafka:9092"
+BOOTSTRAP="kafka:29092"
 
 echo "=== Creating Kafka topics ==="
 

@@ -22,7 +22,7 @@ router = APIRouter(prefix="/v1")
 
 def _clients(request: Request) -> ServiceClients:
     """Shortcut to get ServiceClients from app state."""
-    return cast(ServiceClients, request.app.state.clients)
+    return cast("ServiceClients", request.app.state.clients)
 
 
 # ── Company ───────────────────────────────────────────────

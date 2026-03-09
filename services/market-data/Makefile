@@ -1,20 +1,39 @@
-.PHONY: run test test-integration lint migrate migrate-new
+VENV      := .venv
+PYTHON    := $(VENV)/bin/python
+UV        := uv
+LIBS_ROOT := ../../libs
 
-run:
-	uvicorn market_data.app:create_app --factory --reload --port 8003
+.PHONY: run test test-integration lint migrate migrate-new .env-check setup
+
+setup:
+	@test -d $(VENV) || $(UV) venv --python 3.11 $(VENV)
+	$(UV) pip install --python $(PYTHON) \
+		-e $(LIBS_ROOT)/common \
+		-e $(LIBS_ROOT)/contracts \
+		-e $(LIBS_ROOT)/messaging \
+		-e $(LIBS_ROOT)/observability \
+		-e $(LIBS_ROOT)/storage \
+		-e ".[dev]"
+
+.env-check:
+	@test -f configs/dev.local.env || \
+		(echo "ERROR: configs/dev.local.env missing - run: cp configs/dev.local.env.example configs/dev.local.env" && exit 1)
+
+run: .env-check
+	$(VENV)/bin/uvicorn market_data.app:create_app --factory --reload --port 8003
 
 test:
-	pytest tests/ -m unit -v
+	$(VENV)/bin/pytest tests/ -m unit -v
 
 test-integration:
-	pytest tests/ -m integration -v
+	$(VENV)/bin/pytest tests/ -m integration -v
 
 lint:
-	ruff check src/ tests/
-	mypy src/
+	$(VENV)/bin/ruff check src/ tests/
+	$(VENV)/bin/mypy src/
 
-migrate:
-	alembic upgrade head
+migrate: .env-check
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/alembic upgrade head
 
-migrate-new:
-	alembic revision --autogenerate -m "$(MSG)"
+migrate-new: .env-check
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/alembic revision --autogenerate -m "$(MSG)"

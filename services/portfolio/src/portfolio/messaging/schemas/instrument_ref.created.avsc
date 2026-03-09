@@ -1,0 +1,23 @@
+{
+  "type": "record",
+  "name": "instrument_ref.created",
+  "namespace": "portfolio.events",
+  "doc": "Emitted when an instrument reference is synced from Market Data.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "instrument_ref.created"},
+    {"name": "aggregate_type", "type": "string", "default": "instrument"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "instrument_id", "type": "string", "default": ""},
+    {"name": "symbol", "type": "string", "default": ""},
+    {"name": "exchange", "type": "string", "default": ""},
+    {"name": "name", "type": ["null", "string"], "default": null},
+    {"name": "asset_class", "type": ["null", "string"], "default": null},
+    {"name": "currency", "type": ["null", "string"], "default": null}
+  ]
+}

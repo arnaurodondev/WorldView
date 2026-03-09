@@ -31,6 +31,25 @@ Each execution prompt must explicitly state:
 - list exact documentation files updated in handoff evidence
 - if no docs are changed, include explicit `N/A` justification
 
+## Documentation quality standard
+
+Every execution prompt generated from the wave-generation template (`0000-exec-wave-generation-template.md`)
+inherits the **Documentation quality standard** defined in that template. The standard requires:
+
+| Criterion | Requirement |
+|-----------|-------------|
+| Accuracy | Every API, field, event, config var matches the final implementation |
+| Diagrams | Mermaid diagram required for any flow with ≥3 components or ≥4 steps |
+| Code examples | Working, copy-pasteable examples for every new public class/function |
+| Abstract methods | Table documenting each abstract method (when called, what to do, return) |
+| Common pitfalls | `## Common Pitfalls` section with ≥3 concrete entries in every lib/service doc |
+| Lib docs | `docs/libs/<lib>.md` updated whenever `libs/` source is touched |
+| Service docs | `docs/services/<service>.md` reflects final endpoints/events/schema/env vars |
+| No orphans | No docs for unimplemented code; no stale docs for removed symbols |
+
+Each wave's handoff evidence must include a **Documentation quality checklist** table confirming
+each criterion is ✓ or explicitly N/A.
+
 ## Current Execution Prompt Set
 
 | ID | File | Purpose |

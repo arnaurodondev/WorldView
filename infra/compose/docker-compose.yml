@@ -126,6 +126,69 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Portfolio service ────────────────────────────────────────────────────────
+  portfolio:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://worldview:worldview@postgres:5432/worldview
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      VALKEY_URL: redis://valkey:6379
+      SERVICE_NAME: portfolio
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ── Portfolio outbox dispatcher ──────────────────────────────────────────────
+  portfolio-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      portfolio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://worldview:worldview@postgres:5432/worldview
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      SERVICE_NAME: portfolio-dispatcher
+      LOG_LEVEL: info
+    command: ["python", "-m", "portfolio.messaging.dispatcher_main"]
+    restart: on-failure
+
+  # ── Portfolio migrations (one-shot) ──────────────────────────────────────────
+  portfolio-migrate:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://worldview:worldview@postgres:5432/worldview
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
 volumes:
   minio_data:
   postgres_data:

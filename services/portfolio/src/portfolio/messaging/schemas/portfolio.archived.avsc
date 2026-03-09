@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "portfolio.archived",
+  "namespace": "portfolio.events",
+  "doc": "Emitted when a portfolio is archived.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "portfolio.archived"},
+    {"name": "aggregate_type", "type": "string", "default": "portfolio"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "portfolio_id", "type": "string", "default": ""}
+  ]
+}
