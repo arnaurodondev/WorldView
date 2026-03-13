@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
+
+from portfolio.config import Settings
 
 if TYPE_CHECKING:
     import pytest
 
-from portfolio.config import Settings
 
-
-def test_defaults() -> None:
-    s = Settings(_env_file=None)  # bypass dev.local.env to test pure defaults
+def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Remove any PORTFOLIO_* process env vars so we test pure field defaults,
+    # not whatever dev.local.env injected via `make test-all`.
+    for key in list(os.environ):
+        if key.startswith("PORTFOLIO_"):
+            monkeypatch.delenv(key, raising=False)
+    s = Settings(_env_file=None)  # also skip any env file on disk
     assert s.service_name == "portfolio"
     assert s.host == "0.0.0.0"  # noqa: S104
     assert s.port == 8001

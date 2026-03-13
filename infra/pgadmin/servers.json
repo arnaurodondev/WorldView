@@ -1,0 +1,24 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Postgres (worldview-test)",
+      "Group": "Worldview",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "postgres",
+      "Username": "postgres",
+      "PassFile": "/pgpass",
+      "SSLMode": "prefer"
+    },
+    "2": {
+      "Name": "TimescaleDB (worldview-test)",
+      "Group": "Worldview",
+      "Host": "timescaledb",
+      "Port": 5432,
+      "MaintenanceDB": "market_data_db",
+      "Username": "postgres",
+      "PassFile": "/pgpass",
+      "SSLMode": "prefer"
+    }
+  }
+}

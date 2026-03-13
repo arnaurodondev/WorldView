@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Create all application databases + extensions.
+# POSTGRES_USER must be a superuser (postgres:postgres is the default for this stack).
 set -euo pipefail
 
 echo "=== Creating worldview databases ==="
 
 DATABASES=(
     portfolio_db
-    market_ingestion_db
+    ingestion_db
     market_data_db
     content_ingestion_db
     content_store_db

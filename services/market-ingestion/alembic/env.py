@@ -13,15 +13,18 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
 
-# DB URL resolution: ALEMBIC_URL → MARKET_INGESTION_DATABASE_URL → alembic.ini fallback
-_db_url = os.environ.get("ALEMBIC_URL") or _Settings().database_url
-if _db_url:
-    config.set_main_option("sqlalchemy.url", _db_url)
+# DB URL resolution: Settings (reads MARKET_INGESTION_DATABASE_URL env var) → ALEMBIC_URL override
+config.set_main_option(
+    "sqlalchemy.url",
+    os.environ.get("ALEMBIC_URL") or _Settings().database_url,
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+from market_ingestion.infrastructure.db.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

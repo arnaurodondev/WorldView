@@ -1,0 +1,134 @@
+"""Read-side query helpers for the fundamentals tables.
+
+The ``FundamentalsRepository`` ABC is write-only (upsert-focused).  These
+helpers provide read access to the fundamentals data for the API layer.
+
+Note: The domain ``FundamentalsRecord.security_id`` maps to the DB column
+``instrument_id`` (the FK to ``instruments.id``).  This is a legacy naming
+convention preserved for backward compatibility.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import select
+
+from market_data.domain.entities import FundamentalsRecord
+from market_data.domain.enums import FundamentalsSection, PeriodType
+from market_data.infrastructure.db.models.fundamentals import (
+    AnalystConsensusModel,
+    BalanceSheetModel,
+    CashFlowStatementModel,
+    CompanyProfileModel,
+    DividendHistoryModel,
+    EarningsAnnualTrendModel,
+    EarningsHistoryModel,
+    EarningsTrendModel,
+    FundHoldersModel,
+    HighlightsModel,
+    IncomeStatementModel,
+    InsiderTransactionsSnapshotModel,
+    InstitutionalHoldersModel,
+    OutstandingSharesModel,
+    ShareStatisticsModel,
+    SplitsDividendsModel,
+    TechnicalsSnapshotModel,
+    ValuationRatiosModel,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+# Mapping from FundamentalsSection enum → ORM model class
+_SECTION_MODEL_MAP: dict[FundamentalsSection, type] = {
+    FundamentalsSection.INCOME_STATEMENT: IncomeStatementModel,
+    FundamentalsSection.BALANCE_SHEET: BalanceSheetModel,
+    FundamentalsSection.CASH_FLOW: CashFlowStatementModel,
+    FundamentalsSection.HIGHLIGHTS: HighlightsModel,
+    FundamentalsSection.VALUATION_RATIOS: ValuationRatiosModel,
+    FundamentalsSection.TECHNICALS_SNAPSHOT: TechnicalsSnapshotModel,
+    FundamentalsSection.SHARE_STATISTICS: ShareStatisticsModel,
+    FundamentalsSection.SPLITS_DIVIDENDS: SplitsDividendsModel,
+    FundamentalsSection.ANALYST_CONSENSUS: AnalystConsensusModel,
+    FundamentalsSection.EARNINGS_HISTORY: EarningsHistoryModel,
+    FundamentalsSection.EARNINGS_TREND: EarningsTrendModel,
+    FundamentalsSection.EARNINGS_ANNUAL_TREND: EarningsAnnualTrendModel,
+    FundamentalsSection.DIVIDEND_HISTORY: DividendHistoryModel,
+    FundamentalsSection.OUTSTANDING_SHARES: OutstandingSharesModel,
+    FundamentalsSection.COMPANY_PROFILE: CompanyProfileModel,
+    FundamentalsSection.INSTITUTIONAL_HOLDERS: InstitutionalHoldersModel,
+    FundamentalsSection.FUND_HOLDERS: FundHoldersModel,
+    FundamentalsSection.INSIDER_TRANSACTIONS_SNAPSHOT: InsiderTransactionsSnapshotModel,
+}
+
+# Sections that use FundamentalsModelMixin (have period_type / period_end_date columns)
+_MIXIN_SECTIONS: frozenset[FundamentalsSection] = frozenset(
+    _SECTION_MODEL_MAP.keys() - {FundamentalsSection.COMPANY_PROFILE}
+)
+
+
+def _row_to_domain(row: object, section: FundamentalsSection) -> FundamentalsRecord:
+    """Convert a mixin-based ORM fundamentals row to a domain ``FundamentalsRecord``."""
+    return FundamentalsRecord(
+        id=row.id,  # type: ignore[attr-defined]
+        security_id=row.instrument_id,  # type: ignore[attr-defined]
+        section=section,
+        period_end=row.period_end_date,  # type: ignore[attr-defined]
+        period_type=(
+            PeriodType(row.period_type)  # type: ignore[attr-defined]
+            if row.period_type in PeriodType._value2member_map_  # type: ignore[attr-defined]
+            else PeriodType.ANNUAL
+        ),
+        data=row.data or {},  # type: ignore[attr-defined]
+        source="",
+        ingested_at=row.ingested_at,  # type: ignore[attr-defined]
+    )
+
+
+def _company_profile_row_to_domain(row: object) -> FundamentalsRecord:
+    """Convert a CompanyProfileModel row (no period columns) to a domain record.
+
+    Uses ``ingested_at`` as a surrogate ``period_end`` and ``PeriodType.SNAPSHOT``
+    since company profile is a point-in-time snapshot with no fiscal period.
+    """
+    return FundamentalsRecord(
+        id=row.id,  # type: ignore[attr-defined]
+        security_id=row.instrument_id,  # type: ignore[attr-defined]
+        section=FundamentalsSection.COMPANY_PROFILE,
+        period_end=row.ingested_at,  # type: ignore[attr-defined]
+        period_type=PeriodType.SNAPSHOT,
+        data=row.data or {},  # type: ignore[attr-defined]
+        source="",
+        ingested_at=row.ingested_at,  # type: ignore[attr-defined]
+    )
+
+
+async def query_fundamentals(
+    session: AsyncSession,
+    security_id: str,
+    section: FundamentalsSection,
+) -> list[FundamentalsRecord]:
+    """Query all records for a given instrument + section.
+
+    Args:
+        session: An open ``AsyncSession`` (use the read session for read-only callers).
+        security_id: The instrument UUID (stored as instrument_id in DB).
+        section: Which fundamentals section to query.
+
+    Returns:
+        List of domain ``FundamentalsRecord`` instances.
+    """
+    model_class = _SECTION_MODEL_MAP.get(section)
+    if model_class is None:
+        return []
+
+    result: Any = await session.execute(
+        select(model_class).where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
+    )
+    rows = result.scalars().all()
+
+    if section == FundamentalsSection.COMPANY_PROFILE:
+        return [_company_profile_row_to_domain(row) for row in rows]
+
+    return [_row_to_domain(row, section) for row in rows]
