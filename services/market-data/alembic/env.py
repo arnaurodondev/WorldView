@@ -6,8 +6,10 @@ import asyncio
 import os
 from logging.config import fileConfig
 
+import market_data.infrastructure.db.models  # noqa: F401 — registers all ORM models with Base
 from alembic import context
 from market_data.config import Settings as _Settings
+from market_data.infrastructure.db.base import Base
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -21,7 +23,7 @@ if _db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

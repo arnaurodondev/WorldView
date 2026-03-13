@@ -5,10 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from portfolio.application.ports.repositories import PortfolioRepository
 from portfolio.domain.entities.portfolio import Portfolio
 from portfolio.domain.enums import PortfolioStatus
+from portfolio.domain.errors import PortfolioAlreadyExistsError
 from portfolio.infrastructure.db.models.portfolio import PortfolioModel
 
 if TYPE_CHECKING:
@@ -64,6 +66,12 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
                 created_at=portfolio.created_at,
             )
             self._session.add(row)
+            try:
+                await self._session.flush()
+            except IntegrityError as exc:
+                raise PortfolioAlreadyExistsError(
+                    f"Portfolio with name '{portfolio.name}' already exists for owner {portfolio.owner_id}",
+                ) from exc
         else:
             row.name = portfolio.name
             row.status = str(portfolio.status)

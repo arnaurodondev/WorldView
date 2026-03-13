@@ -1,19 +1,40 @@
 {
   "type": "record",
-  "name": "MarketDatasetFetchedV1",
+  "name": "MarketDatasetFetched",
   "namespace": "market.events",
-  "doc": "Emitted when a dataset has been fetched and stored in object storage (claim-check).",
+  "doc": "Event emitted when a market dataset has been fetched and stored. Claim-check pattern: consumers follow bronze_ref_* and canonical_ref_* pointers to retrieve data from object storage.",
   "fields": [
-    {"name": "event_id", "type": "string", "doc": "Unique event identifier (ULID)"},
-    {"name": "timestamp", "type": "string", "doc": "ISO-8601 UTC timestamp"},
-    {"name": "topic", "type": "string", "doc": "Kafka topic name"},
-    {"name": "bucket", "type": "string", "doc": "Object storage bucket"},
-    {"name": "key", "type": "string", "doc": "Object storage key"},
-    {"name": "symbol", "type": "string"},
-    {"name": "exchange", "type": "string"},
-    {"name": "from_date", "type": "string", "doc": "Start date YYYY-MM-DD"},
-    {"name": "to_date", "type": "string", "doc": "End date YYYY-MM-DD"},
-    {"name": "row_count", "type": "int"},
-    {"name": "schema_version", "type": "int", "default": 2}
+    { "name": "event_id",      "type": "string", "doc": "UUIDv7 / ULID unique event identifier" },
+    { "name": "event_type",    "type": "string", "doc": "Stable event type: market.dataset.fetched" },
+    { "name": "schema_version","type": "int",    "doc": "Schema version number (bump on breaking change)" },
+    { "name": "occurred_at",   "type": "string", "doc": "ISO-8601 UTC timestamp when the event occurred" },
+    { "name": "correlation_id","type": ["null", "string"], "default": null, "doc": "Distributed tracing correlation ID" },
+    { "name": "causation_id",  "type": ["null", "string"], "default": null, "doc": "ID of the event that caused this one" },
+
+    { "name": "task_id",       "type": "string", "doc": "Ingestion task ID that produced this dataset" },
+    { "name": "provider",      "type": "string", "doc": "Data provider slug (e.g. eodhd, polygon)" },
+    { "name": "dataset_type",  "type": "string", "doc": "Dataset type (ohlcv, quotes, fundamentals)" },
+    { "name": "symbol",        "type": "string", "doc": "Instrument symbol (e.g. AAPL)" },
+    { "name": "exchange",      "type": ["null", "string"], "default": null, "doc": "Exchange code (e.g. US, LSE)" },
+    { "name": "timeframe",     "type": ["null", "string"], "default": null, "doc": "Bar timeframe for OHLCV (e.g. 1d)" },
+    { "name": "variant",       "type": ["null", "string"], "default": null, "doc": "Fundamentals variant (e.g. annual)" },
+
+    { "name": "range_start",   "type": ["null", "string"], "default": null, "doc": "ISO-8601 start of data range" },
+    { "name": "range_end",     "type": ["null", "string"], "default": null, "doc": "ISO-8601 end of data range" },
+
+    { "name": "bronze_ref_bucket",      "type": "string", "doc": "Object-storage bucket for raw (bronze) data" },
+    { "name": "bronze_ref_key",         "type": "string", "doc": "Object key for raw (bronze) data" },
+    { "name": "bronze_ref_sha256",      "type": "string", "doc": "SHA-256 hex checksum of the bronze object" },
+    { "name": "bronze_ref_byte_length", "type": "long",   "doc": "Size of the bronze object in bytes" },
+    { "name": "bronze_ref_mime_type",   "type": "string", "doc": "MIME type of the bronze object" },
+
+    { "name": "canonical_ref_bucket",      "type": "string", "doc": "Object-storage bucket for canonical (JSONL) data" },
+    { "name": "canonical_ref_key",         "type": "string", "doc": "Object key for canonical data" },
+    { "name": "canonical_ref_sha256",      "type": "string", "doc": "SHA-256 hex checksum of the canonical object" },
+    { "name": "canonical_ref_byte_length", "type": "long",   "doc": "Size of the canonical object in bytes" },
+    { "name": "canonical_ref_mime_type",   "type": "string", "doc": "MIME type of the canonical object (application/x-ndjson)" },
+
+    { "name": "canonical_schema_version", "type": "int",           "default": 1,    "doc": "Version of the canonical data schema" },
+    { "name": "row_count",                "type": ["null", "long"], "default": null, "doc": "Number of records in the canonical dataset" }
   ]
 }

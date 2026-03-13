@@ -83,6 +83,8 @@ src/<service>/
 - [ ] Verify the Avro schemas in `infra/kafka/schemas/` if your change involves events
 - [ ] **Read `docs/ai-interactions/BUG_PATTERNS.md`** — scan the index for categories
       matching your task. If any pattern applies, read the full entry before writing code.
+- [ ] Define a task-scoped `write_paths` list and avoid edits outside it
+- [ ] Define task-scoped validation commands (targeted pytest + changed-path ruff + changed-package mypy)
 
 ## 4. After You Code — Checklist
 
@@ -90,7 +92,8 @@ src/<service>/
 - [ ] **Docs**: Update `docs/services/<service>.md` if you changed API, events, or schema
 - [ ] **Schema compatibility**: If you modified an Avro schema, ensure it's forward-compatible
         (add fields with defaults; never remove or rename fields)
-- [ ] **Lint + Type check**: Run `scripts/lint.sh` — must pass with zero errors
+- [ ] **Task-scoped quality gates first**: run targeted pytest + changed-path `ruff check` + changed-package `mypy`; fix all failures immediately
+- [ ] **Lint + Type check (broad)**: Run `scripts/lint.sh` at wave/final handoff boundary
 - [ ] **Migrations**: If you changed a DB model, create an Alembic migration
 - [ ] **Env vars**: If you added a new config var, update `configs/dev.local.env.example`
 - [ ] **MASTER_PLAN.md**: If you changed system-wide behavior, update the master doc
@@ -106,6 +109,9 @@ See `RULES.md` for the complete list. Key ones:
 5. **UUIDv7 for all entity IDs** — time-sortable, globally unique
 6. **UTC-only timestamps** — never use naive datetimes
 7. **No secrets in code** — use env vars or secret managers
+8. **No deferred quality debt** — do not leave ruff/mypy/test failures for a later pass
+9. **No done-state without green gates** — a task is not complete unless its required checks pass
+10. **No unbounded exploration** — if scope is known, begin implementation after focused reads
 
 ## 6. How to Propose Architectural Changes
 

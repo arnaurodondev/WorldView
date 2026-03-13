@@ -34,6 +34,9 @@ Given one planning prompt and one planning response, generate multiple execution
 13. Every generated wave prompt must explicitly require documentation updates for any behavior/API/event/config/schema/test-surface change and list exact docs files updated. Documentation must conform to the **Documentation quality standard** defined below.
 14. Every generated wave prompt must require a post-wave commit message proposal: a concise commit title plus 1-2 sentences describing what was implemented and validated.
 15. Every generated wave prompt must require a highly detailed PR description only for the final wave of that scope.
+16. Every generated wave prompt must enforce a **task-scoped fail-fast gate**: targeted tests + changed-path `ruff check` + changed-package `mypy` before the next task starts.
+17. Every generated wave prompt must include an explicit **No Deferred Fixes** rule: no carrying ruff/mypy/test failures into later tasks.
+18. Every generated wave prompt must include a **Scope & Token Budget** section with bounded `write_paths` and a maximum exploration pass before first edit.
 
 ## Documentation quality standard
 
@@ -178,20 +181,29 @@ Each generated file must contain exactly these sections:
    - concrete implementation steps for each task ID in this wave
 9. `## Constraints`
    - explicit “do not implement outside listed task IDs”
-10. `## Required tests`
+10. `## Scope & token budget`
+   - task `write_paths`
+   - exploration bound (e.g., max files to inspect before editing)
+   - stop condition if scope is still ambiguous
+11. `## Required tests`
    - exact commands if available in source; otherwise explicit placeholders
    - pass criteria
-11. `## Documentation requirements`
+12. `## Incremental quality gates (mandatory)`
+   - per-task command sequence (targeted pytest, changed-path ruff, changed-package mypy)
+   - mandatory immediate fix rule before continuing
+13. `## Documentation requirements`
    - files likely impacted + update conditions
    - mandatory instruction: if implementation changes behavior/contracts/config/schema/API/tests, update docs in the same wave
    - **mandatory**: explicitly reference the Documentation quality standard from this template — accuracy, diagrams, realistic examples, pitfalls section, lib and service doc updates
    - list exact documentation files updated (or `N/A` with justification)
-12. `## Required handoff evidence`
+14. `## Required handoff evidence`
    - changed files, tests run/results, docs changed (exact files + summary), unresolved blockers
+   - validation ledger (command, scope, exit code, result)
    - commit message proposal (title + 1-2 sentence body)
    - final wave only: highly detailed PR description covering scope summary, task IDs, changed files grouped by area, tests/lint/typecheck evidence, docs/ADR updates, migration/compatibility notes, risks, and rollback/next steps
-13. `## Definition of done`
+15. `## Definition of done`
    - includes documentation updates completed and quality-standard checklist verified (or explicit N/A justification per criterion)
+   - includes incremental quality gates passed for each task (no deferred failures)
    - includes commit message proposal for every wave and final-wave PR description when applicable
    - **documentation quality gate**: all 8 quality criteria from the Documentation quality standard must be confirmed ✓ or explicitly N/A before the wave is considered done
 
@@ -206,6 +218,7 @@ For each generated wave prompt, validate:
 - docs/test obligations explicitly listed
 - each wave includes mandatory documentation update rule and evidence requirement
 - **each wave includes a reference to the Documentation quality standard and requires the quality checklist in handoff evidence**
+- each wave includes incremental fail-fast validation commands and no-deferred-fixes rule
 - each wave includes commit-message requirement and only the final wave includes a highly detailed PR-description requirement
 
 Global validation (mandatory):

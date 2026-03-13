@@ -3,7 +3,7 @@ PYTHON    := $(VENV)/bin/python
 UV        := uv
 LIBS_ROOT := ../../libs
 
-.PHONY: run test test-integration lint migrate migrate-new .env-check setup
+.PHONY: run test test-integration test-e2e lint migrate migrate-new .env-check setup
 
 setup:
 	@test -d $(VENV) || $(UV) venv --python 3.11 $(VENV)
@@ -27,6 +27,10 @@ test:
 
 test-integration:
 	$(VENV)/bin/pytest tests/ -m integration -v
+
+test-e2e:
+	$(VENV)/bin/pytest tests/e2e/ -m "e2e" -v \
+		--timeout=120
 
 lint:
 	$(VENV)/bin/ruff check src/ tests/

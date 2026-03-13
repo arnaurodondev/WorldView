@@ -97,7 +97,8 @@ class MarketDatasetFetched(DomainEvent):
             "occurred_at": self.occurred_at,
             "correlation_id": self.correlation_id,
             "causation_id": self.causation_id,
-            # Dataset metadata (6)
+            # Task + dataset identity (7)
+            "task_id": self.task_id,
             "provider": self.provider,
             "dataset_type": self.dataset_type,
             "symbol": self.symbol,
@@ -105,42 +106,41 @@ class MarketDatasetFetched(DomainEvent):
             "timeframe": self.timeframe,
             "variant": self.variant,
             # Date range (2)
-            "range_start": self.range_start,
-            "range_end": self.range_end,
+            "range_start": self.range_start or None,
+            "range_end": self.range_end or None,
             # Bronze ref — ObjectRef flattened (5)
-            "bronze_bucket": self.bronze_ref.bucket,
-            "bronze_key": self.bronze_ref.key,
-            "bronze_etag": self.bronze_ref.sha256,
-            "bronze_byte_length": self.bronze_ref.byte_length,
-            "bronze_content_type": self.bronze_ref.mime_type,
-            # Canonical ref — ObjectRef flattened (6)
-            "canonical_bucket": self.canonical_ref.bucket,
-            "canonical_key": self.canonical_ref.key,
-            "canonical_etag": self.canonical_ref.sha256,
-            "canonical_byte_length": self.canonical_ref.byte_length,
-            "canonical_content_type": self.canonical_ref.mime_type,
+            "bronze_ref_bucket": self.bronze_ref.bucket,
+            "bronze_ref_key": self.bronze_ref.key,
+            "bronze_ref_sha256": self.bronze_ref.sha256,
+            "bronze_ref_byte_length": self.bronze_ref.byte_length,
+            "bronze_ref_mime_type": self.bronze_ref.mime_type,
+            # Canonical ref — ObjectRef flattened (5)
+            "canonical_ref_bucket": self.canonical_ref.bucket,
+            "canonical_ref_key": self.canonical_ref.key,
+            "canonical_ref_sha256": self.canonical_ref.sha256,
+            "canonical_ref_byte_length": self.canonical_ref.byte_length,
+            "canonical_ref_mime_type": self.canonical_ref.mime_type,
+            # Metadata (2)
             "canonical_schema_version": self.canonical_schema_version,
-            # Stats (2)
-            "row_count": self.row_count,
-            "task_id": self.task_id,
+            "row_count": self.row_count if self.row_count else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, object]) -> MarketDatasetFetched:
         """Reconstruct from a flat dict produced by to_dict()."""
         bronze_ref = ObjectRef(
-            bucket=str(d["bronze_bucket"]),
-            key=str(d["bronze_key"]),
-            sha256=str(d["bronze_etag"]),
-            byte_length=cast(int, d["bronze_byte_length"]),
-            mime_type=str(d["bronze_content_type"]),
+            bucket=str(d["bronze_ref_bucket"]),
+            key=str(d["bronze_ref_key"]),
+            sha256=str(d["bronze_ref_sha256"]),
+            byte_length=cast(int, d["bronze_ref_byte_length"]),
+            mime_type=str(d["bronze_ref_mime_type"]),
         )
         canonical_ref = ObjectRef(
-            bucket=str(d["canonical_bucket"]),
-            key=str(d["canonical_key"]),
-            sha256=str(d["canonical_etag"]),
-            byte_length=cast(int, d["canonical_byte_length"]),
-            mime_type=str(d["canonical_content_type"]),
+            bucket=str(d["canonical_ref_bucket"]),
+            key=str(d["canonical_ref_key"]),
+            sha256=str(d["canonical_ref_sha256"]),
+            byte_length=cast(int, d["canonical_ref_byte_length"]),
+            mime_type=str(d["canonical_ref_mime_type"]),
         )
         return cls(
             event_id=str(d.get("event_id") or _new_event_id()),

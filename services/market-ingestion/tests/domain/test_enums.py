@@ -54,12 +54,23 @@ def test_dataset_type_values_accessible() -> None:
 @pytest.mark.unit
 def test_dataset_type_membership_exhaustive() -> None:
     members = {d.value for d in DatasetType}
-    assert members == {"ohlcv", "quotes", "fundamentals"}
+    assert members == {
+        "ohlcv",
+        "quotes",
+        "fundamentals",
+        "earnings_calendar",
+        "economic_events",
+        "macro_indicator",
+        "news_sentiment",
+        "insider_transactions",
+        "yield_curve",
+        "market_cap",
+    }
 
 
 @pytest.mark.unit
 def test_dataset_type_iteration() -> None:
-    assert len(list(DatasetType)) == 3
+    assert len(list(DatasetType)) == 10
 
 
 # ── FundamentalsVariant ───────────────────────────────────────────────────────

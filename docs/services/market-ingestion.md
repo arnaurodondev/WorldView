@@ -1,7 +1,8 @@
 # Market Ingestion Service
 
-> **Owner**: Ingestion domain · **Database**: `market_ingestion_db` · **Port**: 8001
-> **Status**: Existing (migrated from `platform_repo/apps/backend-market-ingestion`)
+> **Owner**: Ingestion domain · **Database**: `ingestion_db` · **Port**: 8002
+> **Status**: Migration complete (wave 03 — 2026-03)
+> **Runbook**: [docs/runbooks/market-ingestion-operations.md](../runbooks/market-ingestion-operations.md)
 
 ---
 
@@ -54,7 +55,7 @@ None — this service is a producer-only service.
 CREATE TABLE ingestion_tasks (
     id              UUID PRIMARY KEY,
     provider        VARCHAR(20) NOT NULL,
-    dataset_type    VARCHAR(30) NOT NULL,  -- 'ohlcv', 'quotes', 'fundamentals'
+    dataset_type    VARCHAR(30) NOT NULL,  -- ohlcv, quotes, fundamentals, earnings_calendar, economic_events, macro_indicator, news_sentiment, insider_transactions, yield_curve, market_cap
     symbol          VARCHAR(20) NOT NULL,
     exchange        VARCHAR(10),
     timeframe       VARCHAR(5),
@@ -156,6 +157,29 @@ services/market-ingestion/src/app/
 └── messaging/dispatcher_main.py  # Standalone outbox dispatcher
 ```
 
+### EODHD Adapter Methods (11 total)
+
+The `EODHDProviderAdapter` implements 11 fetch methods covering all supported EODHD endpoints:
+
+**Original endpoints (3):**
+- `fetch_ohlcv` — EOD daily bars (or intraday by minute)
+- `fetch_quotes` — 15-minute delayed quotes
+- `fetch_fundamentals` — All fundamentals sections (18 total)
+
+**Extended endpoints (8, added in waves 01–03):**
+- `fetch_earnings_calendar` — Upcoming earnings announcements (EXT-02)
+- `fetch_economic_events` — Economic calendar events (EXT-03)
+- `fetch_macro_indicator` — Macro indicators (GDP, inflation, etc.) (EXT-04)
+- `fetch_news_sentiment` — News article sentiment analysis (EXT-05)
+- `fetch_insider_transactions` — Insider trading activity (EXT-06)
+- `fetch_yield_curve` — Yield curve rates by maturity (EXT-07)
+- `fetch_historical_market_cap` — Market cap time series (EXT-08)
+
+All methods perform provider-level error mapping (auth errors, rate limits, transient failures)
+and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (accessible by
+everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
+the other 5 endpoints require a paid subscription.
+
 ---
 
 ## Runtime Processes (4)
@@ -220,6 +244,8 @@ sequenceDiagram
 |------|------|---------|
 | Unit | Domain entities, canonical transformation | `make test` |
 | Unit | Use cases (mock repos + adapters) | `make test` |
+| Unit | EODHD adapter (mocked) | `make test` (22 tests) |
+| Live | EODHD adapter with real demo API calls | `make test -- tests/live/test_eodhd_live.py` (56 tests: 48 passed, 8 xfailed for paid-only) |
 | Integration | Worker → MinIO round-trip | `make test-integration` |
 | Contract | Avro schema (market.dataset.fetched) | `scripts/gen-contracts.sh` |
 
