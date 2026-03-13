@@ -28,6 +28,24 @@
 - If you add a new function or class, add a test immediately — do not defer.
 - For integration tests requiring infra, verify infra is running first.
 
+### Fail-Fast Validation Loop (Mandatory)
+- Do not batch large edits before validation. Validate immediately after each logical task.
+- Run the **smallest sufficient gate first**:
+  1. tests that directly cover changed behavior,
+  2. `ruff check` on changed paths,
+  3. `mypy` on changed package/module.
+- Fix failures before continuing to the next task. Do not defer lint/type fixes to the end of a wave.
+- Do not report a task as complete until task-scoped gates are green.
+- Run broad/full-suite checks only at wave boundaries or final handoff.
+
+### Token & Context Efficiency Rules
+- Start from user-provided scope. Avoid broad exploratory reads when target files are already known.
+- Read only files needed for the active task. Prefer targeted searches over opening entire directories.
+- Keep one active objective at a time; avoid mixing refactors and feature work in the same step.
+- If more than 8 files have been read without making an edit, pause and restate the minimal execution plan.
+- Prefer incremental edits with immediate validation over large multi-file rewrites.
+- If stuck after 2 failed fix attempts on the same issue, summarize blocker + options instead of blind retries.
+
 ### Keep Documentation Updated
 - If you change an API endpoint, update `docs/services/<service>.md`.
 - If you change a Kafka event, update the Avro schema AND the service doc.

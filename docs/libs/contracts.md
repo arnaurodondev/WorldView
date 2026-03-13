@@ -32,25 +32,60 @@ The two must be kept in sync. `scripts/gen-contracts.sh` validates this.
 
 ### Canonical Models
 
+**Market data (OHLCV, quotes, fundamentals):**
+
 | Class | Purpose | Version |
 |-------|---------|---------|
 | `CanonicalOHLCVBar` | Open-high-low-close-volume bar | v1 |
 | `CanonicalQuote` | Real-time / delayed quote snapshot | v1 |
-| `CanonicalFundamentals` | Company fundamentals snapshot | v1 |
+| `CanonicalFundamentals` | Company fundamentals snapshot (18 sections) | v1 |
+
+**Extended market data (new in waves 01–03, EXT-02–EXT-08):**
+
+| Class | Purpose | Version |
+|-------|---------|---------|
+| `CanonicalEarningsEvent` | Earnings announcement event | v1 |
+| `CanonicalEconomicEvent` | Economic calendar event (inflation, GDP, etc.) | v1 |
+| `CanonicalMacroIndicator` | Macro indicator snapshot (GDP, inflation rate, unemployment) | v1 |
+| `CanonicalNewsSentiment` | News article with sentiment analysis | v1 |
+| `CanonicalInsiderTransaction` | Insider trading transaction | v1 |
+| `CanonicalYieldPoint` | Yield curve point (maturity + rate) | v1 |
+| `CanonicalMarketCapPoint` | Historical market cap data point | v1 |
+
+**NLP pipeline (sentiment, entities):**
+
+| Class | Purpose | Version |
+|-------|---------|---------|
 | `CanonicalArticle` | Normalised news/content article | v1 |
 | `CanonicalEntity` | Knowledge-graph entity (NER output) | v1 |
 | `CanonicalSentiment` | Sentiment analysis result | v1 |
+| `CanonicalDailySentiment` | Aggregated daily sentiment signal | v1 |
 
 ### Schema Versions
 
 ```python
+# Market data
 from contracts.versions import OHLCV_SCHEMA_VERSION                   # 1
-from contracts.versions import MARKET_DATASET_FETCHED_SCHEMA_VERSION  # 1
 from contracts.versions import QUOTE_SCHEMA_VERSION                   # 1
 from contracts.versions import FUNDAMENTAL_SCHEMA_VERSION             # 1
+
+# Extended market data (waves 01–03)
+from contracts.versions import EARNINGS_EVENT_SCHEMA_VERSION          # 1
+from contracts.versions import ECONOMIC_EVENT_SCHEMA_VERSION          # 1
+from contracts.versions import MACRO_INDICATOR_SCHEMA_VERSION         # 1
+from contracts.versions import NEWS_SENTIMENT_SCHEMA_VERSION          # 1
+from contracts.versions import INSIDER_TRANSACTION_SCHEMA_VERSION     # 1
+from contracts.versions import YIELD_CURVE_SCHEMA_VERSION             # 1
+from contracts.versions import MARKET_CAP_SCHEMA_VERSION              # 1
+
+# NLP pipeline
 from contracts.versions import ARTICLE_SCHEMA_VERSION                 # 1
 from contracts.versions import ENTITY_SCHEMA_VERSION                  # 1
 from contracts.versions import SENTIMENT_SCHEMA_VERSION               # 1
+from contracts.versions import DAILY_SENTIMENT_SCHEMA_VERSION         # 1
+
+# Pointer event
+from contracts.versions import MARKET_DATASET_FETCHED_SCHEMA_VERSION  # 1
 ```
 
 **How to bump a schema version (step-by-step):**
@@ -168,7 +203,9 @@ own Decimal conversion.
 
 ## Testing Strategy
 
-- **Unit**: Round-trip `from_dict → to_dict` for every model, edge cases
+- **Unit**: Round-trip `from_dict → to_dict` for every model (11+ canonical models), edge cases
   (missing optional fields, extra keys ignored).
 - **Contract tests**: Validate that `to_dict()` output matches the Avro
-  schema in `infra/kafka/schemas/` using `fastavro.validate`.
+  schema in `infra/kafka/schemas/` using `fastavro.validate` (all pointer and canonical schemas).
+- **Field additions**: When adding a new canonical model, ensure `from_dict` gracefully
+  handles missing fields (use field defaults), and `to_dict` produces valid Avro JSON.

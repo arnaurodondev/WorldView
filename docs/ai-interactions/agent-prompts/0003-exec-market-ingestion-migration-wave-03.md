@@ -195,9 +195,14 @@ At the end of this wave, the Market Ingestion service is fully migrated, deploya
    - `worldview/services/market-ingestion/src/market_ingestion/infrastructure/messaging/kafka/serialization.py` (wave-02 output)
 2. Create `infrastructure/messaging/dispatcher.py`:
    - `MarketIngestionOutboxDispatcher(BaseOutboxDispatcher)`:
-     - Override `_create_uow() -> UnitOfWork`: instantiate `SqlaUnitOfWork` using the write session factory from `Settings`.
-     - Override `_serialize_event(event_row) -> tuple[str, str, dict]`: deserialize event payload from JSON, identify event type, apply `MarketDatasetFetchedMapper.to_avro_dict()`, return `(topic, kafka_key, avro_dict)`.
-   - `build_market_ingestion_dispatcher(settings: Settings, producer) -> MarketIngestionOutboxDispatcher` factory function.
+     - Override `get_unit_of_work()`: return a fresh `SqlaUnitOfWork` from the write session factory.
+     - Override `get_serializer(event_type: str)`: return the per-event-type `AvroSerializer` from `self._serializers` dict.
+     - Override `get_producer()`: lazy-initialise the producer via `_build_producer()` on first call.
+   - **CRITICAL — `_build_producer()` must follow this exact three-step sequence**:
+     1. Build `SchemaRegistryClient` from settings URL; call `build_market_ingestion_serializers(registry_client)` (wave-02 output, `infrastructure/messaging/kafka/serialization.py`) and store the result as `self._serializers`.
+     2. Construct `value_serializer = OutboxEventValueSerializer(self._serializers)` — import from `messaging.kafka.producer` (in `libs/messaging`).
+     3. Return `build_serializing_producer(producer_config, value_serializer=value_serializer)` — **`value_serializer` is not optional**. Omitting it leaves the `SerializingProducer` with no serializer and causes `"a bytes-like object is required, not 'OutboxKafkaValue'"` on first dispatch attempt.
+   - `build_market_ingestion_dispatcher(settings, session_factory, config=None) -> MarketIngestionOutboxDispatcher` factory function.
    - Configurable from `settings`: `dispatcher_poll_interval_seconds`, `dispatcher_lease_seconds`, `dispatcher_max_attempts`.
 3. Create `tests/infrastructure/test_dispatcher.py`:
    - Unit (mocked UoW + producer): claim → serialize → produce → finalize happy path.
@@ -528,6 +533,24 @@ At the end of this wave, the Market Ingestion service is fully migrated, deploya
 - T-MI-27 platform tests are marked `@pytest.mark.platform` and must NOT run in CI by default.
 
 ---
+
+## Scope & token budget (mandatory)
+
+- `write_paths` are limited to this wave's declared task scope and target paths.
+- If a required edit falls outside scope, stop and record a `Scope Exception` in handoff evidence before continuing.
+- Maximum exploration pass before first edit: 8 files.
+- Reuse already-read context in the same wave; avoid re-reading unchanged docs/files.
+
+## Incremental quality gates (mandatory)
+
+For each task ID, before moving to the next task, run and pass:
+
+1. Targeted test command(s) for the task's changed behavior.
+2. `ruff check` on changed paths only.
+3. `mypy` on changed package/module only.
+
+- No deferred fixes: do not carry ruff/mypy/test failures into later tasks.
+- If the same failure repeats twice, capture root cause + remediation in handoff evidence.
 
 ## Required tests
 

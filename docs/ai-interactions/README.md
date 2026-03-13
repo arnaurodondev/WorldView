@@ -20,6 +20,19 @@ This directory is the canonical location for AI-driven execution artifacts.
 7. Register the run in `INTERACTIONS_REGISTRY.md`.
 8. Validate the final response using `agent-responses/0001-review-checklist.md`.
 
+## Efficiency + Quality Gate Policy (Mandatory)
+
+All implementation waves must enforce these defaults:
+
+1. Validate each task incrementally (targeted tests, changed-path lint, changed-package type-check) before moving on.
+2. Do not batch unresolved ruff/mypy failures into end-of-wave cleanup.
+3. Keep execution prompts task-scoped; avoid full backlog/context dumps in worker prompts.
+4. Include a bounded `write_paths` scope in each worker task.
+5. Require a command/result ledger in response artifacts for every mandatory gate.
+6. Run full-suite checks only at wave/final handoff unless explicitly required earlier.
+7. Require `docs/ai-interactions/BUG_PATTERNS.md` scan in every execution prompt pre-read.
+8. In every wave prompt, include a regression-guardrails subsection referencing relevant `BP-xxx` IDs for the task scope.
+
 ## Orchestration Model
 
 - Topology: **1 orchestrator + N workers**
@@ -45,6 +58,7 @@ Example:
 All agents must:
 
 - read relevant docs before implementation (`AGENTS.md`, `CLAUDE.md`, service/lib docs)
+- scan `docs/ai-interactions/BUG_PATTERNS.md` and cite applicable pattern IDs in implementation handoff evidence
 - update documentation when behavior/contracts/config/schema/API changes
 - include doc updates in the response report
 

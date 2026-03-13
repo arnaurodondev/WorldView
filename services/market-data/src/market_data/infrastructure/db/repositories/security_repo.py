@@ -1,0 +1,97 @@
+"""PostgreSQL adapter for SecurityRepository."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+
+from market_data.application.ports.repositories import SecurityRepository
+from market_data.domain.entities import Security
+from market_data.infrastructure.db.models.securities import SecurityModel
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class PgSecurityRepository(SecurityRepository):
+    """SQLAlchemy-backed implementation of SecurityRepository."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    # ── mapping ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _to_domain(row: SecurityModel) -> Security:
+        return Security(
+            id=row.id,
+            figi=row.figi,
+            isin=row.isin,
+            name=row.name,
+            sector=row.sector,
+            industry=row.industry,
+            country=row.country,
+            currency=row.currency,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    # ── queries ────────────────────────────────────────────────────────────────
+
+    async def find_by_id(self, id: str) -> Security | None:  # noqa: A002
+        result = await self._session.execute(select(SecurityModel).where(SecurityModel.id == id))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row else None
+
+    async def find_by_figi(self, figi: str) -> Security | None:
+        result = await self._session.execute(select(SecurityModel).where(SecurityModel.figi == figi))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row else None
+
+    async def find_by_isin(self, isin: str) -> Security | None:
+        result = await self._session.execute(select(SecurityModel).where(SecurityModel.isin == isin))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row else None
+
+    async def list(self, limit: int = 100, offset: int = 0) -> tuple[list[Security], int]:
+        from sqlalchemy import func
+
+        count_result = await self._session.execute(select(func.count()).select_from(SecurityModel))
+        total = count_result.scalar_one()
+
+        rows_result = await self._session.execute(select(SecurityModel).offset(offset).limit(limit))
+        securities = [self._to_domain(row) for row in rows_result.scalars().all()]
+        return securities, total
+
+    async def upsert(self, security: Security) -> Security:
+        stmt = (
+            insert(SecurityModel)
+            .values(
+                id=security.id,
+                figi=security.figi,
+                isin=security.isin,
+                name=security.name,
+                sector=security.sector,
+                industry=security.industry,
+                country=security.country,
+                currency=security.currency,
+            )
+            .on_conflict_do_update(
+                index_elements=["id"],
+                set_={
+                    "figi": security.figi,
+                    "isin": security.isin,
+                    "name": security.name,
+                    "sector": security.sector,
+                    "industry": security.industry,
+                    "country": security.country,
+                    "currency": security.currency,
+                },
+            )
+            .returning(SecurityModel)
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalar_one()
+        return self._to_domain(row)

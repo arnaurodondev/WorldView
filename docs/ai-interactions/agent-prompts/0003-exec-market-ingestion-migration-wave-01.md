@@ -155,10 +155,12 @@ At the end of this wave:
 2. Read `worldview/libs/messaging/src/messaging/schemas.py`, `topics.py`.
 3. Create `worldview/libs/messaging/src/messaging/producer.py`:
    - `KafkaProducerConfig` (Pydantic BaseSettings): `bootstrap_servers`, `schema_registry_url`, `acks="all"`, `enable_idempotence=True`, `linger_ms=5`, `auto_register_schemas=False`.
-   - `build_serializing_producer(config) -> SerializingProducer` factory.
+   - `build_serializing_producer(config, key_serializer=None, value_serializer=None) -> SerializingProducer` factory — **`value_serializer` must always be passed explicitly by callers**; omitting it leaves the producer with no serializer and causes silent runtime failures on first dispatch (see `docs/ai-interactions/BUG_PATTERNS.md` BP-001).
    - `AvroSerializerConfig` and `build_avro_serializer(schema_str, config) -> AvroSerializer`.
    - `topic_event_type_subject_name_strategy(ctx, record) -> str` naming strategy (`{topic}-{event_type}`).
-   - `OutboxKafkaValue` dataclass and `OutboxEventValueSerializer` from legacy.
+   - `OutboxKafkaValue` dataclass (fields: `event_type: str`, `payload: dict`) — a **wrapper** that carries event type and payload together for routing; it is NOT passed directly to `AvroSerializer` (see BP-001).
+   - `KafkaEventValueSerializer`: routes domain events to per-type `AvroSerializer` by `value.event_type`; passes `value` directly — suitable for non-outbox domain events only.
+   - `OutboxEventValueSerializer(KafkaEventValueSerializer)`: **override `__call__`** to extract `value.payload` (plain dict) before calling the per-type `AvroSerializer`. This is the class that MUST be used in all outbox dispatchers. See BP-001 for why the base class is insufficient.
 4. Re-export from `__init__.py`.
 5. Create `worldview/libs/messaging/tests/test_producer.py`: config construction, serializer building, subject name strategy; mark integration tests for real Kafka.
 6. Update `libs/messaging/IMPLEMENTATION.md`.
@@ -174,7 +176,8 @@ At the end of this wave:
 2. Read `worldview/docs/libs/messaging.md` for spec requirements.
 3. Create `worldview/libs/messaging/src/messaging/outbox.py`:
    - `BaseOutboxDispatcher` (generic, not Market Ingestion-specific):
-     - Abstract methods: `_create_uow()`, `_serialize_event(event) -> tuple[topic, key, avro_dict]`
+     - Abstract methods: `get_unit_of_work()`, `get_serializer(event_type) -> AvroSerializer`, `get_producer() -> SerializingProducer`.
+     - **`get_producer()` contract**: subclass implementations MUST build the producer with `value_serializer=OutboxEventValueSerializer(self._serializers)` wired in. Omitting `value_serializer=` causes `"a bytes-like object is required, not 'OutboxKafkaValue'"` at first dispatch. See `docs/ai-interactions/BUG_PATTERNS.md` BP-001.
      - Concrete logic: hybrid dispatch (immediate + poll), lease-based claim, 3-phase commit (claim → produce with ack → finalize), dead-letter after max attempts, exponential backoff with jitter.
      - Worker ID: `f"{socket.gethostname()}-{os.getpid()}"`.
      - `start()` / `stop()` async lifecycle.
@@ -370,6 +373,24 @@ At the end of this wave:
 - One logical change per edit. Keep lib tasks isolated from service tasks.
 
 ---
+
+## Scope & token budget (mandatory)
+
+- `write_paths` are limited to this wave's declared task scope and target paths.
+- If a required edit falls outside scope, stop and record a `Scope Exception` in handoff evidence before continuing.
+- Maximum exploration pass before first edit: 8 files.
+- Reuse already-read context in the same wave; avoid re-reading unchanged docs/files.
+
+## Incremental quality gates (mandatory)
+
+For each task ID, before moving to the next task, run and pass:
+
+1. Targeted test command(s) for the task's changed behavior.
+2. `ruff check` on changed paths only.
+3. `mypy` on changed package/module only.
+
+- No deferred fixes: do not carry ruff/mypy/test failures into later tasks.
+- If the same failure repeats twice, capture root cause + remediation in handoff evidence.
 
 ## Required tests
 

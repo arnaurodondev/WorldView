@@ -20,25 +20,38 @@ setup:
 		(echo "ERROR: configs/dev.local.env missing - run: cp configs/dev.local.env.example configs/dev.local.env" && exit 1)
 
 run: .env-check
-	$(VENV)/bin/uvicorn portfolio.app:create_app --factory --reload --port 8001
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/uvicorn portfolio.app:create_app --factory --reload --port 8001
 
 run-dispatcher: .env-check
-	$(VENV)/bin/python -m portfolio.messaging.dispatcher_main
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m portfolio.messaging.dispatcher_main
 
+# Unit tests — no env sourcing required (all infra is mocked)
 test:
 	$(VENV)/bin/pytest tests/ -m unit -v
 
-test-integration:
-	$(VENV)/bin/pytest tests/ -m integration -v
+# Integration tests — require running Postgres (testcontainers or dev infra)
+test-integration: .env-check
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/pytest tests/ -m integration -v
 
 test-contract:
 	$(VENV)/bin/pytest tests/ -m contract -v
 
-test-e2e:
-	$(VENV)/bin/pytest tests/e2e/ -v
+# E2E tests — starts docker-compose.test.yml, runs tests against localhost:8001, tears down
+test-e2e: .env-check
+	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test up --build --wait; \
+	COMPOSE_EXIT=$$?; \
+	if [ $$COMPOSE_EXIT -ne 0 ]; then \
+		docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v; \
+		exit $$COMPOSE_EXIT; \
+	fi; \
+	set -a && . ./configs/dev.local.env && set +a; \
+	$(VENV)/bin/pytest tests/e2e/ -v; \
+	EXIT=$$?; \
+	docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v; \
+	exit $$EXIT
 
-test-all:
-	$(VENV)/bin/pytest tests/ -v
+test-all: .env-check
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/pytest tests/ -v
 
 lint:
 	$(VENV)/bin/ruff check src/ tests/

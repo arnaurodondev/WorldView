@@ -31,6 +31,8 @@ Given one planning prompt and one planning response, generate multiple execution
 13. Every generated wave prompt must explicitly require documentation updates for any behavior/API/event/config/schema/test-surface changes and must require listing exact docs files changed. Documentation must conform to the **Documentation quality standard** below.
 14. Every generated wave prompt must require a post-wave commit message proposal: commit title + 1-2 sentences describing what was implemented and validated.
 15. Every generated wave prompt must require a highly detailed PR description only for the final wave of the scope.
+16. Every generated wave prompt must include `docs/ai-interactions/BUG_PATTERNS.md` in mandatory pre-read and require citing applicable BP IDs in handoff evidence.
+17. Every generated wave prompt must include a **Regression guardrails (compounding, mandatory)** subsection with task-scoped anti-pattern checks.
 
 ## Documentation quality standard
 
@@ -110,7 +112,7 @@ Each generated file must contain exactly these sections:
 3. `## Assigned agent profile(s)`
    - include exact agent files listed above
 4. `## Mandatory pre-read`
-   - `AGENTS.md`, `CLAUDE.md`, `docs/services/market-data.md`, relevant `docs/libs/*.md`, planning prompt, response file
+   - `AGENTS.md`, `CLAUDE.md`, `docs/services/market-data.md`, relevant `docs/libs/*.md`, `docs/ai-interactions/BUG_PATTERNS.md`, planning prompt, response file
 5. `## Objective`
 6. `## Task scope for this wave`
    - `### Parallel group(s)`
@@ -121,6 +123,8 @@ Each generated file must contain exactly these sections:
    - concrete per-task implementation steps for the listed task IDs
 9. `## Constraints`
    - explicit “do not implement outside listed task IDs”
+10. `## Regression guardrails (compounding, mandatory)`
+   - reference applicable `BP-xxx` entries and required preventive checks
 10. `## Required tests`
    - exact commands if available in source; otherwise explicit placeholders
    - pass criteria
@@ -148,6 +152,7 @@ For each generated wave prompt, validate:
 - docs/test obligations explicitly listed
 - each wave includes mandatory documentation update rule and evidence requirement
 - **each wave includes reference to the Documentation quality standard and requires the quality checklist in handoff evidence**
+- each wave includes `BUG_PATTERNS.md` pre-read and a task-scoped regression-guardrails section
 - each wave includes commit-message requirement and final-wave-only PR-description requirement
 
 Global validation (mandatory):

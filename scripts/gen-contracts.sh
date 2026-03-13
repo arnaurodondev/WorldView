@@ -28,8 +28,6 @@ FAILED=0
 for SCHEMA_FILE in "$SCHEMA_DIR"/*.avsc; do
     SCHEMA_NAME=$(basename "$SCHEMA_FILE" .avsc)
     echo "  Validating: $SCHEMA_NAME"
-
-    # Validate with fastavro
     python3 -c "
 import json, fastavro
 with open('$SCHEMA_FILE') as f:
@@ -37,18 +35,6 @@ with open('$SCHEMA_FILE') as f:
 fastavro.parse_schema(schema)
 print('    OK')
 " || { echo "    FAILED"; FAILED=1; }
-
-    # Register if requested
-    if [[ "$REGISTER" == true ]]; then
-        SUBJECT="${SCHEMA_NAME}-value"
-        echo "    Registering as subject: $SUBJECT"
-        SCHEMA_CONTENT=$(cat "$SCHEMA_FILE")
-        curl -s -X POST \
-            -H "Content-Type: application/vnd.schemaregistry.v1+json" \
-            -d "{\"schema\": $(echo "$SCHEMA_CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}" \
-            "$REGISTRY_URL/subjects/$SUBJECT/versions" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'    Registered: id={d.get(\"id\", \"error\")}')"
-    fi
 done
 
 if [[ $FAILED -ne 0 ]]; then
@@ -57,3 +43,11 @@ if [[ $FAILED -ne 0 ]]; then
 fi
 
 echo "=== All schemas valid ==="
+
+if [[ "$REGISTER" == true ]]; then
+    echo ""
+    echo "=== Registering schemas ==="
+    python3 "$SCRIPT_DIR/../infra/kafka/init/register-schemas.py" \
+        --schema-dir "$SCHEMA_DIR" \
+        --registry-url "$REGISTRY_URL"
+fi

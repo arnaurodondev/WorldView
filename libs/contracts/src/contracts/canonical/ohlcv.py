@@ -10,11 +10,7 @@ from contracts.versions import OHLCV_SCHEMA_VERSION
 
 @dataclass(frozen=True)
 class CanonicalOHLCVBar:
-    """Open-High-Low-Close-Volume bar for a single instrument on a single date.
-
-    Uses float (not Decimal) for price fields — float64 provides ~15 significant
-    digits of precision, adequate for OHLCV financial data.
-    """
+    """Open-High-Low-Close-Volume bar for a single instrument on a single date."""
 
     symbol: str
     exchange: str
@@ -33,14 +29,30 @@ class CanonicalOHLCVBar:
 
     @classmethod
     def from_dict(cls, d: dict) -> CanonicalOHLCVBar:
-        fetched_at: datetime | None = None
-        raw_fetched = d.get("fetched_at")
-        if raw_fetched is not None:
-            fetched_at = raw_fetched if isinstance(raw_fetched, datetime) else datetime.fromisoformat(str(raw_fetched))
+        fetched_at_raw = d.get("fetched_at")
+        fetched_at = (
+            fetched_at_raw
+            if isinstance(fetched_at_raw, datetime)
+            else datetime.fromisoformat(str(fetched_at_raw))
+            if fetched_at_raw is not None
+            else None
+        )
+        # FIX-O1: normalise separator before parsing (compatible with Python 3.10+).
+        # EODHD EOD uses key "date"; intraday uses key "datetime".
+        raw_date = d.get("date") or d.get("datetime", "")
+        if isinstance(raw_date, datetime):
+            bar_date = raw_date
+        else:
+            bar_date = datetime.fromisoformat(str(raw_date).replace(" ", "T"))
+
+        # adjusted_close: populated only for EOD bars from EODHD (/eod/ endpoint).
+        # Intraday bars (/intraday/ endpoint) return no adjusted price — stored as None.
+        # This is expected behaviour, not a data quality issue. (FIX-O2)
+
         return cls(
             symbol=d["symbol"],
             exchange=d["exchange"],
-            date=d["date"] if isinstance(d["date"], datetime) else datetime.fromisoformat(str(d["date"])),
+            date=bar_date,
             open=float(d["open"]),
             high=float(d["high"]),
             low=float(d["low"]),

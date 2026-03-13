@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "instrument.updated.v1",
+  "namespace": "market_data.events",
+  "doc": "Emitted when an existing instrument's capability flags change.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "market.instrument.updated"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "instrument_id", "type": "string", "default": ""},
+    {"name": "symbol", "type": "string", "default": ""},
+    {"name": "exchange", "type": "string", "default": ""},
+    {"name": "has_ohlcv", "type": "boolean", "default": false},
+    {"name": "has_quotes", "type": "boolean", "default": false},
+    {"name": "has_fundamentals", "type": "boolean", "default": false}
+  ]
+}
