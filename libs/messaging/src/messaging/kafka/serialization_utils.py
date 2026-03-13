@@ -113,3 +113,34 @@ def deserialize_avro(schema: dict[str, Any], data: bytes) -> dict[str, Any]:
     """
     buf = io.BytesIO(data)
     return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema))
+
+
+def deserialize_confluent_avro(schema_path: str, data: bytes) -> dict[str, Any]:
+    """Deserialize a Confluent Schema Registry wire-format Avro message.
+
+    Confluent producers prefix messages with a 5-byte header:
+    ``0x00`` (magic byte) + 4-byte big-endian schema ID.  This function
+    strips those 5 bytes and then delegates to :func:`deserialize_avro`
+    with the schema loaded from *schema_path*.
+
+    Args:
+        schema_path: Filesystem path to the ``.avsc`` schema file.
+        data: Raw Avro bytes from a Confluent Kafka message (including header).
+
+    Returns:
+        Decoded record as a plain dict.
+
+    Raises:
+        ValueError: If *data* does not start with the expected magic byte.
+    """
+    confluent_magic = b"\x00"
+    header_size = 5  # 1 magic byte + 4 schema-id bytes
+
+    if len(data) < header_size or data[0:1] != confluent_magic:
+        raise ValueError(
+            f"Expected Confluent Avro magic byte 0x00 at position 0, " f"got 0x{data[0]:02x}"
+            if data
+            else "Empty payload"
+        )
+    schema = load_schema(schema_path)
+    return deserialize_avro(schema, data[header_size:])

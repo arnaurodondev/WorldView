@@ -215,6 +215,24 @@ Execute **only** the task IDs listed in this wave. Follow the detailed steps in 
 - All entity IDs use UUIDv7 via `common.ids.new_uuid()`.
 - All timestamps are UTC via `common.time` helpers.
 
+## Scope & token budget (mandatory)
+
+- `write_paths` are limited to this wave's declared task scope and target paths.
+- If a required edit falls outside scope, stop and record a `Scope Exception` in handoff evidence before continuing.
+- Maximum exploration pass before first edit: 8 files.
+- Reuse already-read context in the same wave; avoid re-reading unchanged docs/files.
+
+## Incremental quality gates (mandatory)
+
+For each task ID, before moving to the next task, run and pass:
+
+1. Targeted test command(s) for the task's changed behavior.
+2. `ruff check` on changed paths only.
+3. `mypy` on changed package/module only.
+
+- No deferred fixes: do not carry ruff/mypy/test failures into later tasks.
+- If the same failure repeats twice, capture root cause + remediation in handoff evidence.
+
 ## Required tests
 
 ```bash

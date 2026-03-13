@@ -102,25 +102,29 @@ class ValkeyClient:
     """
 
     def __init__(self, config: ValkeyConfig | None = None, url: str | None = None) -> None:
-        from redis.asyncio import ConnectionPool, Redis  # type: ignore[import-untyped]
+        from redis.asyncio import ConnectionPool, Redis, SSLConnection  # type: ignore[import-untyped]
 
         if url is not None:
             self._config = ValkeyConfig.from_url(url)
         else:
             self._config = config or ValkeyConfig()
 
-        pool = ConnectionPool(
-            host=self._config.host,
-            port=self._config.port,
-            db=self._config.db,
-            password=self._config.password or None,
-            username=self._config.username or None,
-            max_connections=self._config.max_connections,
-            socket_timeout=self._config.socket_timeout,
-            socket_connect_timeout=self._config.socket_connect_timeout,
-            decode_responses=self._config.decode_responses,
-            ssl=self._config.ssl,
-        )
+        connection_kwargs: dict[str, object] = {
+            "host": self._config.host,
+            "port": self._config.port,
+            "db": self._config.db,
+            "password": self._config.password or None,
+            "username": self._config.username or None,
+            "socket_timeout": self._config.socket_timeout,
+            "socket_connect_timeout": self._config.socket_connect_timeout,
+            "decode_responses": self._config.decode_responses,
+        }
+        pool_kwargs: dict[str, object] = {
+            "max_connections": self._config.max_connections,
+        }
+        if self._config.ssl:
+            pool_kwargs["connection_class"] = SSLConnection
+        pool = ConnectionPool(**pool_kwargs, **connection_kwargs)  # type: ignore[arg-type]
         self._redis: Redis = Redis(connection_pool=pool)
 
     # ── Basic operations ──────────────────────────────────────────────────────

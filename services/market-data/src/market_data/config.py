@@ -21,6 +21,9 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db"
+    # Optional read replica URL. When set, read-only API queries are routed to this
+    # DB instance (e.g. a streaming replica). When unset, reads use database_url.
+    read_replica_url: str | None = None
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"

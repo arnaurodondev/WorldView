@@ -15,9 +15,9 @@ COPY libs/observability /build/libs/observability
 COPY libs/storage /build/libs/storage
 COPY services/portfolio /build/services/portfolio
 
-# Install all dependencies into /build/.venv
-RUN uv venv /build/.venv && \
-    uv pip install --no-cache \
+# Install all dependencies into /app/.venv so shebang paths match the runtime stage
+RUN uv venv /app/.venv && \
+    uv pip install --no-cache --python /app/.venv \
         -e /build/libs/common \
         -e /build/libs/contracts \
         -e /build/libs/messaging \
@@ -34,7 +34,7 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 # Copy installed packages from builder
-COPY --from=builder /build/.venv /app/.venv
+COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/portfolio/src /app/src
 COPY --from=builder /build/services/portfolio/alembic /app/alembic

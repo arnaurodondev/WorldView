@@ -75,7 +75,8 @@ class TestCanonicalFundamentals:
 
     def test_to_dict_keys(self) -> None:
         d = self._make_fundamentals().to_dict()
-        expected_keys = {
+        # Core fields are always present; section fields appear only when non-None.
+        required_keys = {
             "symbol",
             "exchange",
             "period",
@@ -89,7 +90,35 @@ class TestCanonicalFundamentals:
             "source",
             "schema_version",
         }
-        assert set(d.keys()) == expected_keys
+        assert required_keys.issubset(set(d.keys()))
+        # No section keys should appear for a summary-only fundamentals object.
+        section_keys = {
+            "income_statement",
+            "balance_sheet",
+            "cash_flow",
+            "valuation_ratios",
+            "technicals_snapshot",
+            "share_statistics",
+            "splits_dividends",
+            "analyst_consensus",
+            "earnings_history",
+            "earnings_trend",
+            "earnings_annual_trend",
+            "dividend_history",
+            "outstanding_shares",
+        }
+        assert not section_keys.intersection(set(d.keys()))
+
+    def test_to_dict_includes_sections_when_populated(self) -> None:
+        f = CanonicalFundamentals(
+            symbol="AAPL",
+            income_statement={"annual": {"2023": {"totalRevenue": 1}}},
+            balance_sheet={"annual": {}},
+        )
+        d = f.to_dict()
+        assert "income_statement" in d
+        assert "balance_sheet" in d
+        assert "cash_flow" not in d  # not populated
 
     def test_quarterly_period(self) -> None:
         f = CanonicalFundamentals(

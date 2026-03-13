@@ -131,22 +131,22 @@ def test_to_dict_metadata_keys() -> None:
 def test_to_dict_bronze_ref_flattened() -> None:
     evt = _make_event()
     d = evt.to_dict()
-    assert d["bronze_bucket"] == "bronze-data"
-    assert d["bronze_key"] == "market-ingestion/ohlcv/AAPL/2024-01-01_2024-12-31/raw.json"
-    assert d["bronze_etag"] == "deadbeef"
-    assert d["bronze_byte_length"] == 2048
-    assert d["bronze_content_type"] == "application/json"
+    assert d["bronze_ref_bucket"] == "bronze-data"
+    assert d["bronze_ref_key"] == "market-ingestion/ohlcv/AAPL/2024-01-01_2024-12-31/raw.json"
+    assert d["bronze_ref_sha256"] == "deadbeef"
+    assert d["bronze_ref_byte_length"] == 2048
+    assert d["bronze_ref_mime_type"] == "application/json"
 
 
 @pytest.mark.unit
 def test_to_dict_canonical_ref_flattened() -> None:
     evt = _make_event()
     d = evt.to_dict()
-    assert d["canonical_bucket"] == "canonical-data"
-    assert d["canonical_key"] == "market-ingestion/ohlcv/AAPL/2024-01-01_2024-12-31/canonical/v1.parquet"
-    assert d["canonical_etag"] == "cafebabe"
-    assert d["canonical_byte_length"] == 1024
-    assert d["canonical_content_type"] == "application/octet-stream"
+    assert d["canonical_ref_bucket"] == "canonical-data"
+    assert d["canonical_ref_key"] == "market-ingestion/ohlcv/AAPL/2024-01-01_2024-12-31/canonical/v1.parquet"
+    assert d["canonical_ref_sha256"] == "cafebabe"
+    assert d["canonical_ref_byte_length"] == 1024
+    assert d["canonical_ref_mime_type"] == "application/octet-stream"
     assert d["canonical_schema_version"] == 1
 
 

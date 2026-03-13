@@ -1,0 +1,479 @@
+---
+# Worldview — Isolated test stack for e2e tests.
+#
+# Design decisions:
+#   - tmpfs on postgres/minio: no leftover state between runs
+#   - migrate containers use service_completed_successfully: service never
+#     starts before schema is current
+#   - Long-running background services are included for full async E2E flows
+#   - Ports are identical to dev.local.env so dev.local.env values work
+#     directly with pytest (localhost:8001, localhost:8002, localhost:5432, etc.)
+#
+# Profiles:
+#   portfolio-test          — Postgres + Kafka + Schema Registry + portfolio migrate + portfolio API + portfolio dispatcher
+#   market-ingestion-test   — Postgres + MinIO + Kafka + Schema Registry + market-ingestion migrate + market-ingestion API + scheduler + worker + dispatcher
+#   market-data-test        — TimescaleDB + Valkey + MinIO + Kafka + Schema Registry + market-data migrate + market-data API + market-data dispatcher
+#   dev-tools               — infra + developer UIs (Kafka UI, pgAdmin)
+#   all                     — starts every service in this compose file
+#
+# Usage (called from make test-e2e):
+#   docker compose -f infra/compose/docker-compose.test.yml \
+#       --profile portfolio-test up --build --wait
+#   docker compose -f infra/compose/docker-compose.test.yml \
+#       --profile market-data-test up --build --wait
+#   docker compose -f infra/compose/docker-compose.test.yml \
+#       --profile dev-tools up --build --wait
+#   docker compose -f infra/compose/docker-compose.test.yml \
+#       --profile all up --build --wait
+#   docker compose -f infra/compose/docker-compose.test.yml \
+#       --profile portfolio-test down -v
+
+name: worldview-test
+
+services:
+  # ── Shared Postgres ──────────────────────────────────────────────────────────
+  # Shared across profiles. tmpfs ensures a clean slate on every run.
+  postgres:
+    image: postgres:16-alpine
+    profiles: [portfolio-test, market-ingestion-test, dev-tools, all]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - ../postgres/init/init-test-databases.sh:/docker-entrypoint-initdb.d/01-init-test-databases.sh:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # ── TimescaleDB for market-data (separate from plain postgres) ────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    profiles: [market-data-test, dev-tools, all]
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: market_data_db
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  # ── Valkey for market-data quote cache ────────────────────────────────────────
+  valkey:
+    image: valkey/valkey:7
+    profiles: [market-data-test, dev-tools, all]
+    ports:
+      - "6379:6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── MinIO (market-ingestion + market-data) ────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    command: server /data --console-address ":9001"
+    profiles: [market-ingestion-test, market-data-test, dev-tools, all]
+    ports:
+      - "7480:9000"
+      - "7481:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  minio-init-test:
+    image: minio/mc:latest
+    profiles: [market-ingestion-test, market-data-test, dev-tools, all]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: /init-test-buckets.sh
+    volumes:
+      - ../minio/init/init-test-buckets.sh:/init-test-buckets.sh:ro
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+
+  # ── Kafka ─────────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Schema Registry (starts only after Kafka is healthy) ────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+
+  # ── Kafka topic initialization (one-shot) ─────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command: /create-topics.sh
+    volumes:
+      - ../kafka/init/create-topics.sh:/create-topics.sh:ro
+    restart: "no"
+
+  # ── Schema Registry: register all Avro schemas (one-shot) ─────────────────
+  schema-registry-init:
+    image: python:3.12-slim
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+    volumes:
+      - ../kafka/schemas:/schemas:ro
+      - ../kafka/init/register-schemas.py:/register-schemas.py:ro
+    environment:
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      SCHEMA_DIR: /schemas
+    entrypoint: ["python3", "/register-schemas.py"]
+    restart: "no"
+
+  # ── Portfolio: Alembic migration (one-shot) ───────────────────────────────────
+  portfolio-migrate:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [portfolio-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # ── Portfolio API server ──────────────────────────────────────────────────────
+  portfolio:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [portfolio-test, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # ── Portfolio outbox dispatcher (long-running) ──────────────────────────────
+  portfolio-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [portfolio-test, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.messaging.dispatcher_main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Market-ingestion: Alembic migration (one-shot) ────────────────────────────
+  market-ingestion-migrate:
+    build:
+      context: ../..
+      dockerfile: services/market-ingestion/Dockerfile
+    profiles: [market-ingestion-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/market-ingestion/configs/docker.env
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    restart: "no"
+
+  # ── Market-ingestion API server ───────────────────────────────────────────────
+  market-ingestion:
+    build:
+      context: ../..
+      dockerfile: services/market-ingestion/Dockerfile
+    profiles: [market-ingestion-test, all]
+    depends_on:
+      market-ingestion-migrate:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-ingestion/configs/docker.env
+    ports:
+      - "8002:8002"
+    # Override Dockerfile healthcheck to use healthz (always 200) rather than
+    # readyz which requires both DB and storage to be reachable simultaneously.
+    # The --wait flag in make test-e2e blocks until this passes.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/healthz')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # ── Market-ingestion scheduler (long-running) ───────────────────────────────
+  market-ingestion-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/market-ingestion/Dockerfile
+    profiles: [market-ingestion-test, all]
+    depends_on:
+      market-ingestion-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-ingestion/configs/docker.env
+    environment:
+      MARKET_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS: "2.0"
+      MARKET_INGESTION_SCHEDULER_MAX_TASKS_PER_TICK: "0"
+    command: ["python", "-m", "market_ingestion.scheduler.main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Market-ingestion worker (long-running) ──────────────────────────────────
+  market-ingestion-worker:
+    build:
+      context: ../..
+      dockerfile: services/market-ingestion/Dockerfile
+    profiles: [market-ingestion-test, all]
+    depends_on:
+      market-ingestion-migrate:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-ingestion/configs/docker.env
+    environment:
+      # Short HTTP timeout so the worker fails-fast on EODHD rate-limits in CI
+      MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS: "5"
+    command: ["python", "-m", "market_ingestion.worker.main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Market-ingestion outbox dispatcher (long-running) ───────────────────────
+  market-ingestion-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/market-ingestion/Dockerfile
+    profiles: [market-ingestion-test, all]
+    depends_on:
+      market-ingestion-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-ingestion/configs/docker.env
+    command: ["python", "-m", "market_ingestion.messaging.dispatcher_main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Market-data: Alembic migration (one-shot) ─────────────────────────────────
+  market-data-migrate:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  # ── Market-data API server ────────────────────────────────────────────────────
+  market-data:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/healthz')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  # ── Market-data outbox dispatcher (long-running) ──────────────────────────────
+  market-data-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.outbox.dispatcher_main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Developer tools ────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    profiles: [dev-tools, all]
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: worldview-test
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    profiles: [dev-tools, all]
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: dev@worldview.local
+      PGADMIN_DEFAULT_PASSWORD: devpassword
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: 10
+      PGADMIN_CONFIG_ALLOW_SPECIAL_EMAIL_DOMAINS: "['local']"
+      # Auto-register both DB servers on first start.
+      # Passwords are entered once in the UI and persisted in the named volume.
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
+    volumes:
+      - ../pgadmin/servers.json:/pgadmin4/servers.json:ro
+      # Named volume so the pgAdmin SQLite DB (including saved passwords) persists
+      # across container restarts. Delete the volume to get a clean slate.
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+
+volumes:
+  pgadmin_data:

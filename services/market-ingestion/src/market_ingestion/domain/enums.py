@@ -13,9 +13,16 @@ class Provider(StrEnum):
 
 
 class DatasetType(StrEnum):
-    OHLCV = "ohlcv"
-    QUOTES = "quotes"
-    FUNDAMENTALS = "fundamentals"
+    OHLCV = "ohlcv"  # EOD + intraday (differentiated by timeframe)
+    QUOTES = "quotes"  # 15-min delayed real-time quote
+    FUNDAMENTALS = "fundamentals"  # Full company fundamentals (all sections)
+    EARNINGS_CALENDAR = "earnings_calendar"  # EXT-02
+    ECONOMIC_EVENTS = "economic_events"  # EXT-03
+    MACRO_INDICATOR = "macro_indicator"  # EXT-04
+    NEWS_SENTIMENT = "news_sentiment"  # EXT-05
+    INSIDER_TRANSACTIONS = "insider_transactions"  # EXT-06
+    YIELD_CURVE = "yield_curve"  # EXT-07
+    MARKET_CAP = "market_cap"  # EXT-08
 
 
 class FundamentalsVariant(StrEnum):

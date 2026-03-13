@@ -1,0 +1,37 @@
+{
+  "instrument_id": "test-inst-001",
+  "income_statement": {
+    "period_type": "annual",
+    "period_end_date": "2023-12-31T00:00:00+00:00",
+    "data": {
+      "total_revenue": 383285000000,
+      "gross_profit": 169148000000,
+      "operating_income": 114301000000,
+      "net_income": 96995000000,
+      "eps": 6.13,
+      "eps_diluted": 6.08
+    }
+  },
+  "balance_sheet": {
+    "period_type": "annual",
+    "period_end_date": "2023-12-31T00:00:00+00:00",
+    "data": {
+      "total_assets": 352583000000,
+      "total_liabilities": 290437000000,
+      "total_equity": 62146000000,
+      "cash_and_equivalents": 29965000000,
+      "long_term_debt": 95281000000
+    }
+  },
+  "valuation_ratios": {
+    "period_type": "snapshot",
+    "period_end_date": "2024-01-08T00:00:00+00:00",
+    "data": {
+      "pe_ratio": 29.8,
+      "price_to_book": 45.2,
+      "price_to_sales": 7.5,
+      "enterprise_value": 2950000000000,
+      "ev_to_ebitda": 22.4
+    }
+  }
+}

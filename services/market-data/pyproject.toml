@@ -25,6 +25,19 @@ dev = [
     "pytest-httpx==0.30",
     "ruff==0.4",
     "mypy==1.10",
+    "testcontainers[postgres,kafka,minio]>=4.8",
+    "valkey>=6.0",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring external containers (DB, Kafka, MinIO, Valkey)",
+    "e2e: end-to-end tests requiring the full docker-compose stack",
+    "live: tests that make real HTTP calls to external APIs (requires network + api key)",
+    "slow: long-running tests excluded from CI fast path",
 ]
 
 [tool.hatch.build.targets.wheel]

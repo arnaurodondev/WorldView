@@ -241,3 +241,55 @@ Every L2/L3 run should publish:
 
 This enables independent execution, reproducibility, and faster incident
 triage when regressions appear.
+
+---
+
+## Market Data Service — Integration Test Setup (MD-028)
+
+### Requirements
+
+- Docker must be running locally.
+- The integration test suite uses [testcontainers](https://testcontainers.com/) to spin up
+  real containers for TimescaleDB, Kafka, MinIO, and Valkey.
+- Containers are **session-scoped** (start once per `pytest` session) so startup cost is paid once.
+
+### Running tests
+
+```bash
+cd services/market-data
+
+# All integration tests (Docker required)
+make test -- tests/integration/ -m integration -v
+
+# Smoke tests only
+make test -- tests/integration/test_infra_smoke.py -v
+
+# Unit tests only (no Docker required)
+make test -- tests/unit/ -v
+
+# Full suite
+make test
+```
+
+### Container images used
+
+| Container | Image | Purpose |
+|---|---|---|
+| PostgreSQL/TimescaleDB | `timescale/timescaledb:latest-pg16` | DB with hypertable support |
+| Kafka | `confluentinc/cp-kafka:7.6.1` | Message broker |
+| MinIO | `minio/minio:latest` | S3-compatible object storage |
+| Valkey | `valkey/valkey:7` | Redis-compatible cache |
+
+### Fixture scopes
+
+- **Session-scoped** (`pg_container`, `kafka_container`, `minio_container`, `valkey_container`):
+  containers start once and are shared across all tests in the session.
+- **Function-scoped** (`db_session`, `uow`, `object_storage`, `valkey_client`):
+  state is reset between tests (DB tables truncated after each test).
+
+### Alembic in tests
+
+The `_migrated_db` session fixture runs `alembic upgrade head` once against the
+`pg_container`.  The `db_session` fixture then truncates all user tables after
+each test (preserving `alembic_version`).  This ensures migrations run exactly
+once and each test starts with a clean, migrated database.
