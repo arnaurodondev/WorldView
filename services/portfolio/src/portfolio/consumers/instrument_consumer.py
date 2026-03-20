@@ -46,6 +46,8 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         headers: dict[str, str],
     ) -> None:
         """Upsert an InstrumentRef from the deserialized Kafka message value."""
+        raw_entity_id = value.get("entity_id")
+        entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
         instrument = InstrumentRef(
             id=new_uuid(),
             symbol=value.get("symbol", ""),
@@ -53,6 +55,7 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
             name=value.get("name"),
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),
+            entity_id=entity_id,
             source_event_id=UUID(value["event_id"]) if "event_id" in value else new_uuid(),
             synced_at=utc_now(),
         )

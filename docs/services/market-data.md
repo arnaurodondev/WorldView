@@ -16,7 +16,7 @@ or articles, perform NLP processing, manage portfolios.
 
 ---
 
-## API Surface (27 routes)
+## API Surface (30 routes)
 
 | Method | Path | Description | Cache Tier |
 |--------|------|-------------|------------|
@@ -46,13 +46,19 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/institutional-holders` | Institutional holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
+| GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit` | — |
+| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]`, `limit`, `offset` | — |
+| GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/symbol/{symbol}`) are registered **before** path-param routes
 > (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`, `/instruments/{instrument_id}`)
-> to avoid FastAPI matching the literal as a path param.
+> to avoid FastAPI matching the literal as a path param. The `fundamental_metrics` router
+> is registered before the `fundamentals` router so that `/fundamentals/timeseries`,
+> `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by
+> `/fundamentals/{security_id}`.
 >
 > **Fundamentals path param**: The path parameter is historically named `security_id` in
 > the router code but represents the **instrument UUID** (primary key of the `instruments`
@@ -206,6 +212,35 @@ sequenceDiagram
     CON->>DB: INSERT ingestion_events (mark processed)
 ```
 
+### Fundamentals Data Flow (with read-optimized projection)
+
+```mermaid
+flowchart LR
+    subgraph Ingestion
+        KFK[Kafka] --> FC[FundamentalsConsumer]
+        FC --> MIO[MinIO download]
+    end
+
+    subgraph Write Path
+        MIO --> SEC["Section Tables<br/>(18 tables, source of truth)"]
+        MIO --> FM["fundamental_metrics<br/>(read-optimized projection)"]
+    end
+
+    subgraph Read Path - Section APIs
+        SEC --> API1["GET /fundamentals/{id}<br/>GET /fundamentals/{id}/income-statement<br/>etc."]
+    end
+
+    subgraph Read Path - Metrics APIs
+        FM --> API2["GET /fundamentals/timeseries<br/>POST /fundamentals/screen<br/>GET /fundamentals/metrics/{id}"]
+    end
+
+    style FM fill:#e1f5fe
+    style API2 fill:#e1f5fe
+```
+
+Both section table and `fundamental_metrics` upserts happen in the **same transaction**.
+The metrics API endpoints use the **read session** (replica when configured).
+
 ---
 
 ## Caching Strategy
@@ -254,6 +289,7 @@ calling `process_message(event_dict)`.
 | `api/routers/ohlcv.py` | `/api/v1` | `ohlcv` |
 | `api/routers/quotes.py` | `/api/v1` | `quotes` |
 | `api/routers/fundamentals.py` | `/api/v1` | `fundamentals` |
+| `api/routers/fundamental_metrics.py` | `/api/v1` | `fundamental-metrics` |
 | `api/routers/securities.py` | `/api/v1` | `securities` |
 
 The `ohlcv` router validates `start_date < end_date` and returns HTTP 422 on
@@ -275,8 +311,9 @@ with a 5-second timeout before cancellation; both DB engines are disposed.
 
 All API read operations (`GET` routes) use the **read (replica) session** via
 `uow.instruments_read`, `uow.securities_read`, `uow.ohlcv_read`, `uow.quotes_read`, and
+`uow.get_read_session()`. The fundamentals timeseries and screening endpoints also use
 `uow.get_read_session()`. Write operations (Kafka consumers, `upsert`, flag updates) use
-the **write session** via `uow.instruments`, `uow.securities`, etc.
+the **write session** via `uow.instruments`, `uow.securities`, `uow.fundamental_metrics`, etc.
 
 When `MARKET_DATA_READ_REPLICA_URL` is not set, both sessions point to the same engine
 (write URL), so there is no behaviour change on a single-node deployment. When a read
@@ -543,6 +580,36 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | `fund_holders` | Fund investor holdings |
 | `insider_transactions_snapshot` | Insider trading activity snapshots |
 
+### Read-optimized projection table
+
+| Table | PK | Key columns | Notes |
+|---|---|---|---|
+| `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries. |
+
+**Metric catalog** (initial set extracted from section JSONB data on write):
+
+| Source section | EODHD key(s) | Metric name | Value column |
+|---|---|---|---|
+| `analyst_consensus` | `TargetPrice` | `target_price` | `value_numeric` |
+| `analyst_consensus` | `Rating` | `analyst_rating` | `value_text` (numeric parse attempted) |
+| `valuation_ratios` | `TrailingPE`, `PE` | `pe_ratio` | `value_numeric` |
+| `valuation_ratios` | `PriceBookMRQ`, `PB` | `pb_ratio` | `value_numeric` |
+| `valuation_ratios` | `EnterpriseValue` | `enterprise_value` | `value_numeric` |
+| `highlights` | `RevenueTTM`, `Revenue` | `revenue_ttm` | `value_numeric` |
+| `highlights` | `EBITDA`, `EBITDAttm` | `ebitda_ttm` | `value_numeric` |
+| `highlights` | `EarningsShare`, `EPS` | `eps_ttm` | `value_numeric` |
+| `highlights` | `ReturnOnEquityTTM`, `ROE` | `roe_ttm` | `value_numeric` |
+| `highlights` | `ReturnOnAssetsTTM`, `ROA` | `roa_ttm` | `value_numeric` |
+| `income_statements` | `totalRevenue` | `revenue` | `value_numeric` |
+| `income_statements` | `netIncome` | `net_income` | `value_numeric` |
+| `income_statements` | `eps` | `eps` | `value_numeric` |
+| `balance_sheets` | `totalAssets` | `total_assets` | `value_numeric` |
+| `balance_sheets` | `totalStockholderEquity` | `total_equity` | `value_numeric` |
+| `balance_sheets` | `longTermDebt` | `long_term_debt` | `value_numeric` |
+| `cash_flow_statements` | `operatingCashFlow` | `operating_cash_flow` | `value_numeric` |
+
+**Consistency model**: Upserted in the same transaction as section writes (transactionally consistent for processed records). Snapshot sections use last-write-wins at date-level granularity.
+
 ### Infrastructure tables
 
 | Table | PK | Key columns | Notes |
@@ -566,6 +633,10 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | `003` | `002` | Add 14 fundamentals tables (period-based: income_statement, balance_sheet, etc.) |
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
+| `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
+
+> **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
+> The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
 
 **Alembic env** (`alembic/env.py`) imports `market_data.infrastructure.db.models` (which registers all models in `Base.metadata`) before calling `autogenerate`.
 

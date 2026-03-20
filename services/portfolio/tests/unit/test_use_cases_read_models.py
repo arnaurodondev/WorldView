@@ -112,8 +112,9 @@ async def test_list_transactions_empty(
 ) -> None:
     """ListTransactionsUseCase returns empty list when no transactions."""
     uc = ListTransactionsUseCase()
-    txns = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
+    txns, total = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
     assert txns == []
+    assert total == 0
 
 
 @pytest.mark.asyncio

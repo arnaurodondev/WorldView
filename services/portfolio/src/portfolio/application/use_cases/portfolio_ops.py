@@ -33,8 +33,15 @@ class GetPortfolioUseCase:
 
 
 class ListPortfoliosUseCase:
-    async def execute(self, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> list[Portfolio]:
-        return await uow.portfolios.list_by_owner(owner_id, tenant_id)
+    async def execute(
+        self,
+        owner_id: UUID,
+        tenant_id: UUID,
+        uow: UnitOfWork,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Portfolio], int]:
+        return await uow.portfolios.list_by_owner(owner_id, tenant_id, limit=limit, offset=offset)
 
 
 class ArchivePortfolioUseCase:

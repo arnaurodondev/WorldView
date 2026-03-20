@@ -51,6 +51,7 @@ class Settings(BaseSettings):
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
+    watchlist_cache_ttl_seconds: int = 300
 
     # Observability
     log_level: str = "INFO"

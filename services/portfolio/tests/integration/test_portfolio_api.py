@@ -51,8 +51,8 @@ async def test_list_portfolios_scoped_to_owner(integration_client) -> None:
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 1
-    assert data[0]["name"] == "P1"
+    assert data["total"] == 1
+    assert data["items"][0]["name"] == "P1"
 
 
 async def test_get_portfolio_happy_path(integration_client) -> None:

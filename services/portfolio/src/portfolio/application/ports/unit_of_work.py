@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from portfolio.application.ports.repositories import (
+        AlertPreferenceRepository,
+        EntitySuppressionRepository,
         HoldingRepository,
         IdempotencyRepository,
         InstrumentRepository,
@@ -15,6 +17,8 @@ if TYPE_CHECKING:
         TenantRepository,
         TransactionRepository,
         UserRepository,
+        WatchlistMemberRepository,
+        WatchlistRepository,
     )
 
 
@@ -52,6 +56,22 @@ class UnitOfWork(ABC):
     @property
     @abstractmethod
     def idempotency(self) -> IdempotencyRepository: ...
+
+    @property
+    @abstractmethod
+    def watchlists(self) -> WatchlistRepository: ...
+
+    @property
+    @abstractmethod
+    def watchlist_members(self) -> WatchlistMemberRepository: ...
+
+    @property
+    @abstractmethod
+    def alert_preferences(self) -> AlertPreferenceRepository: ...
+
+    @property
+    @abstractmethod
+    def entity_suppressions(self) -> EntitySuppressionRepository: ...
 
     @abstractmethod
     async def commit(self) -> None: ...

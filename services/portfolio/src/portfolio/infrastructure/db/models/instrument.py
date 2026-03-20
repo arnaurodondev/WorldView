@@ -22,5 +22,6 @@ class InstrumentModel(Base):
     name: Mapped[str | None] = mapped_column(default=None)
     currency: Mapped[str | None] = mapped_column(default=None)
     asset_class: Mapped[str | None] = mapped_column(default=None)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)
     source_event_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True))
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -4,9 +4,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Generic, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, field_serializer, field_validator
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Generic paginated list response."""
+
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
 
 
 def _fmt_decimal(v: Decimal) -> str:
@@ -158,9 +170,66 @@ class InstrumentResponse(BaseModel):
     name: str | None = None
     currency: str | None = None
     asset_class: str | None = None
+    entity_id: UUID | None = None
 
 
 class ErrorResponse(BaseModel):
     error_code: str
     message: str
     details: dict = {}
+
+
+# ── Watchlist schemas ──────────────────────────────────────────────────────────
+
+
+class WatchlistCreateRequest(BaseModel):
+    name: str
+
+
+class WatchlistResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    user_id: UUID
+    name: str
+    status: str
+    created_at: datetime
+
+
+class WatchlistMemberCreateRequest(BaseModel):
+    entity_id: UUID
+    entity_type: str = "company"
+
+
+class WatchlistMemberResponse(BaseModel):
+    id: UUID
+    watchlist_id: UUID
+    entity_id: UUID
+    entity_type: str
+    added_at: datetime
+
+
+# ── Alert preference schemas ───────────────────────────────────────────────────
+
+
+class AlertPreferenceResponse(BaseModel):
+    alert_type: str
+    enabled: bool
+    updated_at: datetime
+
+
+class AlertPreferenceUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class EntitySuppressionResponse(BaseModel):
+    entity_id: UUID
+    suppressed_at: datetime
+
+
+class EntitySuppressionCreateRequest(BaseModel):
+    entity_id: UUID
+
+
+class AlertPreferencesListResponse(BaseModel):
+    preferences: list[AlertPreferenceResponse]
+    suppressions: list[EntitySuppressionResponse]

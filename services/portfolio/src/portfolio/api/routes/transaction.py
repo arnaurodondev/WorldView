@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Query, status
 
 from portfolio.api.dependencies import UoWDep
-from portfolio.api.schemas import RecordTransactionRequest, RecordTransactionResponse, TransactionListItem
+from portfolio.api.schemas import (
+    PaginatedResponse,
+    RecordTransactionRequest,
+    RecordTransactionResponse,
+    TransactionListItem,
+)
 from portfolio.application.use_cases.read_models import ListTransactionsUseCase
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
 
@@ -63,29 +68,36 @@ async def record_transaction(
     )
 
 
-@router.get("/transactions", response_model=list[TransactionListItem])
+@router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
 async def list_transactions(
     uow: UoWDep,
     portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
     x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
     x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-) -> list[TransactionListItem]:
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[TransactionListItem]:
     uc = ListTransactionsUseCase()
-    transactions = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow)
-    return [
-        TransactionListItem(
-            id=t.id,
-            portfolio_id=t.portfolio_id,
-            instrument_id=t.instrument_id,
-            transaction_type=str(t.transaction_type),
-            direction=str(t.direction),
-            quantity=t.quantity,
-            price=t.price,
-            fees=t.fees,
-            currency=t.currency,
-            executed_at=t.executed_at,
-            external_ref=t.external_ref,
-            created_at=t.created_at,
-        )
-        for t in transactions
-    ]
+    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return PaginatedResponse(
+        items=[
+            TransactionListItem(
+                id=t.id,
+                portfolio_id=t.portfolio_id,
+                instrument_id=t.instrument_id,
+                transaction_type=str(t.transaction_type),
+                direction=str(t.direction),
+                quantity=t.quantity,
+                price=t.price,
+                fees=t.fees,
+                currency=t.currency,
+                executed_at=t.executed_at,
+                external_ref=t.external_ref,
+                created_at=t.created_at,
+            )
+            for t in transactions
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
