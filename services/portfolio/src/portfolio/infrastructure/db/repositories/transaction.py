@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from portfolio.application.ports.repositories import TransactionRepository
 from portfolio.domain.entities.transaction import Transaction
@@ -48,14 +48,23 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
-    async def list_by_portfolio(self, portfolio_id: UUID, tenant_id: UUID) -> list[Transaction]:
-        result = await self._session.execute(
-            select(TransactionModel).where(
-                TransactionModel.portfolio_id == portfolio_id,
-                TransactionModel.tenant_id == tenant_id,
-            )
+    async def list_by_portfolio(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        base_where = (
+            TransactionModel.portfolio_id == portfolio_id,
+            TransactionModel.tenant_id == tenant_id,
         )
-        return [self._to_entity(r) for r in result.scalars()]
+        count_result = await self._session.execute(
+            select(func.count()).select_from(TransactionModel).where(*base_where)
+        )
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(select(TransactionModel).where(*base_where).limit(limit).offset(offset))
+        return [self._to_entity(r) for r in result.scalars()], total
 
     async def save(self, transaction: Transaction) -> None:
         row = await self._session.get(TransactionModel, transaction.id)

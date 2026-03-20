@@ -44,13 +44,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = session_factory
     app.state.engine = engine
 
-    # 3. Create outbox dispatcher
+    # 3. Create Valkey client for watchlist reverse-index cache
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+    valkey_client = ValkeyClient(url=settings.valkey_url)
+    app.state.valkey_client = valkey_client
+
+    # 4. Create outbox dispatcher
     from portfolio.messaging.dispatcher import create_dispatcher
 
     dispatcher = create_dispatcher(settings, session_factory)
     app.state.dispatcher = dispatcher
 
-    # 4. Create instrument event consumer
+    # 5. Create instrument event consumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
 
@@ -83,6 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Stop dispatcher (if running)
     if hasattr(dispatcher, "stop"):
         dispatcher.stop()
+
+    # Close Valkey client
+    await valkey_client.close()
 
     # Dispose engine
     await engine.dispose()

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from market_data.application.ports.uow import UnitOfWork
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
+from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
 from market_data.infrastructure.db.repositories.fundamentals_repo import PgFundamentalsRepository
 from market_data.infrastructure.db.repositories.ingestion_event_repo import PgIngestionEventRepository
 from market_data.infrastructure.db.repositories.instrument_repo import PgInstrumentRepository
@@ -78,6 +79,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._ohlcv: PgOHLCVRepository | None = None
         self._quotes: PgQuoteRepository | None = None
         self._fundamentals: PgFundamentalsRepository | None = None
+        self._fundamental_metrics: PgFundamentalMetricsRepository | None = None
         self._ingestion_events_repo: PgIngestionEventRepository | None = None
         self._failed_tasks_repo: PgFailedTaskRepository | None = None
         self._outbox_events_repo: PgOutboxEventRepository | None = None
@@ -179,6 +181,13 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         if self._fundamentals is None:
             self._fundamentals = PgFundamentalsRepository(self._write())
         return self._fundamentals
+
+    @property
+    def fundamental_metrics(self) -> PgFundamentalMetricsRepository:
+        """Fundamental metrics repository (write session) for read-optimized projection."""
+        if self._fundamental_metrics is None:
+            self._fundamental_metrics = PgFundamentalMetricsRepository(self._write())
+        return self._fundamental_metrics
 
     @property
     def ingestion_events(self) -> IngestionEventRepository:

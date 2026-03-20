@@ -221,11 +221,14 @@ def create_app() -> FastAPI:
         return {"status": "ok", "checks": checks}
 
     # Register API routers
-    from market_data.api.routers import fundamentals, instruments, ohlcv, quotes, securities
+    from market_data.api.routers import fundamental_metrics, fundamentals, instruments, ohlcv, quotes, securities
 
     app.include_router(instruments.router, prefix="/api/v1")
     app.include_router(ohlcv.router, prefix="/api/v1")
     app.include_router(quotes.router, prefix="/api/v1")
+    # fundamental_metrics MUST be registered before fundamentals to avoid
+    # /fundamentals/timeseries being matched by /fundamentals/{security_id}
+    app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
 

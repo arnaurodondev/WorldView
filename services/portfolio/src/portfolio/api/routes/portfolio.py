@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Query, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import UoWDep
 from portfolio.api.schemas import (
+    PaginatedResponse,
     PortfolioCreateRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
@@ -56,15 +57,17 @@ async def create_portfolio(
     return _to_response(portfolio)
 
 
-@router.get("/portfolios", response_model=list[PortfolioResponse])
+@router.get("/portfolios", response_model=PaginatedResponse[PortfolioResponse])
 async def list_portfolios(
     uow: UoWDep,
     owner_id: UUID = Header(..., alias="X-Owner-ID"),
     x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-) -> list[PortfolioResponse]:
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[PortfolioResponse]:
     uc = ListPortfoliosUseCase()
-    portfolios = await uc.execute(owner_id, x_tenant_id, uow)
-    return [_to_response(p) for p in portfolios]
+    portfolios, total = await uc.execute(owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return PaginatedResponse(items=[_to_response(p) for p in portfolios], total=total, limit=limit, offset=offset)
 
 
 @router.get("/portfolios/{portfolio_id}", response_model=PortfolioResponse)

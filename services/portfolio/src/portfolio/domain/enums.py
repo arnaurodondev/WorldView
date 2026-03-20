@@ -49,3 +49,15 @@ class IdempotencyState(StrEnum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class WatchlistStatus(StrEnum):
+    ACTIVE = "active"
+    DELETED = "deleted"
+
+
+class AlertType(StrEnum):
+    SIGNAL = "signal"
+    CONTRADICTION = "contradiction"
+    CONFIDENCE_DROP = "confidence_drop"
+    NEW_EVENT = "new_event"

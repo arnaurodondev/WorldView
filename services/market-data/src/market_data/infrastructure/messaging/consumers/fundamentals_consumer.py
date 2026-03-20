@@ -13,6 +13,7 @@ from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure.db.metric_extractor import extract_metrics
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -107,6 +108,24 @@ _DATE_KEYED_SERIES_SECTIONS: frozenset[str] = frozenset(
 def _parse_fundamentals_bytes(raw: bytes) -> dict[str, Any]:
     """Parse JSON-encoded fundamentals bytes into a raw dict."""
     return json.loads(raw.decode())  # type: ignore[no-any-return]
+
+
+async def _upsert_metrics_for_record(uow: Any, record: FundamentalsRecord) -> None:
+    """Extract metrics from a FundamentalsRecord and upsert into fundamental_metrics.
+
+    Uses the same write session (same transaction) as the section upsert.
+    Silently skips sections not in the metric catalog.
+    """
+    metric_rows = extract_metrics(
+        instrument_id=record.security_id,  # domain field maps to instrument_id
+        section=record.section,
+        period_type=str(record.period_type),
+        as_of_date=record.period_end.date() if hasattr(record.period_end, "date") else record.period_end,
+        data=record.data,
+        ingested_at=record.ingested_at,
+    )
+    if metric_rows:
+        await uow.fundamental_metrics.upsert_metrics(metric_rows)
 
 
 class FundamentalsConsumer(BaseKafkaConsumer[dict]):
@@ -304,6 +323,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                             ingested_at=ingested_at,
                         )
                         await handler(record)
+                        await _upsert_metrics_for_record(uow, record)
                         section_count += 1
 
             # ── earnings trend: period-code-keyed dict with "date" field ────
@@ -326,6 +346,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                         ingested_at=ingested_at,
                     )
                     await handler(record)
+                    await _upsert_metrics_for_record(uow, record)
                     section_count += 1
 
             # ── date-keyed flat series: one row per date key ────────────────
@@ -350,6 +371,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                         ingested_at=ingested_at,
                     )
                     await handler(record)
+                    await _upsert_metrics_for_record(uow, record)
                     section_count += 1
 
             # ── snapshot sections: single row, period_end = ingested_at ─────
@@ -364,6 +386,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                     ingested_at=ingested_at,
                 )
                 await handler(record)
+                await _upsert_metrics_for_record(uow, record)
                 section_count += 1
 
         # ── FIX-F4: Extract company_profile metadata into instruments table ──

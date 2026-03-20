@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from portfolio.application.ports.repositories import PortfolioRepository
@@ -44,14 +44,21 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
-    async def list_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[Portfolio]:
-        result = await self._session.execute(
-            select(PortfolioModel).where(
-                PortfolioModel.owner_id == owner_id,
-                PortfolioModel.tenant_id == tenant_id,
-            )
+    async def list_by_owner(
+        self,
+        owner_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Portfolio], int]:
+        base_where = (
+            PortfolioModel.owner_id == owner_id,
+            PortfolioModel.tenant_id == tenant_id,
         )
-        return [self._to_entity(r) for r in result.scalars()]
+        count_result = await self._session.execute(select(func.count()).select_from(PortfolioModel).where(*base_where))
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(select(PortfolioModel).where(*base_where).limit(limit).offset(offset))
+        return [self._to_entity(r) for r in result.scalars()], total
 
     async def save(self, portfolio: Portfolio) -> None:
         row = await self._session.get(PortfolioModel, portfolio.id)

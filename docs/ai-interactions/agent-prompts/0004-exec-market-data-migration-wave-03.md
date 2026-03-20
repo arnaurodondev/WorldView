@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — All tasks in this wave have been completed and merged. See git history for implementation evidence.
+
 # Execution Prompt 0004 — market-data-migration wave 03
 
 ## Context (read first)

@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — All tasks in this wave have been completed and merged. See git history for implementation evidence.
+
 # Execution Prompt 0002 — portfolio-migration wave 02
 
 ## Context (read first)

@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
+    from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
+    from portfolio.domain.entities.watchlist import Watchlist
+    from portfolio.domain.entities.watchlist_member import WatchlistMember
 
 
 @dataclass
@@ -68,7 +71,13 @@ class PortfolioRepository(ABC):
     async def get(self, portfolio_id: UUID, tenant_id: UUID) -> Portfolio | None: ...
 
     @abstractmethod
-    async def list_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[Portfolio]: ...
+    async def list_by_owner(
+        self,
+        owner_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Portfolio], int]: ...
 
     @abstractmethod
     async def save(self, portfolio: Portfolio) -> None: ...
@@ -82,7 +91,7 @@ class InstrumentRepository(ABC):
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None: ...
 
     @abstractmethod
-    async def list_all(self) -> list[InstrumentRef]: ...
+    async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]: ...
 
     @abstractmethod
     async def upsert(self, instrument: InstrumentRef) -> None: ...
@@ -93,7 +102,13 @@ class TransactionRepository(ABC):
     async def get(self, transaction_id: UUID, tenant_id: UUID) -> Transaction | None: ...
 
     @abstractmethod
-    async def list_by_portfolio(self, portfolio_id: UUID, tenant_id: UUID) -> list[Transaction]: ...
+    async def list_by_portfolio(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]: ...
 
     @abstractmethod
     async def save(self, transaction: Transaction) -> None: ...
@@ -137,3 +152,56 @@ class IdempotencyRepository(ABC):
 
     @abstractmethod
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None: ...
+
+
+class WatchlistRepository(ABC):
+    @abstractmethod
+    async def get(self, watchlist_id: UUID, tenant_id: UUID) -> Watchlist | None: ...
+
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID, tenant_id: UUID) -> list[Watchlist]: ...
+
+    @abstractmethod
+    async def save(self, watchlist: Watchlist) -> None: ...
+
+    @abstractmethod
+    async def delete(self, watchlist_id: UUID) -> None: ...
+
+
+class WatchlistMemberRepository(ABC):
+    @abstractmethod
+    async def get(self, watchlist_id: UUID, entity_id: UUID) -> WatchlistMember | None: ...
+
+    @abstractmethod
+    async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]: ...
+
+    @abstractmethod
+    async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]: ...
+
+    @abstractmethod
+    async def save(self, member: WatchlistMember) -> None: ...
+
+    @abstractmethod
+    async def delete(self, watchlist_id: UUID, entity_id: UUID) -> None: ...
+
+
+class AlertPreferenceRepository(ABC):
+    @abstractmethod
+    async def get_by_user(self, user_id: UUID, tenant_id: UUID) -> list[AlertPreference]: ...
+
+    @abstractmethod
+    async def upsert(self, pref: AlertPreference) -> None: ...
+
+
+class EntitySuppressionRepository(ABC):
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID, tenant_id: UUID) -> list[EntitySuppression]: ...
+
+    @abstractmethod
+    async def get(self, user_id: UUID, entity_id: UUID) -> EntitySuppression | None: ...
+
+    @abstractmethod
+    async def save(self, suppression: EntitySuppression) -> None: ...
+
+    @abstractmethod
+    async def delete(self, user_id: UUID, entity_id: UUID) -> None: ...

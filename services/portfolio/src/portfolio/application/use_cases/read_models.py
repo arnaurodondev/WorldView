@@ -27,10 +27,18 @@ class GetHoldingsUseCase:
 
 
 class ListTransactionsUseCase:
-    async def execute(self, portfolio_id: UUID, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> list[Transaction]:
+    async def execute(
+        self,
+        portfolio_id: UUID,
+        owner_id: UUID,
+        tenant_id: UUID,
+        uow: UnitOfWork,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
         if portfolio.owner_id != owner_id:
             raise AuthorizationError("Not authorized to view this portfolio's transactions")
-        return await uow.transactions.list_by_portfolio(portfolio_id, tenant_id)
+        return await uow.transactions.list_by_portfolio(portfolio_id, tenant_id, limit=limit, offset=offset)
