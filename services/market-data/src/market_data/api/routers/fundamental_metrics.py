@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import get_uow
 from market_data.api.schemas.fundamental_metrics import (
@@ -49,6 +49,11 @@ async def get_timeseries(
 
     Query the read-optimized ``fundamental_metrics`` table.
     """
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(
+            status_code=422,
+            detail="start_date must not be after end_date",
+        )
     session = uow.get_read_session()
     data_points = await query_timeseries(
         session,
@@ -91,6 +96,7 @@ async def screen_instruments(
             min_value=f.min_value,
             max_value=f.max_value,
             period_type=f.period_type,
+            sector=f.sector,
         )
         for f in body.filters
     ]

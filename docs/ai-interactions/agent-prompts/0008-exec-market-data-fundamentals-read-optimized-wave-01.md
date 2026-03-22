@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — Core read-optimized fundamentals projection wave completed (migration, extractor, consumer write-through projection, timeseries/screen APIs, backfill script, tests, and service docs).
+
 # Execution Prompt 0007 — market-data fundamentals read-optimized table wave 01
 
 ## Context (read first)

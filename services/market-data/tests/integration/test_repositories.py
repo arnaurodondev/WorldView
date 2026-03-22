@@ -418,3 +418,330 @@ class TestPgQuoteRepository:
     async def test_find_by_instrument_missing_returns_none(self, uow) -> None:
         result = await uow.quotes.find_by_instrument("00000000-0000-0000-0000-000000000000")
         assert result is None
+
+
+# ── PgFundamentalMetricsRepository (ROPT-10) ─────────────────────────────────
+
+
+class TestPgFundamentalMetricsRepository:
+    """Integration tests for the read-optimized fundamental_metrics projection.
+
+    Covers:
+    - Upsert creates a row and can be read back
+    - ON CONFLICT DO UPDATE (idempotent re-ingest overwrites values)
+    - Timeseries query returns sorted points and respects date boundaries
+    - Screening uses latest date per metric per instrument (AND semantics)
+    - Available metrics query returns distinct metric names
+    """
+
+    async def _make_instrument(self, uow) -> str:
+        from market_data.domain.entities import Instrument, Security
+
+        sec = Security(name="Metrics Test Corp")
+        await uow.securities.upsert(sec)
+        instr = Instrument(security_id=sec.id, symbol="MTRX", exchange="XNAS")
+        created = await uow.instruments.upsert(instr)
+        await uow.commit()
+        return created.id
+
+    # ── upsert and read-back ──────────────────────────────────────────────────
+
+    async def test_upsert_creates_row(self, uow) -> None:
+        """Upserting a MetricRow inserts into fundamental_metrics."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_available_metrics
+
+        instr_id = await self._make_instrument(uow)
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric="pe_ratio",
+                value_numeric=Decimal("25.0"),
+                value_text=None,
+                period_type="SNAPSHOT",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            )
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        metrics = await query_available_metrics(session, instr_id)
+        assert "pe_ratio" in metrics
+
+    async def test_upsert_idempotent_updates_value(self, uow) -> None:
+        """Re-upserting the same (instrument_id, as_of_date, metric, period_type)
+        overwrites value_numeric (ON CONFLICT DO UPDATE)."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_timeseries
+
+        instr_id = await self._make_instrument(uow)
+        as_of = date(2024, 9, 30)
+
+        def _row(value: Decimal) -> MetricRow:
+            return MetricRow(
+                instrument_id=instr_id,
+                as_of_date=as_of,
+                metric="pe_ratio",
+                value_numeric=value,
+                value_text=None,
+                period_type="SNAPSHOT",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            )
+
+        await uow.fundamental_metrics.upsert_metrics([_row(Decimal("25.0"))])
+        await uow.commit()
+
+        await uow.fundamental_metrics.upsert_metrics([_row(Decimal("30.0"))])
+        await uow.commit()
+
+        session = uow.get_read_session()
+        points = await query_timeseries(session, instr_id, "pe_ratio")
+        # Exactly one row (no duplicate created)
+        assert len(points) == 1
+        assert points[0].value_numeric == Decimal("30.000000")
+
+    # ── timeseries query ──────────────────────────────────────────────────────
+
+    async def test_timeseries_returns_sorted_ascending(self, uow) -> None:
+        """query_timeseries returns data points ordered by as_of_date ascending."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_timeseries
+
+        instr_id = await self._make_instrument(uow)
+        dates_values = [
+            (date(2022, 12, 31), Decimal("20")),
+            (date(2023, 12, 31), Decimal("22")),
+            (date(2024, 9, 30), Decimal("25")),
+        ]
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=d,
+                metric="pe_ratio",
+                value_numeric=v,
+                value_text=None,
+                period_type="ANNUAL",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            )
+            for d, v in dates_values
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        points = await query_timeseries(session, instr_id, "pe_ratio")
+        assert len(points) == 3
+        # Must be ascending
+        for i in range(len(points) - 1):
+            assert points[i].as_of_date < points[i + 1].as_of_date
+
+    async def test_timeseries_respects_start_date(self, uow) -> None:
+        """query_timeseries with start_date excludes earlier rows."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_timeseries
+
+        instr_id = await self._make_instrument(uow)
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2022, 12, 31),
+                metric="revenue",
+                value_numeric=Decimal("100"),
+                value_text=None,
+                period_type="ANNUAL",
+                section="income_statements",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2023, 12, 31),
+                metric="revenue",
+                value_numeric=Decimal("120"),
+                value_text=None,
+                period_type="ANNUAL",
+                section="income_statements",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        points = await query_timeseries(session, instr_id, "revenue", start_date=date(2023, 1, 1))
+        assert len(points) == 1
+        assert points[0].as_of_date == date(2023, 12, 31)
+
+    async def test_timeseries_respects_end_date(self, uow) -> None:
+        """query_timeseries with end_date excludes later rows."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_timeseries
+
+        instr_id = await self._make_instrument(uow)
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2023, 12, 31),
+                metric="revenue",
+                value_numeric=Decimal("120"),
+                value_text=None,
+                period_type="ANNUAL",
+                section="income_statements",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric="revenue",
+                value_numeric=Decimal("150"),
+                value_text=None,
+                period_type="ANNUAL",
+                section="income_statements",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        points = await query_timeseries(session, instr_id, "revenue", end_date=date(2023, 12, 31))
+        assert len(points) == 1
+        assert points[0].as_of_date == date(2023, 12, 31)
+
+    # ── screening query ───────────────────────────────────────────────────────
+
+    async def test_screen_uses_latest_date_per_metric(self, uow) -> None:
+        """Screening uses the most recent as_of_date per instrument per metric."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import ScreenFilter, query_screen
+
+        instr_id = await self._make_instrument(uow)
+        # Two dates; only the later one should qualify the screen filter
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2023, 12, 31),
+                metric="pe_ratio",
+                value_numeric=Decimal("50"),  # high → would fail max=20
+                value_text=None,
+                period_type="ANNUAL",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric="pe_ratio",
+                value_numeric=Decimal("15"),  # low → passes max=20
+                value_text=None,
+                period_type="ANNUAL",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        results = await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=20.0)])
+        instrument_ids = [r.instrument_id for r in results]
+        assert instr_id in instrument_ids
+
+    async def test_screen_and_logic_requires_all_filters(self, uow) -> None:
+        """Instrument must satisfy ALL filters (AND logic)."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import ScreenFilter, query_screen
+
+        instr_id = await self._make_instrument(uow)
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric="pe_ratio",
+                value_numeric=Decimal("15"),
+                value_text=None,
+                period_type="SNAPSHOT",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric="roe_ttm",
+                value_numeric=Decimal("0.05"),  # ROE too low → fails min=0.15
+                value_text=None,
+                period_type="SNAPSHOT",
+                section="highlights",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            ),
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        # Both pe_ratio ≤ 20 AND roe_ttm ≥ 0.15 — instrument fails the second
+        results = await query_screen(
+            session,
+            [
+                ScreenFilter(metric="pe_ratio", max_value=20.0),
+                ScreenFilter(metric="roe_ttm", min_value=0.15),
+            ],
+        )
+        instrument_ids = [r.instrument_id for r in results]
+        assert instr_id not in instrument_ids
+
+    # ── available metrics ─────────────────────────────────────────────────────
+
+    async def test_available_metrics_returns_distinct_names(self, uow) -> None:
+        """query_available_metrics returns all distinct metric names for an instrument."""
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_available_metrics
+
+        instr_id = await self._make_instrument(uow)
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(2024, 9, 30),
+                metric=metric,
+                value_numeric=Decimal("1"),
+                value_text=None,
+                period_type="SNAPSHOT",
+                section="valuation_ratios",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            )
+            for metric in ["pe_ratio", "pb_ratio", "enterprise_value"]
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        metrics = await query_available_metrics(session, instr_id)
+        assert set(metrics) == {"pe_ratio", "pb_ratio", "enterprise_value"}

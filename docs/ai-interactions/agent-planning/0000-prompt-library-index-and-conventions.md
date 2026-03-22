@@ -44,6 +44,9 @@ Generated execution prompts must:
 | 0003 | `0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md` | Market Ingestion migration planning |
 | 0004 | `0004-market-data-migration-detailed-plan-and-atomic-tasks.md` | Market Data migration planning |
 | 0005 | `0005-generic-implementation-plan-and-task-breakdown-template.md` | Generic execution-ready planning prompt |
+| 0011 | `agent-prompts/0011-ingestion-pipeline-v1-foundations-plan.md` | Ingestion pipeline v1: libs/ml-clients, DB schemas, infra, contracts (foundations) |
+| 0012 | `agent-prompts/0012-ingestion-pipeline-v1-s4-s5-plan.md` | Ingestion pipeline v1: S4 Content Ingestion + S5 Content Store |
+| 0013 | `agent-prompts/0013-ingestion-pipeline-v1-s6-s7-s10-plan.md` | Ingestion pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service |
 
 ## Notes
 

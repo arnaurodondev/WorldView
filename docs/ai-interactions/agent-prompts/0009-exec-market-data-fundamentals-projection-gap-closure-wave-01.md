@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — All FMG tasks shipped. Expanded metric catalog (75+ canonical names across 6 sections), `operating_cash_flow` alias fix, unmapped-key observability, idempotent backfill, `start_date > end_date` → 422 validation, sector filter on screen endpoint, and full unit+integration test coverage. 80 targeted tests pass; ruff + mypy clean.
+
 # Execution Prompt 0008 — market-data fundamentals projection gap-closure wave 01
 
 ## Context (read first)
