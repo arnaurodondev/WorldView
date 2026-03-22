@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "EntityDirtied",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S7 to a compacted topic when an entity needs its profile refreshed. Kafka key is entity_id (plain string — no key schema registered).",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "entity.dirtied"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "entity_id", "type": "string"},
+    {"name": "dirty_reason", "type": "string"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

@@ -319,13 +319,21 @@ All Kafka events carry these standard fields:
 | Topic | Producer | Consumer(s) | Key | Retention | Partitions |
 |-------|----------|-------------|-----|-----------|------------|
 | `portfolio.events.v1` | S1 Portfolio | *(future)* | `aggregate_id` | 7d | 3 |
+| `portfolio.watchlist.updated.v1` | S1 Portfolio | S10 Alert Service | `watchlist_id` | 7d | 3 |
 | `market.dataset.fetched` | S2 Market Ingestion | S3 Market Data | `symbol` | 7d | 6 |
 | `market.instrument.created` | S3 Market Data | S1 Portfolio | `instrument_id` | 7d | 3 |
 | `market.instrument.updated` | S3 Market Data | S1 Portfolio | `instrument_id` | 7d | 3 |
 | `content.article.raw.v1` | S4 Content Ingestion | S5 Content Store | `url_hash` | 3d | 3 |
 | `content.article.stored.v1` | S5 Content Store | S6 NLP Pipeline | `article_id` | 7d | 6 |
 | `nlp.article.enriched.v1` | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` | 14d | 6 |
-| `nlp.signal.detected.v1` | S6 NLP Pipeline | *(future: alerting)* | `entity_id` | 7d | 3 |
+| `nlp.signal.detected.v1` | S6 NLP Pipeline | S10 Alert Service | `entity_id` | 7d | 3 |
+| `graph.state.changed.v1` | S7 Knowledge Graph | S10 Alert Service, S8 | `primary_entity_id` | 14d | 6 |
+| `intelligence.contradiction.v1` | S7 Knowledge Graph | S10 Alert Service | `subject_entity_id` | 14d | 3 |
+| `relation.type.proposed.v1` | S7 Knowledge Graph | *(human review)* | `proposed_type` | 30d | 3 |
+| `entity.dirtied.v1` | S7 Knowledge Graph | S7 (async workers) | `entity_id` | compact | 24 |
+| `alert.delivered.v1` | S10 Alert Service | *(audit)* | `alert_id` | 7d | 3 |
+
+Event types on `portfolio.watchlist.updated.v1`: `watchlist.item_added`, `watchlist.item_deleted` (discriminated by `event_type` field per PRD §1.5 rule 5).
 
 ### 6.3 Avro Schema Policy
 
