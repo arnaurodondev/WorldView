@@ -333,3 +333,172 @@ async def test_dividend_history_year_only_keys() -> None:
     dates = sorted([call.args[0].period_end for call in calls])
     assert dates[0] == datetime(2023, 12, 31, tzinfo=UTC)
     assert dates[1] == datetime(2024, 12, 31, tzinfo=UTC)
+
+
+# ── Metric upsert integration (ROPT-10) ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_consumer_calls_upsert_metrics_for_catalogued_section() -> None:
+    """After each section upsert, fundamental_metrics.upsert_metrics is called
+    for sections that are in the metric catalog (e.g. analyst_consensus)."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.update_metadata = AsyncMock()
+    mock_uow.fundamentals.upsert_analyst_consensus = AsyncMock()
+
+    payload = {
+        "analyst_consensus": {"TargetPrice": 200.0, "Rating": "Buy"},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # fundamental_metrics.upsert_metrics must have been called at least once
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_consumer_calls_upsert_metrics_for_valuation_ratios() -> None:
+    """valuation_ratios section triggers metric extraction (pe_ratio, etc.)."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_valuation_ratios = AsyncMock()
+
+    payload = {"valuation_ratios": {"TrailingPE": 28.5, "PB": 3.2}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_call_upsert_metrics_for_uncatalogued_section() -> None:
+    """Sections not in the metric catalog (e.g. technicals_snapshot) do not
+    trigger a fundamental_metrics.upsert_metrics call."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_technicals_snapshot = AsyncMock()
+
+    payload = {"technicals_snapshot": {"Beta": 1.2, "RSI": 55.0}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # upsert_metrics should NOT have been called (empty rows → skipped)
+    mock_uow.fundamental_metrics.upsert_metrics.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_consumer_upsert_metrics_uses_same_uow() -> None:
+    """Metric upsert uses the same UoW as the section upsert (same transaction)."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_highlights = AsyncMock()
+
+    payload = {"highlights": {"Revenue": 1e9, "EBITDA": 2e8}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # Both section upsert and metric upsert went through the same mock_uow object
+    mock_uow.fundamentals.upsert_highlights.assert_awaited_once()
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_consumer_idempotent_reingest_does_not_duplicate_metrics() -> None:
+    """Processing the same payload twice invokes upsert_metrics the same number
+    of times per ingest — the ON CONFLICT upsert handles idempotency at DB level.
+    The consumer does not skip calling upsert_metrics on replay."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_analyst_consensus = AsyncMock()
+
+    payload = {"analyst_consensus": {"TargetPrice": 200.0, "Rating": "Buy"}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # Simulate two separate ingestion runs (same content, fresh consumer state each time)
+    await consumer.process_message(None, _make_message(), {})
+    first_call_count = mock_uow.fundamental_metrics.upsert_metrics.await_count
+
+    await consumer.process_message(None, _make_message(), {})
+    second_call_count = mock_uow.fundamental_metrics.upsert_metrics.await_count
+
+    # Second run invokes upsert_metrics the same number of additional times
+    assert second_call_count == first_call_count * 2
+
+
+@pytest.mark.asyncio
+async def test_consumer_projects_operating_cash_flow_from_total_cash_from_ops_alias() -> None:
+    """Regression: totalCashFromOperatingActivities populates operating_cash_flow."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_cash_flow = AsyncMock()
+
+    payload = {
+        "cash_flow": {
+            "quarterly": {
+                "2024-09-30": {
+                    "totalCashFromOperatingActivities": 12345.0,
+                }
+            },
+            "yearly": {},
+        }
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
+    metric_rows = mock_uow.fundamental_metrics.upsert_metrics.call_args.args[0]
+    assert any(r.metric == "operating_cash_flow" for r in metric_rows)
+
+
+@pytest.mark.asyncio
+async def test_consumer_metric_upsert_failure_propagates_exception() -> None:
+    """If upsert_metrics raises after the section upsert, the exception propagates
+    (no silent swallowing) so the caller's transaction manager can roll back."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_analyst_consensus = AsyncMock()
+    mock_uow.fundamental_metrics.upsert_metrics = AsyncMock(side_effect=RuntimeError("db write failed"))
+
+    payload = {"analyst_consensus": {"TargetPrice": 200.0, "Rating": "Buy"}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    with pytest.raises(RuntimeError, match="db write failed"):
+        await consumer.process_message(None, _make_message(), {})
+
+    # Section upsert was called, metric upsert raised, exception propagated
+    mock_uow.fundamentals.upsert_analyst_consensus.assert_awaited_once()
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited_once()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio.application.ports.repositories import InstrumentRepository
@@ -29,6 +29,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
             name=row.name,
             currency=row.currency,
             asset_class=row.asset_class,
+            entity_id=row.entity_id,
             source_event_id=row.source_event_id,
             synced_at=row.synced_at,
         )
@@ -48,9 +49,11 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
-    async def list_all(self) -> list[InstrumentRef]:
-        result = await self._session.execute(select(InstrumentModel))
-        return [self._to_entity(r) for r in result.scalars()]
+    async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]:
+        count_result = await self._session.execute(select(func.count()).select_from(InstrumentModel))
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(select(InstrumentModel).limit(limit).offset(offset))
+        return [self._to_entity(r) for r in result.scalars()], total
 
     async def upsert(self, instrument: InstrumentRef) -> None:
         stmt = (
@@ -62,6 +65,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                 name=instrument.name,
                 currency=instrument.currency,
                 asset_class=instrument.asset_class,
+                entity_id=instrument.entity_id,
                 source_event_id=instrument.source_event_id,
                 synced_at=instrument.synced_at,
             )
@@ -71,6 +75,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                     "name": instrument.name,
                     "currency": instrument.currency,
                     "asset_class": instrument.asset_class,
+                    "entity_id": instrument.entity_id,
                     "source_event_id": instrument.source_event_id,
                     "synced_at": instrument.synced_at,
                 },

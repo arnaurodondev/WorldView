@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from portfolio.application.ports.repositories import (
+    AlertPreferenceRepository,
+    EntitySuppressionRepository,
     HoldingRepository,
     IdempotencyRepository,
     InstrumentRepository,
@@ -14,6 +16,8 @@ from portfolio.application.ports.repositories import (
     TenantRepository,
     TransactionRepository,
     UserRepository,
+    WatchlistMemberRepository,
+    WatchlistRepository,
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
 
@@ -22,6 +26,9 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
+    from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
+    from portfolio.domain.entities.watchlist import Watchlist
+    from portfolio.domain.entities.watchlist_member import WatchlistMember
 
 
 class FakeTenantRepository(TenantRepository):
@@ -71,8 +78,16 @@ class FakePortfolioRepository(PortfolioRepository):
             return None
         return p
 
-    async def list_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[Portfolio]:
-        return [p for p in self._store.values() if p.owner_id == owner_id and p.tenant_id == tenant_id]
+    async def list_by_owner(
+        self,
+        owner_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Portfolio], int]:
+        items = [p for p in self._store.values() if p.owner_id == owner_id and p.tenant_id == tenant_id]
+        total = len(items)
+        return items[offset : offset + limit], total
 
     async def save(self, portfolio: Portfolio) -> None:
         self._store[portfolio.id] = portfolio
@@ -93,8 +108,10 @@ class FakeInstrumentRepository(InstrumentRepository):
                 return inst
         return None
 
-    async def list_all(self) -> list[InstrumentRef]:
-        return list(self._store.values())
+    async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]:
+        items = list(self._store.values())
+        total = len(items)
+        return items[offset : offset + limit], total
 
     async def upsert(self, instrument: InstrumentRef) -> None:
         # Check for existing by (symbol, exchange)
@@ -117,8 +134,16 @@ class FakeTransactionRepository(TransactionRepository):
             return None
         return t
 
-    async def list_by_portfolio(self, portfolio_id: UUID, tenant_id: UUID) -> list[Transaction]:
-        return [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+    async def list_by_portfolio(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        total = len(items)
+        return items[offset : offset + limit], total
 
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
@@ -175,6 +200,82 @@ class FakeIdempotencyRepository(IdempotencyRepository):
         self._seen.add(event_id)
 
 
+class FakeWatchlistRepository(WatchlistRepository):
+    """In-memory watchlist store."""
+
+    def __init__(self) -> None:
+        self._store: dict[UUID, Watchlist] = {}
+
+    async def get(self, watchlist_id: UUID, tenant_id: UUID) -> Watchlist | None:
+        w = self._store.get(watchlist_id)
+        if w is None or w.tenant_id != tenant_id:
+            return None
+        return w
+
+    async def list_by_user(self, user_id: UUID, tenant_id: UUID) -> list[Watchlist]:
+        return [w for w in self._store.values() if w.user_id == user_id and w.tenant_id == tenant_id]
+
+    async def save(self, watchlist: Watchlist) -> None:
+        self._store[watchlist.id] = watchlist
+
+    async def delete(self, watchlist_id: UUID) -> None:
+        self._store.pop(watchlist_id, None)
+
+
+class FakeWatchlistMemberRepository(WatchlistMemberRepository):
+    """In-memory watchlist member store keyed by (watchlist_id, entity_id)."""
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[UUID, UUID], WatchlistMember] = {}
+
+    async def get(self, watchlist_id: UUID, entity_id: UUID) -> WatchlistMember | None:
+        return self._store.get((watchlist_id, entity_id))
+
+    async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]:
+        return [m for (wid, _), m in self._store.items() if wid == watchlist_id]
+
+    async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]:
+        return [m for (_, eid), m in self._store.items() if eid == entity_id]
+
+    async def save(self, member: WatchlistMember) -> None:
+        self._store[(member.watchlist_id, member.entity_id)] = member
+
+    async def delete(self, watchlist_id: UUID, entity_id: UUID) -> None:
+        self._store.pop((watchlist_id, entity_id), None)
+
+
+class FakeAlertPreferenceRepository(AlertPreferenceRepository):
+    """In-memory alert preference store keyed by (user_id, alert_type)."""
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[UUID, str], AlertPreference] = {}
+
+    async def get_by_user(self, user_id: UUID, tenant_id: UUID) -> list[AlertPreference]:
+        return [p for p in self._store.values() if p.user_id == user_id and p.tenant_id == tenant_id]
+
+    async def upsert(self, pref: AlertPreference) -> None:
+        self._store[(pref.user_id, str(pref.alert_type))] = pref
+
+
+class FakeEntitySuppressionRepository(EntitySuppressionRepository):
+    """In-memory entity suppression store keyed by (user_id, entity_id)."""
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[UUID, UUID], EntitySuppression] = {}
+
+    async def list_by_user(self, user_id: UUID, tenant_id: UUID) -> list[EntitySuppression]:
+        return [s for s in self._store.values() if s.user_id == user_id and s.tenant_id == tenant_id]
+
+    async def get(self, user_id: UUID, entity_id: UUID) -> EntitySuppression | None:
+        return self._store.get((user_id, entity_id))
+
+    async def save(self, suppression: EntitySuppression) -> None:
+        self._store[(suppression.user_id, suppression.entity_id)] = suppression
+
+    async def delete(self, user_id: UUID, entity_id: UUID) -> None:
+        self._store.pop((user_id, entity_id), None)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """Fully in-memory unit of work — commits and rollbacks are no-ops."""
 
@@ -187,6 +288,10 @@ class FakeUnitOfWork(UnitOfWork):
         self._holdings = FakeHoldingRepository()
         self._outbox = FakeOutboxRepository()
         self._idempotency = FakeIdempotencyRepository()
+        self._watchlists = FakeWatchlistRepository()
+        self._watchlist_members = FakeWatchlistMemberRepository()
+        self._alert_preferences = FakeAlertPreferenceRepository()
+        self._entity_suppressions = FakeEntitySuppressionRepository()
         self.committed = False
         self.rolled_back = False
 
@@ -221,6 +326,22 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def idempotency(self) -> FakeIdempotencyRepository:
         return self._idempotency
+
+    @property
+    def watchlists(self) -> FakeWatchlistRepository:
+        return self._watchlists
+
+    @property
+    def watchlist_members(self) -> FakeWatchlistMemberRepository:
+        return self._watchlist_members
+
+    @property
+    def alert_preferences(self) -> FakeAlertPreferenceRepository:
+        return self._alert_preferences
+
+    @property
+    def entity_suppressions(self) -> FakeEntitySuppressionRepository:
+        return self._entity_suppressions
 
     async def commit(self) -> None:
         self.committed = True

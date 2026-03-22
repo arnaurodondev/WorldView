@@ -30,5 +30,10 @@ class GetInstrumentByIdUseCase:
 
 
 class ListInstrumentsUseCase:
-    async def execute(self, uow: UnitOfWork) -> list[InstrumentRef]:
-        return await uow.instruments.list_all()
+    async def execute(
+        self,
+        uow: UnitOfWork,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[InstrumentRef], int]:
+        return await uow.instruments.list_all(limit=limit, offset=offset)

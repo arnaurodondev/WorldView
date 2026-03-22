@@ -18,6 +18,7 @@ class InstrumentRef:
     """Read-only reference to a financial instrument, sourced from market.instrument events.
 
     ``source_event_id`` is retained to enable idempotent consumer re-processing.
+    ``entity_id`` links to the KG canonical entity when available; not a cross-service FK (R7).
     """
 
     symbol: str
@@ -26,5 +27,6 @@ class InstrumentRef:
     name: str | None = None
     currency: str | None = None
     asset_class: str | None = None
+    entity_id: UUID | None = None
     id: UUID = field(default_factory=new_uuid)
     synced_at: datetime = field(default_factory=utc_now)

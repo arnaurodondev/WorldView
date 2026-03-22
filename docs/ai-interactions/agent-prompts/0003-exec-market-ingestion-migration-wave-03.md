@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — All tasks in this wave have been completed and merged. See git history for implementation evidence.
+
 # Execution Prompt 0003 — market-ingestion-migration wave 03
 
 ## Context (read first)

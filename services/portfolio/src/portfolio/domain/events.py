@@ -200,7 +200,68 @@ class InstrumentRefCreated(DomainEvent):
     name: str | None = None
     asset_class: str | None = None
     currency: str | None = None
+    entity_id: UUID | None = None
 
     @property
     def aggregate_id(self) -> UUID:
         return self.instrument_id
+
+
+# ── Watchlist events ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class WatchlistCreated(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.created"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+    name: str = ""
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id
+
+
+@dataclass
+class WatchlistDeleted(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.deleted"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id
+
+
+@dataclass
+class WatchlistItemAdded(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.item_added"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+    entity_id: UUID = field(default_factory=new_uuid)
+    entity_type: str = "company"
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id
+
+
+@dataclass
+class WatchlistItemRemoved(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.item_removed"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+    entity_id: UUID = field(default_factory=new_uuid)
+    entity_type: str = "company"
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id

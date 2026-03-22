@@ -4,30 +4,40 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from portfolio.api.dependencies import UoWDep
-from portfolio.api.schemas import InstrumentResponse
+from portfolio.api.schemas import InstrumentResponse, PaginatedResponse
 from portfolio.application.use_cases.instrument import GetInstrumentByIdUseCase, ListInstrumentsUseCase
 
 router = APIRouter(tags=["instruments"])
 
 
-@router.get("/instruments", response_model=list[InstrumentResponse])
-async def list_instruments(uow: UoWDep) -> list[InstrumentResponse]:
+@router.get("/instruments", response_model=PaginatedResponse[InstrumentResponse])
+async def list_instruments(
+    uow: UoWDep,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[InstrumentResponse]:
     uc = ListInstrumentsUseCase()
-    instruments = await uc.execute(uow)
-    return [
-        InstrumentResponse(
-            id=i.id,
-            symbol=i.symbol,
-            exchange=i.exchange,
-            name=i.name,
-            currency=i.currency,
-            asset_class=i.asset_class,
-        )
-        for i in instruments
-    ]
+    instruments, total = await uc.execute(uow, limit=limit, offset=offset)
+    return PaginatedResponse(
+        items=[
+            InstrumentResponse(
+                id=i.id,
+                symbol=i.symbol,
+                exchange=i.exchange,
+                name=i.name,
+                currency=i.currency,
+                asset_class=i.asset_class,
+                entity_id=i.entity_id,
+            )
+            for i in instruments
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/instruments/{instrument_id}", response_model=InstrumentResponse)
@@ -41,4 +51,5 @@ async def get_instrument(instrument_id: UUID, uow: UoWDep) -> InstrumentResponse
         name=instrument.name,
         currency=instrument.currency,
         asset_class=instrument.asset_class,
+        entity_id=instrument.entity_id,
     )

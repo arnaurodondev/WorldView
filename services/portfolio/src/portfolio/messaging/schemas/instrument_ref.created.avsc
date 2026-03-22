@@ -18,6 +18,7 @@
     {"name": "exchange", "type": "string", "default": ""},
     {"name": "name", "type": ["null", "string"], "default": null},
     {"name": "asset_class", "type": ["null", "string"], "default": null},
-    {"name": "currency", "type": ["null", "string"], "default": null}
+    {"name": "currency", "type": ["null", "string"], "default": null},
+    {"name": "entity_id", "type": ["null", "string"], "default": null}
   ]
 }

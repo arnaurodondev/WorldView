@@ -1,0 +1,21 @@
+{
+  "type": "record",
+  "name": "watchlist.item_added",
+  "namespace": "portfolio.events",
+  "doc": "Emitted when an entity is added to a watchlist.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "watchlist.item_added"},
+    {"name": "aggregate_type", "type": "string", "default": "watchlist"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "watchlist_id", "type": "string", "default": ""},
+    {"name": "user_id", "type": "string", "default": ""},
+    {"name": "entity_id", "type": "string", "default": ""},
+    {"name": "entity_type", "type": "string", "default": "company"}
+  ]
+}

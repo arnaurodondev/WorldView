@@ -2,7 +2,7 @@
 
 A Python + TypeScript monorepo for financial intelligence — portfolio management, market data ingestion, content analysis, NLP enrichment, knowledge graphs, RAG-powered chat, and an interactive web frontend.
 
-> **Status**: Scaffold — architecture defined, services stubbed, docs complete. See [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md) for the full vision.
+> **Status**: Scaffold — architecture defined, services stubbed, docs complete. See [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for a high-level introduction or [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md) for the full vision.
 
 ---
 

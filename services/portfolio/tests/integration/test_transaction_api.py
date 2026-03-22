@@ -116,8 +116,8 @@ async def test_list_transactions(integration_client, db_session) -> None:
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) >= 1
-    assert data[0]["portfolio_id"] == portfolio["id"]
+    assert data["total"] >= 1
+    assert data["items"][0]["portfolio_id"] == portfolio["id"]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
