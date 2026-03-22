@@ -2,7 +2,7 @@
 
 A Python + TypeScript monorepo for financial intelligence — portfolio management, market data ingestion, content analysis, NLP enrichment, knowledge graphs, RAG-powered chat, and an interactive web frontend.
 
-> **Status**: Scaffold — architecture defined, services stubbed, docs complete. See [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for a high-level introduction or [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md) for the full vision.
+> **Status**: Active development — S1 Portfolio, S2 Market Ingestion, and S3 Market Data fully implemented; S4–S9 stubbed; S10 Alert Service planned. See [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) for a high-level introduction or [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md) for the full architecture.
 
 ---
 
@@ -48,7 +48,8 @@ cd apps/frontend && pnpm dev         # → http://localhost:5173
        ├──▶ S5 Content Store   :8005
        ├──▶ S6 NLP Pipeline    :8006
        ├──▶ S7 Knowledge Graph :8007
-       └──▶ S8 RAG / Chat     :8008
+       ├──▶ S8 RAG / Chat      :8008
+       └──▶ S10 Alert Service  :8010
 
 Infrastructure: PostgreSQL 16 + TimescaleDB + pgvector + AGE │ Kafka │ MinIO │ Valkey │ Ollama
 ```
@@ -83,7 +84,8 @@ worldview/
 │   ├── nlp-pipeline/        # S6 — NLP, embeddings, sentiment
 │   ├── knowledge-graph/     # S7 — Apache AGE knowledge graph
 │   ├── rag-chat/            # S8 — RAG-powered conversational AI
-│   └── api-gateway/         # S9 — BFF API gateway
+│   ├── api-gateway/         # S9 — BFF API gateway
+│   └── alert-service/       # S10 — Watchlist alert fan-out (planned)
 ├── infra/                   # Infrastructure configs
 │   ├── kafka/schemas/       # Avro schemas (.avsc)
 │   ├── postgres/init/       # DB init scripts
@@ -118,7 +120,7 @@ worldview/
 | [MASTER_PLAN.md](docs/MASTER_PLAN.md) | Complete architecture & roadmap |
 | [Architecture diagrams](docs/architecture/diagrams.md) | Mermaid component & flow diagrams |
 | [ADR-0001](docs/architecture/decisions/0001-initial-architecture.md) | Initial architecture decisions |
-| [Service docs](docs/services/) | Per-service API, schema, flow docs (S1–S9) |
+| [Service docs](docs/services/) | Per-service API, schema, flow docs (S1–S10) |
 | [Frontend docs](docs/apps/frontend.md) | Web UI architecture & development |
 | [ADR-0002](docs/architecture/decisions/0002-frontend-tooling.md) | Frontend tooling decisions |
 | [Library docs](docs/libs/) | Per-library public API docs |

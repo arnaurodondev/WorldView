@@ -24,7 +24,7 @@
 
 ## Objective
 
-Create `libs/ml-clients` as the sixth shared library. This library is the ONLY path through which S6 and S7 call ML models. It must be fully functional — protocols, dataclasses, four concrete adapters, unit tests, and documentation — before S6/S7 service implementation begins in Prompt 0017.
+Create `libs/ml-clients` as the sixth shared library. This library is the ONLY path through which S6 and S7 call ML models. It must be fully functional — protocols, dataclasses, seven concrete adapters, unit tests, and documentation — before S6/S7 service implementation begins in Prompt 0017.
 
 **No service logic here.** This wave only creates the shared library and its documentation.
 
@@ -35,7 +35,7 @@ Create `libs/ml-clients` as the sixth shared library. This library is the ONLY p
 | Task | What | Blocks |
 |------|------|--------|
 | **T-F-004** | Library scaffold: pyproject.toml, protocols, dataclasses, config | T-F-005 |
-| **T-F-005** | Four concrete adapters + error wrapping + semaphore injection | T-F-006 |
+| **T-F-005** | Seven concrete adapters + error wrapping + semaphore injection | T-F-006 |
 | **T-F-006** | Unit tests + integration test stubs + docs/libs/ml-clients.md | — |
 
 ## Why this chunk
@@ -68,7 +68,7 @@ libs/ml-clients/
 **2. `pyproject.toml`** — follow `libs/common/pyproject.toml` pattern:
 - `name = "ml-clients"`, `version = "0.1.0"`, `requires-python = ">=3.12"`
 - Dependencies: `pydantic-settings>=2.0`, `structlog>=24.0`, `httpx>=0.27` (for Ollama HTTP calls)
-- Optional: `gliner = {version = ">=0.2", optional = true}`, `anthropic = {version = ">=0.30", optional = true}`
+- Optional: `gliner = {version = ">=0.2", optional = true}`, `anthropic = {version = ">=0.30", optional = true}`, `google-genai = {version = ">=0.7", optional = true}`, `openai = {version = ">=1.40", optional = true}`
 - Extras: `[tool.hatch.envs.default.dependencies]` — dev deps: `pytest>=8`, `pytest-asyncio>=0.23`
 - Add `messaging` as a workspace dependency (same pattern as other libs depending on `common`)
 - Ruff + mypy configuration: inherit from root `ruff.toml` and `mypy.ini`
@@ -183,7 +183,7 @@ python -m pytest tests/test_protocols.py -v
 
 ### T-F-005 — Concrete adapters
 
-Create 4 adapter modules in `libs/ml-clients/src/ml_clients/adapters/`.
+Create 7 adapter modules in `libs/ml-clients/src/ml_clients/adapters/`.
 
 **`adapters/ollama_embedding.py`**:
 ```python
@@ -265,7 +265,25 @@ Verify `isinstance(OllamaEmbeddingAdapter(...), EmbeddingClient)` returns True (
 - If anthropic not installed → raise `FatalError("anthropic package not installed; install ml-clients[anthropic]")`
 - Error mapping: `anthropic.RateLimitError` → `RetryableError`; `anthropic.APIConnectionError` → `RetryableError`; `anthropic.BadRequestError` → `FatalError`
 
-**`adapters/__init__.py`** — export all 4 adapters.
+**`adapters/gemini_extraction.py`**:
+- Constructor: `(api_key: str, model_id: str, semaphore: asyncio.Semaphore)`. Default model: `gemini-2.5-pro`.
+- Uses `google.genai.Client(api_key=api_key)` (imported conditionally: `try: from google import genai except ImportError: genai = None`)
+- If package missing → raise `FatalError("google-genai package not installed; install ml-clients[gemini]")`
+- Error mapping: rate limit / transient transport errors → `RetryableError`; invalid request / malformed output → `FatalError`
+
+**`adapters/chatgpt_extraction.py`**:
+- Constructor: `(api_key: str, model_id: str, semaphore: asyncio.Semaphore)`. Default model: `gpt-5-mini`.
+- Uses `openai.AsyncOpenAI(api_key=api_key)` (imported conditionally)
+- If package missing → raise `FatalError("openai package not installed; install ml-clients[openai]")`
+- Error mapping: `RateLimitError` / `APIConnectionError` / 5xx → `RetryableError`; 4xx validation errors → `FatalError`
+
+**`adapters/deepseek_extraction.py`**:
+- Constructor: `(api_key: str, model_id: str, base_url: str, semaphore: asyncio.Semaphore)`. Default model: `deepseek-chat`.
+- Uses `openai.AsyncOpenAI(api_key=api_key, base_url=base_url)` with a DeepSeek-compatible endpoint.
+- If package missing → raise `FatalError("openai package not installed; install ml-clients[openai]")`
+- Error mapping: timeout / connection / 429 / 5xx → `RetryableError`; 4xx request errors → `FatalError`
+
+**`adapters/__init__.py`** — export all 7 adapters.
 
 **Validation gate** (after T-F-005):
 ```bash
@@ -325,6 +343,9 @@ def test_frozen_dataclass_immutable():
 - `OllamaExtractionAdapter`: test malformed JSON response → FatalError
 - `GLiNERLocalAdapter`: mock `asyncio.get_event_loop().run_in_executor`; test MemoryError → RetryableError
 - `AnthropicExtractionAdapter`: mock `anthropic.AsyncAnthropic`; test RateLimitError → RetryableError
+- `GeminiExtractionAdapter`: mock Gemini client; test rate limit/transient error → RetryableError and malformed output → FatalError
+- `ChatGPTExtractionAdapter`: mock OpenAI client; test rate limit/network error → RetryableError and invalid request → FatalError
+- `DeepSeekExtractionAdapter`: mock OpenAI client with DeepSeek base URL; test timeout/429 → RetryableError and bad request → FatalError
 
 **`tests/integration/__init__.py`** and **`tests/integration/test_ollama_integration.py`**:
 ```python
@@ -350,7 +371,7 @@ Structure:
 1. Overview (what the lib does, why Protocol over ABC, the no-naked-exceptions rule)
 2. Protocol table (3 rows: EmbeddingClient, NERClient, ExtractionClient — method, used-by)
 3. Dataclass table (7 dataclasses with fields)
-4. Adapter table (4 adapters: protocol, backend, model version, optional dep)
+4. Adapter table (7 adapters: protocol, backend, model version, optional dep)
 5. Configuration section (5 ENV vars)
 6. **Sequence diagram** (mermaid): how S6 calls `OllamaEmbeddingAdapter.embed()` → Ollama → returns `EmbeddingOutput`
 7. **Code example**: complete FastAPI lifespan injection of `OllamaEmbeddingAdapter`
@@ -374,7 +395,7 @@ mypy --strict src/
 - Do NOT implement any application logic for S6 or S7 — this library is protocol definitions and adapters only.
 - Do NOT depend on any external service in unit tests (mock everything). Integration tests are the only place where real Ollama is contacted.
 - Do NOT use `ABC` or `abstractmethod` anywhere in `libs/ml-clients` — `typing.Protocol` only.
-- Do NOT add mandatory dependencies that require a GPU or large model download. `gliner` and `anthropic` are optional extras only.
+- Do NOT add mandatory dependencies that require a GPU or large model download. `gliner`, `anthropic`, `google-genai`, and `openai` are optional extras only.
 - Do NOT write ml-clients tests that import from service directories (`services/`).
 
 ## Scope & token budget
@@ -392,6 +413,9 @@ libs/ml-clients/src/ml_clients/adapters/ollama_embedding.py
 libs/ml-clients/src/ml_clients/adapters/ollama_extraction.py
 libs/ml-clients/src/ml_clients/adapters/gliner_local.py
 libs/ml-clients/src/ml_clients/adapters/anthropic_extraction.py
+libs/ml-clients/src/ml_clients/adapters/gemini_extraction.py
+libs/ml-clients/src/ml_clients/adapters/chatgpt_extraction.py
+libs/ml-clients/src/ml_clients/adapters/deepseek_extraction.py
 libs/ml-clients/tests/__init__.py
 libs/ml-clients/tests/conftest.py
 libs/ml-clients/tests/test_protocols.py
@@ -503,8 +527,9 @@ print('Documentation structure OK')
    feat(libs): add ml-clients as sixth shared library
 
    Implement EmbeddingClient, NERClient, and ExtractionClient protocols (structural
-   typing); OllamaEmbeddingAdapter, OllamaExtractionAdapter, GLiNERLocalAdapter, and
-   AnthropicExtractionAdapter concrete adapters with semaphore injection and strict
+    typing); OllamaEmbeddingAdapter, OllamaExtractionAdapter, GLiNERLocalAdapter,
+    AnthropicExtractionAdapter, GeminiExtractionAdapter, ChatGPTExtractionAdapter, and
+    DeepSeekExtractionAdapter concrete adapters with semaphore injection and strict
    RetryableError/FatalError error hierarchy; full unit test suite; docs/libs/ml-clients.md.
    ```
 
@@ -514,7 +539,7 @@ print('Documentation structure OK')
 - [ ] 3 Protocol classes defined with `typing.Protocol` (NOT ABC)
 - [ ] 7 frozen dataclasses in `dataclasses.py`
 - [ ] `errors.py` re-exports `RetryableError` + `FatalError` from `libs/messaging`
-- [ ] 4 concrete adapter classes fully implemented
+- [ ] 7 concrete adapter classes fully implemented
 - [ ] All adapters raise ONLY `RetryableError` or `FatalError` (no naked exceptions)
 - [ ] `asyncio.Semaphore` injected at construction and acquired before every ML call
 - [ ] GLiNER calls wrapped in `run_in_executor` (never blocks event loop)

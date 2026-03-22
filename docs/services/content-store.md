@@ -1,15 +1,23 @@
 # S5 · Content Store Service
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: New
+> **Status**: Stub (🔲 Pending implementation)
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Consuming raw articles from S4, HTML cleaning (readability + bleach),
-near-duplicate detection (URL hash + title Jaccard similarity), canonical ID
-assignment (UUIDv7), cleaned text storage, article query API.
+**Owns**: Consuming raw articles from S4, HTML cleaning (readability-lxml + bleach),
+three-stage deduplication (exact URL hash → normalized hash → Valkey LSH two-tier
+near-dup using MinHash signatures), canonical ID assignment (UUIDv7), clean text
+storage in MinIO silver, article query API.
+
+**MinHash note**: MinHash signatures and entity mention data are stored in
+`content_store_db`. They are **never** stored in `intelligence_db`.
+
+**Corroboration policy**: an article from a different source covering the same story
+is *not* a duplicate — corroborating evidence is preserved. Only near-identical text
+from the same or overlapping sources is suppressed.
 
 **Never does**: Poll external sources (S4 Content Ingestion), NLP/embedding
 generation (S6 NLP Pipeline), serve graphs (S7 Knowledge Graph).
@@ -95,10 +103,47 @@ services/content-store/src/content_store/
 
 ---
 
+## Three-Stage Deduplication
+
+| Stage | Method | Action on Match |
+|-------|--------|----------------|
+| 1 — Exact hash | SHA-256 of normalized URL | Hard duplicate → skip, mark `is_duplicate=true` |
+| 2 — Normalized hash | SHA-256 of lowercased canonical URL (strip UTM params, etc.) | Hard duplicate → skip |
+| 3 — Valkey LSH near-dup | MinHash (128 perms) + LSH bands (4 × 32); Jaccard threshold varies by doc type | Hard dup (≥ threshold) → skip; Soft dup (Tier 2) → store with `is_duplicate=false` but `near_duplicate_of` set |
+
+Dedup thresholds (configurable via ENV):
+
+| Doc Type | Hard Threshold | Soft (Tier 2) Threshold | LSH Window |
+|----------|---------------|------------------------|------------|
+| News | 0.72 | 0.55 | 7 days |
+| Filings | 0.85 | — | 180 days |
+| Transcripts | 0.75 | — | 60 days |
+| Research | — | — | 30 days |
+
+---
+
+## Key ENV Vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MINHASH_NUM_PERM` | `128` | MinHash permutations |
+| `MINHASH_LSH_BANDS` | `4` | LSH bands (4 × 32 rows) |
+| `VALKEY_LSH_WINDOW_NEWS_DAYS` | `7` | LSH dedup window for news |
+| `VALKEY_LSH_WINDOW_FILINGS_DAYS` | `180` | LSH dedup window for filings |
+| `VALKEY_LSH_WINDOW_TRANSCRIPTS_DAYS` | `60` | LSH dedup window for transcripts |
+| `VALKEY_LSH_WINDOW_RESEARCH_DAYS` | `30` | LSH dedup window for research |
+| `DEDUP_HARD_THRESHOLD_NEWS` | `0.72` | Hard Jaccard threshold for news |
+| `DEDUP_SOFT_THRESHOLD_NEWS` | `0.55` | Soft threshold for news (Tier 2) |
+| `DEDUP_HARD_THRESHOLD_FILINGS` | `0.85` | Hard threshold for filings |
+| `DEDUP_HARD_THRESHOLD_TRANSCRIPTS` | `0.75` | Hard threshold for transcripts |
+| `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
+
+---
+
 ## Observability
 
-- **Metrics**: articles_stored_total, duplicates_detected_total, cleaning_duration_seconds
-- **Log fields**: `service=content-store`, `article_id`, `is_duplicate`
+- **Metrics**: `articles_stored_total`, `duplicates_detected_total`, `near_duplicates_detected_total`, `cleaning_duration_seconds`, `lsh_lookup_duration_seconds`
+- **Log fields**: `service=content-store`, `article_id`, `is_duplicate`, `dedup_stage`
 
 ---
 

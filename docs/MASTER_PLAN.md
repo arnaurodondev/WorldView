@@ -82,8 +82,9 @@ graph TB
         S4[S4 · Content Ingestion<br/>FastAPI + Pollers :8004]
         S5[S5 · Content Store<br/>FastAPI + Consumers :8005]
         S6[S6 · NLP Pipeline<br/>FastAPI + Workers :8006]
-        S7[S7 · Knowledge Graph<br/>FastAPI + AGE :8007]
+        S7[S7 · Knowledge Graph<br/>FastAPI + Workers :8007]
         S8[S8 · RAG / Chat<br/>FastAPI + SSE :8008]
+        S10[S10 · Alert Service<br/>FastAPI + WebSocket :8010]
     end
 
     subgraph "Infrastructure"
@@ -105,12 +106,12 @@ graph TB
     S2 --> EODHD
     S4 --> RSS
 
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> PG
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S10 --> PG
     S2 & S4 --> MINIO
-    S3 & GW --> VALKEY
+    S3 & GW & S10 --> VALKEY
     S8 --> LLM_EXT
 
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> KAFKA
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S10 --> KAFKA
 
     S8 -.->|vector search| S6
     S8 -.->|graph query| S7
@@ -129,10 +130,11 @@ graph TB
 | S3 | **Market Data** | `market_data_db` (TimescaleDB) | `market.instrument.created/updated` | `market.dataset.fetched` | 8003 |
 | S4 | **Content Ingestion** | `content_ingestion_db` | `content.article.raw.v1` | — | 8004 |
 | S5 | **Content Store** | `content_store_db` | `content.article.stored.v1` | `content.article.raw.v1` | 8005 |
-| S6 | **NLP Pipeline** | `nlp_db` (pgvector) | `nlp.article.enriched.v1`, `nlp.signal.detected.v1` | `content.article.stored.v1` | 8006 |
-| S7 | **Knowledge Graph** | `kg_db` (Apache AGE) | — | `nlp.article.enriched.v1` | 8007 |
+| S6 | **NLP Pipeline** | `nlp_db` (pgvector, owned) + `intelligence_db` (shared, no DDL) | `nlp.article.enriched.v1`, `nlp.signal.detected.v1` | `content.article.stored.v1` | 8006 |
+| S7 | **Knowledge Graph** | `intelligence_db` (shared, no DDL) | `graph.state.changed.v1`, `intelligence.contradiction.v1`, `relation.type.proposed.v1`, `entity.dirtied.v1` | `nlp.article.enriched.v1` | 8007 |
 | S8 | **RAG / Chat** | — (stateless) | — | — | 8008 |
 | S9 | **API Gateway** | — (stateless) | — | — | 8000 |
+| S10 | **Alert Service** | `alert_db` | `alert.delivered.v1` | `nlp.signal.detected.v1`, `graph.state.changed.v1`, `intelligence.contradiction.v1`, `portfolio.watchlist.updated.v1` | 8010 |
 | — | **Frontend** | — | — | — | 5173 |
 
 Each service has a detailed doc at `docs/services/<name>.md`. The web frontend is documented at `docs/apps/frontend.md`.
@@ -168,27 +170,36 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    RSS[RSS / News APIs] -->|poll + relay| S4[S4 · Content Ingestion]
-    S4 -->|raw HTML/JSON| MINIO[(MinIO)]
+    SRC["EODHD · SEC EDGAR<br/>Finnhub · NewsAPI"] -->|poll| S4[S4 · Content Ingestion]
+    S4 -->|raw HTML/JSON| MINIO[(MinIO bronze)]
     S4 -->|content.article.raw.v1| KAFKA{Kafka}
     KAFKA -->|consume| S5[S5 · Content Store]
-    S5 -->|dedup + clean| PG_CS[(content_store_db)]
+    S5 -->|clean text| MINIO2[(MinIO silver)]
+    S5 -->|dedup metadata| PG_CS[(content_store_db)]
     S5 -->|content.article.stored.v1| KAFKA
     KAFKA -->|consume| S6[S6 · NLP Pipeline]
-    S6 -->|embeddings| PG_VEC[(nlp_db / pgvector)]
-    S6 -->|entities/events| PG_KG[(kg_db / AGE)]
+    S6 -->|embeddings + NLP data| PG_NLP[(nlp_db / pgvector)]
+    S6 -->|relations, claims| PG_INT[(intelligence_db)]
     S6 -->|nlp.article.enriched.v1| KAFKA
     S6 -->|nlp.signal.detected.v1| KAFKA
+    KAFKA -->|consume| S7[S7 · Knowledge Graph]
+    S7 -->|graph upserts| PG_INT
+    S7 -->|graph.state.changed.v1| KAFKA
+    S7 -->|intelligence.contradiction.v1| KAFKA
+    KAFKA -->|consume| S10[S10 · Alert Service]
+    S10 -->|alert_db| PG_ALERT[(alert_db)]
+    S10 -->|alert.delivered.v1| KAFKA
 ```
 
 **Flow**:
-1. **Content Ingestion** polls enabled RSS feeds / news APIs (domain allowlist, relay fallback)
-2. Raw article HTML stored in MinIO; metadata Kafka event emitted
-3. **Content Store** consumer: downloads raw, cleans HTML, deduplicates (URL hash + title similarity), assigns canonical ID
-4. `content.article.stored` triggers NLP enrichment
-5. **NLP Pipeline**: generate embeddings (MiniLM-L6-v2), entity linking (spaCy NER + alias table), event extraction, sentiment analysis, topic clustering
-6. Enriched data written to pgvector (embeddings), Apache AGE (knowledge graph), and Postgres (entities, events, sentiment)
-7. High-severity events or trending topics emit `nlp.signal.detected`
+1. **Content Ingestion** polls EODHD, SEC EDGAR, Finnhub, and NewsAPI on schedule (15–30 min intervals); single-replica advisory lock prevents duplicate polling
+2. Raw article payload stored verbatim in MinIO bronze; `content.article.raw.v1` emitted via outbox
+3. **Content Store** consumer: downloads raw, cleans HTML (readability-lxml + bleach), runs three-stage dedup (exact URL hash → normalized hash → Valkey LSH near-dup), assigns canonical UUID, stores clean text in MinIO silver
+4. `content.article.stored.v1` triggers NLP enrichment
+5. **NLP Pipeline** (Blocks 3–10): sectioning → GLiNER NER (10 entity classes, `urchade/gliner_large-v2.1`) → additive routing score → suppression → chunk/section embeddings (`BAAI/bge-large-en-v1.5`, 1024-dim) → two-stage novelty gate (MinHash) → 4-step entity resolution cascade → deep LLM extraction (Qwen2.5-7B-Instruct)
+6. NLP artifacts written to `nlp_db` (pgvector embeddings, NER data) and `intelligence_db` (canonical entities, relations, claims); both enriched-article and signal events emitted
+7. **Knowledge Graph** consumes enriched events: canonicalizes relation types, materializes evidence to staging table (hot path), runs async derived-semantics workers (confidence recomputation, contradiction detection, relation summary generation, embedding refresh)
+8. `graph.state.changed.v1` and `intelligence.contradiction.v1` events trigger **Alert Service** (S10) fan-out to watching users via WebSocket
 
 ### 4.3 News Ingestion → NLP Enrichment Sequence
 
@@ -200,7 +211,7 @@ sequenceDiagram
     participant K as Kafka
     participant S5 as S5 Content Store
     participant S6 as S6 NLP Pipeline
-    participant DB as nlp_db + kg_db
+    participant DB as nlp_db + intelligence_db
 
     S->>S4: trigger poll (source_id)
     S4->>S4: fetch RSS feed (httpx, 15s timeout)
@@ -224,18 +235,20 @@ sequenceDiagram
     end
 
     K->>S6: consume stored event
-    S6->>S6: generate embedding (MiniLM)
-    S6->>DB: INSERT article_embeddings
-    S6->>S6: NER (spaCy) → entity linking
-    S6->>DB: INSERT article_entities
-    S6->>S6: event extraction (rules + LLM)
-    S6->>DB: INSERT article_events
-    S6->>S6: sentiment analysis (DistilBERT)
-    S6->>DB: INSERT article_sentiment
-    S6->>S6: topic clustering (cosine similarity)
-    S6->>DB: UPDATE topic_clusters
+    S6->>MIO: GET clean text (silver)
+    S6->>S6: Block 3 — sectioning (source-specific)
+    S6->>S6: Block 4 — GLiNER NER per section (urchade/gliner_large-v2.1)
+    S6->>S6: Block 5 — additive routing score (7 signals)
+    S6->>S6: Block 6 — suppression (low-score docs discarded)
+    S6->>S6: Block 7 — chunk + section embeddings (bge-large-en-v1.5, 1024-dim)
+    S6->>DB: INSERT chunk_embeddings, section_embeddings
+    S6->>S6: Block 8 — two-stage novelty gate (MinHash, Valkey LSH)
+    S6->>S6: Block 9 — entity resolution cascade (4 steps)
+    S6->>DB: UPSERT canonical_entities, entity_aliases
+    S6->>S6: Block 10 — deep LLM extraction (Qwen2.5-7B-Instruct)
+    S6->>DB: INSERT article_events, article_claims, relation_evidence_raw
     S6-->>K: nlp.article.enriched.v1
-    opt high-severity or trending
+    opt confidence >= SIGNAL_CONFIDENCE_MIN
         S6-->>K: nlp.signal.detected.v1
     end
 ```
@@ -253,8 +266,9 @@ sequenceDiagram
 | `market_data_db` | S3 Market Data | **TimescaleDB** | securities, instruments, ohlcv_bars (hypertable), quotes, fundamentals_*, corporate_actions, failed_tasks, ingestion_events, outbox_events |
 | `content_ingestion_db` | S4 Content Ingestion | — | sources, article_fetch_log, outbox_events |
 | `content_store_db` | S5 Content Store | — | articles, dedup_hashes, idempotency |
-| `nlp_db` | S6 NLP Pipeline | **pgvector** | article_embeddings, entities, entity_aliases, article_entities, article_events, article_sentiment, topic_clusters, article_clusters |
-| `kg_db` | S7 Knowledge Graph | **Apache AGE** | *(graph stored via AGE extension; `market_kg` graph)* |
+| `nlp_db` | S6 NLP Pipeline | **pgvector** | chunk_embeddings, section_embeddings, entity_profile_embeddings, entities, entity_aliases, article_entities, article_events, article_sentiment, topic_clusters, article_clusters |
+| `intelligence_db` | `intelligence-migrations` (DDL owner); S6 + S7 (read/write, no DDL) | **pgvector** | canonical_entities, relations (hash-partitioned ×8), relation_evidence_raw, relation_summaries, relation_evidence, contradictions, article_claims, relation_type_registry |
+| `alert_db` | S10 Alert Service | — | alerts, pending_alerts, alert_dedup, watchlist_cache, outbox_events, idempotency |
 
 ### 5.2 MinIO Object Store
 
@@ -283,17 +297,18 @@ Key naming convention: `{scope}:{version}:{resource}:{id}[:{qualifier}]`
 
 ### 5.4 Vector Store (pgvector)
 
-- **Model**: `sentence-transformers/all-MiniLM-L6-v2` (384-dim, 23MB, CPU-viable)
+- **Model**: `BAAI/bge-large-en-v1.5` (1024-dim, ~1.34GB, served via Ollama)
 - **Index**: HNSW with `m=16, ef_construction=200`, cosine distance
+- **Embedding types**: chunk-level, section-level, relation summary, entity profile
 - **Scale**: comfortable to ~1M vectors on single node; thesis expects 50K–200K
 
-### 5.5 Knowledge Graph (Apache AGE)
+### 5.5 Knowledge Graph (intelligence_db)
 
-- Runs inside Postgres as extension; Cypher-compatible queries
-- Graph name: `market_kg`
+- Primary model: **relational adjacency-list** (`relations` table, hash-partitioned by `subject_entity_id` into 8 partitions)
+- Shadow migration worker (Block 14) keeps an Apache AGE graph in sync for Cypher query experiments; AGE is opt-in, not on the critical path
 - Node types: Company, Person, Event, Article, Sector, Topic
 - Edge types: HAS_EXECUTIVE, IN_SECTOR, INVOLVED_IN, MENTIONS, REPORTS_ON, ABOUT_TOPIC, SUBSIDIARY_OF, PARTNER_OF, COMPETES_WITH, MOVED_TO, CAUSED_BY
-- Fallback: relational adjacency-list model if AGE proves unstable
+- DDL exclusively managed by `intelligence-migrations` init container; services connect with `ALEMBIC_ENABLED=false`
 
 ---
 
@@ -504,6 +519,16 @@ Merge → Build + Push → Deploy Staging → Smoke Tests → Deploy Prod (manua
 ---
 
 ## 12. Phased Roadmap
+
+### Pre-Implementation Repository Fixes (Blocking)
+
+These three items are blocking prerequisites. No work on S10, `intelligence-migrations`, or any new service consuming the affected topics may begin until all three are resolved.
+
+| Fix | Action |
+|-----|--------|
+| **Rename `watchlist.item_removed` → `watchlist.item_deleted`** | Rename event type in `infra/kafka/schemas/` and all Portfolio service code. S10 cannot be built against the old name. |
+| **Create missing Avro schemas** | `portfolio.watchlist.updated.avsc`, `graph.state.changed.v1.avsc`, `intelligence.contradiction.v1.avsc`, `relation.type.proposed.v1.avsc`, `alert.delivered.v1.avsc`. Required by `schema-init` at boot. |
+| **Fix knowledge-graph service config** | Change `DATABASE_URL` default from `kg_db` to `intelligence_db`. All intelligence_db connection strings must use `intelligence_db` consistently. |
 
 ### Phase 1: Stabilize Core (Weeks 1–4)
 

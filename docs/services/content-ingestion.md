@@ -1,18 +1,19 @@
 # S4 · Content Ingestion Service
 
 > **Owner**: Content domain · **Database**: `content_ingestion_db` · **Port**: 8004
-> **Status**: New
+> **Status**: Stub (🔲 Pending implementation)
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: RSS/API polling for news articles, domain allowlists, polling schedules,
-rate limiting per source, relay fallback for blocked sources, raw article storage
-in MinIO, metadata extraction.
+**Owns**: Scheduled polling of EODHD (news), SEC EDGAR (filings), Finnhub (news),
+and NewsAPI. Domain allowlists, rate limiting per source, relay fallback for blocked
+sources, raw payload storage verbatim in MinIO bronze, metadata extraction.
+Single-replica enforcement via Postgres advisory lock on adapter name.
 
 **Never does**: Clean or deduplicate articles (S5 Content Store), NLP processing
-(S6 NLP Pipeline), financial data ingestion (S2 Market Ingestion).
+(S6 NLP Pipeline), financial market data ingestion (S2 Market Ingestion).
 
 ---
 
@@ -103,19 +104,49 @@ CREATE INDEX idx_outbox_unpublished ON outbox_events(published_at) WHERE publish
 ```
 services/content-ingestion/src/content_ingestion/
 ├── app.py              # FastAPI app factory
-├── config.py           # Settings (DB, MinIO, Kafka, polling)
+├── config.py           # Settings (DB, MinIO, Kafka, polling, API keys)
 ├── api/                # Routes, Pydantic schemas
 ├── domain/             # Source, Article entities
 ├── application/        # Polling use-cases
-└── infrastructure/     # DB, MinIO, Kafka adapters
+├── scheduler/          # APScheduler cron jobs, advisory lock
+├── adapters/           # eodhd.py, edgar.py, finnhub.py, newsapi.py
+└── infrastructure/     # DB, MinIO, Kafka adapters, outbox dispatcher
 ```
+
+---
+
+## Source Adapters
+
+| Source | Interval | Auth |
+|--------|----------|------|
+| EODHD News API | 15 min (`EODHD_POLL_INTERVAL_SECONDS=900`) | `EODHD_API_KEY` |
+| SEC EDGAR EFTS | 30 min (`EDGAR_POLL_INTERVAL_SECONDS=1800`) | None (public) |
+| Finnhub | 15 min | `FINNHUB_API_KEY` |
+| NewsAPI | 15 min | `NEWSAPI_KEY` |
+
+Each adapter runs as an APScheduler cron. Only one replica fires per tick (Postgres advisory lock on adapter name). Raw payloads are written to MinIO bronze and `outbox_events` in a **single DB transaction**.
+
+---
+
+## Key ENV Vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EODHD_API_KEY` | — | Required |
+| `EODHD_POLL_INTERVAL_SECONDS` | `900` | 15 minutes |
+| `EDGAR_POLL_INTERVAL_SECONDS` | `1800` | 30 minutes |
+| `FINNHUB_API_KEY` | — | Required |
+| `NEWSAPI_KEY` | — | Required |
+| `NEWSAPI_QUERIES` | — | Comma-separated query strings |
+| `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
+| `OUTBOX_BATCH_SIZE` | `100` | Rows per dispatch cycle |
 
 ---
 
 ## Observability
 
-- **Metrics**: articles_fetched_total, fetch_errors_total, source_poll_duration_seconds
-- **Log fields**: `service=content-ingestion`, `source_id`, `url_hash`
+- **Metrics**: `articles_fetched_total`, `fetch_errors_total`, `source_poll_duration_seconds`
+- **Log fields**: `service=content-ingestion`, `source_id`, `source_type`, `url_hash`
 
 ---
 
