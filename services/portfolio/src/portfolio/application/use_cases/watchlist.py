@@ -25,13 +25,13 @@ from portfolio.domain.events import (
     WatchlistCreated,
     WatchlistDeleted,
     WatchlistItemAdded,
-    WatchlistItemRemoved,
+    WatchlistItemDeleted,
 )
 from portfolio.messaging.mapper import (
     watchlist_created_to_dict,
     watchlist_deleted_to_dict,
     watchlist_item_added_to_dict,
-    watchlist_item_removed_to_dict,
+    watchlist_item_deleted_to_dict,
 )
 from portfolio.messaging.topics import EVENT_TOPIC_MAP
 
@@ -252,7 +252,7 @@ class RemoveWatchlistMemberUseCase:
 
         await uow.watchlist_members.delete(cmd.watchlist_id, cmd.entity_id)
 
-        event = WatchlistItemRemoved(
+        event = WatchlistItemDeleted(
             tenant_id=cmd.tenant_id,
             watchlist_id=cmd.watchlist_id,
             user_id=cmd.owner_id,
@@ -261,8 +261,8 @@ class RemoveWatchlistMemberUseCase:
         )
         await uow.outbox.save(
             _make_outbox(
-                WatchlistItemRemoved.EVENT_TYPE,
-                watchlist_item_removed_to_dict(event),
+                WatchlistItemDeleted.EVENT_TYPE,
+                watchlist_item_deleted_to_dict(event),
                 cmd.tenant_id,
             )
         )

@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "RelationTypeProposed",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S7 when a novel relation type is inferred that has no canonical mapping. Uses FULL Schema Registry compatibility.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "relation.type.proposed"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "proposed_type", "type": "string"},
+    {"name": "semantic_mode", "type": "string"},
+    {"name": "suggested_decay_class", "type": ["null", "string"], "default": null},
+    {"name": "example_subject_entity_id", "type": ["null", "string"], "default": null},
+    {"name": "example_object_entity_id", "type": ["null", "string"], "default": null},
+    {"name": "example_evidence_text", "type": ["null", "string"], "default": null},
+    {"name": "source_doc_id", "type": ["null", "string"], "default": null},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

@@ -1,0 +1,19 @@
+"""Concrete ML client adapters."""
+
+from ml_clients.adapters.anthropic_extraction import AnthropicExtractionAdapter
+from ml_clients.adapters.chatgpt_extraction import ChatGPTExtractionAdapter
+from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
+from ml_clients.adapters.gemini_extraction import GeminiExtractionAdapter
+from ml_clients.adapters.gliner_local import GLiNERLocalAdapter
+from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
+from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter
+
+__all__ = [
+    "OllamaEmbeddingAdapter",
+    "OllamaExtractionAdapter",
+    "GLiNERLocalAdapter",
+    "AnthropicExtractionAdapter",
+    "GeminiExtractionAdapter",
+    "ChatGPTExtractionAdapter",
+    "DeepSeekExtractionAdapter",
+]

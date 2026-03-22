@@ -10,7 +10,24 @@ on:
 env:
   PYTHON_VERSION: "3.12"
 
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │  Job dependency graph                                                       │
+# │                                                                             │
+# │  lint  validate-schemas  test-libs  test-frontend   (all parallel)         │
+# │                               │                                             │
+# │       ┌──────────┬────────────┼──────────────┐                             │
+# │       │          │            │              │                              │
+# │  test-services  test-contract  test-integration  test-e2e                  │
+# │  (unit, 9 svcs) (portfolio)  (portfolio +        (3 svcs, compose)         │
+# │                               market-data,                                 │
+# │                               testcontainers)                              │
+# └─────────────────────────────────────────────────────────────────────────────┘
+
 jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Fast path — no infrastructure required
+  # ═══════════════════════════════════════════════════════════════════════════
+
   lint:
     name: Lint & Type-check
     runs-on: ubuntu-latest
@@ -21,9 +38,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
+      # Pin versions so a new ruff/mypy release can't silently break CI.
       - name: Install tools
-        run: python -m pip install ruff mypy
+        run: python -m pip install "ruff==0.4.0" "mypy==1.10.0"
 
       - name: Ruff check
         run: ruff check libs/ services/
@@ -37,12 +56,14 @@ jobs:
             python -m pip install -e "$dir[dev]" --quiet
           done
 
-      - name: mypy
+      # Only type-check lib sources — service deps are not installed in this
+      # job so running mypy on services/ would produce "missing import" noise.
+      - name: mypy (libs)
         run: |
-          for src in libs/*/src services/*/src; do
+          for src in libs/*/src; do
             if [ -d "$src" ]; then
               echo "=== mypy $src ==="
-              mypy "$src" || true
+              mypy "$src"
             fi
           done
 
@@ -56,16 +77,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install fastavro
-        run: python -m pip install fastavro
+        run: python -m pip install "fastavro>=1.9,<2"
 
       - name: Validate schemas
         run: |
           python3 -c "
           import json, pathlib, fastavro, sys
+          schema_dir = pathlib.Path('infra/kafka/schemas')
+          if not schema_dir.exists():
+              print('No schemas directory found, skipping.')
+              sys.exit(0)
           failed = False
-          for f in sorted(pathlib.Path('infra/kafka/schemas').glob('*.avsc')):
+          for f in sorted(schema_dir.glob('*.avsc')):
               try:
                   schema = json.loads(f.read_text())
                   fastavro.parse_schema(schema)
@@ -78,9 +104,10 @@ jobs:
           "
 
   test-libs:
-    name: Test Libraries
+    name: Test Libraries — ${{ matrix.lib }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         lib: [common, contracts, messaging, storage, observability]
     steps:
@@ -90,20 +117,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install library
         run: python -m pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
 
+      # `not integration` instead of `unit`: common/contracts/observability have
+      # no pytestmark at all, so `-m unit` collects 0 tests and exits with code 5.
       - name: Run tests
-        run: pytest "libs/${{ matrix.lib }}/tests" -m unit -v --tb=short
+        run: pytest "libs/${{ matrix.lib }}/tests" -m "not integration" -v --tb=short
 
   test-services:
-    name: Test Services
+    name: Test Services — ${{ matrix.service }} (unit)
     runs-on: ubuntu-latest
     needs: [test-libs]
     strategy:
+      fail-fast: false
       matrix:
-        service: [portfolio, market-ingestion, market-data, content-ingestion, content-store, nlp-pipeline, knowledge-graph, rag-chat, api-gateway]
+        service:
+          - portfolio
+          - market-ingestion
+          - market-data
+          - content-ingestion
+          - content-store
+          - nlp-pipeline
+          - knowledge-graph
+          - rag-chat
+          - api-gateway
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +151,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -119,8 +160,12 @@ jobs:
           done
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
+      # Excludes infra-dependent test tiers: those run in the jobs below.
       - name: Run tests
-        run: pytest "services/${{ matrix.service }}/tests" -m unit -v --tb=short
+        run: >
+          pytest "services/${{ matrix.service }}/tests"
+          -m "not integration and not e2e and not live and not slow"
+          -v --tb=short
 
   test-frontend:
     name: Frontend Lint & Test
@@ -139,17 +184,217 @@ jobs:
       - name: Install pnpm
         run: corepack enable && corepack prepare pnpm@9 --activate
 
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/frontend/package.json') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      # No pnpm-lock.yaml is committed; use a plain install.
+      # TODO: commit pnpm-lock.yaml and switch to --frozen-lockfile.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile || pnpm install
+        run: pnpm install
 
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Lint
-        run: pnpm lint || true
+        run: pnpm lint
 
       - name: Unit tests
         run: pnpm test
 
       - name: Build
         run: pnpm build
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Contract tests — verifies Avro / OpenAPI schema compatibility
+  # No infrastructure needed; uses ASGI in-process transport.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  test-contract:
+    name: Contract Tests — portfolio
+    runs-on: ubuntu-latest
+    needs: [test-libs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          for dir in libs/*/; do
+            python -m pip install -e "$dir" --quiet
+          done
+          python -m pip install -e "services/portfolio[dev]" --quiet
+
+      - name: Run contract tests
+        run: pytest services/portfolio/tests -m contract -v --tb=short
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Integration tests — testcontainers (Docker-in-CI, no compose stack needed)
+  #
+  # Scope: portfolio and market-data only.
+  #   - portfolio: testcontainers Postgres + in-process ASGI
+  #   - market-data: testcontainers TimescaleDB + Kafka + MinIO + Valkey
+  #
+  # market-ingestion has no testcontainers in its dev deps; its integration
+  # tests require live infra and run inside the test-e2e compose job below.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  test-integration:
+    name: Integration Tests — ${{ matrix.service }} (testcontainers)
+    runs-on: ubuntu-latest
+    needs: [test-libs]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: portfolio
+            # portfolio's integration conftest runs Alembic via subprocess,
+            # hardcoded to services/portfolio/.venv/bin/alembic (local dev
+            # convention).  We symlink the globally-installed binary to that
+            # path so the conftest works without modification in CI.
+            fix_alembic_venv: true
+          - service: market-data
+            # market-data conftest uses the Python alembic API directly —
+            # no venv path assumption, works out of the box.
+            fix_alembic_venv: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          for dir in libs/*/; do
+            python -m pip install -e "$dir" --quiet
+          done
+          python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
+
+      - name: Symlink alembic into expected venv path (portfolio only)
+        if: matrix.fix_alembic_venv
+        run: |
+          mkdir -p services/portfolio/.venv/bin
+          ln -sf "$(which alembic)" services/portfolio/.venv/bin/alembic
+
+      - name: Run integration tests
+        run: >
+          pytest "services/${{ matrix.service }}/tests"
+          -m integration -v --tb=short
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # E2E tests — docker-compose.test.yml per-service profile
+  #
+  # Each matrix leg runs on its own dedicated runner, so there are no port
+  # conflicts between services (all expose kafka:9092, postgres:5432, etc.).
+  #
+  # Stack startup uses --wait, which blocks until every service healthcheck
+  # passes.  Teardown runs unconditionally via `if: always()`.
+  #
+  # market-ingestion specifics:
+  #   Its integration tests also run here (against the live compose stack)
+  #   because the service has no testcontainers in its dev deps.
+  #   Env vars are set to the localhost-mapped ports that docker-compose exposes.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  test-e2e:
+    name: E2E — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [test-libs]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Port mappings (host ← container):
+          #   5432 ← postgres, 9092 ← kafka, 8081 ← schema-registry
+          #   8001 ← portfolio API
+          - service: portfolio
+            profile: portfolio-test
+
+          # Port mappings:
+          #   5432 ← postgres, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
+          #   6379 ← valkey, 8002 ← market-ingestion API
+          - service: market-ingestion
+            profile: market-ingestion-test
+
+          # Port mappings:
+          #   5433 ← timescaledb, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
+          #   6379 ← valkey, 8003 ← market-data API
+          - service: market-data
+            profile: market-data-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          for dir in libs/*/; do
+            python -m pip install -e "$dir" --quiet
+          done
+          python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
+
+      # Kafka has a 30s start_period; TimescaleDB is also slow on first start.
+      # --wait blocks here until every service healthcheck passes.
+      - name: Start test stack
+        run: |
+          docker compose -f infra/compose/docker-compose.test.yml \
+            --profile ${{ matrix.profile }} up --build --wait
+        timeout-minutes: 12
+
+      # market-ingestion integration tests connect directly to Postgres, MinIO,
+      # and Kafka — no testcontainers.  Set localhost URLs matching the ports
+      # that docker-compose.test.yml binds on the runner.
+      - name: Set env vars for market-ingestion infra
+        if: matrix.service == 'market-ingestion'
+        run: |
+          {
+            echo "MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ingestion_db"
+            echo "MARKET_INGESTION_STORAGE_ENDPOINT=http://localhost:7480"
+            echo "MARKET_INGESTION_STORAGE_ACCESS_KEY=minioadmin"
+            echo "MARKET_INGESTION_STORAGE_SECRET_KEY=minioadmin"
+            echo "MARKET_INGESTION_STORAGE_BUCKET=market-ingestion"
+            echo "MARKET_INGESTION_BRONZE_BUCKET=market-bronze"
+            echo "MARKET_INGESTION_CANONICAL_BUCKET=market-canonical"
+            echo "MARKET_INGESTION_KAFKA_BOOTSTRAP_SERVERS=localhost:9092"
+            echo "MARKET_INGESTION_SCHEMA_REGISTRY_URL=http://localhost:8081"
+            echo "MARKET_INGESTION_EODHD_API_KEY=demo"
+            echo "MARKET_INGESTION_VALKEY_URL=redis://localhost:6379/0"
+          } >> "$GITHUB_ENV"
+
+      # Run integration tests against the live compose infra.
+      # Only for market-ingestion — portfolio and market-data use testcontainers
+      # and their integration tests already ran in the test-integration job.
+      - name: Run integration tests (market-ingestion only)
+        if: matrix.service == 'market-ingestion'
+        run: >
+          pytest services/market-ingestion/tests/integration
+          -m integration -v --tb=short
+
+      # All three services expose their API on localhost (8001/8002/8003).
+      # The e2e conftest files default to these ports, so no env vars are needed.
+      - name: Run E2E tests
+        run: >
+          pytest services/${{ matrix.service }}/tests/e2e
+          -m e2e -v --tb=short
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose -f infra/compose/docker-compose.test.yml \
+            --profile ${{ matrix.profile }} down -v

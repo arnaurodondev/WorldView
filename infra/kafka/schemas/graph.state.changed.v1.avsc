@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "GraphStateChanged",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S7 Knowledge Graph when a graph relation or entity state changes.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "graph.state.changed"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "primary_entity_id", "type": "string"},
+    {"name": "related_entity_ids", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "relation_id", "type": ["null", "string"], "default": null},
+    {"name": "canonical_type", "type": ["null", "string"], "default": null},
+    {"name": "change_type", "type": "string"},
+    {"name": "confidence", "type": ["null", "float"], "default": null},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

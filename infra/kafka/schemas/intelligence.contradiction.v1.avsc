@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "IntelligenceContradiction",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S7 when a new claim contradicts an existing relation in the knowledge graph.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "intelligence.contradiction"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "subject_entity_id", "type": "string"},
+    {"name": "relation_id", "type": "string"},
+    {"name": "canonical_type", "type": "string"},
+    {"name": "contradicting_claim_id", "type": "string"},
+    {"name": "contradiction_strength", "type": "float"},
+    {"name": "contradiction_type", "type": "string"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}
