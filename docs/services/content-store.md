@@ -54,38 +54,101 @@ generation (S6 NLP Pipeline), serve graphs (S7 Knowledge Graph).
 
 ## Database Schema
 
+Migration: `alembic/versions/0001_create_content_store_schema.py`
+
 ```sql
 -- content_store_db
 
-CREATE TABLE articles (
-    id              UUID PRIMARY KEY,
-    source_domain   TEXT NOT NULL,
-    title           TEXT NOT NULL,
-    summary         TEXT,
-    body_text       TEXT,
-    external_url    TEXT NOT NULL,
-    url_hash        TEXT NOT NULL,
-    language        VARCHAR(10) DEFAULT 'en',
-    word_count      INTEGER,
-    published_at    TIMESTAMPTZ,
-    ingested_at     TIMESTAMPTZ DEFAULT now(),
-    is_duplicate    BOOLEAN DEFAULT false,
-    duplicate_of    UUID REFERENCES articles(id)
+-- Canonical deduplicated document store.
+CREATE TABLE documents (
+    doc_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type      VARCHAR(50)  NOT NULL,
+    source_url       TEXT,
+    title            TEXT,
+    published_at     TIMESTAMPTZ,
+    ingested_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    content_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
+    normalized_hash  VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
+    status           VARCHAR(20)  NOT NULL DEFAULT 'stored',
+    minio_silver_key TEXT         NOT NULL,          -- MinIO silver-layer key
+    word_count       INT,
+    language         VARCHAR(10)  DEFAULT 'en',
+    UNIQUE (content_hash)
 );
-CREATE INDEX idx_articles_url_hash ON articles(url_hash);
-CREATE INDEX idx_articles_published ON articles(published_at DESC);
+CREATE INDEX idx_documents_normalized_hash ON documents (normalized_hash);
+CREATE INDEX idx_documents_source_published ON documents (source_type, published_at DESC);
 
-CREATE TABLE dedup_hashes (
-    url_hash    TEXT PRIMARY KEY,
-    article_id  UUID NOT NULL REFERENCES articles(id),
-    created_at  TIMESTAMPTZ DEFAULT now()
+-- 128-band MinHash vectors for near-duplicate detection.
+-- signature MUST be INTEGER[] — BYTEA is not acceptable; band-by-band Jaccard
+-- comparison requires integer arithmetic, not raw byte comparison.
+CREATE TABLE minhash_signatures (
+    sig_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id        UUID NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    signature     INTEGER[] NOT NULL,                -- 128-band MinHash vector, never BYTEA
+    shingle_type  VARCHAR(50) NOT NULL DEFAULT 'word_bigram_char3gram',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (doc_id)
 );
+CREATE INDEX idx_minhash_sig_created ON minhash_signatures (created_at DESC);
 
-CREATE TABLE idempotency (
-    event_id    UUID PRIMARY KEY,
-    processed_at TIMESTAMPTZ DEFAULT now()
+-- Entity mentions extracted from MinHash shingles.
+-- entity_id is a LOGICAL FK to intelligence_db.canonical_entities.
+-- There is NO Postgres-level FK constraint on entity_id — intelligence_db is a
+-- separate database; cross-DB FK enforcement is handled at the application layer.
+CREATE TABLE minhash_entity_mentions (
+    sig_id              UUID   NOT NULL REFERENCES minhash_signatures(sig_id) ON DELETE CASCADE,
+    mention_text_hash   BIGINT NOT NULL,
+    mention_text        VARCHAR(300),
+    entity_id           UUID,                        -- logical FK only, no PG constraint
+    resolution_status   VARCHAR(20) NOT NULL DEFAULT 'UNRESOLVED',
+    resolved_at         TIMESTAMPTZ,
+    PRIMARY KEY (sig_id, mention_text_hash)
+);
+CREATE INDEX idx_minhash_mentions_hash ON minhash_entity_mentions (mention_text_hash, sig_id);
+CREATE INDEX idx_minhash_mentions_entity ON minhash_entity_mentions (entity_id, sig_id)
+    WHERE entity_id IS NOT NULL;
+
+-- Transactional outbox for content.article.stored.v1 events (Avro-encoded).
+CREATE TABLE outbox_events (
+    event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    topic          VARCHAR(200)  NOT NULL,
+    partition_key  TEXT          NOT NULL,
+    payload_avro   BYTEA         NOT NULL,
+    status         VARCHAR(20)   NOT NULL DEFAULT 'pending',
+    created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    dispatched_at  TIMESTAMPTZ,
+    retry_count    INT           NOT NULL DEFAULT 0,
+    failed_at      TIMESTAMPTZ
+);
+CREATE INDEX idx_outbox_s5_pending ON outbox_events (created_at) WHERE status = 'pending';
+
+-- Poison-pill events that exhausted retries.
+CREATE TABLE dead_letter_queue (
+    dlq_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_event_id UUID         NOT NULL,
+    topic             VARCHAR(200) NOT NULL,
+    payload_avro      BYTEA        NOT NULL,
+    error_detail      TEXT,
+    status            VARCHAR(20)  NOT NULL DEFAULT 'failed',
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    resolved_at       TIMESTAMPTZ,
+    resolution_note   TEXT
 );
 ```
+
+---
+
+## Common Pitfalls
+
+1. **Using BYTEA for MinHash signatures**: `minhash_signatures.signature` must be
+   `INTEGER[]`. The 128-band MinHash comparison is performed band-by-band as integer
+   arithmetic; storing as `BYTEA` would require a custom Jaccard implementation and
+   break all existing band-lookup queries.
+
+2. **Adding a Postgres FK from `minhash_entity_mentions.entity_id` to `intelligence_db`**:
+   `entity_id` is a *logical* foreign key — `intelligence_db` is a separate Postgres
+   database and Postgres does not support cross-database FK constraints. Referential
+   integrity is enforced at the application level via idempotent upserts.
 
 ---
 

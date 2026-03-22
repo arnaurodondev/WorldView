@@ -48,46 +48,65 @@ None — S4 is a pure producer.
 
 ## Database Schema
 
+Migration: `alembic/versions/0001_create_content_ingestion_schema.py`
+
 ```sql
 -- content_ingestion_db
 
-CREATE TABLE sources (
-    id                      UUID PRIMARY KEY,
-    domain                  TEXT NOT NULL UNIQUE,
-    name                    TEXT NOT NULL,
-    source_type             VARCHAR(20),
-    trust_tier              SMALLINT DEFAULT 3,
-    is_enabled              BOOLEAN DEFAULT true,
-    polling_interval_seconds INTEGER DEFAULT 300,
-    last_polled_at          TIMESTAMPTZ,
-    config_json             JSONB,
-    created_at              TIMESTAMPTZ DEFAULT now()
+-- Tracks every fetch attempt (success or failure) per source URL.
+CREATE TABLE fetch_log (
+    fetch_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type    VARCHAR(50)  NOT NULL,
+    source_url     TEXT         NOT NULL,
+    fetched_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    status         VARCHAR(20)  NOT NULL DEFAULT 'success',
+    raw_minio_key  TEXT,                     -- MinIO bronze key; NULL on error
+    content_hash   VARCHAR(64),              -- SHA-256 of raw payload; NULL on error
+    error_detail   TEXT
 );
+CREATE INDEX idx_fetch_log_source_fetched ON fetch_log (source_type, fetched_at DESC);
+CREATE INDEX idx_fetch_log_hash ON fetch_log (content_hash) WHERE content_hash IS NOT NULL;
 
-CREATE TABLE article_fetch_log (
-    id              UUID PRIMARY KEY,
-    source_id       UUID NOT NULL REFERENCES sources(id),
-    url             TEXT NOT NULL,
-    url_hash        TEXT NOT NULL,
-    http_status     SMALLINT,
-    minio_key       TEXT,
-    error_message   TEXT,
-    fetched_at      TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_fetch_log_source ON article_fetch_log(source_id, fetched_at DESC);
-CREATE INDEX idx_fetch_log_url_hash ON article_fetch_log(url_hash);
-
+-- Transactional outbox for content.article.raw.v1 events (Avro-encoded).
 CREATE TABLE outbox_events (
-    id              UUID PRIMARY KEY,
-    event_type      VARCHAR(100) NOT NULL,
-    topic           VARCHAR(100) NOT NULL,
-    key             TEXT NOT NULL,
-    payload         JSONB NOT NULL,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    published_at    TIMESTAMPTZ
+    event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    topic          VARCHAR(200)  NOT NULL,
+    partition_key  TEXT          NOT NULL,
+    payload_avro   BYTEA         NOT NULL,
+    status         VARCHAR(20)   NOT NULL DEFAULT 'pending',
+    created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    dispatched_at  TIMESTAMPTZ,
+    retry_count    INT           NOT NULL DEFAULT 0,
+    failed_at      TIMESTAMPTZ
 );
-CREATE INDEX idx_outbox_unpublished ON outbox_events(published_at) WHERE published_at IS NULL;
+CREATE INDEX idx_outbox_s4_pending ON outbox_events (created_at) WHERE status = 'pending';
+
+-- Poison-pill events that exhausted retries.
+CREATE TABLE dead_letter_queue (
+    dlq_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_event_id UUID         NOT NULL,
+    topic             VARCHAR(200) NOT NULL,
+    payload_avro      BYTEA        NOT NULL,
+    error_detail      TEXT,
+    status            VARCHAR(20)  NOT NULL DEFAULT 'failed',
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    resolved_at       TIMESTAMPTZ,
+    resolution_note   TEXT
+);
 ```
+
+---
+
+## Common Pitfalls
+
+1. **Using TIMESTAMP instead of TIMESTAMPTZ**: All timestamp columns are `TIMESTAMPTZ`
+   (timezone-aware). Using `TIMESTAMP` silently drops timezone information and will
+   cause subtle ordering bugs when comparing timestamps from different system clocks.
+
+2. **Writing to DB and Kafka in separate transactions**: Every fetch result must be
+   written to `fetch_log` and the corresponding `outbox_events` row in the same
+   database transaction. Publishing directly to Kafka outside a transaction risks
+   losing events if the process crashes between the DB commit and the Kafka send.
 
 ---
 
