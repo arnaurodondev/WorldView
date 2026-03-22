@@ -16,7 +16,7 @@ or articles, perform NLP processing, manage portfolios.
 
 ---
 
-## API Surface (27 routes)
+## API Surface (30 routes)
 
 | Method | Path | Description | Cache Tier |
 |--------|------|-------------|------------|
@@ -46,13 +46,19 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/institutional-holders` | Institutional holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
+| GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
+| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit`, `offset` | — |
+| GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/symbol/{symbol}`) are registered **before** path-param routes
 > (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`, `/instruments/{instrument_id}`)
-> to avoid FastAPI matching the literal as a path param.
+> to avoid FastAPI matching the literal as a path param. The `fundamental_metrics` router
+> is registered before the `fundamentals` router so that `/fundamentals/timeseries`,
+> `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by
+> `/fundamentals/{security_id}`.
 >
 > **Fundamentals path param**: The path parameter is historically named `security_id` in
 > the router code but represents the **instrument UUID** (primary key of the `instruments`
@@ -165,6 +171,26 @@ CREATE TABLE failed_tasks (
 );
 
 CREATE TABLE outbox_events (...);  -- same pattern as Portfolio
+
+-- Read-optimized projection: one row per (instrument_id, as_of_date, metric, period_type)
+-- Source of truth remains the 18 section tables; this is a derived projection.
+CREATE TABLE fundamental_metrics (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    instrument_id   UUID NOT NULL REFERENCES instruments(id) ON DELETE CASCADE,
+    as_of_date      DATE NOT NULL,
+    metric          VARCHAR(64) NOT NULL,
+    value_numeric   NUMERIC(24, 6) NULL,
+    value_text      TEXT NULL,
+    period_type     VARCHAR(20) NULL,   -- ANNUAL | QUARTERLY | SNAPSHOT
+    section         VARCHAR(64) NULL,   -- source section (e.g. analyst_consensus)
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX uq_fundamental_metrics_instrument_date_metric
+    ON fundamental_metrics (instrument_id, as_of_date, metric, period_type);
+CREATE INDEX ix_fundamental_metrics_metric_date
+    ON fundamental_metrics (metric, as_of_date);
+CREATE INDEX ix_fundamental_metrics_instrument_metric
+    ON fundamental_metrics (instrument_id, metric, as_of_date);
 ```
 
 ---
@@ -205,6 +231,35 @@ sequenceDiagram
     end
     CON->>DB: INSERT ingestion_events (mark processed)
 ```
+
+### Fundamentals Data Flow (with read-optimized projection)
+
+```mermaid
+flowchart LR
+    subgraph Ingestion
+        KFK[Kafka] --> FC[FundamentalsConsumer]
+        FC --> MIO[MinIO download]
+    end
+
+    subgraph Write Path
+        MIO --> SEC["Section Tables<br/>(18 tables, source of truth)"]
+        MIO --> FM["fundamental_metrics<br/>(read-optimized projection)"]
+    end
+
+    subgraph Read Path - Section APIs
+        SEC --> API1["GET /fundamentals/{id}<br/>GET /fundamentals/{id}/income-statement<br/>etc."]
+    end
+
+    subgraph Read Path - Metrics APIs
+        FM --> API2["GET /fundamentals/timeseries<br/>POST /fundamentals/screen<br/>GET /fundamentals/metrics/{id}"]
+    end
+
+    style FM fill:#e1f5fe
+    style API2 fill:#e1f5fe
+```
+
+Both section table and `fundamental_metrics` upserts happen in the **same transaction**.
+The metrics API endpoints use the **read session** (replica when configured).
 
 ---
 
@@ -254,6 +309,7 @@ calling `process_message(event_dict)`.
 | `api/routers/ohlcv.py` | `/api/v1` | `ohlcv` |
 | `api/routers/quotes.py` | `/api/v1` | `quotes` |
 | `api/routers/fundamentals.py` | `/api/v1` | `fundamentals` |
+| `api/routers/fundamental_metrics.py` | `/api/v1` | `fundamental-metrics` |
 | `api/routers/securities.py` | `/api/v1` | `securities` |
 
 The `ohlcv` router validates `start_date < end_date` and returns HTTP 422 on
@@ -275,8 +331,9 @@ with a 5-second timeout before cancellation; both DB engines are disposed.
 
 All API read operations (`GET` routes) use the **read (replica) session** via
 `uow.instruments_read`, `uow.securities_read`, `uow.ohlcv_read`, `uow.quotes_read`, and
+`uow.get_read_session()`. The fundamentals timeseries and screening endpoints also use
 `uow.get_read_session()`. Write operations (Kafka consumers, `upsert`, flag updates) use
-the **write session** via `uow.instruments`, `uow.securities`, etc.
+the **write session** via `uow.instruments`, `uow.securities`, `uow.fundamental_metrics`, etc.
 
 When `MARKET_DATA_READ_REPLICA_URL` is not set, both sessions point to the same engine
 (write URL), so there is no behaviour change on a single-node deployment. When a read
@@ -543,6 +600,72 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | `fund_holders` | Fund investor holdings |
 | `insider_transactions_snapshot` | Insider trading activity snapshots |
 
+### Read-optimized projection table
+
+| Table | PK | Key columns | Notes |
+|---|---|---|---|
+| `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries. |
+
+**Metric catalog** (expanded set extracted from section JSONB data on write):
+
+| Source section | EODHD key(s) | Metric name | Value column |
+|---|---|---|---|
+| `analyst_consensus` | `TargetPrice` | `target_price` | `value_numeric` |
+| `analyst_consensus` | `Rating` | `analyst_rating` | `value_text` (numeric parse attempted) |
+| `analyst_consensus` | `Buy`, `Hold`, `Sell`, `StrongBuy`, `StrongSell` | `analyst_buy`, `analyst_hold`, `analyst_sell`, `analyst_strong_buy`, `analyst_strong_sell` | `value_numeric` |
+| `valuation_ratios` | `TrailingPE`, `PE` | `pe_ratio` | `value_numeric` |
+| `valuation_ratios` | `PriceBookMRQ`, `PB` | `pb_ratio` | `value_numeric` |
+| `valuation_ratios` | `EnterpriseValue` | `enterprise_value` | `value_numeric` |
+| `valuation_ratios` | `ForwardPE`, `EnterpriseValueEbitda`, `EnterpriseValueRevenue`, `PriceSalesTTM` | `forward_pe`, `enterprise_value_ebitda`, `enterprise_value_revenue`, `price_sales_ttm` | `value_numeric` |
+| `highlights` | `RevenueTTM`, `Revenue` | `revenue_ttm` | `value_numeric` |
+| `highlights` | `EBITDA`, `EBITDAttm` | `ebitda_ttm` | `value_numeric` |
+| `highlights` | `EarningsShare`, `EPS` | `eps_ttm` | `value_numeric` |
+| `highlights` | `ReturnOnEquityTTM`, `ROE` | `roe_ttm` | `value_numeric` |
+| `highlights` | `ReturnOnAssetsTTM`, `ROA` | `roa_ttm` | `value_numeric` |
+| `highlights` | `BookValue`, `DilutedEpsTTM`, `DividendShare`, `DividendYield`, `EPSEstimate*`, `GrossProfitTTM`, `MarketCapitalization*`, `OperatingMarginTTM`, `PEGRatio`, `PERatio`, `ProfitMargin`, `Quarterly*GrowthYOY`, `RevenuePerShareTTM`, `WallStreetTargetPrice` | `book_value`, `diluted_eps_ttm`, `dividend_share`, `dividend_yield`, `eps_estimate_*`, `gross_profit_ttm`, `market_capitalization*`, `operating_margin_ttm`, `peg_ratio`, `pe_ratio`, `profit_margin`, `quarterly_*_growth_yoy`, `revenue_per_share_ttm`, `wall_street_target_price` | `value_numeric` |
+| `income_statements` | `totalRevenue` | `revenue` | `value_numeric` |
+| `income_statements` | `netIncome` | `net_income` | `value_numeric` |
+| `income_statements` | `eps` | `eps` | `value_numeric` |
+| `income_statements` | `costOfRevenue`, `grossProfit`, `operatingIncome`, `incomeBeforeTax`, `incomeTaxExpense`, `interestExpense`, `interestIncome`, `ebit`, `ebitda`, `totalOperatingExpenses`, `totalOtherIncomeExpenseNet`, `researchDevelopment`, `sellingGeneralAdministrative`, `sellingAndMarketingExpenses`, `netIncomeApplicableToCommonShares`, `netIncomeFromContinuingOps` | `cost_of_revenue`, `gross_profit`, `operating_income`, `income_before_tax`, `income_tax_expense`, `interest_expense`, `interest_income`, `ebit`, `ebitda`, `total_operating_expenses`, `total_other_income_expense_net`, `research_development`, `selling_general_administrative`, `selling_and_marketing_expenses`, `net_income_applicable_to_common_shares`, `net_income_from_continuing_ops` | `value_numeric` |
+| `balance_sheets` | `totalAssets` | `total_assets` | `value_numeric` |
+| `balance_sheets` | `totalStockholderEquity` | `total_equity` | `value_numeric` |
+| `balance_sheets` | `longTermDebt` | `long_term_debt` | `value_numeric` |
+| `balance_sheets` | `cash`, `cashAndEquivalents`, `cashAndShortTermInvestments`, `totalLiab`, `totalCurrentAssets`, `totalCurrentLiabilities`, `shortTermDebt`, `shortLongTermDebt`, `shortLongTermDebtTotal`, `accountsPayable`, `netReceivables`, `inventory`, `retainedEarnings`, `propertyPlantAndEquipmentNet`, `commonStockSharesOutstanding`, `netDebt`, `netWorkingCapital` | `cash`, `cash_and_equivalents`, `cash_and_short_term_investments`, `total_liab`, `total_current_assets`, `total_current_liabilities`, `short_term_debt`, `short_long_term_debt`, `short_long_term_debt_total`, `accounts_payable`, `net_receivables`, `inventory`, `retained_earnings`, `property_plant_and_equipment_net`, `common_stock_shares_outstanding`, `net_debt`, `net_working_capital` | `value_numeric` |
+| `cash_flow_statements` | `operatingCashFlow`, `totalCashFromOperatingActivities` | `operating_cash_flow` | `value_numeric` |
+| `cash_flow_statements` | `capitalExpenditures`, `freeCashFlow`, `totalCashFromFinancingActivities`, `totalCashflowsFromInvestingActivities`, `dividendsPaid`, `netBorrowings`, `depreciation` | `capital_expenditures`, `free_cash_flow`, `total_cash_from_financing_activities`, `total_cashflows_from_investing_activities`, `dividends_paid`, `net_borrowings`, `depreciation` | `value_numeric` |
+
+**Deterministic `as_of_date` rule**: always derived from `record.period_end.date()` for `ANNUAL`, `QUARTERLY`, and `SNAPSHOT` (never from `ingested_at`). This ensures replay and backfill produce identical `(instrument_id, as_of_date, metric, period_type)` keys.
+
+**Consistency model**: Upserted in the same transaction as section writes (transactionally consistent for processed records). Snapshot sections use last-write-wins at date-level granularity. If `upsert_metrics` raises after a section write, the exception propagates to the caller's transaction manager for rollback.
+
+**Screening semantics**: `POST /fundamentals/screen` uses the **latest** `as_of_date` per instrument for each metric filter. All filters combine with AND logic. Each filter may optionally specify a `sector` (matched against `instruments.sector`); specifying sector on any filter restricts results to that sector.
+
+**Timeseries date validation**: `start_date > end_date` returns HTTP 422 with a descriptive error before querying the DB.
+
+**Unmapped key observability**: extractor logs structured `metric_extractor.unmapped_keys` events with `section`, `instrument_id`, `period_type`, `unmapped_keys_count`, and `unmapped_keys_sample`. Events with ≥20 unmapped keys log at `WARNING`; fewer log at `DEBUG`.
+
+**Backfill command** (idempotent, chunked, resumable):
+
+```bash
+cd services/market-data
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db \
+    python scripts/backfill_fundamental_metrics.py \
+    --batch-size 500 \
+    --continue-on-error \
+    --json-summary
+
+# Resume a single section from checkpoint
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db \
+    python scripts/backfill_fundamental_metrics.py \
+    --section valuation_ratios \
+    --start-id 00000000-0000-0000-0000-000000000100 \
+    --batch-size 500 \
+    --continue-on-error \
+    --json-summary
+```
+
+Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_rows`, `updated_rows`, `skipped_rows`, `failed_rows`, and runtime.
+
 ### Infrastructure tables
 
 | Table | PK | Key columns | Notes |
@@ -566,6 +689,10 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | `003` | `002` | Add 14 fundamentals tables (period-based: income_statement, balance_sheet, etc.) |
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
+| `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
+
+> **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
+> The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
 
 **Alembic env** (`alembic/env.py`) imports `market_data.infrastructure.db.models` (which registers all models in `Base.metadata`) before calling `autogenerate`.
 

@@ -135,6 +135,7 @@ async def db_session(_migrated_db: str) -> AsyncIterator[AsyncSession]:
         await session.execute(
             text(
                 "TRUNCATE TABLE "
+                "fundamental_metrics, "
                 "income_statements, balance_sheets, cash_flow_statements, "
                 "valuation_ratios, technicals_snapshots, share_statistics, "
                 "splits_dividends, analyst_consensus, earnings_history, "

@@ -19,6 +19,7 @@ echo "=== Creating Kafka topics ==="
 
 TOPICS=(
     "portfolio.events.v1:3:1"
+    "portfolio.watchlist.updated.v1:3:1"
     "market.dataset.fetched:6:1"
     "market.instrument.created:3:1"
     "market.instrument.updated:3:1"

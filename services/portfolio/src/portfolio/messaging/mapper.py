@@ -15,6 +15,10 @@ if TYPE_CHECKING:
         TenantCreated,
         TransactionRecorded,
         UserCreated,
+        WatchlistCreated,
+        WatchlistDeleted,
+        WatchlistItemAdded,
+        WatchlistItemRemoved,
     )
 
 
@@ -103,6 +107,40 @@ def instrument_ref_created_to_dict(event: InstrumentRefCreated) -> dict[str, Any
     d["name"] = event.name
     d["asset_class"] = event.asset_class
     d["currency"] = event.currency
+    d["entity_id"] = str(event.entity_id) if event.entity_id else None
+    return d
+
+
+def watchlist_created_to_dict(event: WatchlistCreated) -> dict[str, Any]:
+    d = event_to_envelope_dict(event)
+    d["watchlist_id"] = str(event.watchlist_id)
+    d["user_id"] = str(event.user_id)
+    d["name"] = event.name
+    return d
+
+
+def watchlist_deleted_to_dict(event: WatchlistDeleted) -> dict[str, Any]:
+    d = event_to_envelope_dict(event)
+    d["watchlist_id"] = str(event.watchlist_id)
+    d["user_id"] = str(event.user_id)
+    return d
+
+
+def watchlist_item_added_to_dict(event: WatchlistItemAdded) -> dict[str, Any]:
+    d = event_to_envelope_dict(event)
+    d["watchlist_id"] = str(event.watchlist_id)
+    d["user_id"] = str(event.user_id)
+    d["entity_id"] = str(event.entity_id)
+    d["entity_type"] = event.entity_type
+    return d
+
+
+def watchlist_item_removed_to_dict(event: WatchlistItemRemoved) -> dict[str, Any]:
+    d = event_to_envelope_dict(event)
+    d["watchlist_id"] = str(event.watchlist_id)
+    d["user_id"] = str(event.user_id)
+    d["entity_id"] = str(event.entity_id)
+    d["entity_type"] = event.entity_type
     return d
 
 
@@ -116,4 +154,8 @@ EVENT_MAPPER_REGISTRY: dict[str, Any] = {
     "portfolio.archived": portfolio_archived_to_dict,
     "holding.changed": holding_changed_to_dict,
     "instrument_ref.created": instrument_ref_created_to_dict,
+    "watchlist.created": watchlist_created_to_dict,
+    "watchlist.deleted": watchlist_deleted_to_dict,
+    "watchlist.item_added": watchlist_item_added_to_dict,
+    "watchlist.item_removed": watchlist_item_removed_to_dict,
 }

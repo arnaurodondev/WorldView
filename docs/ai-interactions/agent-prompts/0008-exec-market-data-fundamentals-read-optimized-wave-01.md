@@ -1,3 +1,5 @@
+> **STATUS: IMPLEMENTED** — Core read-optimized fundamentals projection wave completed (migration, extractor, consumer write-through projection, timeseries/screen APIs, backfill script, tests, and service docs).
+
 # Execution Prompt 0007 — market-data fundamentals read-optimized table wave 01
 
 ## Context (read first)
@@ -106,7 +108,8 @@ Keys below are those observed in EODHD responses and/or user samples. Casing and
 - **Not** one column per stock (does not scale). Use **narrow** layout: one row per (instrument_id, as_of_date, metric), with a **value** column.
 - **metric** is a string that identifies the series (e.g. `target_price`, `pe_ratio`, `analyst_rating`, `revenue`, `total_assets`, `roe`). A fixed set of metrics is defined and populated from section `data` using known JSONB keys.
 - **value** is numeric (NUMERIC or DOUBLE PRECISION) for screening and graphing; optional second column for text/categorical if needed later.
-- **as_of_date** is the logical date of the value: for period-based sections it is the period end date (date only); for SNAPSHOT sections it is the date of the snapshot (e.g. ingested_at::date or period_end_date::date).
+- **as_of_date** is the logical date of the value: for period-based sections it is `period_end_date::date`; for SNAPSHOT sections it is also **always** `period_end_date::date`.
+- **Deterministic date rule (mandatory):** do not derive `as_of_date` from `ingested_at`; derive from `record.period_end` only. This avoids replay drift and keeps uniqueness deterministic across retries and backfills.
 
 ### 2.3 Proposed schema
 
@@ -132,7 +135,7 @@ CREATE INDEX ix_fundamental_metrics_instrument_metric
     ON fundamental_metrics (instrument_id, metric, as_of_date);
 ```
 
-- **Unique constraint:** One numeric value per (instrument, as_of_date, metric). For SNAPSHOT sections we typically have one as_of_date per ingest; for period-based we use period_end_date::date.
+- **Unique constraint:** One value per `(instrument_id, as_of_date, metric)`. For both period-based and SNAPSHOT sections, `as_of_date` is `period_end_date::date`.
 - **Indexes:** Support (1) “one instrument, one metric, date range” and (2) “one metric, date range” (screening by metric then filter by date).
 
 ### 2.4 Metric catalog (initial set to extract from JSONB)
@@ -166,6 +169,7 @@ All values stored in `value_numeric`; string metrics (e.g. sector) are not in th
 - **Consistency:** Read-optimized table is eventually consistent with section tables: it is updated in the same write path (consumer or post-write job) that writes section tables.
 - **Idempotency:** Upsert on (instrument_id, as_of_date, metric) so re-ingestion overwrites the same row.
 - **Backfill:** After creating the table, backfill from existing section tables: for each section and each row, extract the catalogued keys from `data` and insert into `fundamental_metrics`. One-time migration or script.
+- **Backfill operation (mandatory):** backfill must be chunked, idempotent, resumable, and observable. At minimum include batch-size control, deterministic section order, per-batch commit, and summary counters for scanned rows, extracted metrics, inserted rows, updated rows, skipped rows, and failures.
 - **New metrics:** Adding a new metric = add mapping in the extractor and (optional) migration to backfill.
 
 ---
@@ -202,8 +206,34 @@ All values stored in `value_numeric`; string metrics (e.g. sector) are not in th
 
 - **Migrations:** New Alembic migration that creates `fundamental_metrics` and the indexes/unique constraint. No change to existing section tables.
 - **Config:** No new env vars required for the new table (same DB).
-- **Backfill:** Document or implement a one-time backfill script that reads from all section tables and inserts into `fundamental_metrics` for the metric catalog (optional in wave 01 if you only populate going forward).
+- **Backfill:** Implement a one-time backfill script that reads from all section tables and inserts into `fundamental_metrics` for the metric catalog. Script requirements: deterministic ordering, chunked reads, idempotent upsert, resumability via cursor/checkpoint option, and final machine-readable summary.
 - **Documentation:** Update `docs/services/market-data.md` with: new table schema, metric catalog, new endpoints (timeseries, screen), and a short “Data flow” diagram: Kafka → Consumer → Section tables + Fundamental_metrics; API “full section” → Section tables; API “timeseries” / “screen” → Fundamental_metrics.
+
+### 3.4 Mandatory test matrix (wave 01)
+
+The implementation is incomplete unless the following tests are added and passing:
+
+1. **Extractor unit tests**
+  - Key alias normalization (for example `PE` and `pe_ratio` → `pe_ratio`).
+  - Numeric coercion (`"123"`, `"123.45"`, negative values, scientific notation).
+  - Null/empty/unparseable values are skipped without raising.
+  - Duplicate aliases for the same canonical metric in one payload resolve deterministically.
+2. **Consumer integration tests**
+  - Section upsert and metric upsert occur in the same transaction.
+  - Idempotent re-ingest does not create duplicate `(instrument_id, as_of_date, metric)` rows.
+  - Retry/replay overwrites existing value via ON CONFLICT.
+3. **Read query integration tests**
+  - Timeseries query returns sorted points and respects `start_date`/`end_date` boundaries.
+  - Screening query uses latest date per metric per instrument.
+  - Screening with two metrics (AND semantics) returns only instruments satisfying both.
+4. **API integration tests**
+  - Existing full fundamentals endpoints remain shape-compatible.
+  - New timeseries/screen endpoints read from read-session path (not write-session path).
+  - Invalid metric/date parameters return explicit 4xx validation errors.
+5. **Backfill integration tests**
+  - One run populates expected metrics from existing section rows.
+  - Re-running backfill is idempotent (row counts stable, values updated when changed).
+  - Progress/result summary includes scanned/extracted/inserted/updated/skipped counts.
 
 ---
 
@@ -220,6 +250,7 @@ All values stored in `value_numeric`; string metrics (e.g. sector) are not in th
 | ROPT-7 | Use read session for new endpoints; document in service doc. |
 | ROPT-8 | (Optional) Backfill script from section tables → fundamental_metrics. |
 | ROPT-9 | Update docs/services/market-data.md: table schema, metric list, new routes, data flow diagram. |
+| ROPT-10 | Add mandatory edge-case unit/integration tests for extractor, consumer, queries, API, and backfill. |
 
 ---
 
@@ -227,7 +258,9 @@ All values stored in `value_numeric`; string metrics (e.g. sector) are not in th
 
 1. ROPT-1 (migration) first.
 2. ROPT-2, ROPT-3 (extractor + upsert) then ROPT-4 (wire in consumer); validate with integration test (ingest fixture, assert rows in fundamental_metrics).
-3. ROPT-5, ROPT-6, ROPT-7 (read layer and endpoints); then ROPT-9 (docs). ROPT-8 (backfill) last or in a follow-up wave.
+3. ROPT-5, ROPT-6, ROPT-7 (read layer and endpoints).
+4. ROPT-8 (backfill) and ROPT-10 (edge-case tests).
+5. ROPT-9 (docs) after all behavior and tests are final.
 
 ---
 
@@ -237,6 +270,8 @@ All values stored in `value_numeric`; string metrics (e.g. sector) are not in th
 - No change to section table schemas or to the consumer’s idempotency (ingestion_events) or outbox behavior.
 - New endpoints must use the read session (read replica when configured).
 - After ingest of a fundamentals payload that contains analyst_consensus (TargetPrice, Rating) and valuation_ratios (PE), assert that `fundamental_metrics` contains rows for that instrument_id with metric in (target_price, analyst_rating, pe_ratio).
+- Re-ingesting the same event payload must keep row cardinality stable while allowing value overwrite through upsert.
+- Backfill run 1 and run 2 over identical source rows must produce identical final table state.
 
 ---
 

@@ -12,7 +12,9 @@ async def test_list_instruments_empty(integration_client) -> None:
     resp = await integration_client.get("/api/v1/instruments")
     assert resp.status_code == 200
     # May be empty or contain previously seeded instruments (session-scoped DB)
-    assert isinstance(resp.json(), list)
+    data = resp.json()
+    assert "items" in data
+    assert isinstance(data["items"], list)
 
 
 async def test_list_instruments_after_seeding(integration_client, db_session) -> None:
@@ -36,5 +38,5 @@ async def test_list_instruments_after_seeding(integration_client, db_session) ->
     resp = await integration_client.get("/api/v1/instruments")
     assert resp.status_code == 200
     data = resp.json()
-    symbols = [i["symbol"] for i in data]
+    symbols = [i["symbol"] for i in data["items"]]
     assert "TSLA" in symbols

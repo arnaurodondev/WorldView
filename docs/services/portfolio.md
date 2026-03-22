@@ -8,7 +8,8 @@
 ## Mission & Boundaries
 
 **Owns**: Tenant management, user management, portfolio CRUD, transaction recording,
-holding calculation, instrument reference synchronization.
+holding calculation, instrument reference synchronization, watchlist CRUD, alert preference
+management, Valkey reverse-index cache for watchlist entity tracking.
 
 **Never does**: Price lookups (delegates to Market Data), news/content operations,
 direct market data ingestion, cross-service DB queries.
@@ -29,17 +30,41 @@ direct market data ingestion, cross-service DB queries.
 | POST | `/api/v1/users` | Create user | private |
 | GET | `/api/v1/users/{id}` | Get user | private |
 | POST | `/api/v1/portfolios` | Create portfolio | private |
-| GET | `/api/v1/portfolios` | List portfolios (by owner) | private |
+| GET | `/api/v1/portfolios` | List portfolios (by owner) — paginated (`limit`, `offset`) | private |
 | GET | `/api/v1/portfolios/{id}` | Get portfolio | private |
 | PUT | `/api/v1/portfolios/{id}` | Rename portfolio | private |
 | DELETE | `/api/v1/portfolios/{id}` | Archive portfolio | private |
 | POST | `/api/v1/transactions` | Record transaction | private |
-| GET | `/api/v1/transactions` | List transactions (by portfolio) | private |
+| GET | `/api/v1/transactions` | List transactions (by portfolio) — paginated (`limit`, `offset`) | private |
 | GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio | private |
-| GET | `/api/v1/instruments` | List local instrument refs | private |
+| GET | `/api/v1/instruments` | List local instrument refs — paginated (`limit`, `offset`) | private |
 | GET | `/api/v1/instruments/{id}` | Get instrument by ID | private |
+| POST | `/api/v1/watchlists` | Create watchlist | private |
+| GET | `/api/v1/watchlists` | List watchlists (by owner) | private |
+| GET | `/api/v1/watchlists/{id}` | Get watchlist | private |
+| DELETE | `/api/v1/watchlists/{id}` | Soft-delete watchlist | private |
+| POST | `/api/v1/watchlists/{id}/members` | Add member to watchlist | private |
+| DELETE | `/api/v1/watchlists/{id}/members/{entity_id}` | Remove member from watchlist | private |
+| GET | `/api/v1/alert-preferences` | Get alert preferences + suppressions | private |
+| PUT | `/api/v1/alert-preferences/{alert_type}` | Upsert alert preference | private |
+| POST | `/api/v1/alert-preferences/suppressions` | Add entity suppression | private |
+| DELETE | `/api/v1/alert-preferences/suppressions/{entity_id}` | Remove entity suppression | private |
 
 ### Request/Response Models
+
+Paginated list endpoints (`GET /portfolios`, `GET /instruments`, `GET /transactions`) accept:
+
+| Query param | Default | Max | Description |
+|-------------|---------|-----|-------------|
+| `limit` | 100 | 500 | Max items per page |
+| `offset` | 0 | — | Skip N items |
+
+All three return a `PaginatedResponse<T>`:
+```json
+{ "items": [...], "total": 42, "limit": 100, "offset": 0 }
+```
+
+---
 
 ```python
 # CreatePortfolio
@@ -67,7 +92,71 @@ direct market data ingestion, cross-service DB queries.
     "average_cost": Decimal,
     "currency": str
 }
+
+# InstrumentResponse — entity_id links to KG canonical entity (nullable; no cross-service FK)
+{
+    "id": UUID,
+    "symbol": str,
+    "exchange": str,
+    "name": str | None,
+    "currency": str | None,
+    "asset_class": str | None,
+    "entity_id": UUID | None   # populated when instrument is linked to a KG entity
+}
+
+# WatchlistCreateRequest
+{ "name": str }
+
+# WatchlistResponse
+{
+    "id": UUID,
+    "tenant_id": UUID,
+    "user_id": UUID,
+    "name": str,
+    "status": "active" | "deleted",
+    "created_at": datetime
+}
+
+# WatchlistMemberCreateRequest
+{ "entity_id": UUID, "entity_type": str = "company" }
+
+# WatchlistMemberResponse
+{
+    "id": UUID,
+    "watchlist_id": UUID,
+    "entity_id": UUID,     # no cross-service FK — plain UUID (R7)
+    "entity_type": str,
+    "added_at": datetime
+}
+
+# AlertPreferencesListResponse — defaults enabled=True for missing rows
+{
+    "preferences": [{"alert_type": str, "enabled": bool, "updated_at": datetime}, ...],
+    "suppressions": [{"entity_id": UUID, "suppressed_at": datetime}, ...]
+}
+
+# AlertPreferenceUpdateRequest
+{ "enabled": bool }
+
+# EntitySuppressionCreateRequest
+{ "entity_id": UUID }
 ```
+
+#### Watchlist error codes
+
+| Error | HTTP |
+|-------|------|
+| `WATCHLIST_NOT_FOUND` | 404 |
+| `WATCHLIST_ALREADY_EXISTS` | 409 |
+| `WATCHLIST_MEMBER_NOT_FOUND` | 404 |
+| `WATCHLIST_MEMBER_ALREADY_EXISTS` | 409 |
+
+#### Alert preference error codes
+
+| Error | HTTP |
+|-------|------|
+| `VALIDATION_ERROR` (invalid alert_type) | 422 |
+| `ALERT_PREFERENCE_NOT_FOUND` (suppression missing) | 404 |
 
 ---
 
@@ -77,7 +166,8 @@ direct market data ingestion, cross-service DB queries.
 
 | Topic | Event Types | Key | Schema |
 |-------|-------------|-----|--------|
-| `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created` | `aggregate_id` | Per-event `.avsc` files |
+| `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created`, `watchlist.created`, `watchlist.deleted` | `aggregate_id` | Per-event `.avsc` files |
+| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed` | `aggregate_id` | `watchlist.item_added.avsc`, `watchlist.item_removed.avsc` |
 
 ### Consumed
 
@@ -155,9 +245,11 @@ CREATE TABLE instruments (
     name        TEXT,
     currency    VARCHAR(3),
     asset_class VARCHAR(20),
+    entity_id   UUID,           -- KG canonical entity; nullable, no cross-service FK (R7)
     synced_at   TIMESTAMPTZ DEFAULT now(),
     UNIQUE (symbol, exchange)
 );
+-- Partial index: CREATE INDEX ix_instruments_entity_id ON instruments (entity_id) WHERE entity_id IS NOT NULL;
 
 CREATE TABLE outbox_events (
     id              UUID PRIMARY KEY,
@@ -177,6 +269,48 @@ CREATE TABLE idempotency (
     event_id    UUID PRIMARY KEY,
     processed_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE TABLE watchlists (
+    id          UUID PRIMARY KEY,  -- UUIDv7
+    tenant_id   UUID NOT NULL,
+    user_id     UUID NOT NULL,
+    name        TEXT NOT NULL,
+    status      VARCHAR(20) DEFAULT 'active',
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (user_id, name)  -- name: uq_watchlists_user_name
+);
+-- Indexes: ix_watchlists_user_id, ix_watchlists_tenant_id
+
+CREATE TABLE watchlist_members (
+    id          UUID PRIMARY KEY,
+    watchlist_id UUID NOT NULL REFERENCES watchlists(id),
+    entity_id   UUID NOT NULL,  -- KG entity; no cross-service FK (R7)
+    entity_type VARCHAR(30) NOT NULL DEFAULT 'company',
+    added_at    TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (watchlist_id, entity_id)  -- name: uq_watchlist_members_watchlist_entity
+);
+-- Index: ix_watchlist_members_entity_id
+
+CREATE TABLE alert_preferences (
+    id          UUID PRIMARY KEY,  -- UUIDv7
+    tenant_id   UUID NOT NULL,
+    user_id     UUID NOT NULL,
+    alert_type  VARCHAR(30) NOT NULL,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    updated_at  TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (user_id, alert_type)  -- name: uq_alert_preferences_user_type
+);
+-- Index: ix_alert_preferences_user_id
+
+CREATE TABLE entity_suppressions (
+    id            UUID PRIMARY KEY,  -- UUIDv7
+    tenant_id     UUID NOT NULL,
+    user_id       UUID NOT NULL,
+    entity_id     UUID NOT NULL,
+    suppressed_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (user_id, entity_id)  -- name: uq_entity_suppressions_user_entity
+);
+-- Indexes: ix_entity_suppressions_user_id, ix_entity_suppressions_entity_id
 ```
 
 ---
@@ -310,6 +444,24 @@ The service is exposed on host port **8001** (container port 8000).
 Portfolio data is **private** (tenant-scoped) — no gateway caching.
 Service-level caching is minimal (instrument lookups cached in-memory for consumer).
 
+### Watchlist Reverse-Index Cache (Valkey)
+
+The service maintains a Valkey reverse-index mapping `entity_id → set of user_ids` to support
+the Intelligence Layer alerting fanout (S10 consumes `portfolio.watchlist.updated.v1` events
+and queries this index if needed).
+
+| Key taxonomy | `pf:v1:watchlist:entity:{entity_id}` |
+|---|---|
+| Data structure | Redis Set (`SADD` / `SMEMBERS`) |
+| TTL | Configurable via `PORTFOLIO_WATCHLIST_CACHE_TTL_SECONDS` (default 300 s) |
+| Invalidation trigger | Every `add_member` and `remove_member` operation calls `invalidate_entity(entity_id)` (DEL key) |
+| Rebuild | `set_user_ids(entity_id, user_ids, ttl)` atomically replaces the set (DEL + SADD + EXPIRE) |
+| Miss handling | `get_user_ids` returns `[]` on a cache miss; callers should fall back to DB query |
+
+> **Common pitfall**: The reverse-index cache may be stale briefly after a member mutation —
+> always treat it as eventually consistent and never make security decisions based solely on
+> its contents.
+
 ---
 
 ## Observability
@@ -329,7 +481,9 @@ Service-level caching is minimal (instrument lookups cached in-memory for consum
 | Integration | All 16 API endpoints → Postgres round-trip (testcontainers) | `python -m pytest tests/integration/ -v` |
 | E2E | Full BUY/SELL flow, outbox assertions, idempotency | `python -m pytest tests/e2e/ -v -m e2e` |
 
-**Test counts (as of wave-03 completion)**: 253 tests passing (191 unit + contract, 24 integration, 2 e2e).
+**Test counts (as of wave-02 completion)**: 300+ tests passing (unit + contract + integration + e2e).
+New in wave-02: 11 watchlist API integration tests, 2 cache integration tests, 6 alert preference integration tests,
+4 cache unit tests, 6 alert preference unit tests.
 
 ---
 
@@ -358,6 +512,27 @@ make migrate-new MSG="add_column_foo"  # generate new migration
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker(s) |
 | `KAFKA_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Schema registry |
 | `VALKEY_URL` | `redis://localhost:6379` | Valkey/Redis URL |
+| `PORTFOLIO_WATCHLIST_CACHE_TTL_SECONDS` | `300` | TTL (seconds) for watchlist reverse-index cache entries |
 | `SERVICE_NAME` | `portfolio` | Used in logs and traces |
 | `OTLP_ENDPOINT` | (optional) | OpenTelemetry collector endpoint |
 | `LOG_LEVEL` | `info` | structlog level |
+
+---
+
+## Common Pitfalls
+
+- **Alert preferences default to `enabled=True` when no row exists** — do not treat a missing row
+  as disabled. `GetAlertPreferencesUseCase` synthesizes defaults for all `AlertType` values not
+  stored in the DB; callers should never infer "disabled" from absence of a row.
+
+- **Watchlist reverse-index cache may be stale briefly after member mutation** — always treat it
+  as eventually consistent. `add_member` and `remove_member` call `invalidate_entity` (DEL), not
+  a synchronous rebuild. If you read the cache immediately after a write, a miss (`[]`) is expected.
+
+- **`WatchlistCacheDep` requires `app.state.valkey_client`** — in tests, override
+  `get_watchlist_cache` to return `NoOpWatchlistCache()` or a `fakeredis`-backed
+  `ValkeyWatchlistCache`. Forgetting this causes `AttributeError` at request time.
+
+- **Watchlist soft-delete does not prevent GET** — `DeleteWatchlistUseCase` saves the watchlist
+  with `status=deleted` but does not remove it from the DB. `GetWatchlistUseCase` will still
+  return it. Consumers must check `status` if they need to filter deleted watchlists.

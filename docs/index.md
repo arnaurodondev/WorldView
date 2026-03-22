@@ -8,6 +8,7 @@
 
 | Document | Description |
 |----------|-------------|
+| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | High-level explanation of the project, services, and infrastructure |
 | [MASTER_PLAN.md](MASTER_PLAN.md) | System architecture, service catalog, data lifecycle, contracts |
 | [Architecture Diagrams](architecture/diagrams.md) | Mermaid component, dataflow, and sequence diagrams |
 | [ADR-0001 — Initial Architecture](architecture/decisions/0001-initial-architecture.md) | Backend architecture decisions |

@@ -154,3 +154,29 @@ class ConcurrencyError(DomainError):
 
 class IdempotencyKeyConflictError(DomainError):
     error_code = "IDEMPOTENCY_KEY_CONFLICT"
+
+
+# ── Watchlist ──────────────────────────────────────────────────────────────────
+
+
+class WatchlistNotFoundError(EntityNotFoundError):
+    error_code = "WATCHLIST_NOT_FOUND"
+
+
+class WatchlistAlreadyExistsError(EntityAlreadyExistsError):
+    error_code = "WATCHLIST_ALREADY_EXISTS"
+
+
+class WatchlistMemberNotFoundError(EntityNotFoundError):
+    error_code = "WATCHLIST_MEMBER_NOT_FOUND"
+
+
+class WatchlistMemberAlreadyExistsError(EntityAlreadyExistsError):
+    error_code = "WATCHLIST_MEMBER_ALREADY_EXISTS"
+
+
+# ── Alert preference ───────────────────────────────────────────────────────────
+
+
+class AlertPreferenceNotFoundError(EntityNotFoundError):
+    error_code = "ALERT_PREFERENCE_NOT_FOUND"

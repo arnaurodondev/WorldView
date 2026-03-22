@@ -18,6 +18,8 @@ _AVSC_MAP: dict[str, str] = {
     "transaction.recorded": "transaction.recorded.avsc",
     "holding.changed": "holding.changed.avsc",
     "instrument_ref.created": "instrument_ref.created.avsc",
+    "watchlist.item_added": "watchlist.item_added.avsc",
+    "watchlist.item_removed": "watchlist.item_removed.avsc",
 }
 
 

@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.infrastructure.db.repositories.alert_preference import (
+    SqlAlchemyAlertPreferenceRepository,
+    SqlAlchemyEntitySuppressionRepository,
+)
 from portfolio.infrastructure.db.repositories.holding import SqlAlchemyHoldingRepository
 from portfolio.infrastructure.db.repositories.idempotency import SqlAlchemyIdempotencyRepository
 from portfolio.infrastructure.db.repositories.instrument import SqlAlchemyInstrumentRepository
@@ -13,6 +17,8 @@ from portfolio.infrastructure.db.repositories.portfolio import SqlAlchemyPortfol
 from portfolio.infrastructure.db.repositories.tenant import SqlAlchemyTenantRepository
 from portfolio.infrastructure.db.repositories.transaction import SqlAlchemyTransactionRepository
 from portfolio.infrastructure.db.repositories.user import SqlAlchemyUserRepository
+from portfolio.infrastructure.db.repositories.watchlist import SqlAlchemyWatchlistRepository
+from portfolio.infrastructure.db.repositories.watchlist_member import SqlAlchemyWatchlistMemberRepository
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -20,6 +26,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from portfolio.application.ports.repositories import (
+        AlertPreferenceRepository,
+        EntitySuppressionRepository,
         HoldingRepository,
         IdempotencyRepository,
         InstrumentRepository,
@@ -28,6 +36,8 @@ if TYPE_CHECKING:
         TenantRepository,
         TransactionRepository,
         UserRepository,
+        WatchlistMemberRepository,
+        WatchlistRepository,
     )
 
 
@@ -57,6 +67,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._holdings: SqlAlchemyHoldingRepository | None = None
         self._outbox: SqlAlchemyOutboxRepository | None = None
         self._idempotency: SqlAlchemyIdempotencyRepository | None = None
+        self._watchlists: SqlAlchemyWatchlistRepository | None = None
+        self._watchlist_members: SqlAlchemyWatchlistMemberRepository | None = None
+        self._alert_preferences: SqlAlchemyAlertPreferenceRepository | None = None
+        self._entity_suppressions: SqlAlchemyEntitySuppressionRepository | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -68,6 +82,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._holdings = SqlAlchemyHoldingRepository(self._session)
         self._outbox = SqlAlchemyOutboxRepository(self._session)
         self._idempotency = SqlAlchemyIdempotencyRepository(self._session)
+        self._watchlists = SqlAlchemyWatchlistRepository(self._session)
+        self._watchlist_members = SqlAlchemyWatchlistMemberRepository(self._session)
+        self._alert_preferences = SqlAlchemyAlertPreferenceRepository(self._session)
+        self._entity_suppressions = SqlAlchemyEntitySuppressionRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -120,6 +138,26 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def idempotency(self) -> IdempotencyRepository:
         assert self._idempotency is not None, "UnitOfWork not entered"
         return self._idempotency
+
+    @property
+    def watchlists(self) -> WatchlistRepository:
+        assert self._watchlists is not None, "UnitOfWork not entered"
+        return self._watchlists
+
+    @property
+    def watchlist_members(self) -> WatchlistMemberRepository:
+        assert self._watchlist_members is not None, "UnitOfWork not entered"
+        return self._watchlist_members
+
+    @property
+    def alert_preferences(self) -> AlertPreferenceRepository:
+        assert self._alert_preferences is not None, "UnitOfWork not entered"
+        return self._alert_preferences
+
+    @property
+    def entity_suppressions(self) -> EntitySuppressionRepository:
+        assert self._entity_suppressions is not None, "UnitOfWork not entered"
+        return self._entity_suppressions
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"
