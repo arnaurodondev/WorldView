@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "AlertDelivered",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S10 Alert Service when an alert has been successfully delivered to a user channel.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "alert.delivered"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "alert_id", "type": "string"},
+    {"name": "user_id", "type": "string"},
+    {"name": "entity_id", "type": "string"},
+    {"name": "alert_type", "type": "string"},
+    {"name": "channel", "type": "string"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+  ]
+}

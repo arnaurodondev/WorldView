@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/kg_db"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+    alembic_enabled: bool = False
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"

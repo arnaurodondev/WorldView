@@ -15,7 +15,7 @@ from portfolio.domain.errors import (
     WatchlistMemberNotFoundError,
     WatchlistNotFoundError,
 )
-from portfolio.domain.events import WatchlistItemAdded, WatchlistItemRemoved
+from portfolio.domain.events import WatchlistItemAdded, WatchlistItemDeleted
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
@@ -88,20 +88,20 @@ def test_watchlist_item_added_event_fields() -> None:
     assert event.aggregate_id == watchlist_id
 
 
-def test_watchlist_item_removed_event_fields() -> None:
+def test_watchlist_item_deleted_event_fields() -> None:
     tenant_id = uuid4()
     watchlist_id = uuid4()
     user_id = uuid4()
     entity_id = uuid4()
 
-    event = WatchlistItemRemoved(
+    event = WatchlistItemDeleted(
         tenant_id=tenant_id,
         watchlist_id=watchlist_id,
         user_id=user_id,
         entity_id=entity_id,
         entity_type="etf",
     )
-    assert event.EVENT_TYPE == "watchlist.item_removed"
+    assert event.EVENT_TYPE == "watchlist.item_deleted"
     assert event.aggregate_id == watchlist_id
     assert event.entity_id == entity_id
 

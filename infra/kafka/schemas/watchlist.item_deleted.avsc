@@ -1,11 +1,11 @@
 {
   "type": "record",
-  "name": "watchlist.item_removed",
+  "name": "WatchlistItemDeleted",
   "namespace": "portfolio.events",
-  "doc": "Emitted when an entity is removed from a watchlist.",
+  "doc": "Emitted when an entity is deleted from a watchlist.",
   "fields": [
     {"name": "event_id", "type": "string"},
-    {"name": "event_type", "type": "string", "default": "watchlist.item_removed"},
+    {"name": "event_type", "type": "string", "default": "watchlist.item_deleted"},
     {"name": "aggregate_type", "type": "string", "default": "watchlist"},
     {"name": "aggregate_id", "type": "string"},
     {"name": "tenant_id", "type": "string"},

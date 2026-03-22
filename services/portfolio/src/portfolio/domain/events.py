@@ -253,8 +253,8 @@ class WatchlistItemAdded(DomainEvent):
 
 
 @dataclass
-class WatchlistItemRemoved(DomainEvent):
-    EVENT_TYPE: ClassVar[str] = "watchlist.item_removed"
+class WatchlistItemDeleted(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.item_deleted"
     AGGREGATE_TYPE: ClassVar[str] = "watchlist"
 
     watchlist_id: UUID = field(default_factory=new_uuid)

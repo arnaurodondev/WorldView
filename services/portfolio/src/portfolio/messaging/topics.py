@@ -19,5 +19,5 @@ EVENT_TOPIC_MAP: dict[str, str] = {
     "watchlist.created": PORTFOLIO_EVENTS_V1,
     "watchlist.deleted": PORTFOLIO_EVENTS_V1,
     "watchlist.item_added": WATCHLIST_UPDATED_V1,
-    "watchlist.item_removed": WATCHLIST_UPDATED_V1,
+    "watchlist.item_deleted": WATCHLIST_UPDATED_V1,
 }
