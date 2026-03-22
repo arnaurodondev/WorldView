@@ -16,10 +16,15 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from market_data.domain.enums import FundamentalsSection
 
 if TYPE_CHECKING:
     from datetime import date, datetime
+
+
+logger = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,22 @@ def _coerce_numeric(val: Any) -> Decimal | None:
     """Attempt to coerce a value to Decimal.  Returns None on failure."""
     if val is None:
         return None
+    if isinstance(val, bool):
+        return None
+
+    if isinstance(val, str):
+        cleaned = val.strip()
+        if cleaned.lower() in {"", "n/a", "na", "none", "null", "nan", "-", "--"}:
+            return None
+        # Parenthesized negatives are common in finance feeds: (123.4) -> -123.4
+        if cleaned.startswith("(") and cleaned.endswith(")"):
+            cleaned = f"-{cleaned[1:-1]}"
+        cleaned = cleaned.replace(",", "")
+        try:
+            return Decimal(cleaned)
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+
     try:
         return Decimal(str(val))
     except (InvalidOperation, ValueError, TypeError):
@@ -68,11 +89,26 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
             ("Rating", "rating"),
             text_only=True,
         ),
+        _MetricDef("analyst_buy", ("Buy", "buy")),
+        _MetricDef("analyst_hold", ("Hold", "hold")),
+        _MetricDef("analyst_sell", ("Sell", "sell")),
+        _MetricDef("analyst_strong_buy", ("StrongBuy", "strongBuy", "strong_buy")),
+        _MetricDef("analyst_strong_sell", ("StrongSell", "strongSell", "strong_sell")),
     ],
     FundamentalsSection.VALUATION_RATIOS: [
         _MetricDef("pe_ratio", ("TrailingPE", "PE", "pe_ratio", "trailingPE")),
         _MetricDef("pb_ratio", ("PriceBookMRQ", "PB", "price_to_book", "priceBookMRQ")),
         _MetricDef("enterprise_value", ("EnterpriseValue", "enterpriseValue", "enterprise_value")),
+        _MetricDef("forward_pe", ("ForwardPE", "forwardPE", "forward_pe")),
+        _MetricDef(
+            "enterprise_value_ebitda",
+            ("EnterpriseValueEbitda", "enterpriseValueEbitda", "enterprise_value_ebitda"),
+        ),
+        _MetricDef(
+            "enterprise_value_revenue",
+            ("EnterpriseValueRevenue", "enterpriseValueRevenue", "enterprise_value_revenue"),
+        ),
+        _MetricDef("price_sales_ttm", ("PriceSalesTTM", "priceSalesTTM", "price_sales_ttm")),
     ],
     FundamentalsSection.HIGHLIGHTS: [
         _MetricDef("revenue_ttm", ("RevenueTTM", "Revenue", "revenueTTM", "revenue")),
@@ -80,19 +116,228 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
         _MetricDef("eps_ttm", ("EarningsShare", "EPS", "earningsShare", "eps")),
         _MetricDef("roe_ttm", ("ReturnOnEquityTTM", "ROE", "returnOnEquityTTM", "roe")),
         _MetricDef("roa_ttm", ("ReturnOnAssetsTTM", "ROA", "returnOnAssetsTTM", "roa")),
+        _MetricDef("book_value", ("BookValue", "bookValue", "book_value")),
+        _MetricDef("diluted_eps_ttm", ("DilutedEpsTTM", "dilutedEpsTTM", "diluted_eps_ttm")),
+        _MetricDef("dividend_share", ("DividendShare", "dividendShare", "dividend_share")),
+        _MetricDef("dividend_yield", ("DividendYield", "dividendYield", "dividend_yield")),
+        _MetricDef(
+            "eps_estimate_current_quarter",
+            ("EPSEstimateCurrentQuarter", "epsEstimateCurrentQuarter", "eps_estimate_current_quarter"),
+        ),
+        _MetricDef(
+            "eps_estimate_current_year",
+            ("EPSEstimateCurrentYear", "epsEstimateCurrentYear", "eps_estimate_current_year"),
+        ),
+        _MetricDef(
+            "eps_estimate_next_quarter",
+            ("EPSEstimateNextQuarter", "epsEstimateNextQuarter", "eps_estimate_next_quarter"),
+        ),
+        _MetricDef(
+            "eps_estimate_next_year",
+            ("EPSEstimateNextYear", "epsEstimateNextYear", "eps_estimate_next_year"),
+        ),
+        _MetricDef("gross_profit_ttm", ("GrossProfitTTM", "grossProfitTTM", "gross_profit_ttm")),
+        _MetricDef(
+            "market_capitalization",
+            ("MarketCapitalization", "marketCapitalization", "market_capitalization"),
+        ),
+        _MetricDef(
+            "market_capitalization_mln",
+            ("MarketCapitalizationMln", "marketCapitalizationMln", "market_capitalization_mln"),
+        ),
+        _MetricDef(
+            "operating_margin_ttm",
+            ("OperatingMarginTTM", "operatingMarginTTM", "operating_margin_ttm"),
+        ),
+        _MetricDef("peg_ratio", ("PEGRatio", "pegRatio", "peg_ratio")),
+        _MetricDef("pe_ratio", ("PERatio", "peRatio")),
+        _MetricDef("profit_margin", ("ProfitMargin", "profitMargin", "profit_margin")),
+        _MetricDef(
+            "quarterly_earnings_growth_yoy",
+            (
+                "QuarterlyEarningsGrowthYOY",
+                "quarterlyEarningsGrowthYOY",
+                "quarterly_earnings_growth_yoy",
+            ),
+        ),
+        _MetricDef(
+            "quarterly_revenue_growth_yoy",
+            (
+                "QuarterlyRevenueGrowthYOY",
+                "quarterlyRevenueGrowthYOY",
+                "quarterly_revenue_growth_yoy",
+            ),
+        ),
+        _MetricDef(
+            "revenue_per_share_ttm",
+            ("RevenuePerShareTTM", "revenuePerShareTTM", "revenue_per_share_ttm"),
+        ),
+        _MetricDef(
+            "wall_street_target_price",
+            ("WallStreetTargetPrice", "wallStreetTargetPrice", "wall_street_target_price"),
+        ),
     ],
     FundamentalsSection.INCOME_STATEMENT: [
         _MetricDef("revenue", ("totalRevenue", "total_revenue", "TotalRevenue")),
         _MetricDef("net_income", ("netIncome", "net_income", "NetIncome")),
         _MetricDef("eps", ("eps", "EPS", "Eps")),
+        _MetricDef("cost_of_revenue", ("costOfRevenue", "cost_of_revenue", "CostOfRevenue")),
+        _MetricDef("gross_profit", ("grossProfit", "gross_profit", "GrossProfit")),
+        _MetricDef("operating_income", ("operatingIncome", "operating_income", "OperatingIncome")),
+        _MetricDef("income_before_tax", ("incomeBeforeTax", "income_before_tax", "IncomeBeforeTax")),
+        _MetricDef(
+            "income_tax_expense",
+            ("incomeTaxExpense", "income_tax_expense", "IncomeTaxExpense"),
+        ),
+        _MetricDef("interest_expense", ("interestExpense", "interest_expense", "InterestExpense")),
+        _MetricDef("interest_income", ("interestIncome", "interest_income", "InterestIncome")),
+        _MetricDef("ebit", ("ebit", "EBIT")),
+        _MetricDef("ebitda", ("ebitda", "EBITDA")),
+        _MetricDef(
+            "total_operating_expenses",
+            ("totalOperatingExpenses", "total_operating_expenses", "TotalOperatingExpenses"),
+        ),
+        _MetricDef(
+            "total_other_income_expense_net",
+            (
+                "totalOtherIncomeExpenseNet",
+                "total_other_income_expense_net",
+                "TotalOtherIncomeExpenseNet",
+            ),
+        ),
+        _MetricDef(
+            "research_development",
+            ("researchDevelopment", "research_development", "ResearchDevelopment"),
+        ),
+        _MetricDef(
+            "selling_general_administrative",
+            (
+                "sellingGeneralAdministrative",
+                "selling_general_administrative",
+                "SellingGeneralAdministrative",
+            ),
+        ),
+        _MetricDef(
+            "selling_and_marketing_expenses",
+            (
+                "sellingAndMarketingExpenses",
+                "selling_and_marketing_expenses",
+                "SellingAndMarketingExpenses",
+            ),
+        ),
+        _MetricDef(
+            "net_income_applicable_to_common_shares",
+            (
+                "netIncomeApplicableToCommonShares",
+                "net_income_applicable_to_common_shares",
+                "NetIncomeApplicableToCommonShares",
+            ),
+        ),
+        _MetricDef(
+            "net_income_from_continuing_ops",
+            (
+                "netIncomeFromContinuingOps",
+                "net_income_from_continuing_ops",
+                "NetIncomeFromContinuingOps",
+            ),
+        ),
     ],
     FundamentalsSection.BALANCE_SHEET: [
         _MetricDef("total_assets", ("totalAssets", "total_assets", "TotalAssets")),
         _MetricDef("total_equity", ("totalStockholderEquity", "total_equity", "TotalStockholderEquity")),
         _MetricDef("long_term_debt", ("longTermDebt", "long_term_debt", "LongTermDebt")),
+        _MetricDef("cash", ("cash", "Cash")),
+        _MetricDef(
+            "cash_and_equivalents",
+            ("cashAndEquivalents", "cash_and_equivalents", "CashAndEquivalents"),
+        ),
+        _MetricDef(
+            "cash_and_short_term_investments",
+            (
+                "cashAndShortTermInvestments",
+                "cash_and_short_term_investments",
+                "CashAndShortTermInvestments",
+            ),
+        ),
+        _MetricDef("total_liab", ("totalLiab", "total_liab", "TotalLiab")),
+        _MetricDef(
+            "total_current_assets",
+            ("totalCurrentAssets", "total_current_assets", "TotalCurrentAssets"),
+        ),
+        _MetricDef(
+            "total_current_liabilities",
+            ("totalCurrentLiabilities", "total_current_liabilities", "TotalCurrentLiabilities"),
+        ),
+        _MetricDef("short_term_debt", ("shortTermDebt", "short_term_debt", "ShortTermDebt")),
+        _MetricDef(
+            "short_long_term_debt",
+            ("shortLongTermDebt", "short_long_term_debt", "ShortLongTermDebt"),
+        ),
+        _MetricDef(
+            "short_long_term_debt_total",
+            ("shortLongTermDebtTotal", "short_long_term_debt_total", "ShortLongTermDebtTotal"),
+        ),
+        _MetricDef("accounts_payable", ("accountsPayable", "accounts_payable", "AccountsPayable")),
+        _MetricDef("net_receivables", ("netReceivables", "net_receivables", "NetReceivables")),
+        _MetricDef("inventory", ("inventory", "Inventory")),
+        _MetricDef("retained_earnings", ("retainedEarnings", "retained_earnings", "RetainedEarnings")),
+        _MetricDef(
+            "property_plant_and_equipment_net",
+            (
+                "propertyPlantAndEquipmentNet",
+                "property_plant_and_equipment_net",
+                "PropertyPlantAndEquipmentNet",
+            ),
+        ),
+        _MetricDef(
+            "common_stock_shares_outstanding",
+            (
+                "commonStockSharesOutstanding",
+                "common_stock_shares_outstanding",
+                "CommonStockSharesOutstanding",
+            ),
+        ),
+        _MetricDef("net_debt", ("netDebt", "net_debt", "NetDebt")),
+        _MetricDef(
+            "net_working_capital",
+            ("netWorkingCapital", "net_working_capital", "NetWorkingCapital"),
+        ),
     ],
     FundamentalsSection.CASH_FLOW: [
-        _MetricDef("operating_cash_flow", ("operatingCashFlow", "operating_cash_flow", "OperatingCashFlow")),
+        _MetricDef(
+            "operating_cash_flow",
+            (
+                "operatingCashFlow",
+                "operating_cash_flow",
+                "OperatingCashFlow",
+                "totalCashFromOperatingActivities",
+                "TotalCashFromOperatingActivities",
+            ),
+        ),
+        _MetricDef(
+            "capital_expenditures",
+            ("capitalExpenditures", "capital_expenditures", "CapitalExpenditures"),
+        ),
+        _MetricDef("free_cash_flow", ("freeCashFlow", "free_cash_flow", "FreeCashFlow")),
+        _MetricDef(
+            "total_cash_from_financing_activities",
+            (
+                "totalCashFromFinancingActivities",
+                "total_cash_from_financing_activities",
+                "TotalCashFromFinancingActivities",
+            ),
+        ),
+        _MetricDef(
+            "total_cashflows_from_investing_activities",
+            (
+                "totalCashflowsFromInvestingActivities",
+                "total_cashflows_from_investing_activities",
+                "TotalCashflowsFromInvestingActivities",
+            ),
+        ),
+        _MetricDef("dividends_paid", ("dividendsPaid", "dividends_paid", "DividendsPaid")),
+        _MetricDef("net_borrowings", ("netBorrowings", "net_borrowings", "NetBorrowings")),
+        _MetricDef("depreciation", ("depreciation", "Depreciation")),
     ],
 }
 
@@ -117,6 +362,7 @@ def extract_metrics(
         return []
 
     rows: list[MetricRow] = []
+    matched_keys: set[str] = set()
     section_value = str(section.value) if hasattr(section, "value") else str(section)
 
     for metric_def in _METRIC_CATALOG[section]:
@@ -127,6 +373,7 @@ def extract_metrics(
             if key in data:
                 raw_value = data[key]
                 found = True
+                matched_keys.add(key)
                 break
 
         if not found:
@@ -140,8 +387,8 @@ def extract_metrics(
             value_numeric = _coerce_numeric(raw_value)  # attempt numeric parse
         else:
             value_numeric = _coerce_numeric(raw_value)
-            if value_numeric is None and raw_value is not None:
-                # Non-coercible numeric → skip this metric
+            if value_numeric is None:
+                # Null or non-coercible numeric value → skip this metric.
                 continue
 
         rows.append(
@@ -156,5 +403,20 @@ def extract_metrics(
                 ingested_at=ingested_at,
             )
         )
+
+    if data:
+        unmapped_keys = sorted([k for k in data if k not in matched_keys])
+        if unmapped_keys:
+            payload = {
+                "section": section_value,
+                "instrument_id": instrument_id,
+                "period_type": period_type,
+                "unmapped_keys_count": len(unmapped_keys),
+                "unmapped_keys_sample": unmapped_keys[:10],
+            }
+            if len(unmapped_keys) >= 20:
+                logger.warning("metric_extractor.unmapped_keys", **payload)
+            else:
+                logger.debug("metric_extractor.unmapped_keys", **payload)
 
     return rows

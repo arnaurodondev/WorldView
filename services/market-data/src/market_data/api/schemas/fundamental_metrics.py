@@ -31,6 +31,7 @@ class ScreenFilterRequest(BaseModel):
     min_value: float | None = None
     max_value: float | None = None
     period_type: str | None = None
+    sector: str | None = None
 
 
 class ScreenRequest(BaseModel):

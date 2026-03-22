@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import and_, func, select
 
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
+from market_data.infrastructure.db.models.instruments import InstrumentModel
 
 if TYPE_CHECKING:
     from datetime import date
@@ -41,6 +42,7 @@ class ScreenFilter:
     min_value: float | None = None
     max_value: float | None = None
     period_type: str | None = None
+    sector: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +166,6 @@ async def query_screen(
 
     # INNER JOIN all filter subqueries on instrument_id
     base = filter_subqueries[0]
-    joined = select(base.c.instrument_id)
 
     # Add metric value columns
     select_cols = [base.c.instrument_id]
@@ -175,6 +176,18 @@ async def query_screen(
 
     for sq in filter_subqueries[1:]:
         joined = joined.join(sq, base.c.instrument_id == sq.c.instrument_id)
+
+    # Apply sector filter: join with instruments and restrict by sector if any filter specifies one
+    sector_values = [f.sector for f in filters if f.sector is not None]
+    if sector_values:
+        instr = InstrumentModel
+        joined = joined.join(instr, instr.id == base.c.instrument_id)
+        # AND logic: all specified sector values must agree (in practice, use the first one
+        # since cross-sector AND would match zero instruments).  Use IN to allow callers
+        # to express "sector in (list)" by adding multiple filters with the same metric but
+        # different sectors; here we apply the intersection (AND) of all sector values.
+        for sv in sector_values:
+            joined = joined.where(instr.sector == sv)
 
     joined = joined.order_by(base.c.instrument_id).offset(offset).limit(limit)
 
