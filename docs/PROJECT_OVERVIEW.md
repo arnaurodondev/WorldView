@@ -14,7 +14,7 @@ The core innovation is fusion: rather than treating news and prices separately, 
 
 ## 2. System Architecture
 
-The project is a **Python + TypeScript Monorepo** built on a **Clean/Hexagonal Architecture**. It consists of **9 independent microservices** that communicate asynchronously via Kafka events and synchronously via REST APIs (orchestrated by an API Gateway).
+The project is a **Python + TypeScript Monorepo** built on a **Clean/Hexagonal Architecture**. It consists of **10 independent microservices** (S1–S9 + S10) that communicate asynchronously via Kafka events and synchronously via REST APIs (orchestrated by an API Gateway).
 
 ### Key Architectural Patterns
 - **Microservices**: Decomposed by domain (Market Data vs. Content vs. Portfolio).
@@ -25,9 +25,9 @@ The project is a **Python + TypeScript Monorepo** built on a **Clean/Hexagonal A
 
 ---
 
-## 3. Service Breakdown (The 9 Microservices)
+## 3. Service Breakdown (The 10 Microservices)
 
-The backend is divided into 9 services (S1–S9), each with its own database schema and responsibility.
+The backend is divided into 10 services (S1–S9 + S10), each with its own database schema and responsibility.
 
 ### **Core Domain Services**
 
@@ -38,10 +38,11 @@ The backend is divided into 9 services (S1–S9), each with its own database sch
 | **S3 · Market Data** | Analytics Engine | `market_data_db` | Consumes raw market data, processes it into efficient time-series (OHLCV) and structured fundamentals (Financial Statements). Serves charts. |
 | **S4 · Content Ingestion** | News Gateway | `content_ingestion_db` | Polls RSS feeds and news APIs. Stores raw HTML/JSON in MinIO and signals new articles via Kafka. |
 | **S5 · Content Store** | Article Repository | `content_store_db` | Cleans, normalizes, and deduplicates news articles. Acts as the canonical source of truth for text content. |
-| **S6 · NLP Pipeline** | AI Enrichment | `nlp_db` | Runs ML models on articles: Sentiment Analysis, Named Entity Recognition (NER), and Embedding generation (for vector search). |
-| **S7 · Knowledge Graph** | Relationship Engine | `kg_db` | Maps relationships between entities (e.g., `NVDA` -(supplies)-> `MSFT`). Enables graph-based reasoning. |
+| **S6 · NLP Pipeline** | AI Enrichment | `nlp_db` (owned) + `intelligence_db` (shared) | Runs pipeline Blocks 3–10 on articles: sectioning, GLiNER NER (10 entity classes), routing score, suppression, chunk/section embeddings (`BAAI/bge-large-en-v1.5`, 1024-dim), two-stage novelty gate, 4-step entity resolution, deep LLM extraction (Qwen2.5-7B). |
+| **S7 · Knowledge Graph** | Relationship Engine | `intelligence_db` (shared) | Canonicalizes relation types, materializes evidence to the relational adjacency-list graph, runs async workers for confidence recomputation, contradiction detection, and relation summary generation. |
 | **S8 · RAG / Chat** | Intelligence Layer | (Stateless) | The "Brain". Orchestrates LLM queries using Retrieval-Augmented Generation (RAG) by fetching context from S3, S6, and S7. |
-| **S9 · API Gateway** | Frontend Entrypoint | (Stateless) | A "Backend-for-Frontend" (BFF). Aggregates data from internal services and presents a unified GraphQL/REST API to the UI. |
+| **S9 · API Gateway** | Frontend Entrypoint | (Stateless) | A "Backend-for-Frontend" (BFF). Aggregates data from internal services and presents a unified REST API to the UI. |
+| **S10 · Alert Service** | Notification Engine | `alert_db` | Consumes intelligence events (signals, graph changes, contradictions) and watchlist events from S1. Fans out real-time WebSocket alerts to users watching affected entities. |
 
 ---
 
@@ -83,19 +84,22 @@ How data moves through the interactions of these services.
 1. **S4 (Ingestion)** detects a new RSS item and saves raw HTML to **MinIO**.
 2. S4 emits `content.article.raw`.
 3. **S5 (Store)** consumes it, cleans the HTML, deduplicates it, and saves the text. Emits `content.article.stored`.
-4. **S6 (NLP)** consumes the stored article. It runs:
-   - **Sentiment Model**: Is this good or bad news?
-   - **NER Model**: Whic companies are mentioned? (e.g., "Apple", "Tim Cook").
-   - **Embedding Model**: Converts text to vectors.
-5. S6 stores these insights in **pgvector** and emits `nlp.article.enriched`.
-6. **S7 (Graph)** links the mentioned entities in the **Knowledge Graph**.
+4. **S6 (NLP)** consumes the stored article and runs the full enrichment pipeline (Blocks 3–10):
+   - **Sectioning + GLiNER NER**: Which entities (companies, people, events) are mentioned?
+   - **Routing + Suppression**: Is the document informative enough to process fully?
+   - **Embedding Model**: Converts text chunks and sections to 1024-dim vectors (`BAAI/bge-large-en-v1.5`).
+   - **Entity Resolution**: 4-step cascade maps mentions to canonical entity IDs.
+   - **Deep Extraction (Qwen2.5-7B)**: Extracts structured events, claims, and relations.
+5. S6 stores embeddings in **pgvector** (`nlp_db`) and relation evidence in `intelligence_db`, then emits `nlp.article.enriched.v1`.
+6. **S7 (Graph)** canonicalizes relation types, materializes evidence into the `relations` table, and runs async workers to recompute confidence, detect contradictions, and generate summaries.
+7. **S10 (Alert)** consumes signals and graph changes, resolves which users watch affected entities via S1, and pushes WebSocket notifications.
 
 ### **C. The User Interaction (RAG Chat)**
 1. User asks: *"How does Apple's news affect its stock?"*
 2. **S8 (Chat)** receives the query.
 3. S8 searches **S6 (Vector DB)** for relevant news.
 4. S8 queries **S3 (Market Data)** for recent price changes.
-5. S8 synthesizes an answer using an LLM (e.g., Llama 3 via Ollama) citeing specific articles and price movements.
+5. S8 synthesizes an answer using an LLM (e.g., Llama 3 via Ollama) citing specific articles and price movements.
 6. **S9 (Gateway)** delivers the streaming response to the Frontend.
 
 ---
