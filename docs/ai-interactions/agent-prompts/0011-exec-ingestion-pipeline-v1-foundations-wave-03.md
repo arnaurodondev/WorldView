@@ -413,8 +413,6 @@ alembic downgrade base && alembic upgrade head
 - HNSW indexes must be created with `op.execute(...)` — not `op.create_index(...)`.
 - All timestamp columns must be `TIMESTAMPTZ` (with timezone) — never `TIMESTAMP`.
 
-## Scope & token budget
-
 **write_paths**:
 ```
 services/content-ingestion/alembic/versions/0001_create_content_ingestion_schema.py
@@ -425,8 +423,6 @@ services/nlp-pipeline/alembic/versions/0001_create_nlp_schema.py
 services/nlp-pipeline/alembic.ini                         # verify/update only
 services/nlp-pipeline/alembic/env.py                      # add pgvector setup note
 ```
-
-**Exploration bound**: Read at most 8 files total before starting (alembic.ini for each service, one reference migration, the PRD §6 sections). Column specs are in the response document and PRD — do not explore further.
 
 ## Required tests
 

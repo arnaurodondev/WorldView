@@ -1,4 +1,10 @@
-"""Alembic environment configuration."""
+"""Alembic environment configuration.
+
+IMPORTANT: This service (S6 NLP Pipeline) ONLY manages nlp_db.
+Set ALEMBIC_ENABLED=false in the S6 env when connecting to intelligence_db —
+that database is owned exclusively by the intelligence-migrations init container.
+Never add intelligence_db Alembic config here.
+"""
 
 from __future__ import annotations
 
