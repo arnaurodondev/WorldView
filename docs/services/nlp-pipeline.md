@@ -77,107 +77,162 @@ performs read/write operations only.
 
 ### `nlp_db` (owned by S6)
 
+Migration: `alembic/versions/0001_create_nlp_schema.py`
+
+Tables are created in dependency order (FK chain: sections → chunks → entity_mentions → chunk_entity_mentions → chunk_embeddings / section_embeddings).
+
 ```sql
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS vector;  -- required for VECTOR type and HNSW indexes
 
-CREATE TABLE chunk_embeddings (
-    id              UUID PRIMARY KEY,
-    article_id      UUID NOT NULL,
-    chunk_index     SMALLINT NOT NULL,
-    chunk_text      TEXT NOT NULL,
-    embedding       vector(1024),
-    model_version   VARCHAR(50) NOT NULL,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    UNIQUE (article_id, chunk_index)
+-- Document sections produced by Block 3 (Sectioning).
+CREATE TABLE sections (
+    section_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id         UUID        NOT NULL,              -- logical FK to content_store_db.documents
+    section_index  INT         NOT NULL,
+    section_type   VARCHAR(50),
+    title          TEXT,
+    char_start     INT         NOT NULL,
+    char_end       INT         NOT NULL,
+    token_count    INT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_chunk_emb_hnsw ON chunk_embeddings
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
+CREATE INDEX idx_sections_doc ON sections (doc_id, section_index);
 
+-- Text chunks within a section (sliding window / sentence-boundary split).
+CREATE TABLE chunks (
+    chunk_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id              UUID        NOT NULL,
+    section_id          UUID        NOT NULL REFERENCES sections(section_id) ON DELETE CASCADE,
+    chunk_index         INT         NOT NULL,
+    char_start          INT         NOT NULL,
+    char_end            INT         NOT NULL,
+    token_count         INT         NOT NULL,
+    sentence_start_idx  INT,
+    sentence_end_idx    INT,
+    speaker             TEXT,
+    heading_path        TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_chunks_doc ON chunks (doc_id, chunk_index);
+CREATE INDEX idx_chunks_section ON chunks (section_id);
+
+-- Named entity mentions from Block 4 (GLiNER NER).
+CREATE TABLE entity_mentions (
+    mention_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id                UUID        NOT NULL,
+    section_id            UUID REFERENCES sections(section_id) ON DELETE SET NULL,
+    mention_text          TEXT        NOT NULL,
+    mention_class         VARCHAR(50) NOT NULL,
+    confidence            FLOAT       NOT NULL,
+    char_start            INT         NOT NULL,
+    char_end              INT         NOT NULL,
+    resolved_entity_id    UUID,                       -- logical FK to intelligence_db.canonical_entities
+    resolution_confidence FLOAT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_entity_mentions_doc ON entity_mentions (doc_id, mention_class);
+CREATE INDEX idx_entity_mentions_resolved ON entity_mentions (resolved_entity_id)
+    WHERE resolved_entity_id IS NOT NULL;
+
+-- Junction table: which mentions appear in which chunks.
+CREATE TABLE chunk_entity_mentions (
+    chunk_id   UUID NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    mention_id UUID NOT NULL REFERENCES entity_mentions(mention_id) ON DELETE CASCADE,
+    PRIMARY KEY (chunk_id, mention_id)
+);
+
+-- Chunk-level embeddings (BAAI/bge-large-en-v1.5, 1024-dim) from Block 7.
+-- Separate HNSW index from section_embeddings — mixing chunk and section vectors
+-- in one index would pollute ANN results (different granularity = different recall).
+CREATE TABLE chunk_embeddings (
+    embedding_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chunk_id         UUID         NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    embedding        VECTOR(1024) NOT NULL,
+    model_id         VARCHAR(200) NOT NULL,
+    embedding_status VARCHAR(20)  NOT NULL DEFAULT 'ready',
+    expires_at       TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (chunk_id, model_id)
+);
+-- HNSW index: partial predicate excludes expired embeddings from ANN scans.
+CREATE INDEX idx_chunk_emb_hnsw ON chunk_embeddings
+    USING hnsw (embedding vector_cosine_ops)
+    WHERE (expires_at IS NULL OR expires_at > now());
+CREATE INDEX idx_chunk_emb_pending ON chunk_embeddings (created_at)
+    WHERE embedding_status = 'pending';
+CREATE INDEX idx_chunk_emb_expires ON chunk_embeddings (expires_at)
+    WHERE expires_at IS NOT NULL;
+
+-- Section-level embeddings — separate HNSW index from chunk_embeddings.
+-- Chunk and section ANN searches must not pollute each other's results.
 CREATE TABLE section_embeddings (
-    id              UUID PRIMARY KEY,
-    article_id      UUID NOT NULL,
-    section_index   SMALLINT NOT NULL,
-    section_label   VARCHAR(50),
-    embedding       vector(1024),
-    model_version   VARCHAR(50) NOT NULL,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    UNIQUE (article_id, section_index)
+    embedding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    section_id   UUID         NOT NULL REFERENCES sections(section_id) ON DELETE CASCADE,
+    embedding    VECTOR(1024) NOT NULL,
+    model_id     VARCHAR(200) NOT NULL,
+    expires_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    UNIQUE (section_id, model_id)
 );
 CREATE INDEX idx_section_emb_hnsw ON section_embeddings
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
+    USING hnsw (embedding vector_cosine_ops)
+    WHERE (expires_at IS NULL OR expires_at > now());
 
-CREATE TABLE entity_profile_embeddings (
-    entity_id       UUID PRIMARY KEY,
-    embedding       vector(1024),
-    model_version   VARCHAR(50) NOT NULL,
-    updated_at      TIMESTAMPTZ DEFAULT now()
+-- Block 5 routing decisions (which processing tier an article was assigned to).
+CREATE TABLE routing_decisions (
+    decision_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id              UUID        NOT NULL,
+    routing_tier        VARCHAR(20) NOT NULL,
+    composite_score     FLOAT       NOT NULL,
+    feature_scores_json JSONB       NOT NULL,
+    decided_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_entity_profile_hnsw ON entity_profile_embeddings
-    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200);
+CREATE INDEX idx_routing_doc ON routing_decisions (doc_id);
 
-CREATE TABLE entities (
-    id              UUID PRIMARY KEY,
-    canonical_name  TEXT NOT NULL,
-    entity_type     VARCHAR(20) NOT NULL,
-    metadata        JSONB,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    UNIQUE (canonical_name, entity_type)
+-- Transactional outbox for nlp.article.enriched.v1 and nlp.signal.detected.v1.
+CREATE TABLE outbox_events (
+    event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    topic          VARCHAR(200)  NOT NULL,
+    partition_key  TEXT          NOT NULL,
+    payload_avro   BYTEA         NOT NULL,
+    status         VARCHAR(20)   NOT NULL DEFAULT 'pending',
+    created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    dispatched_at  TIMESTAMPTZ,
+    retry_count    INT           NOT NULL DEFAULT 0,
+    failed_at      TIMESTAMPTZ
 );
+CREATE INDEX idx_outbox_s6_pending ON outbox_events (created_at) WHERE status = 'pending';
 
-CREATE TABLE entity_aliases (
-    id          UUID PRIMARY KEY,
-    entity_id   UUID REFERENCES entities(id),
-    alias       TEXT NOT NULL,
-    alias_type  VARCHAR(20),
-    UNIQUE (alias, alias_type)
-);
-
-CREATE TABLE article_entities (
-    article_id      UUID NOT NULL,
-    entity_id       UUID NOT NULL REFERENCES entities(id),
-    confidence      REAL,
-    mention_count   SMALLINT DEFAULT 1,
-    PRIMARY KEY (article_id, entity_id)
-);
-
-CREATE TABLE article_events (
-    id              UUID PRIMARY KEY,
-    article_id      UUID NOT NULL,
-    event_type      VARCHAR(50) NOT NULL,
-    entity_id       UUID REFERENCES entities(id),
-    severity        SMALLINT DEFAULT 1,
-    details         JSONB,
-    occurred_at     TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX idx_events_entity ON article_events(entity_id);
-CREATE INDEX idx_events_type ON article_events(event_type);
-
-CREATE TABLE article_sentiment (
-    article_id      UUID PRIMARY KEY,
-    score           REAL NOT NULL,
-    label           VARCHAR(20) NOT NULL,
-    model_version   VARCHAR(50) NOT NULL,
-    created_at      TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE topic_clusters (
-    id              UUID PRIMARY KEY,
-    label           TEXT,
-    centroid        vector(1024),
-    article_count   INTEGER DEFAULT 0,
-    is_trending     BOOLEAN DEFAULT false,
-    created_at      TIMESTAMPTZ DEFAULT now(),
-    updated_at      TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE article_clusters (
-    article_id      UUID NOT NULL,
-    cluster_id      UUID NOT NULL REFERENCES topic_clusters(id),
-    similarity      REAL,
-    PRIMARY KEY (article_id, cluster_id)
+-- Poison-pill events that exhausted retries.
+CREATE TABLE dead_letter_queue (
+    dlq_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_event_id UUID         NOT NULL,
+    topic             VARCHAR(200) NOT NULL,
+    payload_avro      BYTEA        NOT NULL,
+    error_detail      TEXT,
+    status            VARCHAR(20)  NOT NULL DEFAULT 'failed',
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    resolved_at       TIMESTAMPTZ,
+    resolution_note   TEXT
 );
 ```
+
+---
+
+## Common Pitfalls
+
+1. **Creating HNSW indexes without a partial predicate**: Both `idx_chunk_emb_hnsw` and
+   `idx_section_emb_hnsw` include `WHERE (expires_at IS NULL OR expires_at > now())`.
+   Omitting this predicate bloats the HNSW graph with stale embeddings and degrades ANN
+   recall. Alembic does not support `USING hnsw` natively — always use `op.execute(...)`.
+
+2. **Running Alembic against `intelligence_db` from S6**: `intelligence_db` is owned
+   exclusively by the `intelligence-migrations` init container. S6 must set
+   `ALEMBIC_ENABLED=false` and connect with read/write credentials only. Adding
+   `intelligence_db` Alembic config to S6 will conflict with the init container on startup
+   and may corrupt the migration chain.
+
+---
 
 ### `intelligence_db` (DDL owned by `intelligence-migrations`; S6 read/write only)
 

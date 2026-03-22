@@ -1,10 +1,4 @@
-"""Alembic environment configuration.
-
-IMPORTANT: This service (S6 NLP Pipeline) ONLY manages nlp_db.
-Set ALEMBIC_ENABLED=false in the S6 env when connecting to intelligence_db —
-that database is owned exclusively by the intelligence-migrations init container.
-Never add intelligence_db Alembic config here.
-"""
+"""Alembic environment configuration for alert_db."""
 
 from __future__ import annotations
 
@@ -12,14 +6,15 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
-from nlp_pipeline.config import Settings as _Settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
+from alert.config import Settings as _Settings
+
 config = context.config
 
-# DB URL resolution: ALEMBIC_URL → NLP_PIPELINE_DATABASE_URL → alembic.ini fallback
+# DB URL resolution: ALEMBIC_URL → ALERT_DATABASE_URL → alembic.ini fallback
 _db_url = os.environ.get("ALEMBIC_URL") or _Settings().database_url
 if _db_url:
     config.set_main_option("sqlalchemy.url", _db_url)
@@ -27,7 +22,7 @@ if _db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+target_metadata = None  # TODO: import Base.metadata when models exist
 
 
 def run_migrations_offline() -> None:
@@ -37,7 +32,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection):  # type: ignore[no-untyped-def]
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
