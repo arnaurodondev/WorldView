@@ -18,7 +18,7 @@ if TYPE_CHECKING:
         WatchlistCreated,
         WatchlistDeleted,
         WatchlistItemAdded,
-        WatchlistItemRemoved,
+        WatchlistItemDeleted,
     )
 
 
@@ -135,7 +135,7 @@ def watchlist_item_added_to_dict(event: WatchlistItemAdded) -> dict[str, Any]:
     return d
 
 
-def watchlist_item_removed_to_dict(event: WatchlistItemRemoved) -> dict[str, Any]:
+def watchlist_item_deleted_to_dict(event: WatchlistItemDeleted) -> dict[str, Any]:
     d = event_to_envelope_dict(event)
     d["watchlist_id"] = str(event.watchlist_id)
     d["user_id"] = str(event.user_id)
@@ -157,5 +157,5 @@ EVENT_MAPPER_REGISTRY: dict[str, Any] = {
     "watchlist.created": watchlist_created_to_dict,
     "watchlist.deleted": watchlist_deleted_to_dict,
     "watchlist.item_added": watchlist_item_added_to_dict,
-    "watchlist.item_removed": watchlist_item_removed_to_dict,
+    "watchlist.item_deleted": watchlist_item_deleted_to_dict,
 }

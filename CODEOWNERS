@@ -3,19 +3,19 @@
 # Expand as needed if collaborators join.
 
 # Default owner for everything
-*                       @arnaurodon
+*                       @arnaurodondev
 
 # Shared libraries — extra caution on changes
-libs/                   @arnaurodon
+libs/                   @arnaurodondev
 
 # Avro schemas — contract changes need explicit review
-infra/kafka/schemas/    @arnaurodon
+infra/kafka/schemas/    @arnaurodondev
 
 # Infrastructure changes
-infra/                  @arnaurodon
-.github/                @arnaurodon
+infra/                  @arnaurodondev
+.github/                @arnaurodondev
 
 # Governance docs
-AGENTS.md               @arnaurodon
-CLAUDE.md               @arnaurodon
-RULES.md                @arnaurodon
+AGENTS.md               @arnaurodondev
+CLAUDE.md               @arnaurodondev
+RULES.md                @arnaurodondev

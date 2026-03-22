@@ -51,7 +51,7 @@ This foundations scope is the prerequisite layer that makes S4, S5, S6, S7, and 
 | **§1.4 watchlist schema** | `watchlist.item_removed.avsc` exists; event_type = `watchlist.item_removed` | `watchlist.item_deleted.avsc`; event_type = `watchlist.item_deleted` | Rename schema + fix Portfolio service code |
 | **§1.4 missing Avro schemas** | 10 schemas exist; `portfolio.watchlist.updated.v1.avsc`, `graph.state.changed.v1.avsc`, `intelligence.contradiction.v1.avsc`, `relation.type.proposed.v1.avsc`, `entity.dirtied.v1.avsc`, `alert.delivered.v1.avsc` — all absent | 16 schema files registered at boot | 6 new files to create |
 | **§1.4 knowledge-graph config** | `database_url` default = `postgresql+.../kg_db` | Default = `postgresql+.../intelligence_db` | Single constant change |
-| **libs/ml-clients** | Does not exist (5 shared libs: common, contracts, messaging, storage, observability) | 6th shared lib with 3 Protocols, 6 dataclasses, 4 concrete adapters | Full new library |
+| **libs/ml-clients** | Does not exist (5 shared libs: common, contracts, messaging, storage, observability) | 6th shared lib with 3 Protocols, 7 dataclasses, 7 concrete adapters | Full new library |
 | **content_ingestion_db schema** | No schema exists (S4 is a stub) | `fetch_log`, `outbox_events`, `dead_letter_queue` + Alembic init | New migration from empty |
 | **content_store_db schema** | No schema exists (S5 is a stub) | `documents`, `minhash_signatures` (INTEGER[]), `minhash_entity_mentions`, `outbox_events`, `dead_letter_queue` + Alembic init | New migration from empty |
 | **nlp_db schema** | No schema exists (S6 is a stub) | `sections`, `chunks`, `chunk_embeddings` (HNSW), `section_embeddings` (HNSW), `entity_mentions`, `chunk_entity_mentions`, `routing_decisions`, `outbox_events`, `dead_letter_queue` + Alembic init | New migration from empty |
@@ -458,7 +458,7 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
 
 **Implementation steps**:
 
-1. **`pyproject.toml`** — follow existing lib pattern with Hatch, Python 3.12, ruff, mypy strict. Dependencies: `pydantic-settings>=2.0`, `structlog>=24.0`. Dev-only: `pytest>=8`, `pytest-asyncio`, `gliner` (optional), `anthropic` (optional). No `requests`, no heavy ML deps as mandatory.
+1. **`pyproject.toml`** — follow existing lib pattern with Hatch, Python 3.12, ruff, mypy strict. Dependencies: `pydantic-settings>=2.0`, `structlog>=24.0`, `httpx>=0.27`. Dev-only: `pytest>=8`, `pytest-asyncio`. Optional extras: `gliner`, `anthropic`, `google-genai`, `openai`. No `requests`, no heavy ML deps as mandatory.
 
 2. **`src/ml_clients/protocols.py`** — define three Protocols using `typing.Protocol` (structural typing, NOT ABC):
    ```python
@@ -543,7 +543,7 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
 
 ### T-F-005 — `libs/ml-clients` concrete adapters
 
-**Objective**: Implement the four concrete adapter classes: `OllamaEmbeddingAdapter`, `OllamaExtractionAdapter`, `GLiNERLocalAdapter`, `AnthropicExtractionAdapter`. Each wraps its backend and raises only `RetryableError` or `FatalError`.
+**Objective**: Implement the seven concrete adapter classes: `OllamaEmbeddingAdapter`, `OllamaExtractionAdapter`, `GLiNERLocalAdapter`, `AnthropicExtractionAdapter`, `GeminiExtractionAdapter`, `ChatGPTExtractionAdapter`, and `DeepSeekExtractionAdapter`. Each wraps its backend and raises only `RetryableError` or `FatalError`.
 
 **Paths to read**:
 - `libs/ml-clients/src/ml_clients/protocols.py` (from T-F-004)
@@ -557,6 +557,9 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
 - `libs/ml-clients/src/ml_clients/adapters/ollama_extraction.py`
 - `libs/ml-clients/src/ml_clients/adapters/gliner_local.py`
 - `libs/ml-clients/src/ml_clients/adapters/anthropic_extraction.py`
+- `libs/ml-clients/src/ml_clients/adapters/gemini_extraction.py`
+- `libs/ml-clients/src/ml_clients/adapters/chatgpt_extraction.py`
+- `libs/ml-clients/src/ml_clients/adapters/deepseek_extraction.py`
 
 **Prerequisites**: T-F-004.
 
@@ -587,15 +590,36 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
    - Error mapping: `anthropic.RateLimitError` → `RetryableError`. `anthropic.APIConnectionError` → `RetryableError`. `anthropic.BadRequestError` → `FatalError`.
    - This adapter is `optional` — only instantiated if `ANTHROPIC_API_KEY` is set.
 
-5. **`adapters/__init__.py`** — export all 4 adapters:
+5. **`GeminiExtractionAdapter`** implements `ExtractionClient`:
+    - Constructor: `(api_key: str, model_id: str, semaphore: asyncio.Semaphore)`. Model default: `gemini-2.5-pro`.
+    - `async extract(inp)`: call Gemini API via `google.genai`. Parse model JSON output and validate against `inp.output_schema`.
+    - Error mapping: rate limit / transient transport errors → `RetryableError`; invalid request / malformed output → `FatalError`.
+    - This adapter is `optional` — only instantiated if `GEMINI_API_KEY` is set.
+
+6. **`ChatGPTExtractionAdapter`** implements `ExtractionClient`:
+    - Constructor: `(api_key: str, model_id: str, semaphore: asyncio.Semaphore)`. Model default: `gpt-5-mini`.
+    - `async extract(inp)`: call OpenAI API via `openai.AsyncOpenAI`. Parse model JSON output and validate against `inp.output_schema`.
+    - Error mapping: `RateLimitError` / `APIConnectionError` / 5xx → `RetryableError`; 4xx validation errors → `FatalError`.
+    - This adapter is `optional` — only instantiated if `OPENAI_API_KEY` is set.
+
+7. **`DeepSeekExtractionAdapter`** implements `ExtractionClient`:
+    - Constructor: `(api_key: str, model_id: str, base_url: str, semaphore: asyncio.Semaphore)`. Model default: `deepseek-chat`.
+    - `async extract(inp)`: call DeepSeek-compatible API via `openai.AsyncOpenAI(api_key=..., base_url=...)`.
+    - Error mapping: timeout / connection / 429 / 5xx → `RetryableError`; 4xx request errors → `FatalError`.
+    - This adapter is `optional` — only instantiated if `DEEPSEEK_API_KEY` is set.
+
+8. **`adapters/__init__.py`** — export all 7 adapters:
    ```python
    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
    from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter
    from ml_clients.adapters.gliner_local import GLiNERLocalAdapter
    from ml_clients.adapters.anthropic_extraction import AnthropicExtractionAdapter
+    from ml_clients.adapters.gemini_extraction import GeminiExtractionAdapter
+    from ml_clients.adapters.chatgpt_extraction import ChatGPTExtractionAdapter
+    from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
    ```
 
-6. Run `ruff check libs/ml-clients/src/` and `mypy --strict libs/ml-clients/src/`.
+9. Run `ruff check libs/ml-clients/src/` and `mypy --strict libs/ml-clients/src/`.
 
 **Tests required**:
 - Unit (using `unittest.mock` / `pytest-mock`):
@@ -603,6 +627,9 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
   - `OllamaExtractionAdapter`: mock `httpx.AsyncClient.post` — test malformed JSON → `FatalError`, valid response → `ExtractionOutput`
   - `GLiNERLocalAdapter`: mock `run_in_executor` — test `MemoryError` → `RetryableError`, valid output → `NEROutput` with `EntityMention` list
   - `AnthropicExtractionAdapter`: mock `anthropic.AsyncAnthropic` — test `RateLimitError` → `RetryableError`, valid response → `ExtractionOutput`
+    - `GeminiExtractionAdapter`: mock Gemini client — test transient error → `RetryableError`, malformed output → `FatalError`, valid response → `ExtractionOutput`
+    - `ChatGPTExtractionAdapter`: mock OpenAI client — test `RateLimitError` → `RetryableError`, bad request → `FatalError`, valid response → `ExtractionOutput`
+    - `DeepSeekExtractionAdapter`: mock OpenAI client with DeepSeek base URL — test timeout/429 → `RetryableError`, bad request → `FatalError`, valid response → `ExtractionOutput`
 - Integration (marked `@pytest.mark.integration` — skipped in CI by default):
   - `OllamaEmbeddingAdapter` against a real Ollama instance with `bge-large-en-v1.5`
   - `GLiNERLocalAdapter` against local model file
@@ -611,14 +638,14 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
 - `docs/libs/ml-clients.md` created in T-F-006
 
 **Definition of Done**:
-- [ ] 4 concrete adapter classes implemented
+- [ ] 7 concrete adapter classes implemented
 - [ ] All adapters raise only `RetryableError` or `FatalError` (never raw exceptions)
 - [ ] `asyncio.Semaphore` injected at construction, acquired before every ML call
 - [ ] GLiNER runs via `run_in_executor` (never blocks async event loop)
 - [ ] `ruff check` and `mypy --strict` pass
 - [ ] Unit tests pass; integration tests present and marked
 
-**Risks**: `gliner` package may have conflicting transitive dependencies. Keep it in `[optional-dependencies]` section of `pyproject.toml` (e.g., `pip install ml-clients[gliner]`). Similarly `anthropic` → `[optional-dependencies]`. Only `httpx` and `pydantic-settings` are mandatory.
+**Risks**: Optional provider SDKs (`gliner`, `anthropic`, `google-genai`, `openai`) may have conflicting transitive dependencies. Keep them in `[optional-dependencies]` and avoid importing them at module import time unless guarded. Only `httpx`, `pydantic-settings`, and `structlog` are mandatory.
 
 **Effort**: L
 
@@ -668,7 +695,7 @@ T-F-004 → T-F-005       T-F-007 ──┐                     T-F-012
    - Overview: what the library does, why protocols over ABC, the no-naked-exceptions rule
    - Protocol table: all 3 protocols with method signatures, used-by column
    - Dataclass table: all 7 dataclasses with field names and types
-   - Adapter table: all 4 adapters with protocol, backend, model version
+    - Adapter table: all 7 adapters with protocol, backend, model version
    - Configuration section: all 5 ENV vars with defaults and description
    - Sequence diagram: how S6 calls `EmbeddingClient.embed()` through the adapter to Ollama
    - Code example: complete working example of injecting `OllamaEmbeddingAdapter` in FastAPI lifespan

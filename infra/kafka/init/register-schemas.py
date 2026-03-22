@@ -76,6 +76,28 @@ def register_schemas(registry_url: str, schema_dir: str) -> int:
                 logger.error("FAILED %s: HTTP %s %s", subject, e.code, body)
                 failed += 1
 
+    if failed:
+        return failed
+
+    # Set FULL compatibility for relation.type.proposed.v1 (both FORWARD and BACKWARD required)
+    subject = "relation.type.proposed.v1-value"
+    compat_url = f"{registry_url}/config/{subject}"
+    compat_payload = json.dumps({"compatibility": "FULL"}).encode()
+    compat_req = Request(  # noqa: S310
+        compat_url,
+        data=compat_payload,
+        headers={"Content-Type": "application/vnd.schemaregistry.v1+json"},
+        method="PUT",
+    )
+    try:
+        with urlopen(compat_req) as resp:  # noqa: S310
+            body = json.load(resp)
+            logger.info("Set FULL compatibility for %s: %s", subject, body)
+    except HTTPError as e:
+        body = json.loads(e.read())
+        logger.error("FAILED to set compatibility for %s: HTTP %s %s", subject, e.code, body)
+        failed += 1
+
     return failed
 
 

@@ -243,7 +243,7 @@ async def test_remove_member_success_writes_outbox_event(
         ),
         uow,
     )
-    events = uow.outbox.events_by_type("watchlist.item_removed")
+    events = uow.outbox.events_by_type("watchlist.item_deleted")
     assert len(events) == 1
     assert events[0].payload["entity_id"] == str(entity_id)
 
