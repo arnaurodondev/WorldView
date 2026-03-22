@@ -61,6 +61,16 @@ The two must be kept in sync. `scripts/gen-contracts.sh` validates this.
 | `CanonicalSentiment` | Sentiment analysis result | v1 |
 | `CanonicalDailySentiment` | Aggregated daily sentiment signal | v1 |
 
+**Ingestion pipeline events (new in Wave 05):**
+
+| Model | Avro schema | Producer | Consumer | Version constant |
+|-------|-------------|----------|---------|-----------------|
+| `CanonicalRawArticleEvent` | `content.article.raw.v1.avsc` | S4 | S5 | `RAW_ARTICLE_SCHEMA_VERSION` |
+| `CanonicalStoredArticleEvent` | `content.article.stored.v1.avsc` | S5 | S6 | `STORED_ARTICLE_SCHEMA_VERSION` |
+| `CanonicalEnrichedArticleEvent` | `nlp.article.enriched.v1.avsc` | S6 | S7 | `ENRICHED_ARTICLE_SCHEMA_VERSION` |
+| `CanonicalSignalEvent` | `nlp.signal.detected.v1.avsc` | S6 | S10 | `SIGNAL_SCHEMA_VERSION` |
+| `CanonicalWatchlistEvent` | `portfolio.watchlist.updated.v1.avsc` | S1 | S10 | `WATCHLIST_EVENT_SCHEMA_VERSION` |
+
 ### Schema Versions
 
 ```python
@@ -86,7 +96,32 @@ from contracts.versions import DAILY_SENTIMENT_SCHEMA_VERSION         # 1
 
 # Pointer event
 from contracts.versions import MARKET_DATASET_FETCHED_SCHEMA_VERSION  # 1
+
+# Ingestion pipeline events (Wave 05)
+from contracts.versions import RAW_ARTICLE_SCHEMA_VERSION             # 1
+from contracts.versions import STORED_ARTICLE_SCHEMA_VERSION          # 1
+from contracts.versions import ENRICHED_ARTICLE_SCHEMA_VERSION        # 1
+from contracts.versions import SIGNAL_SCHEMA_VERSION                  # 1
+from contracts.versions import WATCHLIST_EVENT_SCHEMA_VERSION         # 1
 ```
+
+---
+
+### Ingestion Event Models
+
+Five new frozen dataclasses in `contracts.canonical.ingestion` cover the S4→S5→S6→S7/S10 event chain.
+
+**`article_id` field naming**: Both `CanonicalStoredArticleEvent` and `CanonicalEnrichedArticleEvent` use `article_id` (not `doc_id`) to match the Avro schema field name exactly. In `content_store_db` the column is `doc_id`, but the event field is `article_id` for schema backward compatibility. Do NOT rename to `doc_id`.
+
+**`CanonicalEnrichedArticleEvent.embedding_model` default mismatch**: The Avro schema default is `"all-MiniLM-L6-v2"` (preserved for backward compatibility with early consumers). The active production model is `bge-large-en-v1.5`. Always read the actual `embedding_model` value from the event payload — never assume the default is the current model.
+
+**`CanonicalWatchlistEvent` event_type values**: There are exactly two valid values:
+- `"watchlist.item_added"` — entity added to watchlist
+- `"watchlist.item_deleted"` — entity removed from watchlist
+
+`"watchlist.item_removed"` was deprecated in Wave 01 (T-F-001) and is a bug if it appears. The test `test_watchlist_event_type_deleted_not_removed` is a regression guard for this.
+
+**`tuple` vs `list` for collection fields**: `source_article_ids` (on `CanonicalSignalEvent`) and `entity_ids_affected` (on `CanonicalWatchlistEvent`) are stored internally as `tuple` because these are frozen dataclasses — mutable containers like `list` would allow accidental mutation via aliasing. `to_dict()` converts them back to `list` for Avro array compatibility.
 
 **How to bump a schema version (step-by-step):**
 
@@ -197,6 +232,10 @@ own Decimal conversion.
    break Avro serialization and require custom serializers.
 5. **Forgetting `frozen=True`** — if you add a mutable dataclass to this library
    it will be accidentally mutated somewhere in a pipeline. All canonical models
+6. **Using `list` for `source_article_ids` or `entity_ids_affected`** — these fields
+   are `tuple` internally (frozen dataclass constraint). `to_dict()` converts to `list`
+   for Avro array serialization. Don't try to mutate them after construction and don't
+   assign a `list` directly to these fields in the constructor.
    must be `frozen=True`.
 
 ---
