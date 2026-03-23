@@ -119,6 +119,9 @@ These are blocking prerequisites. Work on S10, intelligence-migrations, or any n
 - Shared infrastructure: Kafka, MinIO, Valkey, PostgreSQL, Ollama
 - `intelligence-migrations` init container
 - Full evaluation and testing framework
+- **Backfill via source API historical range query** — S4 supports a one-shot boot-time backfill
+  mode that queries each source API with configurable `from_date`/`to_date` windows before
+  switching to steady-state polling. See §2.4.
 
 ### 2.2 Out of Scope for v1
 
@@ -126,7 +129,91 @@ These are blocking prerequisites. Work on S10, intelligence-migrations, or any n
 - Frontend rendering
 - Per-tenant data isolation beyond what S1 provides
 - Production-scale horizontal worker deployment (designed for it, but v1 is single-node)
-- Backfill of historical data. Full rebuild from scratch is acceptable.
+- Direct database import / bulk loader bypassing the S4→S5→S6→S7 pipeline
+
+### 2.4 Backfill Architecture
+
+#### Why backfill matters
+
+The knowledge graph starts cold. Without historical context the graph is empty on day 1 and takes
+weeks to become useful.  The temporal decay formula (`exp(-α × days)`) naturally handles old
+evidence — DURABLE (730-day half-life) and PERMANENT relations survive backfill intact;
+EPHEMERAL and FAST relations from years ago contribute near-zero confidence and are effectively
+discarded by the formula without any special-case logic.
+
+#### Approach: Source API historical range query
+
+Each source adapter supports a configurable `(from_date, to_date)` window already used by the
+steady-state watermark pattern. Backfill runs the same adapter code with a wider historical
+window at service startup, before handing off to the APScheduler cron.
+
+This keeps the implementation simple: no separate bulk-import path, no schema bypass.  All backfill
+documents pass through the full S4→S5→S6→S7 pipeline (dedup, NLP, entity resolution, graph write),
+so the knowledge graph is built with exactly the same quality guarantees as live data.
+
+#### `published_at` — the critical temporal anchor
+
+Every source API returns an editorial publication date alongside the article payload.  S4 adapters
+**must** extract this date and populate `RawArticle.published_at` (nullable).  This field flows
+through the Avro event to S5 (`documents.published_at`) and ultimately to
+`relation_evidence.evidence_date` in S7.
+
+The temporal decay formula uses `evidence_date` as the age anchor:
+
+```
+temporal_weight = exp(-decay_alpha * days_since(evidence_date))
+```
+
+If `evidence_date` were set to `ingested_at` (today) instead of `published_at` (when the article
+was actually written), a 2-year-old article backfilled today would appear as fresh evidence and
+artificially inflate relation confidence.  **Setting `evidence_date = published_at` is
+non-negotiable when `published_at` is available.**
+
+Fallback when `published_at` is None: use `fetched_at` (i.e. `ingested_at`).
+
+#### `is_backfill` flag
+
+All events produced during a backfill run carry `is_backfill = true` in the Avro payload.
+S10 MUST check this flag before triggering alert fan-out:
+
+```python
+if event.is_backfill:
+    return  # suppress alert — historical document, not a live signal
+```
+
+Without this suppression, backfilling 3 years of news would fire tens of thousands of alerts
+to all watchlist subscribers on startup.
+
+#### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKFILL_ENABLED` | `false` | Set `true` to run historical backfill on next startup |
+| `BACKFILL_FROM_DATE` | `""` | ISO-8601 start date (e.g. `2024-01-01`). Required when enabled. |
+| `BACKFILL_TO_DATE` | `""` | ISO-8601 end date (e.g. `2025-12-31`). Defaults to yesterday. |
+| `BACKFILL_SOURCES` | `""` | Comma-separated source names to backfill. Empty = all configured sources. |
+| `BACKFILL_BATCH_DELAY_SECONDS` | `0.5` | Sleep between paginated requests to avoid API rate bans during backfill. |
+
+#### What to backfill
+
+Backfilling is most valuable for relation types with long half-lives:
+
+| Decay class | Half-life | Value of 2-year backfill |
+|-------------|-----------|--------------------------|
+| PERMANENT | ∞ | Full weight (board memberships, incorporations) |
+| DURABLE | 730 days | ~50% weight at 2 years — still valuable |
+| SLOW | 180 days | ~5% — marginal |
+| MEDIUM | 60 days | <1% — effectively zero |
+| FAST / EPHEMERAL | ≤14 days | ~0% — worthless |
+
+**Recommendation:** set `BACKFILL_FROM_DATE` to 18–24 months ago for DURABLE/PERMANENT
+graph seeding; 3–6 months for MEDIUM/SLOW signal enrichment.
+
+#### Routing suppression during backfill (S6)
+
+Backfill articles that would normally score below the routing threshold (light/suppress) can be
+routed at `medium` tier during a backfill run to maximise entity and relation extraction. This is
+controlled by `BACKFILL_ROUTING_OVERRIDE_TIER` (default: no override). Optional in v1.
 
 ### 2.3 Design Principles
 
@@ -313,6 +400,11 @@ The `relations` table hash-partitioned by `subject_entity_id` into 8 partitions 
 | `NEWSAPI_QUERIES` | — | Comma-separated query strings |
 | `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
 | `OUTBOX_BATCH_SIZE` | `100` | Rows per dispatch cycle |
+| `BACKFILL_ENABLED` | `false` | Set `true` to run historical backfill on next startup |
+| `BACKFILL_FROM_DATE` | `""` | ISO-8601 start date (e.g. `2024-01-01`). Required when enabled. |
+| `BACKFILL_TO_DATE` | `""` | ISO-8601 end date (e.g. `2025-12-31`). Defaults to yesterday. |
+| `BACKFILL_SOURCES` | `""` | Comma-separated source names to backfill. Empty = all configured sources. |
+| `BACKFILL_BATCH_DELAY_SECONDS` | `0.5` | Sleep between paginated requests to avoid API rate bans during backfill. |
 
 ---
 
@@ -886,7 +978,7 @@ After resolution: update `minhash_entity_mentions` with resolved entity_ids (for
    - Otherwise → accept with `valid_to_confidence = 0.6` (`valid_to_source = 'EXTRACTED'`).
 5. For each relation: assign `semantic_mode` from `relation_type_registry` (RELATION_STATE or TEMPORAL_CLAIM). Assign `decay_class` from `relation_type_registry.default_decay_class` (override LLM suggestion).
 6. Write to `events`, `event_entities`, `claims`.
-7. Write to `relation_evidence_raw` (staging table, Block 11/12 consumes). Include `claim_id` if this relation is backed by a specific claim.
+7. Write to `relation_evidence_raw` (staging table, Block 11/12 consumes). Include `claim_id` if this relation is backed by a specific claim. Set `evidence_date = coalesce(event.published_at, event.occurred_at)` — use the source-reported editorial date when available; fall back to the ingestion timestamp only when the adapter did not return a publication date. Set `is_backfill = event.is_backfill`. **Non-negotiable:** never use `now()` or `extracted_at` as `evidence_date` when `published_at` is present; doing so corrupts the temporal decay formula by making historical documents appear as fresh evidence.
 8. Emit `nlp.article.enriched.v1` to outbox.
 9. If any claim has `confidence ≥ SIGNAL_CONFIDENCE_MIN` and `event_type ∈ {earnings_surprise, regulatory_action, supply_disruption, executive_change, m_and_a, guidance_cut, guidance_raise}`: emit `nlp.signal.detected.v1` to outbox.
 
@@ -949,7 +1041,8 @@ Runs every `RELATION_AGGREGATION_INTERVAL_SECONDS` (default 300). This is a sepa
 
 ```
 1. SELECT raw_id, subject_entity_id, object_entity_id, canonical_type, extraction_confidence,
-          source_trust_weight, claim_id, chunk_id, source_document_id, extracted_at
+          source_trust_weight, claim_id, chunk_id, source_document_id, extracted_at,
+          evidence_date, is_backfill
    FROM relation_evidence_raw
    WHERE processed = false
    ORDER BY extracted_at
@@ -1119,18 +1212,38 @@ All primary keys are `UUID` generated with `gen_random_uuid()`. All timestamps a
 ### 6.1 content_ingestion_db (Owner: S4)
 
 ```sql
-CREATE TABLE fetch_log (
-    fetch_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type    VARCHAR(50)  NOT NULL,  -- EODHD | SEC_EDGAR | FINNHUB | NEWSAPI
-    source_url     TEXT         NOT NULL,
-    fetched_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    status         VARCHAR(20)  NOT NULL DEFAULT 'success',  -- success | error
-    raw_minio_key  TEXT,
-    content_hash   VARCHAR(64),
-    error_detail   TEXT
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Configured polling sources (seeded by startup config)
+CREATE TABLE sources (
+    id          UUID        PRIMARY KEY,
+    name        TEXT        UNIQUE NOT NULL,
+    source_type TEXT        NOT NULL,  -- eodhd | sec_edgar | finnhub | newsapi
+    enabled     BOOLEAN     NOT NULL DEFAULT TRUE,
+    config      JSONB       NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_fetch_log_source_fetched ON fetch_log (source_type, fetched_at DESC);
-CREATE INDEX idx_fetch_log_hash ON fetch_log (content_hash) WHERE content_hash IS NOT NULL;
+
+-- Deduplication ledger for fetched URLs; unique constraint on url_hash prevents double-fetch
+CREATE TABLE fetch_logs (
+    id           UUID        PRIMARY KEY,
+    source_id    UUID        NOT NULL REFERENCES sources(id),
+    url          TEXT        NOT NULL,
+    url_hash     TEXT        NOT NULL,  -- SHA-256 hex of url
+    http_status  INT,
+    byte_size    INT,
+    fetched_at   TIMESTAMPTZ NOT NULL,
+    -- Source-reported editorial publication date extracted by the adapter (nullable).
+    -- Used by S7 as relation_evidence.evidence_date (preferred over fetched_at).
+    published_at TIMESTAMPTZ,
+    -- TRUE for documents ingested during a boot-time backfill run.
+    -- Propagates through Kafka event so S10 suppresses alert fan-out.
+    is_backfill  BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_fetch_logs_url_hash UNIQUE (url_hash)
+);
+CREATE INDEX ix_fetch_logs_published_at ON fetch_logs (published_at DESC)
+    WHERE published_at IS NOT NULL;
 
 CREATE TABLE outbox_events (
     event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1533,6 +1646,13 @@ CREATE TABLE relation_evidence_raw (
     extraction_confidence FLOAT     NOT NULL,
     source_trust_weight   FLOAT     NOT NULL DEFAULT 1.0,
     extracted_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- Temporal anchor for the decay formula: coalesce(published_at, extracted_at)
+    -- where published_at comes from the nlp.article.enriched.v1 event payload.
+    -- Setting this to extracted_at for backfill documents would make 2-year-old
+    -- articles appear as fresh evidence — NEVER use extracted_at when published_at
+    -- is available.
+    evidence_date      TIMESTAMPTZ  NOT NULL,
+    is_backfill        BOOLEAN      NOT NULL DEFAULT false,
     processed          BOOLEAN      NOT NULL DEFAULT false,
     processed_at       TIMESTAMPTZ,
     worker_claim_id    UUID,        -- for advisory lock tracking in v1
@@ -1834,19 +1954,24 @@ All topics are pre-created by `kafka-init`. `auto.create.topics.enable=false`. S
 {
   "type": "record", "name": "ContentArticleRaw", "namespace": "com.worldview",
   "fields": [
-    {"name": "event_id",      "type": "string"},
-    {"name": "schema_version","type": "int",    "default": 1},
-    {"name": "occurred_at",   "type": "string"},
-    {"name": "doc_id",        "type": "string"},
-    {"name": "source_type",   "type": "string"},
-    {"name": "source_url",    "type": ["null","string"], "default": null},
+    {"name": "event_id",        "type": "string"},
+    {"name": "schema_version",  "type": "int",    "default": 1},
+    {"name": "occurred_at",     "type": "string"},
+    {"name": "doc_id",          "type": "string"},
+    {"name": "source_type",     "type": "string"},
+    {"name": "source_url",      "type": ["null","string"], "default": null},
     {"name": "minio_bronze_key","type": "string"},
-    {"name": "content_hash",  "type": "string"},
-    {"name": "fetch_id",      "type": "string"},
-    {"name": "correlation_id","type": ["null","string"], "default": null}
+    {"name": "content_hash",    "type": "string"},
+    {"name": "fetch_id",        "type": "string"},
+    {"name": "published_at",    "type": ["null","string"], "default": null},
+    {"name": "is_backfill",     "type": "boolean",         "default": false},
+    {"name": "correlation_id",  "type": ["null","string"], "default": null}
   ]
 }
 ```
+`published_at`: ISO-8601 UTC string of the source-reported editorial publication date.
+Null when the API does not return a publication date.
+`is_backfill`: true when this event was produced during a boot-time historical backfill run.
 
 **content.article.stored.v1**
 ```json
@@ -1862,10 +1987,15 @@ All topics are pre-created by `kafka-init`. `auto.create.topics.enable=false`. S
     {"name": "dedup_result",    "type": "string"},
     {"name": "minio_silver_key","type": "string"},
     {"name": "source_type",     "type": "string"},
+    {"name": "published_at",    "type": ["null","string"], "default": null},
+    {"name": "is_backfill",     "type": "boolean",         "default": false},
     {"name": "correlation_id",  "type": ["null","string"], "default": null}
   ]
 }
 ```
+S5 **must** copy `published_at` and `is_backfill` verbatim from the `content.article.raw.v1`
+event into the `content.article.stored.v1` event and the `documents` table.  These fields
+are critical for downstream temporal correctness (S7) and alert suppression (S10).
 
 **nlp.signal.detected.v1**
 ```json
@@ -2168,6 +2298,12 @@ On cache miss: call `GET /internal/v1/watchlists/by-entity/{entity_id}` on S1 (P
 ### 11.3 Alert Generation and Dedup
 
 For each incoming signal:
+0. **Backfill suppression (mandatory):** Check the `is_backfill` field on the incoming event.
+   If `is_backfill = true` for `nlp.signal.detected.v1` or `graph.state.changed.v1` events:
+   skip steps 1–4 entirely. Acknowledge the Kafka message and continue to the next.
+   Without this gate a boot-time backfill of 3 years of news fires tens of thousands of
+   alerts to all watchlist subscribers. `intelligence.contradiction.v1` events do not carry
+   `is_backfill` and are never suppressed.
 1. Resolve watchers from Valkey cache (or S1 fallback).
 2. Compute `dedup_key = sha256(entity_id + alert_type + source_event_id + floor(created_at / 3600))`.
 3. INSERT into `alerts` with `ON CONFLICT (dedup_key) DO NOTHING`.

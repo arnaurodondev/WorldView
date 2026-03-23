@@ -1,5 +1,7 @@
 # Prompt 0013 — Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service
 
+> **Status**: ⏳ Pending implementation
+
 Act as the **Backend Engineer** (`.claude/agents/backend-engineer.md`), **RAG & Knowledge Graph Engineer** (`.claude/agents/rag-knowledge-graph-engineer.md`), and **Machine Learning Lead** (`.claude/agents/machine-learning-lead.md`).
 
 ## Goal

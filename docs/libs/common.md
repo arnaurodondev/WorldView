@@ -12,7 +12,7 @@
 must never introduce its own service-level dependencies. Three rules govern every
 addition to this library:
 
-1. **Zero heavy deps** — the only permitted external dependency is `python-ulid`.
+1. **Zero heavy deps** — permitted external dependencies are `python-ulid` and `uuid6`.
    No pydantic, no SQLAlchemy, no httpx.
 2. **UTC everywhere** — naive datetimes are silent bugs. Every time-returning
    function here produces timezone-aware UTC. Callers that supply naive datetimes
@@ -40,21 +40,33 @@ addition to this library:
 
 | Function | Purpose |
 |----------|---------|
-| `new_uuid()` | `uuid.uuid4()` — returns `UUID` object |
-| `new_uuid_str()` | `str(uuid.uuid4())` — returns string |
-| `new_ulid()` | Time-sortable ULID (useful for event IDs) |
+| `new_uuid()` | `uuid.uuid4()` — returns `UUID` object (UUIDv4, backwards-compatible) |
+| `new_uuid_str()` | `str(uuid.uuid4())` — returns string (UUIDv4) |
+| `new_uuid7()` | RFC 9562 UUIDv7 — time-sortable, returns `UUID` object |
+| `new_uuid7_str()` | RFC 9562 UUIDv7 — time-sortable, returns hyphenated string |
+| `new_ulid()` | Time-sortable ULID — for Kafka event IDs |
 
-**UUID vs ULID — when to use which:**
+**When to use which ID function:**
 
-| Scenario | Use |
-|----------|-----|
-| Entity primary keys (DB rows) | `new_uuid()` — UUIDv4, random, index-friendly with uuid-ossp |
-| Kafka event IDs (`event_id` envelope field) | `new_ulid()` — lexicographically sortable by creation time, easier to debug |
-| Outbox record IDs | Either; prefer `new_uuid()` for DB FK compatibility |
+| Use case | Function | Rationale |
+|----------|----------|-----------|
+| New entity primary keys (S4–S10) | `new_uuid7()` | Time-sortable; PRD-mandated for ingestion pipeline |
+| Kafka event IDs | `new_ulid()` | Lexicographically sortable by design |
+| Existing service entities (portfolio, market-ingestion) | `new_uuid()` | Backwards-compatible; changing would break existing DB rows |
+| DB outbox/DLQ record IDs | `new_uuid7()` | FK-compatible + time-ordered |
 
-> **AGENTS.md says** UUIDv7 for all entity IDs. `new_ulid()` is the current
-> implementation. Both are time-sortable; the practical difference is negligible
-> for this project. Use `new_ulid()` for event IDs and `new_uuid()` for DB PKs.
+**UUID type decision flowchart:**
+
+```mermaid
+flowchart TD
+    A[Need a new ID?] --> B{Is it a Kafka event ID?}
+    B -->|Yes| C[new_ulid\nlexicographically sortable]
+    B -->|No| D{Is it in portfolio or market-ingestion\nwith existing UUIDv4 rows in prod?}
+    D -->|Yes| E[new_uuid\nUUIDv4 - backwards compatible]
+    D -->|No| F{Is it a new entity in the ingestion pipeline\nS4 / S5 / S6 / S7 / S10?}
+    F -->|Yes| G[new_uuid7\nUUIDv7 - time-sortable, PRD-mandated]
+    F -->|No| H[new_uuid7\ndefault for all new services]
+```
 
 ### Type Aliases (`common.types`)
 
@@ -67,10 +79,18 @@ addition to this library:
 | `EventId` | `NewType("EventId", str)` | Prevents bare `str` leaking into event ID slots |
 | `TopicName` | `NewType("TopicName", str)` | Makes topic names opaque; prevents arbitrary string injection |
 | `JsonDict` | `dict[str, Any]` | Plain alias — no domain meaning, just a readability shorthand |
+| `DocumentId` | `NewType("DocumentId", UUID)` | Canonical document ID — S5 creates, S6 enriches, S7 produces evidence for |
+| `EntityId` | `NewType("EntityId", UUID)` | Canonical entity ID — S6 resolves, S7 graphs, S10 fans out on |
+| `UrlHash` | `NewType("UrlHash", str)` | SHA-256 hex digest of a normalised URL — S4 computes, S5 checks for dedup |
+| `MinIOKey` | `NewType("MinIOKey", str)` | MinIO object key — S4 writes bronze, S5 reads bronze + writes silver, S6 reads silver |
 
 `NewType` creates a **distinct type at the type-checker level but is an identity
 function at runtime**. Mypy strict mode will reject `UserId(user_uuid)` passed
 where `TenantId` is required, catching a whole class of ID-confusion bugs for free.
+
+Only types referenced by **two or more services** live in `common.types`. Service-local
+IDs (`SourceId`, `SectionId`, `ChunkId`, `RelationId`, `AlertId`, etc.) belong in
+each service's own domain layer.
 
 ---
 
@@ -78,24 +98,31 @@ where `TenantId` is required, catching a whole class of ID-confusion bugs for fr
 
 ```python
 # All public symbols are re-exported from the package root:
-from common import utc_now, to_iso8601, new_uuid, TenantId
+from common import utc_now, to_iso8601, new_uuid, new_uuid7, TenantId
+from common import DocumentId, EntityId, UrlHash, MinIOKey
 
 # Or from sub-modules directly:
 from common.time import utc_now, to_iso8601
-from common.ids import new_uuid, new_uuid_str, new_ulid
-from common.types import TenantId
+from common.ids import new_uuid, new_uuid_str, new_ulid, new_uuid7, new_uuid7_str
+from common.types import TenantId, DocumentId, EntityId, UrlHash, MinIOKey
 
 now = utc_now()
 event_time = to_iso8601(now)
 tenant = TenantId(new_uuid())
+
+# Ingestion pipeline usage:
+doc_id: DocumentId = DocumentId(new_uuid7())
+entity_id: EntityId = EntityId(new_uuid7())
+url_hash: UrlHash = UrlHash("a3f1...")   # sha256 hex digest
+minio_key: MinIOKey = MinIOKey("bronze/2026/03/23/abc123.json")
 ```
 
 ---
 
 ## Guidelines
 
-1. **No heavy dependencies** — this library must remain < 3 external deps.
-   Allowed: `python-ulid`. Not allowed: `pydantic`, `sqlalchemy`, etc.
+1. **No heavy dependencies** — this library must remain lightweight.
+   Allowed: `python-ulid`, `uuid6`. Not allowed: `pydantic`, `sqlalchemy`, etc.
 2. **All datetimes are UTC** — `utc_now()` is the only way to get "now".
    Never call `datetime.now()` without `timezone.utc`. The mypy config enforces
    `--disallow-untyped-defs`; adding `ensure_utc()` calls at service boundaries
@@ -120,6 +147,19 @@ tenant = TenantId(new_uuid())
 4. **Adding `pydantic` as a dependency to `common`** — once pydantic is here,
    every service that imports `common` in a minimal environment will drag in
    pydantic. Keep it in service-level `pyproject.toml` only.
+5. **Calling `uuid6.uuid7()` directly in service code** — bypasses the library's
+   abstraction, adds a raw external dependency to service code, and makes future
+   migrations (e.g., stdlib UUIDv7 in Python 3.14) a multi-service change instead
+   of a single-library update. Always use `common.ids.new_uuid7()`.
+6. **Defining `DocumentId` or `EntityId` locally in service code** — duplicate
+   `NewType` aliases break cross-service type safety; mypy will not catch mismatched
+   IDs at service boundaries. Always import from `common.types`.
+7. **Using `new_uuid7()` in portfolio or market-ingestion** — these services have
+   UUIDv4 primary keys in production. Switching ID functions without a migration
+   will produce rows that cannot be joined with existing data.
+8. **Using `new_uuid()` (UUIDv4) for new ingestion pipeline entities** — violates
+   the PRD mandate; UUIDv4 is not time-sortable and requires a separate `created_at`
+   index for ordered queries.
 
 ---
 

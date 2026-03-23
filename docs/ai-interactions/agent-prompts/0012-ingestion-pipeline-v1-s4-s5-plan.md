@@ -1,5 +1,7 @@
 # Prompt 0012 — Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store
 
+> **Status**: ⏳ Pending implementation
+
 Act as the **Backend Engineer** (`.claude/agents/backend-engineer.md`) and **Data Platform Engineer** (`.claude/agents/data-platform-engineer.md`).
 
 ## Goal

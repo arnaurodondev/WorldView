@@ -1,7 +1,7 @@
 # S4 · Content Ingestion Service
 
 > **Owner**: Content domain · **Database**: `content_ingestion_db` · **Port**: 8004
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Wave 01 implemented — foundation layer (domain, DB infra, outbox dispatcher, MinIO adapter)
 
 ---
 
@@ -46,52 +46,70 @@ None — S4 is a pure producer.
 
 ---
 
+## Domain Entities
+
+| Entity | Type | Key Fields | Notes |
+|--------|------|------------|-------|
+| `SourceType` | `str Enum` | `EODHD`, `SEC_EDGAR`, `FINNHUB`, `NEWSAPI` | Identifies adapter |
+| `Source` | dataclass (mutable) | `id: UUID`, `name`, `source_type`, `enabled`, `config` | Polling config |
+| `FetchResult` | dataclass (frozen) | `source_id`, `url`, `url_hash`, `raw_bytes`, `http_status` | Single HTTP attempt |
+| `RawArticle` | dataclass (frozen) | `id: UUID`, `source_type`, `url_hash`, `raw_bytes`, `byte_size` | Ready for storage |
+| `TokenBucket` | dataclass | `capacity`, `tokens`, `refill_rate`, `last_refill` | Per-adapter rate limiter |
+
+All `UUID` fields default to `common.ids.new_uuid7()`. All `datetime` fields default to `common.time.utc_now()`.
+
+---
+
 ## Database Schema
 
-Migration: `alembic/versions/0001_create_content_ingestion_schema.py`
+Migration: `alembic/versions/0001_initial_s4_schema.py`
 
 ```sql
 -- content_ingestion_db
 
--- Tracks every fetch attempt (success or failure) per source URL.
-CREATE TABLE fetch_log (
-    fetch_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type    VARCHAR(50)  NOT NULL,
-    source_url     TEXT         NOT NULL,
-    fetched_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    status         VARCHAR(20)  NOT NULL DEFAULT 'success',
-    raw_minio_key  TEXT,                     -- MinIO bronze key; NULL on error
-    content_hash   VARCHAR(64),              -- SHA-256 of raw payload; NULL on error
-    error_detail   TEXT
+CREATE TABLE sources (
+    id          UUID        PRIMARY KEY,
+    name        TEXT        UNIQUE NOT NULL,
+    source_type TEXT        NOT NULL,
+    enabled     BOOLEAN     NOT NULL DEFAULT TRUE,
+    config      JSONB       NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_fetch_log_source_fetched ON fetch_log (source_type, fetched_at DESC);
-CREATE INDEX idx_fetch_log_hash ON fetch_log (content_hash) WHERE content_hash IS NOT NULL;
 
--- Transactional outbox for content.article.raw.v1 events (Avro-encoded).
+CREATE TABLE fetch_logs (
+    id          UUID        PRIMARY KEY,
+    source_id   UUID        NOT NULL REFERENCES sources(id),
+    url         TEXT        NOT NULL,
+    url_hash    TEXT        NOT NULL,
+    http_status INT,
+    byte_size   INT,
+    fetched_at  TIMESTAMPTZ NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_fetch_logs_url_hash UNIQUE (url_hash)
+);
+
 CREATE TABLE outbox_events (
-    event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    topic          VARCHAR(200)  NOT NULL,
-    partition_key  TEXT          NOT NULL,
-    payload_avro   BYTEA         NOT NULL,
-    status         VARCHAR(20)   NOT NULL DEFAULT 'pending',
-    created_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    id             UUID        PRIMARY KEY,
+    aggregate_type TEXT        NOT NULL,
+    aggregate_id   UUID        NOT NULL,
+    event_type     TEXT        NOT NULL,
+    payload        JSONB       NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     dispatched_at  TIMESTAMPTZ,
-    retry_count    INT           NOT NULL DEFAULT 0,
-    failed_at      TIMESTAMPTZ
+    retry_count    INT         NOT NULL DEFAULT 0,
+    status         TEXT        NOT NULL DEFAULT 'pending',
+    error          TEXT
 );
-CREATE INDEX idx_outbox_s4_pending ON outbox_events (created_at) WHERE status = 'pending';
+CREATE INDEX ix_outbox_events_status_created_at ON outbox_events (status, created_at);
 
--- Poison-pill events that exhausted retries.
-CREATE TABLE dead_letter_queue (
-    dlq_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    original_event_id UUID         NOT NULL,
-    topic             VARCHAR(200) NOT NULL,
-    payload_avro      BYTEA        NOT NULL,
-    error_detail      TEXT,
-    status            VARCHAR(20)  NOT NULL DEFAULT 'failed',
-    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+CREATE TABLE dlq_events (
+    id                UUID        PRIMARY KEY,
+    original_event_id UUID        NOT NULL,
+    payload           JSONB       NOT NULL,
+    error             TEXT        NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at       TIMESTAMPTZ,
-    resolution_note   TEXT
+    status            TEXT        NOT NULL DEFAULT 'open'
 );
 ```
 
@@ -104,9 +122,21 @@ CREATE TABLE dead_letter_queue (
    cause subtle ordering bugs when comparing timestamps from different system clocks.
 
 2. **Writing to DB and Kafka in separate transactions**: Every fetch result must be
-   written to `fetch_log` and the corresponding `outbox_events` row in the same
+   written to `fetch_logs` and the corresponding `outbox_events` row in the same
    database transaction. Publishing directly to Kafka outside a transaction risks
    losing events if the process crashes between the DB commit and the Kafka send.
+
+3. **Using `uuid.uuid4()` or `uuid6.uuid7()` directly**: Always use
+   `common.ids.new_uuid7()` for all entity PKs. Direct use of `uuid6.uuid7()` bypasses
+   the shared wrapper and may diverge if the ID generation strategy changes.
+
+4. **Calling `datetime.now()` without `utc_now()`**: Never use `datetime.now()` or
+   `datetime.utcnow()`. Always use `common.time.utc_now()` to ensure all timestamps
+   are timezone-aware UTC datetimes.
+
+5. **Mocking `asyncio.to_thread` incorrectly in tests**: The MinIO adapter wraps the
+   sync client with `asyncio.to_thread`. Tests must patch `asyncio.to_thread` at the
+   call site (`content_ingestion.infrastructure.storage.minio_bronze`) not globally.
 
 ---
 
@@ -114,7 +144,25 @@ CREATE TABLE dead_letter_queue (
 
 | Path Pattern | Content |
 |-------------|---------|
-| `content-ingestion/articles/{source}/{article_id}/raw/v1.html` | Raw article HTML |
+| `content-ingestion/{source_type}/{url_hash}/raw/v1.json` | Raw article bytes (JSON envelope) |
+
+Example: `content-ingestion/eodhd/a3f8c1.../raw/v1.json`
+
+---
+
+## Avro Schema — `ArticleRawV1`
+
+Published on topic `content.article.raw.v1`. Serialised with `fastavro.schemaless_writer`.
+
+| Field | Avro Type | Description |
+|-------|-----------|-------------|
+| `article_id` | `string` | UUIDv7 of the `RawArticle` |
+| `source_type` | `string` | `eodhd` / `sec_edgar` / `finnhub` / `newsapi` |
+| `url` | `string` | Original article URL |
+| `url_hash` | `string` | SHA-256 hex of normalised URL |
+| `minio_key` | `string` | MinIO bronze key where bytes are stored |
+| `fetched_at` | `string` | ISO-8601 UTC timestamp |
+| `byte_size` | `int` | Raw byte count |
 
 ---
 
