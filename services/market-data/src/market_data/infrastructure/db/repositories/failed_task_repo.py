@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from common.ids import new_uuid7_str  # type: ignore[import-untyped]
 from market_data.application.ports.repositories import FailedTaskRepository
 from market_data.infrastructure.db.models.infrastructure import FailedTaskModel
 
@@ -23,13 +23,13 @@ class PgFailedTaskRepository(FailedTaskRepository):
         self._session = session
 
     async def create(self, task_type: str, payload: dict, max_attempts: int = 5) -> str:
-        task_id = str(uuid.uuid4())
+        task_id = new_uuid7_str()
         stmt = insert(FailedTaskModel).values(
             id=task_id,
             task_type=task_type,
             payload=payload,
             max_attempts=max_attempts,
-            status="PENDING",
+            status="pending",
         )
         await self._session.execute(stmt)
         return task_id
@@ -39,7 +39,7 @@ class PgFailedTaskRepository(FailedTaskRepository):
         result = await self._session.execute(
             select(FailedTaskModel)
             .where(
-                FailedTaskModel.status == "PENDING",
+                FailedTaskModel.status == "pending",
                 (FailedTaskModel.next_attempt_at == None)  # noqa: E711
                 | (FailedTaskModel.next_attempt_at <= now),
             )
@@ -75,5 +75,7 @@ class PgFailedTaskRepository(FailedTaskRepository):
 
     async def mark_dead(self, task_id: str, last_error: str | None = None) -> None:
         await self._session.execute(
-            update(FailedTaskModel).where(FailedTaskModel.id == task_id).values(status="DEAD", last_error=last_error)
+            update(FailedTaskModel)
+            .where(FailedTaskModel.id == task_id)
+            .values(status="dead_letter", last_error=last_error)
         )

@@ -40,6 +40,7 @@ Before writing a single line of code, read ALL of the following in full:
 8. Run `cd services/content-store && make test` — confirm all existing unit tests pass before starting T-S5-011.
 9. Run `cd services/content-ingestion && make test` — confirm S4 unit tests still pass.
 10. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+11. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

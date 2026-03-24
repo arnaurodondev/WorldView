@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import cast
 
-import uuid6 as _uuid6  # imported at module level with alias to avoid shadowing stdlib uuid
+import uuid6 as _uuid6  # type: ignore[import-not-found]  # imported at module level with alias to avoid shadowing stdlib uuid
 from ulid import ULID
 
 
@@ -36,7 +36,7 @@ def new_uuid7() -> uuid.UUID:
     Do NOT use in existing services (portfolio, market-ingestion) that already
     have UUIDv4 primary keys in production — changing would break existing rows.
     """
-    return cast(uuid.UUID, _uuid6.uuid7())
+    return cast("uuid.UUID", _uuid6.uuid7())
 
 
 def new_uuid7_str() -> str:

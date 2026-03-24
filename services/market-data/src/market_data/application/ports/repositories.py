@@ -263,7 +263,7 @@ class FailedTaskRepository(ABC):
 
     @abstractmethod
     async def find_retryable(self, limit: int = 100) -> list[dict]:
-        """Return tasks eligible for retry (status=PENDING, next_attempt_at <= now)."""
+        """Return tasks eligible for retry (status=pending, next_attempt_at <= now)."""
 
     @abstractmethod
     async def increment_attempts(self, task_id: str, next_attempt_at: datetime, last_error: str | None = None) -> None:
@@ -271,7 +271,7 @@ class FailedTaskRepository(ABC):
 
     @abstractmethod
     async def mark_dead(self, task_id: str, last_error: str | None = None) -> None:
-        """Mark a task as permanently failed (status=DEAD)."""
+        """Mark a task as permanently failed (status=dead_letter)."""
 
 
 class OutboxEventRepository(ABC):
@@ -279,11 +279,11 @@ class OutboxEventRepository(ABC):
 
     @abstractmethod
     async def create(self, event_type: str, topic: str, payload: dict) -> str:
-        """Insert a new PENDING outbox record; return the new record ID."""
+        """Insert a new pending outbox record; return the new record ID."""
 
     @abstractmethod
     async def find_pending(self, limit: int = 100) -> list[dict]:
-        """Return PENDING records whose lease has expired or was never set."""
+        """Return pending records whose lease has expired or was never set."""
 
     @abstractmethod
     async def claim(self, event_id: str, worker_id: str, lease_expires_at: datetime) -> bool:

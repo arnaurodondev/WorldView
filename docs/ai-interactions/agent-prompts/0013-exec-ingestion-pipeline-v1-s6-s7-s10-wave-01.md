@@ -35,6 +35,7 @@ Before writing any code, read:
 4. `docs/libs/ml-clients.md` — protocol definitions for NERClient, EmbeddingClient, ExtractionClient
 5. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — full task details for T-S6-001, T-S6-002, T-S6-003
 6. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+7. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

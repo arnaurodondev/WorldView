@@ -26,7 +26,7 @@ class SourceRepository:
 
     async def get_by_id(self, source_id: UUID) -> SourceModel | None:
         result = await self._session.execute(select(SourceModel).where(SourceModel.id == source_id))
-        return cast(SourceModel | None, result.scalar_one_or_none())
+        return cast("SourceModel | None", result.scalar_one_or_none())
 
     async def create(
         self,

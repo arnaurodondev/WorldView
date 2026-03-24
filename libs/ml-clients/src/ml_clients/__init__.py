@@ -14,21 +14,17 @@ from ml_clients.errors import FatalError, RetryableError
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 
 __all__ = [
-    # Protocols
     "EmbeddingClient",
-    "NERClient",
-    "ExtractionClient",
-    # Dataclasses
     "EmbeddingInput",
     "EmbeddingOutput",
-    "NERInput",
-    "NEROutput",
     "EntityMention",
+    "ExtractionClient",
     "ExtractionInput",
     "ExtractionOutput",
-    # Errors
-    "RetryableError",
     "FatalError",
-    # Config
     "MLClientsSettings",
+    "NERClient",
+    "NERInput",
+    "NEROutput",
+    "RetryableError",
 ]

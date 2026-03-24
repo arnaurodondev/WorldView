@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import get_quote_cache, get_uow
@@ -13,8 +12,9 @@ from market_data.application.ports.repositories import QuoteRepository
 from market_data.application.ports.uow import UnitOfWork
 from market_data.domain.entities import Quote
 from market_data.infrastructure.cache.quote_cache import QuoteCache
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
-logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["quotes"])
 

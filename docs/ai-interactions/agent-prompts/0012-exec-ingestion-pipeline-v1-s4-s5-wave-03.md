@@ -38,6 +38,7 @@
    - `services/content-ingestion/src/content_ingestion/infrastructure/adapters/finnhub/adapter.py`
    - `services/content-ingestion/src/content_ingestion/infrastructure/adapters/newsapi/adapter.py`
 7. `services/content-ingestion/pyproject.toml` — verify `apscheduler>=3.10`, `fastapi`, `prometheus-client` are listed.
+8. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

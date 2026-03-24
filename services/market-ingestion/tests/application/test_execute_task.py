@@ -217,7 +217,7 @@ async def test_provider_unavailable_retries_task() -> None:
     """ProviderUnavailable → task.retry() called, exception propagates."""
     task = _make_task()
     exc = ProviderUnavailable("service unavailable")
-    uc, uow, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
+    uc, _, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
 
     with pytest.raises(ProviderUnavailable):
         await uc.execute(task)
@@ -230,7 +230,7 @@ async def test_provider_auth_error_fails_task() -> None:
     """ProviderAuthError → task.fail() called (fatal), exception propagates."""
     task = _make_task()
     exc = ProviderAuthError("bad credentials")
-    uc, uow, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
+    uc, _, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
 
     with pytest.raises(ProviderAuthError):
         await uc.execute(task)
@@ -244,7 +244,7 @@ async def test_provider_data_error_fails_task() -> None:
     """ProviderDataError → task.fail() called (fatal), exception propagates."""
     task = _make_task()
     exc = ProviderDataError("malformed response")
-    uc, uow, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
+    uc, _, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
 
     with pytest.raises(ProviderDataError):
         await uc.execute(task)
@@ -259,7 +259,7 @@ async def test_storage_unavailable_on_bronze_retries_task() -> None:
     task = _make_task()
     exc = StorageUnavailable("s3 down")
     store = _make_store(bronze_side_effect=exc)
-    uc, uow, _, _, _ = _make_use_case(store=store)
+    uc, _, _, _, _ = _make_use_case(store=store)
 
     with pytest.raises(StorageUnavailable):
         await uc.execute(task)
@@ -274,7 +274,7 @@ async def test_storage_unavailable_on_canonical_retries_task() -> None:
     task = _make_task()
     exc = StorageUnavailable("s3 canonical shard down")
     store = _make_store(canonical_side_effect=exc)
-    uc, uow, _, _, _ = _make_use_case(store=store)
+    uc, _, _, _, _ = _make_use_case(store=store)
 
     with pytest.raises(StorageUnavailable):
         await uc.execute(task)

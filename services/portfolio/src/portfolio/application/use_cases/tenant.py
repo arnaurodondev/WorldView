@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+from portfolio.application.messaging.mapper import tenant_created_to_dict
+from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.domain.entities.tenant import Tenant
 from portfolio.domain.errors import EntityNotFoundError
 from portfolio.domain.events import TenantCreated
-from portfolio.messaging.mapper import tenant_created_to_dict
-from portfolio.messaging.topics import EVENT_TOPIC_MAP
 
 if TYPE_CHECKING:
     from uuid import UUID

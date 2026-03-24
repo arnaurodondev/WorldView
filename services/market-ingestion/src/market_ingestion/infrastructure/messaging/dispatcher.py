@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from market_ingestion.infrastructure.db.repositories.outbox_repository import _DispatchableOutboxRecord
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
-from market_ingestion.infrastructure.messaging.kafka.serialization import build_market_ingestion_serializers
+from market_ingestion.infrastructure.messaging.serialization import build_market_ingestion_serializers
 from messaging.kafka.dispatcher.base import (  # type: ignore[import-untyped]
     BaseOutboxDispatcher,
     DeliveryResult,

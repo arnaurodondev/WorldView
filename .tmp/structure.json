@@ -1,0 +1,176 @@
+{
+  "services_checked": 11,
+  "total_violations": 28,
+  "expired_exceptions": 0,
+  "violations": [
+    {
+      "service": "alert",
+      "rule_id": "STR-002",
+      "description": "src/<package>/app.py must exist",
+      "detail": "Missing /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/alert/src/alert/app.py"
+    },
+    {
+      "service": "alert",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/alert"
+    },
+    {
+      "service": "alert",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/alert"
+    },
+    {
+      "service": "alert",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/alert"
+    },
+    {
+      "service": "api-gateway",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/api-gateway"
+    },
+    {
+      "service": "api-gateway",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/api-gateway"
+    },
+    {
+      "service": "api-gateway",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/api-gateway"
+    },
+    {
+      "service": "content-ingestion",
+      "rule_id": "STR-005",
+      "description": "src/<package>/application/ layer must exist",
+      "detail": "Missing application/ layer in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-ingestion/src/content_ingestion"
+    },
+    {
+      "service": "content-ingestion",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-ingestion"
+    },
+    {
+      "service": "content-ingestion",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-ingestion"
+    },
+    {
+      "service": "content-store",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-store"
+    },
+    {
+      "service": "content-store",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-store"
+    },
+    {
+      "service": "content-store",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/content-store"
+    },
+    {
+      "service": "intelligence-migrations",
+      "rule_id": "STR-001",
+      "description": "src/<package>/__init__.py must exist",
+      "detail": "Cannot determine package name under src/"
+    },
+    {
+      "service": "knowledge-graph",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/knowledge-graph"
+    },
+    {
+      "service": "knowledge-graph",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/knowledge-graph"
+    },
+    {
+      "service": "knowledge-graph",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/knowledge-graph"
+    },
+    {
+      "service": "market-data",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/market-data"
+    },
+    {
+      "service": "market-ingestion",
+      "rule_id": "STR-008",
+      "description": "infrastructure/messaging/schemas/ must exist for Kafka-enabled services",
+      "detail": "Missing infrastructure/messaging/schemas/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/market-ingestion/src/market_ingestion"
+    },
+    {
+      "service": "market-ingestion",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/market-ingestion"
+    },
+    {
+      "service": "market-ingestion",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/market-ingestion"
+    },
+    {
+      "service": "nlp-pipeline",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/nlp-pipeline"
+    },
+    {
+      "service": "nlp-pipeline",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/nlp-pipeline"
+    },
+    {
+      "service": "nlp-pipeline",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/nlp-pipeline"
+    },
+    {
+      "service": "portfolio",
+      "rule_id": "STR-008",
+      "description": "infrastructure/messaging/schemas/ must exist for Kafka-enabled services",
+      "detail": "Missing infrastructure/messaging/schemas/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/portfolio/src/portfolio"
+    },
+    {
+      "service": "rag-chat",
+      "rule_id": "STR-009",
+      "description": "tests/unit/ directory must exist",
+      "detail": "Missing tests/unit/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/rag-chat"
+    },
+    {
+      "service": "rag-chat",
+      "rule_id": "STR-010",
+      "description": "tests/integration/ directory must exist",
+      "detail": "Missing tests/integration/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/rag-chat"
+    },
+    {
+      "service": "rag-chat",
+      "rule_id": "STR-011",
+      "description": "tests/contract/ directory must exist",
+      "detail": "Missing tests/contract/ in /Users/arnaurodon/Projects/University/Final Thesis/worldview/services/rag-chat"
+    }
+  ],
+  "expired_exception_errors": []
+}

@@ -32,6 +32,7 @@ Before writing any code, read in full:
 5. `docs/ai-interactions/agent-responses/0012-response-20260322-ingestion-pipeline-v1-s4-s5.md` — this wave's planning context
 6. `services/content-ingestion/pyproject.toml` — verify `uuid6`, `aiokafka`, `fastavro`, `minio`/`aioboto3` are listed as dependencies before writing any code; add missing deps before proceeding
 7. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+8. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run ruff + mypy across all packages.
+# Run ruff + mypy + structure checks + import guards across all packages.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,6 +25,20 @@ for PKG_DIR in "$ROOT_DIR"/libs/*/src "$ROOT_DIR"/services/*/src; do
         mypy "$PKG_DIR" || FAILED=1
     fi
 done
+
+# Service structure validation
+echo "Running service structure validator..."
+python3 "$ROOT_DIR/scripts/structure_checks/check_service_structure.py" \
+    --strict \
+    --allow-exceptions-file "$ROOT_DIR/scripts/structure_checks/exceptions.yaml" \
+    || FAILED=1
+
+# Import guards
+echo "Running import guards..."
+python3 "$ROOT_DIR/scripts/import_guards/check_import_guards.py" \
+    --strict \
+    --baseline "$ROOT_DIR/scripts/import_guards/baseline.json" \
+    || FAILED=1
 
 # Frontend (if pnpm available)
 if command -v pnpm &> /dev/null && [[ -d "$ROOT_DIR/apps/frontend" ]]; then

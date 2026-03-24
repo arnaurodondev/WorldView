@@ -13,7 +13,8 @@ env:
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │  Job dependency graph                                                       │
 # │                                                                             │
-# │  lint  validate-schemas  test-libs  test-frontend   (all parallel)         │
+# │  lint  validate-schemas  validate-service-structure  import-guards          │
+# │  architecture-tests  test-libs  test-frontend  (fast path, all parallel)   │
 # │                               │                                             │
 # │       ┌──────────┬────────────┼──────────────┐                             │
 # │       │          │            │              │                              │
@@ -21,6 +22,9 @@ env:
 # │  (unit, 9 svcs) (portfolio)  (portfolio +        (3 svcs, compose)         │
 # │                               market-data,                                 │
 # │                               testcontainers)                              │
+# │                                                                             │
+# │  validate-service-structure, import-guards, and architecture-tests gate    │
+# │  all long-running test jobs via needs: [...].                               │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
 jobs:
@@ -111,6 +115,94 @@ jobs:
               sys.exit(1)
           "
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Service structure validator — fast path, no infra required
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  validate-service-structure:
+    name: Validate Service Structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install PyYAML
+        run: python -m pip install "pyyaml>=6" --quiet
+
+      - name: Validate service structure (strict)
+        run: >
+          python scripts/structure_checks/check_service_structure.py
+          --strict
+          --allow-exceptions-file scripts/structure_checks/exceptions.yaml
+          --report-json /tmp/structure-report.json
+
+      - name: Upload structure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: structure-violation-report
+          path: /tmp/structure-report.json
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Import guards — AST-based anti-pattern enforcement, fast path
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  import-guards:
+    name: Import Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install PyYAML
+        run: python -m pip install "pyyaml>=6" --quiet
+
+      - name: Run import guards (strict)
+        run: >
+          python scripts/import_guards/check_import_guards.py
+          --strict
+          --baseline scripts/import_guards/baseline.json
+          --report-json /tmp/import-guards-report.json
+
+      - name: Upload import guard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-guard-violation-report
+          path: /tmp/import-guards-report.json
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Architecture tests — fast path pytest suite, no infra required
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  architecture-tests:
+    name: Architecture Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install pytest
+        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" --quiet
+
+      - name: Run architecture tests
+        run: pytest tests/architecture -v --tb=short
+
   test-libs:
     name: Test Libraries — ${{ matrix.lib }}
     runs-on: ubuntu-latest
@@ -145,7 +237,7 @@ jobs:
   test-services:
     name: Test Services — ${{ matrix.service }} (unit)
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -231,7 +323,7 @@ jobs:
   test-contract:
     name: Contract Tests — portfolio
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     steps:
       - uses: actions/checkout@v4
 
@@ -265,7 +357,7 @@ jobs:
   test-integration:
     name: Integration Tests — ${{ matrix.service }} (testcontainers)
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -325,7 +417,7 @@ jobs:
   test-e2e:
     name: E2E — ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:

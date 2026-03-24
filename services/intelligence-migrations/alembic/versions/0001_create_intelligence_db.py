@@ -116,8 +116,7 @@ CREATE TABLE entity_aliases (
 )
 """)
     op.execute(
-        "CREATE UNIQUE INDEX uidx_entity_aliases_exact ON entity_aliases (lower(alias_text))"
-        " WHERE alias_type = 'EXACT'"
+        "CREATE UNIQUE INDEX uidx_entity_aliases_exact ON entity_aliases (lower(alias_text)) WHERE alias_type = 'EXACT'"
     )
     op.execute("CREATE INDEX idx_entity_aliases_text ON entity_aliases USING gin (alias_text gin_trgm_ops)")
     op.execute("CREATE INDEX idx_entity_aliases_entity ON entity_aliases (entity_id)")
@@ -185,12 +184,9 @@ CREATE TABLE relations_p{i} PARTITION OF relations
 """)
 
     op.execute(
-        "CREATE UNIQUE INDEX uidx_relations_triple ON relations"
-        " (subject_entity_id, canonical_type, object_entity_id)"
+        "CREATE UNIQUE INDEX uidx_relations_triple ON relations (subject_entity_id, canonical_type, object_entity_id)"
     )
-    op.execute(
-        "CREATE INDEX idx_relations_subject ON relations" " (subject_entity_id, canonical_type, confidence DESC)"
-    )
+    op.execute("CREATE INDEX idx_relations_subject ON relations (subject_entity_id, canonical_type, confidence DESC)")
     op.execute("CREATE INDEX idx_relations_object ON relations (object_entity_id, canonical_type)")
     op.execute("""
 CREATE INDEX idx_relations_stale_confidence ON relations (decay_class, latest_evidence_at DESC)
@@ -233,9 +229,7 @@ CREATE TABLE relation_evidence_raw (
 CREATE INDEX idx_raw_evidence_unprocessed ON relation_evidence_raw (extracted_at)
     WHERE processed = false
 """)
-    op.execute(
-        "CREATE INDEX idx_raw_evidence_subject ON relation_evidence_raw" " (subject_entity_id, extracted_at DESC)"
-    )
+    op.execute("CREATE INDEX idx_raw_evidence_subject ON relation_evidence_raw (subject_entity_id, extracted_at DESC)")
     op.execute("""
 CREATE INDEX idx_raw_evidence_partition_unprocessed
     ON relation_evidence_raw (partition_key, extracted_at)
@@ -272,9 +266,9 @@ CREATE TABLE {partition_name} PARTITION OF relation_evidence
     FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')
 """)
 
-    op.execute("CREATE INDEX idx_rel_evidence_relation ON relation_evidence" " (relation_id, evidence_date DESC)")
+    op.execute("CREATE INDEX idx_rel_evidence_relation ON relation_evidence (relation_id, evidence_date DESC)")
     op.execute("CREATE INDEX idx_rel_evidence_doc ON relation_evidence (doc_id)")
-    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id)" " WHERE claim_id IS NOT NULL")
+    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id) WHERE claim_id IS NOT NULL")
 
     # -------------------------------------------------------------------------
     # Block I — relation_contradiction_links
@@ -322,7 +316,7 @@ CREATE TABLE relation_summaries (
 CREATE UNIQUE INDEX uidx_relation_summaries_current ON relation_summaries (relation_id)
     WHERE is_current = true
 """)
-    op.execute("CREATE INDEX idx_relation_summaries_relation ON relation_summaries" " (relation_id, generated_at DESC)")
+    op.execute("CREATE INDEX idx_relation_summaries_relation ON relation_summaries (relation_id, generated_at DESC)")
     op.execute("""
 CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
     USING hnsw (summary_embedding vector_cosine_ops)
@@ -428,9 +422,7 @@ CREATE TABLE provisional_entity_queue (
     retry_count        INT          NOT NULL DEFAULT 0
 )
 """)
-    op.execute(
-        "CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at)" " WHERE status = 'pending'"
-    )
+    op.execute("CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at) WHERE status = 'pending'")
 
     # -------------------------------------------------------------------------
     # Block O — outbox_events + dead_letter_queue
@@ -448,7 +440,7 @@ CREATE TABLE outbox_events (
     failed_at      TIMESTAMPTZ
 )
 """)
-    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at)" " WHERE status = 'pending'")
+    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at) WHERE status = 'pending'")
 
     op.execute("""
 CREATE TABLE dead_letter_queue (

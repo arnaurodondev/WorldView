@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(
         service_name=settings.service_name,
         level=settings.log_level,
-        json=settings.log_format == "json",
+        json=settings.log_json,
     )
     configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
 
@@ -51,14 +51,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey_client = valkey_client
 
     # 4. Create outbox dispatcher
-    from portfolio.messaging.dispatcher import create_dispatcher
+    from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     dispatcher = create_dispatcher(settings, session_factory)
     app.state.dispatcher = dispatcher
 
     # 5. Create instrument event consumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer_config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,

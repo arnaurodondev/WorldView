@@ -34,8 +34,8 @@ _DB_URL = os.getenv(
 
 async def test_instrument_consumer_upserts_instrument(e2e_db_session: AsyncSession) -> None:
     """InstrumentEventConsumer.process_message() upserts an InstrumentRef row."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
     from portfolio.infrastructure.db.session import create_session_factory
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
     from sqlalchemy import select
 
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
@@ -80,8 +80,8 @@ async def test_instrument_consumer_upserts_instrument(e2e_db_session: AsyncSessi
 
 async def test_instrument_consumer_idempotent(e2e_db_session: AsyncSession) -> None:
     """Duplicate events (same event_id) do NOT create duplicate InstrumentRef rows."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
     from portfolio.infrastructure.db.session import create_session_factory
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
     from sqlalchemy import func, select
 
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
@@ -116,8 +116,10 @@ async def test_instrument_consumer_idempotent(e2e_db_session: AsyncSession) -> N
 
 
 async def test_list_instruments_endpoint(e2e_client: AsyncClient) -> None:
-    """GET /api/v1/instruments returns a list (may be empty on fresh DB)."""
+    """GET /api/v1/instruments returns paginated items (may be empty on fresh DB)."""
     resp = await e2e_client.get("/api/v1/instruments")
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert isinstance(data, list)
+    assert isinstance(data, dict)
+    assert "items" in data
+    assert "total" in data

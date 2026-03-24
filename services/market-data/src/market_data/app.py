@@ -6,13 +6,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-import structlog
 from fastapi import FastAPI
+
+from observability.logging import configure_logging, get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 @asynccontextmanager
@@ -24,7 +23,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = Settings()
 
-    # 1. DB — write engine + optional read engine (falls back to write URL when read_replica_url is None)
+    # 0. Logging — always first (STANDARDS.md §5.1)
+    configure_logging(
+        service_name="market-data",
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    logger = get_logger("market_data.app")
+
+    # 1. DB — write engine + optional read engine
     write_engine = build_write_engine(settings)
     read_engine = build_read_engine(settings)
     write_factory = build_session_factory(write_engine)
@@ -73,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         metrics = None
 
     # 5. Tracing
-    if getattr(settings, "otlp_endpoint", None):
+    if settings.otlp_endpoint:
         try:
             from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 

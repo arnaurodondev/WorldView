@@ -37,6 +37,7 @@ Before writing any code, read in full:
    - `services/content-ingestion/src/content_ingestion/infrastructure/db/repositories/fetch_log.py`
 7. `services/content-ingestion/pyproject.toml` — verify `aiohttp`, `uuid6`, `structlog` are present.
 8. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+9. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

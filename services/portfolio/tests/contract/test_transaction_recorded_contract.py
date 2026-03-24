@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import fastavro
 import pytest
+from portfolio.application.messaging.mapper import transaction_recorded_to_dict
 from portfolio.domain.events import TransactionRecorded
-from portfolio.messaging.mapper import transaction_recorded_to_dict
 
 pytestmark = pytest.mark.contract
 
@@ -23,7 +23,7 @@ def _load_schema(filename: str):  # type: ignore[no-untyped-def]
 
 def test_transaction_recorded_valid_schema() -> None:
     """transaction.recorded mapper output must be valid against its Avro schema."""
-    parsed_schema = _load_schema("transaction.recorded.avsc")
+    parsed_schema = _load_schema("transaction.recorded.v1.avsc")
 
     event = TransactionRecorded(
         tenant_id=uuid4(),

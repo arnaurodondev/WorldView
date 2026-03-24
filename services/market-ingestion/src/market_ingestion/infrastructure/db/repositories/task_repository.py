@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.engine import CursorResult
 
 from market_ingestion.application.ports.repositories import TaskRepository
 from market_ingestion.domain.entities.ingestion_task import IngestionTask
@@ -144,7 +143,7 @@ class SqlaTaskRepository(TaskRepository):
                 .on_conflict_do_nothing(index_elements=["provider", "dedupe_key"])
             )
             result = await self._w.execute(stmt)
-            inserted += cast(CursorResult[Any], result).rowcount
+            inserted += cast("Any", result).rowcount
         return inserted
 
     async def save(self, task: IngestionTask) -> None:

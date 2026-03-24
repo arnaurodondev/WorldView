@@ -33,6 +33,7 @@
 6. Wave 01 output: `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/`
 7. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details for T-S6-004 through T-S6-007
 8. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+9. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

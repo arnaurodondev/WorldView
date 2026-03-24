@@ -27,7 +27,7 @@ def upgrade() -> None:
             ADD COLUMN is_backfill  BOOLEAN NOT NULL DEFAULT FALSE
     """)
     op.execute(
-        "CREATE INDEX ix_fetch_logs_published_at ON fetch_logs (published_at DESC)" " WHERE published_at IS NOT NULL"
+        "CREATE INDEX ix_fetch_logs_published_at ON fetch_logs (published_at DESC) WHERE published_at IS NOT NULL"
     )
 
 

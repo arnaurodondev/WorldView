@@ -1,0 +1,2121 @@
+{
+  "total_violations": 132,
+  "net_new_violations": 132,
+  "baselined_violations": 0,
+  "violations": [
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 79,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 99,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 124,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 153,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 199,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_fundamental_metrics_backfill.py",
+      "line": 12,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/market-data/tests/live/test_aapl_live.py",
+      "line": 166,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/market-data/tests/live/test_aapl_live.py",
+      "line": 172,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_holding_changed_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_instrument_ref_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_archived_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_renamed_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_tenant_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_transaction_recorded_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_user_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_watchlist_item_added_contract.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_watchlist_item_deleted_contract.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 34,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 41,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 49,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 65,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 159,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 168,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 172,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 176,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 196,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 200,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 205,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 209,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 246,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 250,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 255,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 275,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 284,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_instrument_sync.py",
+      "line": 52,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_instrument_sync.py",
+      "line": 98,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/helpers.py",
+      "line": 77,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_alert_preferences_api.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_holding_api.py",
+      "line": 85,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_holding_api.py",
+      "line": 93,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_instrument_api.py",
+      "line": 27,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_instrument_api.py",
+      "line": 33,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_portfolio_api.py",
+      "line": 110,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_tenant_api.py",
+      "line": 46,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 55,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 136,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 146,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_user_api.py",
+      "line": 74,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_watchlist_api.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_watchlist_reverse_index.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_alert_preference.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 55,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 59,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 78,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 89,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 90,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 94,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 95,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 133,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 134,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 135,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 191,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 192,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 242,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 251,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 256,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 262,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 263,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_errors.py",
+      "line": 59,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_errors.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 27,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 33,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 39,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 40,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 45,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 50,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 51,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 52,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 69,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 74,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 83,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 88,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 106,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 111,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 116,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 117,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 122,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 123,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 128,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 129,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 134,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 135,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 140,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 141,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 146,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 147,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 152,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 153,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 158,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 159,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 169,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 173,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 212,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 218,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 219,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 225,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 234,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 238,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 242,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 246,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 250,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 254,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 265,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 266,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 270,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 271,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 275,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 279,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 283,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_watchlist.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_instrument_consumer.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_alert_preferences.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_portfolio.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_read_models.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_tenant.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_transaction.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_transaction.py",
+      "line": 395,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_user.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_watchlist.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_watchlist_cache.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    }
+  ],
+  "net_new": [
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 79,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 99,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 124,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 153,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_benchmarks.py",
+      "line": 199,
+      "rule_id": "IG-OBS-001",
+      "rule_description": "Forbid stdlib logging.getLogger() and bare print() in service code",
+      "detail": "Forbidden print() call (rule IG-OBS-001) \u2014 use structlog",
+      "remediation": "Replace logging.getLogger() with structlog.get_logger(). Remove all print() calls from service code. See docs/libs/observability.md."
+    },
+    {
+      "file": "services/market-data/tests/integration/test_fundamental_metrics_backfill.py",
+      "line": 12,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/market-data/tests/live/test_aapl_live.py",
+      "line": 166,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/market-data/tests/live/test_aapl_live.py",
+      "line": 172,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_holding_changed_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_instrument_ref_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_archived_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_portfolio_renamed_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_tenant_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_transaction_recorded_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_user_created_contract.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_watchlist_item_added_contract.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/contract/test_watchlist_item_deleted_contract.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 34,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 41,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 49,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 65,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 159,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 168,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 172,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 176,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 196,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 200,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 205,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 209,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 246,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 250,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 255,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 275,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_full_flow.py",
+      "line": 284,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_instrument_sync.py",
+      "line": 52,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/e2e/test_instrument_sync.py",
+      "line": 98,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/helpers.py",
+      "line": 77,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_alert_preferences_api.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_holding_api.py",
+      "line": 85,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_holding_api.py",
+      "line": 93,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_instrument_api.py",
+      "line": 27,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_instrument_api.py",
+      "line": 33,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_portfolio_api.py",
+      "line": 110,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_tenant_api.py",
+      "line": 46,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 55,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 136,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_transaction_api.py",
+      "line": 146,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_user_api.py",
+      "line": 74,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_watchlist_api.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/integration/test_watchlist_reverse_index.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_alert_preference.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 55,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 59,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 78,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 89,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 90,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 94,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 95,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 133,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 134,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 135,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 191,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 192,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 242,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 251,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 256,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 262,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_entities.py",
+      "line": 263,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_errors.py",
+      "line": 59,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_errors.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 27,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 33,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 39,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 40,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 45,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 50,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 51,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 52,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 69,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 74,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 83,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 88,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 106,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 111,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 116,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 117,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 122,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 123,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 128,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 129,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 134,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 135,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 140,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 141,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 146,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 147,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 152,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 153,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 158,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 159,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 169,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 173,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 212,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 218,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 219,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 225,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 234,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 238,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 242,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 246,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 250,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 254,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 265,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 266,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 270,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 271,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 275,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 279,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_events.py",
+      "line": 283,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_domain_watchlist.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_instrument_consumer.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_alert_preferences.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_portfolio.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_read_models.py",
+      "line": 7,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_tenant.py",
+      "line": 64,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_transaction.py",
+      "line": 8,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_transaction.py",
+      "line": 395,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_user.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_use_cases_watchlist.py",
+      "line": 6,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    },
+    {
+      "file": "services/portfolio/tests/unit/test_watchlist_cache.py",
+      "line": 5,
+      "rule_id": "IG-COMMON-001",
+      "rule_description": "Forbid direct uuid.uuid4() in service code",
+      "detail": "Forbidden import: `from uuid import uuid4` (rule IG-COMMON-001)",
+      "remediation": "Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid() (legacy UUIDv4 columns). See docs/STANDARDS.md \u00a72.1."
+    }
+  ]
+}

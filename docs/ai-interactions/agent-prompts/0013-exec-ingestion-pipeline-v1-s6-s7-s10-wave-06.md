@@ -33,6 +33,7 @@ Both agents work in parallel.
 5. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S7-001, T-S7-002
 6. Wave 05 handoff evidence — confirm S6 is complete and emitting `nlp.article.enriched.v1`
 7. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+8. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 **PREREQUISITE GATE:** Do not begin Wave 06 until Wave 05 integration test `test_full_pipeline` passes. S7 consumes `nlp.article.enriched.v1` — S7 is useless without S6 emitting it.
 

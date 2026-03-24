@@ -23,7 +23,9 @@ from portfolio.infrastructure.db.models.watchlist import WatchlistModel  # noqa:
 from portfolio.infrastructure.db.models.watchlist_member import WatchlistMemberModel  # noqa: E402
 
 __all__ = [
+    "AlertPreferenceModel",
     "Base",
+    "EntitySuppressionModel",
     "HoldingModel",
     "IdempotencyModel",
     "InstrumentModel",
@@ -32,8 +34,6 @@ __all__ = [
     "TenantModel",
     "TransactionModel",
     "UserModel",
-    "WatchlistModel",
     "WatchlistMemberModel",
-    "AlertPreferenceModel",
-    "EntitySuppressionModel",
+    "WatchlistModel",
 ]

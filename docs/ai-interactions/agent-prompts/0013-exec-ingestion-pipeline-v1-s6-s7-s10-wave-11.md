@@ -31,6 +31,7 @@ Single agent can handle all 4 tasks given they are all foundation-level.
 4. Wave 10 handoff evidence — confirm S7 is complete and emitting `graph.state.changed.v1`
 5. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S10-001 through T-S10-003, T-S10-011
 6. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+7. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 **PREREQUISITE GATE:** Do not begin Wave 11 until Wave 10 integration test `test_s6_s7_pipeline_continuity` passes. S10 depends on S7 emitting `graph.state.changed.v1`.
 

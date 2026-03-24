@@ -3,7 +3,7 @@
 These tests run against the LIVE service started by `make test-e2e`, which
 spins up docker-compose.test.yml --profile market-ingestion-test:
 
-  Postgres (localhost:5432/ingestion_db) ─┐
+    Postgres (localhost:55433/ingestion_db) ─┐
   MinIO   (localhost:7480)               ─┤── market-ingestion-migrate
                                           └── market-ingestion API (localhost:8002)
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 _BASE_URL = os.getenv("MARKET_INGESTION_E2E_BASE_URL", "http://localhost:8002")
 _DB_URL = os.getenv(
     "MARKET_INGESTION_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/ingestion_db",
+    "postgresql+asyncpg://postgres:postgres@localhost:55433/ingestion_db",
 )
 
 

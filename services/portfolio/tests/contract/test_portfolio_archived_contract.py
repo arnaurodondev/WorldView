@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import fastavro
 import pytest
+from portfolio.application.messaging.mapper import portfolio_archived_to_dict
 from portfolio.domain.events import PortfolioArchived
-from portfolio.messaging.mapper import portfolio_archived_to_dict
 
 pytestmark = pytest.mark.contract
 
@@ -23,7 +23,7 @@ def _load_schema(filename: str):  # type: ignore[no-untyped-def]
 
 def test_portfolio_archived_valid_schema() -> None:
     """portfolio.archived mapper output must be valid against its Avro schema."""
-    parsed_schema = _load_schema("portfolio.archived.avsc")
+    parsed_schema = _load_schema("portfolio.archived.v1.avsc")
 
     event = PortfolioArchived(
         tenant_id=uuid4(),

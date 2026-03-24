@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Configuration for the market-data service."""
 
-    model_config = {
-        "env_prefix": "MARKET_DATA_",
-        "env_file": "configs/dev.local.env",
-        "env_file_encoding": "utf-8",
-    }
+    model_config = SettingsConfigDict(
+        env_prefix="MARKET_DATA_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Server
     host: str = "0.0.0.0"
@@ -36,3 +37,8 @@ class Settings(BaseSettings):
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
+
+    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""
