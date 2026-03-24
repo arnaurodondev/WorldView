@@ -38,7 +38,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.valkey_url == "redis://localhost:6379/0"
     assert s.log_level == "INFO"
     assert s.log_format == "json"
-    assert s.otlp_endpoint is None
+    assert s.otlp_endpoint == ""
 
 
 def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
