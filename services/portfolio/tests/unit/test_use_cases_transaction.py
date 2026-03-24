@@ -112,7 +112,7 @@ class FakeTransactionRepo(TransactionRepository):
     async def get(self, transaction_id, tenant_id):
         return next((t for t in self.saved if t.id == transaction_id), None)
 
-    async def list_by_portfolio(self, portfolio_id, tenant_id):
+    async def list_by_portfolio(self, portfolio_id, tenant_id, limit: int = 100, **kwargs):
         return [t for t in self.saved if t.portfolio_id == portfolio_id]
 
     async def save(self, transaction):
