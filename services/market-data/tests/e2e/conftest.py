@@ -42,25 +42,21 @@ _DB_URL = os.getenv(
 # ── Session-scoped HTTP client ─────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client pointing at the live market-data service on localhost:8003."""
     async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-# ── Session-scoped DB engine ───────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="session")
-def _e2e_engine():
-    return create_async_engine(_DB_URL, echo=False)
+# ── Function-scoped DB engine ──────────────────────────────────────────────────
 
 
 @pytest.fixture
-async def e2e_db_session(_e2e_engine) -> AsyncGenerator[AsyncSession, None]:
+async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Direct DB session for white-box assertions and test data seeding."""
-    factory = async_sessionmaker(_e2e_engine, expire_on_commit=False)
+    engine = create_async_engine(_DB_URL, echo=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         yield session
         # Clean up seeded data so tests remain isolated
@@ -79,6 +75,7 @@ async def e2e_db_session(_e2e_engine) -> AsyncGenerator[AsyncSession, None]:
             )
         )
         await session.commit()
+    await engine.dispose()
 
 
 # ── Seeding helpers ───────────────────────────────────────────────────────────

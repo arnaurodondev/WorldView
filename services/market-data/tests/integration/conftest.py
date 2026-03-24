@@ -159,12 +159,33 @@ async def db_session(_migrated_db: str) -> AsyncIterator[AsyncSession]:
 async def uow(_migrated_db: str) -> AsyncIterator:
     """Yield a SqlAlchemyUnitOfWork backed by the integration test DB."""
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     engine = create_async_engine(_migrated_db, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with SqlAlchemyUnitOfWork(factory, factory) as unit:
         yield unit
+    # Truncate all user tables so the next test starts with a clean slate
+    async with AsyncSession(engine) as session:
+        await session.execute(
+            text(
+                "TRUNCATE TABLE "
+                "fundamental_metrics, "
+                "income_statements, balance_sheets, cash_flow_statements, "
+                "valuation_ratios, technicals_snapshots, share_statistics, "
+                "splits_dividends, analyst_consensus, earnings_history, "
+                "earnings_trends, earnings_annual_trends, dividend_history, "
+                "dividend_summary, outstanding_shares, "
+                "highlights, company_profiles, institutional_holders, "
+                "fund_holders, insider_transactions_snapshot, "
+                "ohlcv_bars, quotes, "
+                "ingestion_events, failed_tasks, outbox_events, "
+                "instruments, securities "
+                "CASCADE",
+            ),
+        )
+        await session.commit()
     await engine.dispose()
 
 
