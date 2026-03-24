@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 def create_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
     """Create an async session factory bound to the configured database URL."""
-    engine = create_async_engine(settings.CONTENT_INGESTION_DB_URL, echo=False)
+    engine = create_async_engine(settings.db_url, echo=False)
     return async_sessionmaker(engine, expire_on_commit=False)
 
 

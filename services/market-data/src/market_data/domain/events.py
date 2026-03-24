@@ -5,26 +5,24 @@ domain.  They are frozen dataclasses: once created their state cannot change.
 
 ``event_id`` and ``occurred_at`` are auto-populated at construction time so
 callers only need to supply domain-specific fields.
-
-No shared-library imports — this module is framework-free stdlib-only so that
-the domain layer can be tested and reasoned about without any infra dependencies.
 """
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+
+from common.ids import new_uuid7_str  # type: ignore[import-untyped]
+from common.time import to_iso8601, utc_now  # type: ignore[import-untyped]
 
 
 def _new_event_id() -> str:
-    """Generate a random UUID string for use as an event identifier."""
-    return str(uuid.uuid4())
+    """Generate a UUIDv7 string for use as an event identifier."""
+    return new_uuid7_str()
 
 
 def _utc_iso() -> str:
     """Return the current UTC time as an ISO-8601 string."""
-    return datetime.now(tz=UTC).isoformat()
+    return to_iso8601(utc_now())
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,6 @@ from datetime import UTC
 from typing import TYPE_CHECKING, Any, cast
 
 from common.time import utc_now  # type: ignore[import-untyped]
-from market_ingestion.application.ports.adapters import ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType
 from market_ingestion.domain.errors import (
     InvalidStateTransition,
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
         CanonicalSerializer,
         ObjectStoreAdapter,
         ProviderAdapter,
+        ProviderFetchResult,
     )
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
@@ -191,9 +191,9 @@ class ExecuteTaskUseCase:
         if task.dataset_type == DatasetType.OHLCV:
             # EXT-01: intraday vs EOD dispatch based on timeframe
             if task.timeframe in {"1m", "5m", "1h"}:
-                ext_adapter = cast(Any, adapter)
+                ext_adapter = cast("Any", adapter)
                 return cast(
-                    ProviderFetchResult,
+                    "ProviderFetchResult",
                     await ext_adapter.fetch_intraday(
                         symbol=task.symbol,
                         interval=task.timeframe,
@@ -216,9 +216,9 @@ class ExecuteTaskUseCase:
             from datetime import timedelta
 
             today = utc_now().date()
-            ext_adapter = cast(Any, adapter)
+            ext_adapter = cast("Any", adapter)
             return cast(
-                ProviderFetchResult,
+                "ProviderFetchResult",
                 await ext_adapter.fetch_earnings_calendar(
                     from_date=(today - timedelta(days=14)).isoformat(),
                     to_date=(today + timedelta(days=14)).isoformat(),
@@ -230,9 +230,9 @@ class ExecuteTaskUseCase:
             today = utc_now().date()
             # symbol encodes country: "EVENTS.USA" → "USA"
             country = task.symbol.split(".")[-1] if "." in task.symbol else "USA"
-            ext_adapter = cast(Any, adapter)
+            ext_adapter = cast("Any", adapter)
             return cast(
-                ProviderFetchResult,
+                "ProviderFetchResult",
                 await ext_adapter.fetch_economic_events(
                     from_date=(today - timedelta(days=14)).isoformat(),
                     to_date=(today + timedelta(days=14)).isoformat(),
@@ -240,15 +240,15 @@ class ExecuteTaskUseCase:
                 ),
             )
         if task.dataset_type == DatasetType.MACRO_INDICATOR:
-            ext_adapter = cast(Any, adapter)
-            return cast(ProviderFetchResult, await ext_adapter.fetch_macro_indicator(symbol=task.symbol))
+            ext_adapter = cast("Any", adapter)
+            return cast("ProviderFetchResult", await ext_adapter.fetch_macro_indicator(symbol=task.symbol))
         if task.dataset_type == DatasetType.NEWS_SENTIMENT:
             from datetime import timedelta
 
             today = utc_now().date()
-            ext_adapter = cast(Any, adapter)
+            ext_adapter = cast("Any", adapter)
             return cast(
-                ProviderFetchResult,
+                "ProviderFetchResult",
                 await ext_adapter.fetch_news_sentiment(
                     symbol=task.symbol,
                     from_date=(today - timedelta(days=7)).isoformat(),
@@ -256,14 +256,14 @@ class ExecuteTaskUseCase:
                 ),
             )
         if task.dataset_type == DatasetType.INSIDER_TRANSACTIONS:
-            ext_adapter = cast(Any, adapter)
-            return cast(ProviderFetchResult, await ext_adapter.fetch_insider_transactions(ticker=task.symbol))
+            ext_adapter = cast("Any", adapter)
+            return cast("ProviderFetchResult", await ext_adapter.fetch_insider_transactions(ticker=task.symbol))
         if task.dataset_type == DatasetType.YIELD_CURVE:
-            ext_adapter = cast(Any, adapter)
-            return cast(ProviderFetchResult, await ext_adapter.fetch_yield_curve(series_symbol=task.symbol))
+            ext_adapter = cast("Any", adapter)
+            return cast("ProviderFetchResult", await ext_adapter.fetch_yield_curve(series_symbol=task.symbol))
         if task.dataset_type == DatasetType.MARKET_CAP:
-            ext_adapter = cast(Any, adapter)
-            return cast(ProviderFetchResult, await ext_adapter.fetch_historical_market_cap(ticker=task.symbol))
+            ext_adapter = cast("Any", adapter)
+            return cast("ProviderFetchResult", await ext_adapter.fetch_historical_market_cap(ticker=task.symbol))
         # FUNDAMENTALS (default)
         return await adapter.fetch_fundamentals(
             symbol=task.symbol,

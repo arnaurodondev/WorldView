@@ -132,14 +132,14 @@ class MarketDatasetFetched(DomainEvent):
             bucket=str(d["bronze_ref_bucket"]),
             key=str(d["bronze_ref_key"]),
             sha256=str(d["bronze_ref_sha256"]),
-            byte_length=cast(int, d["bronze_ref_byte_length"]),
+            byte_length=cast("int", d["bronze_ref_byte_length"]),
             mime_type=str(d["bronze_ref_mime_type"]),
         )
         canonical_ref = ObjectRef(
             bucket=str(d["canonical_ref_bucket"]),
             key=str(d["canonical_ref_key"]),
             sha256=str(d["canonical_ref_sha256"]),
-            byte_length=cast(int, d["canonical_ref_byte_length"]),
+            byte_length=cast("int", d["canonical_ref_byte_length"]),
             mime_type=str(d["canonical_ref_mime_type"]),
         )
         return cls(
@@ -157,8 +157,8 @@ class MarketDatasetFetched(DomainEvent):
             range_end=str(d.get("range_end", "")),
             bronze_ref=bronze_ref,
             canonical_ref=canonical_ref,
-            canonical_schema_version=cast(int, d.get("canonical_schema_version", 1)),
-            row_count=cast(int, d.get("row_count", 0)),
+            canonical_schema_version=cast("int", d.get("canonical_schema_version", 1)),
+            row_count=cast("int", d.get("row_count", 0)),
             task_id=str(d.get("task_id", "")),
         )
 

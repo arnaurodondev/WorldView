@@ -518,7 +518,7 @@ class TestAAPLFundamentals:
 
         from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
-        uow_factory, engine = _live_uow_factory
+        uow_factory, _engine = _live_uow_factory
         general = aapl_fundamentals_raw["General"]
 
         canonical_bytes = _build_fundamentals_canonical(aapl_fundamentals_raw)

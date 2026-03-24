@@ -32,6 +32,7 @@ T-S7-017 and T-S7-018 can be done in parallel; T-S7-019 validates the complete S
 4. All Wave 06–09 outputs (all S7 code)
 5. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S7-017, T-S7-018, T-S7-019
 6. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+7. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

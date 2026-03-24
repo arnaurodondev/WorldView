@@ -78,7 +78,7 @@ class FailedTaskModel(Base):
     max_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="5")
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'PENDING'")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
@@ -99,7 +99,7 @@ class OutboxEventModel(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     topic: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'PENDING'")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     claimed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

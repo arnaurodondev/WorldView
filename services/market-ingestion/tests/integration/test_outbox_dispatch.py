@@ -29,7 +29,7 @@ _NEEDS_KAFKA = pytest.mark.skipif(
 async def test_dispatcher_starts_and_stops_cleanly():
     """DispatcherProcess starts and stops without error."""
     from market_ingestion.config import Settings
-    from market_ingestion.messaging.dispatcher_main import DispatcherProcess
+    from market_ingestion.infrastructure.messaging.outbox.dispatcher_main import DispatcherProcess
 
     settings = Settings()
     process = DispatcherProcess(settings=settings)
@@ -46,7 +46,7 @@ async def test_dispatcher_starts_and_stops_cleanly():
 @pytest.mark.asyncio
 async def test_dispatcher_process_build_uses_settings():
     """DispatcherProcess builds kafka config from settings."""
-    from market_ingestion.messaging.dispatcher_main import DispatcherProcess
+    from market_ingestion.infrastructure.messaging.outbox.dispatcher_main import DispatcherProcess
 
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
@@ -56,10 +56,12 @@ async def test_dispatcher_process_build_uses_settings():
 
     with (
         patch(
-            "market_ingestion.messaging.dispatcher_main._build_factories",
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.messaging.dispatcher_main.build_market_ingestion_dispatcher") as mock_build,
+        patch(
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main.build_market_ingestion_dispatcher"
+        ) as mock_build,
     ):
         mock_dispatcher = MagicMock()
         mock_dispatcher.run = AsyncMock()

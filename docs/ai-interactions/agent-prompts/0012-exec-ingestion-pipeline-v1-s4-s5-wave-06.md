@@ -36,6 +36,7 @@
    - `services/content-store/src/content_store/application/deduplication/minhash_compute.py`
 7. `services/content-store/pyproject.toml` — verify `redis[asyncio]` (Valkey), `aiokafka`, `fastavro`, `minio`/`aioboto3` present.
 8. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+9. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

@@ -1,4 +1,4 @@
-"""FastAPI application factory for the API Gateway (S9)."""
+"""FastAPI application factory for the API Gateway."""
 
 from __future__ import annotations
 
@@ -11,7 +11,12 @@ from fastapi import FastAPI
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
 from api_gateway.middleware import AuthMiddleware, add_cors
-from api_gateway.routes import router
+from api_gateway.routes import router as main_router
+from api_gateway.routes.health import router as health_router
+from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -19,10 +24,30 @@ if TYPE_CHECKING:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Manage httpx client pool lifecycle."""
+    """Manage application lifecycle: observability → clients → Valkey."""
     settings: Settings = app.state.settings
 
-    # Build downstream clients
+    # 1. Logging — always first
+    configure_logging(
+        service_name="api-gateway",
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    logger = get_logger("api_gateway.app")
+
+    # 2. Metrics
+    metrics = create_metrics(service_name="api-gateway")
+    add_prometheus_middleware(app, metrics)
+
+    # 3. Tracing (optional)
+    if settings.otlp_endpoint:
+        configure_tracing(
+            service_name="api-gateway",
+            otlp_endpoint=settings.otlp_endpoint,
+        )
+        add_otel_middleware(app)
+
+    # 4. Downstream service clients
     timeout = httpx.Timeout(30.0, connect=5.0)
     clients = ServiceClients(
         portfolio=httpx.AsyncClient(base_url=settings.portfolio_url, timeout=timeout),
@@ -36,26 +61,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.clients = clients
 
-    # Optional Valkey connection
-    valkey_client = None
+    # 5. Valkey (fail-open: rate limiting degrades gracefully if unavailable)
+    valkey: ValkeyClient | None = None
     try:
-        import redis.asyncio as aioredis
+        valkey = create_valkey_client_from_url(settings.valkey_url)
+        await valkey.ping()
+        app.state.valkey = valkey
+        logger.info("valkey_connected", url=settings.valkey_url)
+    except Exception as exc:
+        app.state.valkey = None
+        logger.warning("valkey_unavailable", error=str(exc), detail="rate limiting disabled")
 
-        valkey_client = aioredis.from_url(settings.valkey_url)
-        await valkey_client.ping()
-    except Exception:
-        valkey_client = None  # fail-open: rate limiting disabled
-
-    app.state.valkey = valkey_client
-
+    logger.info("service_started", service="api-gateway")
     yield
 
-    # Shutdown: close all clients
+    # Shutdown
     for field_name in ServiceClients.__dataclass_fields__:
         client = getattr(clients, field_name)
         await client.aclose()
-    if valkey_client:
-        await valkey_client.aclose()
+    if valkey is not None:
+        await valkey.close()
+    logger.info("service_stopped", service="api-gateway")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -69,7 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware (order matters: last added = first executed)
+    # Middleware (order: last added = outermost)
     add_cors(app, settings.cors_origins)
     app.add_middleware(
         AuthMiddleware,
@@ -78,18 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     # Routes
-    app.include_router(router)
-
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/readyz")
-    async def readyz() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/metrics")
-    async def metrics() -> dict[str, str]:
-        return {"status": "stub"}
+    app.include_router(health_router, tags=["health"])
+    app.include_router(main_router)
 
     return app

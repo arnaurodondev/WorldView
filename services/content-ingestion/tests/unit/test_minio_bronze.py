@@ -1,68 +1,41 @@
-"""Unit tests for MinioBronzeAdapter."""
+"""Unit tests for content-ingestion storage wiring."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from content_ingestion.domain.exceptions import StorageError
-from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
+from content_ingestion.app import _normalize_endpoint
+
+from storage.settings import StorageSettings
 
 pytestmark = pytest.mark.unit
 
-_KEY = "content-ingestion/eodhd/abc123/raw/v1.json"
-_DATA = b'{"url": "https://example.com/news"}'
+
+def test_normalize_endpoint_adds_http_scheme_when_missing() -> None:
+    assert _normalize_endpoint("localhost:7480") == "http://localhost:7480"
 
 
-def _make_settings() -> MagicMock:
-    settings = MagicMock()
-    settings.MINIO_BUCKET = "worldview-bronze"
-    return settings
+def test_normalize_endpoint_keeps_existing_scheme() -> None:
+    assert _normalize_endpoint("http://localhost:7480") == "http://localhost:7480"
+    assert _normalize_endpoint("https://minio.internal:9000") == "https://minio.internal:9000"
 
 
-class TestMinioBronzeAdapter:
-    async def test_put_object_calls_client(self) -> None:
-        """put_object wraps sync client.put_object via asyncio.to_thread."""
-        client = MagicMock()
-        adapter = MinioBronzeAdapter(client=client, settings=_make_settings())
+def test_storage_settings_mapping_from_service_config_like_values() -> None:
+    service_settings = MagicMock()
+    service_settings.minio_endpoint = "localhost:7480"
+    service_settings.minio_access_key = "minioadmin"
+    service_settings.minio_secret_key = "minioadmin"  # noqa: S105
+    service_settings.minio_secure = False
+    service_settings.minio_bucket = "worldview-bronze"
 
-        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-            mock_to_thread.return_value = None
-            await adapter.put_object(key=_KEY, data=_DATA)
+    storage_settings = StorageSettings(
+        endpoint=_normalize_endpoint(service_settings.minio_endpoint),
+        access_key=service_settings.minio_access_key,
+        secret_key=service_settings.minio_secret_key,
+        use_ssl=service_settings.minio_secure,
+        default_bucket=service_settings.minio_bucket,
+    )
 
-        mock_to_thread.assert_awaited_once()
-        call_args = mock_to_thread.await_args
-        assert call_args.args[0] == client.put_object
-        assert call_args.args[1] == "worldview-bronze"
-        assert call_args.args[2] == _KEY
-
-    async def test_put_object_raises_storage_error_on_failure(self) -> None:
-        """StorageError wraps client exceptions."""
-        client = MagicMock()
-        adapter = MinioBronzeAdapter(client=client, settings=_make_settings())
-
-        with (
-            patch("asyncio.to_thread", new_callable=AsyncMock, side_effect=RuntimeError("conn refused")),
-            pytest.raises(StorageError, match="conn refused"),
-        ):
-            await adapter.put_object(key=_KEY, data=_DATA)
-
-    async def test_object_exists_returns_true_when_found(self) -> None:
-        """object_exists returns True if stat_object succeeds."""
-        client = MagicMock()
-        adapter = MinioBronzeAdapter(client=client, settings=_make_settings())
-
-        with patch("asyncio.to_thread", new_callable=AsyncMock, return_value=MagicMock()):
-            result = await adapter.object_exists(_KEY)
-
-        assert result is True
-
-    async def test_object_exists_returns_false_when_not_found(self) -> None:
-        """object_exists returns False if stat_object raises (key absent)."""
-        client = MagicMock()
-        adapter = MinioBronzeAdapter(client=client, settings=_make_settings())
-
-        with patch("asyncio.to_thread", new_callable=AsyncMock, side_effect=Exception("NoSuchKey")):
-            result = await adapter.object_exists(_KEY)
-
-        assert result is False
+    assert storage_settings.endpoint == "http://localhost:7480"
+    assert storage_settings.default_bucket == "worldview-bronze"

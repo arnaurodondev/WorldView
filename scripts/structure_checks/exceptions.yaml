@@ -1,0 +1,34 @@
+# Service Structure Exceptions Registry
+#
+# Fields per exception:
+#   service      — service directory name under services/
+#   rule_id      — rule ID from RULE_DEFINITIONS in check_service_structure.py
+#   reason       — why the exception is needed
+#   owner        — team/person responsible for resolving
+#   expires_on   — ISO-8601 date after which the exception is treated as expired (CI fails)
+#
+# Example structure exception:
+#   STR-013 can be used temporarily if a service still has
+#   src/<pkg>/infrastructure/messaging/kafka/ before flattening mapper/serialization
+#   modules to src/<pkg>/infrastructure/messaging/.
+#
+# Policy:
+#   - Expired exceptions cause CI to fail, forcing resolution or renewal.
+#   - Remove an exception once the violation is resolved.
+#   - "never" is not valid — every exception must have an expiry.
+#
+# Run `python scripts/structure_checks/check_service_structure.py --strict` locally
+# to verify all exceptions are valid before pushing.
+
+exceptions:
+  # ─────────────────────────────────────────────────────────────────────────
+  # intelligence-migrations: not a FastAPI service — pure Alembic runner.
+  # It has no src/ directory and will never have an app.py or package layers.
+  # ─────────────────────────────────────────────────────────────────────────
+  - service: intelligence-migrations
+    rule_id: STR-001
+    reason: >
+      intelligence-migrations is a dedicated Alembic migration container, not a
+      FastAPI microservice. It has no src/ Python package by design.
+    owner: platform
+    expires_on: "2027-01-01"

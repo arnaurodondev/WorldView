@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from portfolio.messaging.outbox_mapper import outbox_record_to_kafka_value
-from portfolio.messaging.serialization import headers_for_event
+from portfolio.application.messaging.outbox_mapper import outbox_record_to_kafka_value
+from portfolio.infrastructure.messaging.serialization import headers_for_event
 
 
 def test_headers_for_event_content_type() -> None:

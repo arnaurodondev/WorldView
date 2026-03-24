@@ -33,6 +33,7 @@ All 4 tasks can be developed in parallel; T-S6-017 integration tests validate th
 5. All Wave 01–04 outputs (all blocks, consumer, repos, domain)
 6. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S6-014 through T-S6-017
 7. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+8. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

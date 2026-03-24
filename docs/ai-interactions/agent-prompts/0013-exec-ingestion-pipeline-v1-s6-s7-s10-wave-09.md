@@ -33,6 +33,7 @@ All tasks can run in parallel; T-S7-016 is documentation-only (no code).
 5. Wave 06 output: repos; Wave 07: scheduler, co-topology; Wave 08: Workers 13A–D
 6. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S7-010 through T-S7-016
 7. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+8. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

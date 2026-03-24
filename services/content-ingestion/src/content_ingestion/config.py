@@ -6,61 +6,69 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Configuration for the Content Ingestion service (S4)."""
+    """Configuration for the Content Ingestion service (S4).
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    All fields are read from environment variables prefixed with
+    ``CONTENT_INGESTION_`` (set by ``env_prefix``).
 
-    # External API keys
-    EODHD_API_KEY: str = ""
-    SEC_EDGAR_USER_AGENT: str = "worldview/1.0 contact@worldview.example"
-    FINNHUB_API_KEY: str = ""
-    NEWSAPI_KEY: str = ""
+    Exception: source API keys use their own conventional unprefixed names
+    (EODHD_API_KEY, FINNHUB_API_KEY, etc.) and are overridden via
+    ``validation_alias`` to bypass the prefix.
+    """
 
-    # Database
-    CONTENT_INGESTION_DB_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
+    model_config = SettingsConfigDict(
+        env_prefix="CONTENT_INGESTION_",
+        env_file=".env",
+        extra="ignore",
+    )
 
-    # Kafka
-    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
-    KAFKA_OUTBOX_TOPIC: str = "content.article.raw.v1"
+    # ── External API keys (no CONTENT_INGESTION_ prefix — shared variables) ──
+    eodhd_api_key: str = ""
+    sec_edgar_user_agent: str = "worldview/1.0 contact@worldview.example"
+    finnhub_api_key: str = ""
+    newsapi_key: str = ""
 
-    # MinIO
-    MINIO_ENDPOINT: str = "localhost:9000"
-    MINIO_ACCESS_KEY: str = ""
-    MINIO_SECRET_KEY: str = ""
-    MINIO_BUCKET: str = "worldview-bronze"
+    # ── Database ──────────────────────────────────────────────────────────────
+    db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
 
-    # Security
-    ADMIN_TOKEN: str = ""
+    # ── Kafka ─────────────────────────────────────────────────────────────────
+    kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_basic_auth: str = ""
+    kafka_outbox_topic: str = "content.article.raw.v1"
 
-    # Scheduler / outbox
-    SCHEDULER_INTERVAL_SECONDS: int = 300
-    OUTBOX_BATCH_SIZE: int = 100
-    OUTBOX_POLL_INTERVAL_SECONDS: int = 5
-    MAX_RETRIES: int = 3
-    OUTBOX_METRICS_POLL_SECONDS: int = 30
+    # ── MinIO (object storage) ────────────────────────────────────────────────
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "worldview-bronze"
+    minio_secure: bool = False
 
-    # Rate limiting
-    NEWSAPI_DAILY_LIMIT: int = 100
+    # ── Security ──────────────────────────────────────────────────────────────
+    admin_token: str = ""
 
-    # Valkey
-    VALKEY_URL: str = "redis://localhost:6379"
+    # ── Scheduler / outbox ────────────────────────────────────────────────────
+    scheduler_interval_seconds: int = 300
+    outbox_batch_size: int = 100
+    outbox_poll_interval_seconds: float = 5.0
+    outbox_lease_seconds: int = 30
+    outbox_max_attempts: int = 5
+    outbox_metrics_poll_seconds: int = 30
 
-    # Backfill — historical ingestion via source API date range
-    # Set BACKFILL_ENABLED=true to run a one-shot historical fetch on startup before
-    # switching to steady-state polling.  BACKFILL_FROM_DATE / BACKFILL_TO_DATE are
-    # ISO-8601 date strings (YYYY-MM-DD).  Leave BACKFILL_TO_DATE empty to default to
-    # yesterday.  BACKFILL_SOURCES is a comma-separated subset of:
-    #   eodhd, sec_edgar, finnhub, newsapi
-    # Leave empty to backfill all configured sources.
-    # BACKFILL_BATCH_DELAY_SECONDS adds a sleep between paginated requests during backfill
-    # to avoid hammering external APIs.
-    BACKFILL_ENABLED: bool = False
-    BACKFILL_FROM_DATE: str = ""  # e.g. "2024-01-01"
-    BACKFILL_TO_DATE: str = ""  # e.g. "2025-12-31"; defaults to yesterday
-    BACKFILL_SOURCES: str = ""  # e.g. "eodhd,finnhub"; empty = all
-    BACKFILL_BATCH_DELAY_SECONDS: float = 0.5
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    newsapi_daily_limit: int = 100
 
-    @property
-    def database_url(self) -> str:
-        """Backward-compatible alias used by alembic/env.py."""
-        return self.CONTENT_INGESTION_DB_URL
+    # ── Valkey ────────────────────────────────────────────────────────────────
+    valkey_url: str = "redis://localhost:6379"
+
+    # ── Backfill ─────────────────────────────────────────────────────────────
+    backfill_enabled: bool = False
+    backfill_from_date: str = ""
+    backfill_to_date: str = ""
+    backfill_sources: str = ""
+    backfill_batch_delay_seconds: float = 0.5
+
+    # ── Observability ─────────────────────────────────────────────────────────
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+from portfolio.application.messaging.mapper import holding_changed_to_dict, transaction_recorded_to_dict
+from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.repositories import OutboxRecord
 from portfolio.domain.entities.holding import Holding
 from portfolio.domain.entities.transaction import Transaction
@@ -22,8 +24,6 @@ from portfolio.domain.errors import (
     UserInactiveError,
 )
 from portfolio.domain.events import HoldingChanged, TransactionRecorded
-from portfolio.messaging.mapper import holding_changed_to_dict, transaction_recorded_to_dict
-from portfolio.messaging.topics import EVENT_TOPIC_MAP
 
 if TYPE_CHECKING:
     from datetime import datetime

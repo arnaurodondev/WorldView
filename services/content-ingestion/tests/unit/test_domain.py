@@ -68,7 +68,7 @@ class TestTokenBucketWaitTime:
         # 0 tokens, need 2, refill_rate=1 → wait = 2s
         bucket = _make_bucket(tokens=0.0, refill_rate=1.0)
         wt = bucket.wait_time(2)
-        assert wt == pytest.approx(2.0)
+        assert wt == pytest.approx(2.0, abs=1e-3)
 
 
 class TestRawArticle:

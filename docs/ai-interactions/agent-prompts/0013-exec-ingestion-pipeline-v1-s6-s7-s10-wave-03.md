@@ -35,6 +35,7 @@ Both agents work in parallel; T-S6-009 has a soft dependency on T-S6-008 (MinHas
 6. Wave 02 output: `services/nlp-pipeline/src/nlp_pipeline/application/blocks/block04_ner.py` (EntityMention output)
 7. `docs/ai-interactions/agent-responses/0013-response-20260322-ingestion-pipeline-v1-s6-s7-s10.md` — task details T-S6-008, T-S6-009, T-S6-010
 8. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+9. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

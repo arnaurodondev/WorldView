@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ import common.ids
 import common.time
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     """Supported ingestion sources."""
 
     EODHD = "eodhd"

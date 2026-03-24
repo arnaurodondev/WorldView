@@ -35,9 +35,9 @@ for LIB_DIR in "$ROOT_DIR"/libs/*/; do
         LIB_NAME=$(basename "$LIB_DIR")
         echo "--- Testing lib: $LIB_NAME ---"
         if [[ -n "$MARKER" ]]; then
-            pytest "$LIB_DIR/tests" -m "$MARKER" -v "${EXTRA_ARGS[@]}" || FAILED=1
+            pytest "$LIB_DIR/tests" -m "$MARKER" -v ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} || FAILED=1
         else
-            pytest "$LIB_DIR/tests" -v "${EXTRA_ARGS[@]}" || FAILED=1
+            pytest "$LIB_DIR/tests" -v ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} || FAILED=1
         fi
     fi
 done
@@ -48,9 +48,9 @@ for SVC_DIR in "$ROOT_DIR"/services/*/; do
         SVC_NAME=$(basename "$SVC_DIR")
         echo "--- Testing service: $SVC_NAME ---"
         if [[ -n "$MARKER" ]]; then
-            pytest "$SVC_DIR/tests" -m "$MARKER" -v "${EXTRA_ARGS[@]}" || FAILED=1
+            pytest "$SVC_DIR/tests" -m "$MARKER" -v ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} || FAILED=1
         else
-            pytest "$SVC_DIR/tests" -v "${EXTRA_ARGS[@]}" || FAILED=1
+            pytest "$SVC_DIR/tests" -v ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} || FAILED=1
         fi
     fi
 done

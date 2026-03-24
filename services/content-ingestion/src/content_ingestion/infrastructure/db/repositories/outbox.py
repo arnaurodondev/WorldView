@@ -1,14 +1,15 @@
-"""Repository for outbox_events and dlq_events tables."""
+"""Outbox repository — implements OutboxRepositoryProtocol with lease-based claiming."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+import datetime as dt
+from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select
+from sqlalchemy import select, update
 
 import common.ids
 import common.time
-from content_ingestion.infrastructure.db.models import DLQEventModel, OutboxEventModel
+from content_ingestion.infrastructure.db.models import OutboxEventModel
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -17,60 +18,94 @@ if TYPE_CHECKING:
 
 
 class OutboxRepository:
+    """PostgreSQL implementation of OutboxRepositoryProtocol.
+
+    Uses ``SELECT … FOR UPDATE SKIP LOCKED`` so concurrent dispatcher
+    instances never claim the same record.
+    """
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    # ── OutboxRepositoryProtocol ──────────────────────────────────────────────
+
+    async def fetch_pending(
+        self,
+        worker_id: str,
+        lease_seconds: int,
+        batch_size: int,
+    ) -> list[OutboxEventModel]:
+        """Atomically claim and return up to *batch_size* claimable records."""
+        now = common.time.utc_now()
+        expires_at = now + dt.timedelta(seconds=lease_seconds)
+
+        result = await self._session.execute(
+            select(OutboxEventModel)
+            .where(
+                OutboxEventModel.status.in_(["pending", "processing"]),
+                (OutboxEventModel.leased_until.is_(None)) | (OutboxEventModel.leased_until <= now),
+            )
+            .order_by(OutboxEventModel.created_at)
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+        records = list(result.scalars().all())
+        for record in records:
+            record.status = "processing"
+            record.lease_owner = worker_id
+            record.leased_until = expires_at
+        await self._session.flush()
+        return records
+
+    async def mark_published(self, record_id: UUID) -> None:
+        await self._session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == record_id)
+            .values(
+                status="delivered",
+                dispatched_at=common.time.utc_now(),
+                lease_owner=None,
+                leased_until=None,
+            )
+        )
+
+    async def increment_attempts(self, record_id: UUID) -> None:
+        await self._session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == record_id)
+            .values(
+                attempts=OutboxEventModel.attempts + 1,
+                status="pending",
+                lease_owner=None,
+                leased_until=None,
+            )
+        )
+
+    async def move_to_dead_letter(self, record_id: UUID) -> None:
+        await self._session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == record_id)
+            .values(status="dead_letter", lease_owner=None, leased_until=None)
+        )
+
+    # ── Service-specific helpers ──────────────────────────────────────────────
 
     async def append(
         self,
         aggregate_type: str,
         aggregate_id: UUID,
         event_type: str,
+        topic: str,
         payload: dict,
     ) -> None:
-        row = OutboxEventModel(
-            id=common.ids.new_uuid7(),
-            aggregate_type=aggregate_type,
-            aggregate_id=aggregate_id,
-            event_type=event_type,
-            payload=payload,
+        """Insert a new outbox record in ``pending`` state."""
+        self._session.add(
+            OutboxEventModel(
+                id=common.ids.new_uuid7(),
+                aggregate_type=aggregate_type,
+                aggregate_id=aggregate_id,
+                event_type=event_type,
+                topic=topic,
+                payload=payload,
+            )
         )
-        self._session.add(row)
-
-    async def fetch_pending(self, limit: int = 100) -> list[OutboxEventModel]:
-        result = await self._session.execute(
-            select(OutboxEventModel)
-            .where(OutboxEventModel.status == "pending")
-            .order_by(OutboxEventModel.created_at)
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def get_by_id(self, event_id: UUID) -> OutboxEventModel | None:
-        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == event_id))
-        return cast(OutboxEventModel | None, result.scalar_one_or_none())
-
-    async def mark_dispatched(self, event_id: UUID) -> None:
-        event = await self.get_by_id(event_id)
-        if event is not None:
-            event.status = "dispatched"
-            event.dispatched_at = common.time.utc_now()
-
-    async def mark_failed(self, event_id: UUID, error: str) -> None:
-        event = await self.get_by_id(event_id)
-        if event is not None:
-            event.retry_count += 1
-            event.status = "failed"
-            event.error = error
-
-    async def move_to_dlq(self, event_id: UUID) -> None:
-        event = await self.get_by_id(event_id)
-        if event is None:
-            return
-        dlq_row = DLQEventModel(
-            id=common.ids.new_uuid7(),
-            original_event_id=event.id,
-            payload=event.payload,
-            error=event.error or "",
-        )
-        self._session.add(dlq_row)
-        await self._session.execute(delete(OutboxEventModel).where(OutboxEventModel.id == event_id))

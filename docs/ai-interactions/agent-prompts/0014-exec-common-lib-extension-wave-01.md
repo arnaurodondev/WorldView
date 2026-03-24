@@ -31,6 +31,7 @@
 11. `docs/libs/common.md` — current documentation
 12. `services/portfolio/src/portfolio/domain/events.py` — canonical example of correct common usage
 13. `services/market-ingestion/src/market_ingestion/domain/events.py` — canonical example of correct common usage
+14. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

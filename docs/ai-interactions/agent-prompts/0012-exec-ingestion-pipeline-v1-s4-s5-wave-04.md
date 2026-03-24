@@ -37,6 +37,7 @@
    - `services/content-ingestion/src/content_ingestion/api/health.py`
 8. `services/content-store/pyproject.toml` — verify `uuid6`, `pydantic-settings`, `structlog`, `datasketch`, `readability-lxml`, `bleach`, `aiokafka`, `fastavro`, `redis[asyncio]` are listed.
 9. `docs/libs/common.md` — UUIDv7 (`new_uuid7`), UTC time (`utc_now`), cross-service types (`DocumentId`, `EntityId`, `UrlHash`, `MinIOKey`)
+10. **`docs/STANDARDS.md`** — engineering standards and anti-patterns: canonical library usage, config conventions, observability setup, testing rules
 
 ---
 

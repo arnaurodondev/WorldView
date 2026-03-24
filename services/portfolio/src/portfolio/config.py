@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Configuration for the portfolio service."""
 
-    model_config = {
-        "env_prefix": "PORTFOLIO_",
-        "env_file": "configs/dev.local.env",
-        "env_file_encoding": "utf-8",
-    }
+    model_config = SettingsConfigDict(
+        env_prefix="PORTFOLIO_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Server
     service_name: str = "portfolio"
@@ -53,7 +54,7 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
     watchlist_cache_ttl_seconds: int = 300
 
-    # Observability
+    # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
-    log_format: str = "json"
-    otlp_endpoint: str | None = None
+    log_json: bool = True
+    otlp_endpoint: str = ""
