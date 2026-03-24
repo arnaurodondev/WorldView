@@ -33,6 +33,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external containers (DB, Kafka, MinIO, Valkey)",
