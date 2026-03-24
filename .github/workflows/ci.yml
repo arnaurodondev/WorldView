@@ -512,6 +512,11 @@ jobs:
           pytest services/${{ matrix.service }}/tests/e2e
           -m e2e -v --tb=short
 
+      - name: Show migrate container logs (on failure)
+        if: failure()
+        run: |
+          docker logs $(docker ps -aq --filter "name=${{ matrix.service }}-migrate" 2>/dev/null | head -1) 2>/dev/null || true
+
       - name: Tear down stack
         if: always()
         run: |

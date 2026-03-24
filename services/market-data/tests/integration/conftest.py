@@ -105,10 +105,11 @@ def _migrated_db(pg_container):
         "asyncpg",
     )
 
-    _service_dir = Path(__file__).parent.parent.parent
+    _service_dir = Path(__file__).resolve().parent.parent.parent
     os.environ["ALEMBIC_URL"] = asyncpg_url
     try:
         alembic_cfg = Config(str(_service_dir / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(_service_dir / "alembic"))
         command.upgrade(alembic_cfg, "head")
     finally:
         os.environ.pop("ALEMBIC_URL", None)
