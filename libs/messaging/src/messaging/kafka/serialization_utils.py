@@ -112,7 +112,7 @@ def deserialize_avro(schema: dict[str, Any], data: bytes) -> dict[str, Any]:
         Decoded record as a plain dict.
     """
     buf = io.BytesIO(data)
-    return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema))
+    return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema, None))
 
 
 def deserialize_confluent_avro(schema_path: str, data: bytes) -> dict[str, Any]:
