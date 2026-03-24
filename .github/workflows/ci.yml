@@ -476,7 +476,7 @@ jobs:
               --profile ${{ matrix.profile }} up --build --wait; then
             echo "=== migrate container logs ==="
             docker compose -f infra/compose/docker-compose.test.yml \
-              --profile ${{ matrix.profile }} logs --no-color "*-migrate" 2>/dev/null || true
+              --profile ${{ matrix.profile }} logs --no-color "${{ matrix.service }}-migrate" 2>/dev/null || true
             exit 1
           fi
         timeout-minutes: 12
