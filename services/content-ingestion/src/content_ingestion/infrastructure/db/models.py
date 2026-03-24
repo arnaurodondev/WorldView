@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID  # noqa: TCH003 — SQLAlchemy get_type_hints() resolves Mapped[UUID] at runtime
 
 from sqlalchemy import (
     Boolean,
@@ -22,7 +23,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 if TYPE_CHECKING:
     from datetime import datetime
-    from uuid import UUID
 
 
 class Base(DeclarativeBase):

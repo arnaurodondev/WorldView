@@ -90,6 +90,22 @@ class FakeUoW(UnitOfWork):
     def idempotency(self) -> IdempotencyRepository:
         return self._idempotency_repo
 
+    @property
+    def watchlists(self):
+        return MagicMock()
+
+    @property
+    def watchlist_members(self):
+        return MagicMock()
+
+    @property
+    def alert_preferences(self):
+        return MagicMock()
+
+    @property
+    def entity_suppressions(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 

@@ -208,6 +208,22 @@ class FakeUoW(UnitOfWork):
     def idempotency(self):
         return self._idempotency
 
+    @property
+    def watchlists(self):
+        return None
+
+    @property
+    def watchlist_members(self):
+        return None
+
+    @property
+    def alert_preferences(self):
+        return None
+
+    @property
+    def entity_suppressions(self):
+        return None
+
     async def commit(self): ...
     async def rollback(self): ...
 

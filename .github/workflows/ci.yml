@@ -456,6 +456,18 @@ jobs:
             --quiet
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
+      # docker.env is gitignored (contains local secrets). In CI, bootstrap
+      # from the committed .example files which have correct Docker-network values.
+      - name: Create docker.env from example
+        run: |
+          for svc in portfolio market-ingestion market-data; do
+            example="services/$svc/configs/docker.env.example"
+            target="services/$svc/configs/docker.env"
+            if [ -f "$example" ] && [ ! -f "$target" ]; then
+              cp "$example" "$target"
+            fi
+          done
+
       # Kafka has a 30s start_period; TimescaleDB is also slow on first start.
       # --wait blocks here until every service healthcheck passes.
       - name: Start test stack
