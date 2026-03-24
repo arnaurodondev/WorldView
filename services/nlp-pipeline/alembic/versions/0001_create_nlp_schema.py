@@ -69,7 +69,7 @@ def upgrade() -> None:
             created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
-    op.execute("CREATE INDEX idx_entity_mentions_doc" " ON entity_mentions (doc_id, mention_class)")
+    op.execute("CREATE INDEX idx_entity_mentions_doc ON entity_mentions (doc_id, mention_class)")
     op.execute(
         "CREATE INDEX idx_entity_mentions_resolved"
         " ON entity_mentions (resolved_entity_id)"
@@ -104,10 +104,8 @@ def upgrade() -> None:
             USING hnsw (embedding vector_cosine_ops)
             WHERE (expires_at IS NULL OR expires_at > now())
     """)
-    op.execute(
-        "CREATE INDEX idx_chunk_emb_pending ON chunk_embeddings (created_at)" " WHERE embedding_status = 'pending'"
-    )
-    op.execute("CREATE INDEX idx_chunk_emb_expires ON chunk_embeddings (expires_at)" " WHERE expires_at IS NOT NULL")
+    op.execute("CREATE INDEX idx_chunk_emb_pending ON chunk_embeddings (created_at) WHERE embedding_status = 'pending'")
+    op.execute("CREATE INDEX idx_chunk_emb_expires ON chunk_embeddings (expires_at) WHERE expires_at IS NOT NULL")
 
     # 7. section_embeddings — separate HNSW index (chunk and section ANN must not pollute each other)
     op.execute("""
@@ -154,7 +152,7 @@ def upgrade() -> None:
             failed_at      TIMESTAMPTZ
         )
     """)
-    op.execute("CREATE INDEX idx_outbox_s6_pending ON outbox_events (created_at)" " WHERE status = 'pending'")
+    op.execute("CREATE INDEX idx_outbox_s6_pending ON outbox_events (created_at) WHERE status = 'pending'")
 
     # 10. dead_letter_queue
     op.execute("""

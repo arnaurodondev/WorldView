@@ -7,9 +7,9 @@ from market_ingestion.infrastructure.db.repositories.task_repository import Sqla
 from market_ingestion.infrastructure.db.repositories.watermark_repository import SqlaWatermarkRepository
 
 __all__ = [
-    "SqlaProviderBudgetRepository",
     "SqlaOutboxRepository",
     "SqlaPollingPolicyRepository",
+    "SqlaProviderBudgetRepository",
     "SqlaTaskRepository",
     "SqlaWatermarkRepository",
 ]

@@ -16,15 +16,14 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
 from market_data.domain.enums import FundamentalsSection
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from datetime import date, datetime
 
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)

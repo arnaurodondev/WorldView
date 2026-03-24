@@ -23,13 +23,13 @@ run: .env-check
 	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/uvicorn market_ingestion.app:create_app --factory --reload --port 8002
 
 run-dispatcher: .env-check
-	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.messaging.dispatcher_main
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.infrastructure.messaging.outbox.dispatcher_main
 
 run-scheduler: .env-check
-	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.scheduler.main
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.infrastructure.schedulers.scheduler
 
 run-worker: .env-check
-	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.worker.main
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m market_ingestion.infrastructure.workers.worker
 
 # Unit tests — no env sourcing required (all infra is mocked)
 test:
@@ -37,23 +37,37 @@ test:
 
 # Integration tests — require running Postgres + MinIO (or dev infra)
 test-integration: .env-check
-	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/pytest tests/ -m integration -v
+	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans >/dev/null 2>&1 || true
+	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test up --build --wait; \
+	COMPOSE_EXIT=$$?; \
+	if [ $$COMPOSE_EXIT -ne 0 ]; then \
+		docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans; \
+		exit $$COMPOSE_EXIT; \
+	fi; \
+	set -a && . ./configs/dev.local.env && set +a; \
+	MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/ingestion_db \
+		$(VENV)/bin/pytest tests/ -m integration -v; \
+	EXIT=$$?; \
+	docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans; \
+	exit $$EXIT
 
 test-contract:
 	$(VENV)/bin/pytest tests/ -m contract -v
 
 # E2E tests — starts docker-compose.test.yml, runs tests against localhost:8002, tears down
 test-e2e: .env-check
+	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans >/dev/null 2>&1 || true
 	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test up --build --wait; \
 	COMPOSE_EXIT=$$?; \
 	if [ $$COMPOSE_EXIT -ne 0 ]; then \
-		docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v; \
+		docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans; \
 		exit $$COMPOSE_EXIT; \
 	fi; \
 	set -a && . ./configs/dev.local.env && set +a; \
-	$(VENV)/bin/pytest tests/e2e/ -v; \
+	MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/ingestion_db \
+		$(VENV)/bin/pytest tests/e2e/ -v; \
 	EXIT=$$?; \
-	docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v; \
+	docker compose -f ../../infra/compose/docker-compose.test.yml --profile market-ingestion-test down -v --remove-orphans; \
 	exit $$EXIT
 
 test-all: .env-check

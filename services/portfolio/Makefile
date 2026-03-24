@@ -23,7 +23,7 @@ run: .env-check
 	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/uvicorn portfolio.app:create_app --factory --reload --port 8001
 
 run-dispatcher: .env-check
-	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m portfolio.messaging.dispatcher_main
+	set -a && . ./configs/dev.local.env && set +a && $(VENV)/bin/python -m portfolio.infrastructure.messaging.outbox.dispatcher_main
 
 # Unit tests — no env sourcing required (all infra is mocked)
 test:
@@ -38,16 +38,18 @@ test-contract:
 
 # E2E tests — starts docker-compose.test.yml, runs tests against localhost:8001, tears down
 test-e2e: .env-check
+	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v --remove-orphans >/dev/null 2>&1 || true
 	@docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test up --build --wait; \
 	COMPOSE_EXIT=$$?; \
 	if [ $$COMPOSE_EXIT -ne 0 ]; then \
-		docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v; \
+		docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v --remove-orphans; \
 		exit $$COMPOSE_EXIT; \
 	fi; \
 	set -a && . ./configs/dev.local.env && set +a; \
-	$(VENV)/bin/pytest tests/e2e/ -v; \
+	PORTFOLIO_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/portfolio_db \
+		$(VENV)/bin/pytest tests/e2e/ -v; \
 	EXIT=$$?; \
-	docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v; \
+	docker compose -f ../../infra/compose/docker-compose.test.yml --profile portfolio-test down -v --remove-orphans; \
 	exit $$EXIT
 
 test-all: .env-check

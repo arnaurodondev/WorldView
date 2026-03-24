@@ -8,6 +8,7 @@ version = "2025.6.0"
 description = "Embeddings, entity linking, sentiment, event extraction, topic clustering"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "common",
     "fastapi==0.111",
     "uvicorn[standard]==0.29",
     "pydantic==2.5",

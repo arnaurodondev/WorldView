@@ -19,13 +19,18 @@ Usage:
   ./scripts/ci-local.sh [--job <name>] [--python <python_bin>]
 
 Options:
-  --job <name>     One of: all, lint, validate-schemas, test-libs, test-services, test-frontend
+  --job <name>     One of: all, lint, validate-schemas, validate-service-structure,
+                   import-guards, architecture-tests, test-libs, test-services,
+                   test-frontend
                    Default: all
   --python <bin>   Python executable to use (default: python3)
   -h, --help       Show this help
 
 Examples:
   ./scripts/ci-local.sh
+  ./scripts/ci-local.sh --job validate-service-structure
+  ./scripts/ci-local.sh --job import-guards
+  ./scripts/ci-local.sh --job architecture-tests
   ./scripts/ci-local.sh --job test-libs
   ./scripts/ci-local.sh --job lint --python python3.12
 EOF
@@ -149,6 +154,40 @@ run_test_services() {
     done
 }
 
+run_validate_service_structure() {
+    echo "=== Job: validate-service-structure ==="
+
+    cd "$ROOT_DIR"
+    ensure_venv
+    python_install pyyaml --quiet
+
+    run_cmd "$PYTHON_BIN" scripts/structure_checks/check_service_structure.py \
+        --strict \
+        --allow-exceptions-file scripts/structure_checks/exceptions.yaml
+}
+
+run_import_guards() {
+    echo "=== Job: import-guards ==="
+
+    cd "$ROOT_DIR"
+    ensure_venv
+    python_install pyyaml --quiet
+
+    run_cmd "$PYTHON_BIN" scripts/import_guards/check_import_guards.py \
+        --strict \
+        --baseline scripts/import_guards/baseline.json
+}
+
+run_architecture_tests() {
+    echo "=== Job: architecture-tests ==="
+
+    cd "$ROOT_DIR"
+    ensure_venv
+    python_install pytest pytest-asyncio --quiet
+
+    run_cmd "$PYTHON_BIN" -m pytest tests/architecture -v --tb=short
+}
+
 run_test_frontend() {
     echo "=== Job: test-frontend ==="
 
@@ -192,6 +231,9 @@ case "$JOB" in
     all)
         run_lint
         run_validate_schemas
+        run_validate_service_structure
+        run_import_guards
+        run_architecture_tests
         run_test_libs
         run_test_services
         run_test_frontend
@@ -201,6 +243,15 @@ case "$JOB" in
         ;;
     validate-schemas)
         run_validate_schemas
+        ;;
+    validate-service-structure)
+        run_validate_service_structure
+        ;;
+    import-guards)
+        run_import_guards
+        ;;
+    architecture-tests)
+        run_architecture_tests
         ;;
     test-libs)
         run_test_libs

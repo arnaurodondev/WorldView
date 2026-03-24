@@ -8,6 +8,10 @@ version = "2025.6.0"
 description = "RSS/API polling for news, domain allowlists, rate limiting, relay fallback, raw article storage"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "common",
+    "messaging",
+    "storage",
+    "observability",
     "fastapi==0.111",
     "uvicorn[standard]==0.29",
     "pydantic==2.5",
@@ -29,3 +33,13 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/content_ingestion"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring external infra (DB, Kafka, MinIO)",
+]

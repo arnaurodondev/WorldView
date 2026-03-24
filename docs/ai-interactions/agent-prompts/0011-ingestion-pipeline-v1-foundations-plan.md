@@ -1,5 +1,7 @@
 # Prompt 0011 — Ingestion Pipeline v1: Foundations (libs/ml-clients, DB schemas, infra, contracts)
 
+> **Status**: ✅ Implemented — all 5 waves complete (2026-03-22)
+
 Act as the **Architecture Decision Lead** (`.claude/agents/architecture-decision-lead.md`), **Data Platform Engineer** (`.claude/agents/data-platform-engineer.md`), and **Machine Learning Lead** (`.claude/agents/machine-learning-lead.md`).
 
 ## Goal

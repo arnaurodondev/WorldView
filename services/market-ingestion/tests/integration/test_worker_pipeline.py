@@ -110,7 +110,7 @@ async def test_worker_pipeline_end_to_end_mocked():
     """WorkerProcess claims a task and executes the pipeline end-to-end with mocks."""
     from unittest.mock import patch
 
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
@@ -124,13 +124,13 @@ async def test_worker_pipeline_end_to_end_mocked():
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
-        patch("market_ingestion.worker.main.ExecuteTaskUseCase") as mock_exec,
-        patch("market_ingestion.worker.main.ClaimTasksUseCase") as mock_claim,
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.ExecuteTaskUseCase") as mock_exec,
+        patch("market_ingestion.infrastructure.workers.worker.ClaimTasksUseCase") as mock_claim,
     ):
         fake_task = MagicMock()
         fake_task.id = "task-intg-001"

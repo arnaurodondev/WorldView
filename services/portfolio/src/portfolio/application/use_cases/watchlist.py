@@ -8,6 +8,13 @@ from typing import TYPE_CHECKING
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+from portfolio.application.messaging.mapper import (
+    watchlist_created_to_dict,
+    watchlist_deleted_to_dict,
+    watchlist_item_added_to_dict,
+    watchlist_item_deleted_to_dict,
+)
+from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.cache import NoOpWatchlistCache
 from portfolio.application.ports.repositories import OutboxRecord
 from portfolio.domain.entities.watchlist import Watchlist
@@ -27,13 +34,6 @@ from portfolio.domain.events import (
     WatchlistItemAdded,
     WatchlistItemDeleted,
 )
-from portfolio.messaging.mapper import (
-    watchlist_created_to_dict,
-    watchlist_deleted_to_dict,
-    watchlist_item_added_to_dict,
-    watchlist_item_deleted_to_dict,
-)
-from portfolio.messaging.topics import EVENT_TOPIC_MAP
 
 if TYPE_CHECKING:
     from uuid import UUID

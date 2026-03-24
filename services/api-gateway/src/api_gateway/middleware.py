@@ -52,7 +52,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             token = auth[7:]
             with suppress(jwt.InvalidTokenError):
                 request.state.user = decode_jwt(token, self.secret, self.algorithm)
-        return await call_next(request)
+        return cast("Response", await call_next(request))
 
 
 # ── Rate Limiting ─────────────────────────────────────────
@@ -78,7 +78,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if self.valkey is None:
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
         # Key by IP (production should use user ID if authenticated)
         client_ip = request.client.host if request.client else "unknown"
@@ -95,9 +95,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     media_type="application/json",
                 )
         except Exception:
-            return await call_next(request)
+            return cast("Response", await call_next(request))
 
-        return await call_next(request)
+        return cast("Response", await call_next(request))
 
 
 # ── CORS setup ────────────────────────────────────────────

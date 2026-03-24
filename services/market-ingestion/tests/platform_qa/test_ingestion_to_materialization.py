@@ -343,6 +343,7 @@ async def test_scenario_scheduler_tick_with_symbol_policy_creates_task():
     mock_uow.budgets.get_or_create = AsyncMock(return_value=mock_budget)
     mock_uow.budgets.save = AsyncMock()
     mock_uow.tasks = MagicMock()
+    mock_uow.tasks.has_active_task = AsyncMock(return_value=False)
     mock_uow.tasks.add_many = AsyncMock(return_value=1)
 
     use_case = ScheduleDueTasksUseCase(uow=mock_uow)

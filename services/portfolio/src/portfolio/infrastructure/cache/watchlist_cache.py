@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from portfolio.application.ports.cache import WatchlistCachePort
@@ -28,7 +28,8 @@ class ValkeyWatchlistCache(WatchlistCachePort):
 
     async def get_user_ids(self, entity_id: UUID) -> list[UUID]:
         """Return all user_ids tracking *entity_id*; empty list on cache miss."""
-        members: set[str] = await self._client._redis.smembers(_key(entity_id))
+        members_raw = await cast("Any", self._client._redis.smembers(_key(entity_id)))
+        members: set[str] = cast("set[str]", members_raw)
         if not members:
             return []
         return [UUID(m) for m in members]
@@ -43,5 +44,5 @@ class ValkeyWatchlistCache(WatchlistCachePort):
         effective_ttl = ttl if ttl is not None else self._ttl
         await self._client._redis.delete(key)
         if user_ids:
-            await self._client._redis.sadd(key, *[str(uid) for uid in user_ids])
+            await cast("Any", self._client._redis.sadd(key, *[str(uid) for uid in user_ids]))
             await self._client._redis.expire(key, effective_ttl)

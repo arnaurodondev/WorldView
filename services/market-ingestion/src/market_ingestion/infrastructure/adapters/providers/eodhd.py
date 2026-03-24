@@ -474,7 +474,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if response.status_code >= 400:
             raise ProviderDataError(f"EODHD client error: HTTP {response.status_code} for {url}")
 
-        return cast(bytes, response.content)
+        return cast("bytes", response.content)
 
 
 # ---------------------------------------------------------------------------

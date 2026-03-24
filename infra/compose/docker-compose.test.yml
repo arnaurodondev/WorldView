@@ -6,8 +6,8 @@
 #   - migrate containers use service_completed_successfully: service never
 #     starts before schema is current
 #   - Long-running background services are included for full async E2E flows
-#   - Ports are identical to dev.local.env so dev.local.env values work
-#     directly with pytest (localhost:8001, localhost:8002, localhost:5432, etc.)
+#   - API ports match dev.local.env; Postgres host port uses 55433 to avoid
+#     collisions with local database instances during E2E runs.
 #
 # Profiles:
 #   portfolio-test          — Postgres + Kafka + Schema Registry + portfolio migrate + portfolio API + portfolio dispatcher
@@ -37,7 +37,7 @@ services:
     image: postgres:16-alpine
     profiles: [portfolio-test, market-ingestion-test, dev-tools, all]
     ports:
-      - "5432:5432"
+      - "55433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -249,7 +249,7 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/portfolio/configs/docker.env
-    command: ["python", "-m", "portfolio.messaging.dispatcher_main"]
+    command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s
@@ -314,7 +314,7 @@ services:
     environment:
       MARKET_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS: "2.0"
       MARKET_INGESTION_SCHEDULER_MAX_TASKS_PER_TICK: "0"
-    command: ["python", "-m", "market_ingestion.scheduler.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.schedulers.scheduler"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s
@@ -338,7 +338,7 @@ services:
     environment:
       # Short HTTP timeout so the worker fails-fast on EODHD rate-limits in CI
       MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS: "5"
-    command: ["python", "-m", "market_ingestion.worker.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.workers.worker"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s
@@ -361,7 +361,7 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.messaging.dispatcher_main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from market_ingestion.domain.events import MarketDatasetFetched
 from market_ingestion.domain.value_objects import ObjectRef
-from market_ingestion.infrastructure.messaging.kafka.mapper import MarketDatasetFetchedMapper
+from market_ingestion.infrastructure.messaging.mapper import MarketDatasetFetchedMapper
 
 # ---------------------------------------------------------------------------
 # Fixtures

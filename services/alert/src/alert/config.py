@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,6 +8,7 @@ class Settings(BaseSettings):
         env_prefix="ALERT_",
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     s1_portfolio_base_url: str = "http://localhost:8001"
@@ -18,5 +21,7 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     valkey_url: str = "redis://localhost:6379/0"
 
-
-settings = Settings()
+    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""

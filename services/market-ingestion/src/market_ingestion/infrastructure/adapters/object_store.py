@@ -68,11 +68,11 @@ class S3ObjectStoreAdapter(ObjectStoreAdapter):
 
     async def get(self, bucket: str, key: str) -> bytes:
         """Retrieve raw bytes for *key* in *bucket*."""
-        return cast(bytes, await self._storage.get_bytes(bucket, key))
+        return cast("bytes", await self._storage.get_bytes(bucket, key))
 
     async def exists(self, bucket: str, key: str) -> bool:
         """Return True if *key* exists in *bucket*."""
-        return cast(bool, await self._storage.exists(bucket, key))
+        return cast("bool", await self._storage.exists(bucket, key))
 
     async def ensure_bucket(self, bucket: str) -> None:
         """No-op: bucket lifecycle is managed externally (infra init scripts)."""

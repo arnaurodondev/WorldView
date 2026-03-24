@@ -2,34 +2,73 @@
 
 from __future__ import annotations
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Configuration for the content-ingestion service."""
+    """Configuration for the Content Ingestion service (S4).
 
-    model_config = {
-        "env_prefix": "CONTENT_INGESTION_",
-        "env_file": "configs/dev.local.env",
-        "env_file_encoding": "utf-8",
-    }
+    All fields are read from environment variables prefixed with
+    ``CONTENT_INGESTION_`` (set by ``env_prefix``).
 
-    # Server
-    host: str = "0.0.0.0"
-    port: int = 8004
-    debug: bool = False
+    Exception: source API keys use their own conventional unprefixed names
+    (EODHD_API_KEY, FINNHUB_API_KEY, etc.) and are overridden via
+    ``validation_alias`` to bypass the prefix.
+    """
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
+    model_config = SettingsConfigDict(
+        env_prefix="CONTENT_INGESTION_",
+        env_file=".env",
+        extra="ignore",
+    )
 
-    # Kafka
+    # ── External API keys (no CONTENT_INGESTION_ prefix — shared variables) ──
+    eodhd_api_key: str = ""
+    sec_edgar_user_agent: str = "worldview/1.0 contact@worldview.example"
+    finnhub_api_key: str = ""
+    newsapi_key: str = ""
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
+
+    # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
-    schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_basic_auth: str = ""
+    kafka_outbox_topic: str = "content.article.raw.v1"
 
-    # Storage
-    storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    # ── MinIO (object storage) ────────────────────────────────────────────────
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bucket: str = "worldview-bronze"
+    minio_secure: bool = False
 
-    # Valkey
-    valkey_url: str = "redis://localhost:6379/0"
+    # ── Security ──────────────────────────────────────────────────────────────
+    admin_token: str = ""
+
+    # ── Scheduler / outbox ────────────────────────────────────────────────────
+    scheduler_interval_seconds: int = 300
+    outbox_batch_size: int = 100
+    outbox_poll_interval_seconds: float = 5.0
+    outbox_lease_seconds: int = 30
+    outbox_max_attempts: int = 5
+    outbox_metrics_poll_seconds: int = 30
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    newsapi_daily_limit: int = 100
+
+    # ── Valkey ────────────────────────────────────────────────────────────────
+    valkey_url: str = "redis://localhost:6379"
+
+    # ── Backfill ─────────────────────────────────────────────────────────────
+    backfill_enabled: bool = False
+    backfill_from_date: str = ""
+    backfill_to_date: str = ""
+    backfill_sources: str = ""
+    backfill_batch_delay_seconds: float = 0.5
+
+    # ── Observability ─────────────────────────────────────────────────────────
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""

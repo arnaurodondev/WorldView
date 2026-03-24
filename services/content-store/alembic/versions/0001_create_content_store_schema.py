@@ -33,7 +33,7 @@ def upgrade() -> None:
         )
     """)
     op.execute("CREATE INDEX idx_documents_normalized_hash ON documents (normalized_hash)")
-    op.execute("CREATE INDEX idx_documents_source_published" " ON documents (source_type, published_at DESC)")
+    op.execute("CREATE INDEX idx_documents_source_published ON documents (source_type, published_at DESC)")
 
     # 2. minhash_signatures — INTEGER[] is non-negotiable (never BYTEA)
     op.execute("""
@@ -61,7 +61,7 @@ def upgrade() -> None:
             PRIMARY KEY (sig_id, mention_text_hash)
         )
     """)
-    op.execute("CREATE INDEX idx_minhash_mentions_hash" " ON minhash_entity_mentions (mention_text_hash, sig_id)")
+    op.execute("CREATE INDEX idx_minhash_mentions_hash ON minhash_entity_mentions (mention_text_hash, sig_id)")
     op.execute(
         "CREATE INDEX idx_minhash_mentions_entity"
         " ON minhash_entity_mentions (entity_id, sig_id)"
@@ -82,7 +82,7 @@ def upgrade() -> None:
             failed_at      TIMESTAMPTZ
         )
     """)
-    op.execute("CREATE INDEX idx_outbox_s5_pending ON outbox_events (created_at)" " WHERE status = 'pending'")
+    op.execute("CREATE INDEX idx_outbox_s5_pending ON outbox_events (created_at) WHERE status = 'pending'")
 
     # 5. dead_letter_queue
     op.execute("""
