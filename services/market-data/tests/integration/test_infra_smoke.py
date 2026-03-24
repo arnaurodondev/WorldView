@@ -20,12 +20,8 @@ class TestPostgresContainer:
         import asyncpg
 
         url = pg_container.get_connection_url()
-        # asyncpg uses postgresql:// not postgresql+asyncpg://
-        dsn = url.replace("postgresql+asyncpg://", "postgresql://").replace(
-            "postgresql://",
-            "postgresql://",
-            1,
-        )
+        # testcontainers may return +psycopg2 or +asyncpg; asyncpg needs bare scheme
+        dsn = url.replace("postgresql+asyncpg://", "postgresql://").replace("postgresql+psycopg2://", "postgresql://")
         conn = await asyncpg.connect(dsn)
         result = await conn.fetchval("SELECT 1")
         await conn.close()
@@ -41,7 +37,7 @@ class TestPostgresContainer:
         await conn.close()
 
         version_nums = {row["version_num"] for row in rows}
-        assert "002" in version_nums, f"Expected migration '002' to be head, got: {version_nums}"
+        assert "003" in version_nums, f"Expected migration '003' to be head, got: {version_nums}"
 
 
 class TestKafkaContainer:
