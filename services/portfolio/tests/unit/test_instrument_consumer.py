@@ -112,7 +112,7 @@ def _make_config():
 
 
 def _make_consumer_with_fake_uow(fake_uow: FakeUoW):
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     config = _make_config()
     consumer = InstrumentEventConsumer(config=config, session_factory=MagicMock())
@@ -232,7 +232,7 @@ async def test_mark_processed_ignores_invalid_uuid() -> None:
 
 def test_deserialize_value_parses_json() -> None:
     """deserialize_value decodes raw JSON bytes to a dict."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
     payload = {"symbol": "AAPL", "exchange": "NASDAQ", "event_id": str(uuid4())}
@@ -246,7 +246,7 @@ def test_deserialize_value_parses_json() -> None:
 
 def test_extract_event_id_returns_event_id_field() -> None:
     """extract_event_id returns the event_id string from value dict."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
     eid = str(uuid4())
@@ -256,7 +256,7 @@ def test_extract_event_id_returns_event_id_field() -> None:
 
 def test_extract_event_id_returns_empty_string_when_missing() -> None:
     """extract_event_id returns empty string when event_id is absent."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
 
@@ -265,7 +265,7 @@ def test_extract_event_id_returns_empty_string_when_missing() -> None:
 
 def test_get_schema_path_returns_none() -> None:
     """get_schema_path always returns None (instruments use JSON, not Avro)."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
 
@@ -275,7 +275,7 @@ def test_get_schema_path_returns_none() -> None:
 @pytest.mark.asyncio
 async def test_get_pending_retries_returns_empty_list() -> None:
     """get_pending_retries returns an empty list (no retry persistence)."""
-    from portfolio.consumers.instrument_consumer import InstrumentEventConsumer
+    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
 

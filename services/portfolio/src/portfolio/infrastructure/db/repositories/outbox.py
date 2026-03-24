@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
 
+from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.repositories import OutboxRecord, OutboxRepository
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel
-from portfolio.messaging.topics import EVENT_TOPIC_MAP
 
 if TYPE_CHECKING:
     from uuid import UUID

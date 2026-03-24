@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import fastavro
 import pytest
+from portfolio.application.messaging.mapper import instrument_ref_created_to_dict
 from portfolio.domain.events import InstrumentRefCreated
-from portfolio.messaging.mapper import instrument_ref_created_to_dict
 
 pytestmark = pytest.mark.contract
 
@@ -23,7 +23,7 @@ def _load_schema(filename: str):  # type: ignore[no-untyped-def]
 
 def test_instrument_ref_created_valid_schema() -> None:
     """instrument_ref.created mapper output must be valid against its Avro schema."""
-    parsed_schema = _load_schema("instrument_ref.created.avsc")
+    parsed_schema = _load_schema("instrument_ref.created.v1.avsc")
 
     event = InstrumentRefCreated(
         tenant_id=uuid4(),
@@ -40,7 +40,7 @@ def test_instrument_ref_created_valid_schema() -> None:
 
 def test_instrument_ref_created_minimal_schema() -> None:
     """instrument_ref.created with null optional fields passes validation."""
-    parsed_schema = _load_schema("instrument_ref.created.avsc")
+    parsed_schema = _load_schema("instrument_ref.created.v1.avsc")
 
     event = InstrumentRefCreated(
         tenant_id=uuid4(),

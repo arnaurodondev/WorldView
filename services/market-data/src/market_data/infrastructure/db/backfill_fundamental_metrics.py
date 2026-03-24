@@ -18,8 +18,9 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-import structlog
 from sqlalchemy import and_, func, select, tuple_
+
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -37,7 +38,7 @@ from market_data.infrastructure.db.models.fundamentals import (
 )
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -60,7 +59,9 @@ def create_app() -> FastAPI:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        import common.ids
+
+        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
         try:
             import structlog
 

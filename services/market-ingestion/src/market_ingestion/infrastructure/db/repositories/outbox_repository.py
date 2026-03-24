@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select, update
-from sqlalchemy.engine import CursorResult
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
 from market_ingestion.application.ports.repositories import OutboxRecord, OutboxRepository
@@ -60,7 +59,7 @@ class SqlaOutboxRepository(OutboxRepository):
     async def add(self, *, events: Sequence[DomainEvent]) -> None:
         for event in events:
             if hasattr(event, "to_dict"):
-                event_dict = cast(dict[str, Any], cast(Any, event).to_dict())
+                event_dict = cast("dict[str, Any]", cast("Any", event).to_dict())
             else:
                 event_dict = {"event_type": event.EVENT_TYPE, "event_id": event.event_id}
             event_type = event_dict.get("event_type", "")
@@ -137,7 +136,7 @@ class SqlaOutboxRepository(OutboxRepository):
             )
         )
         result = await self._w.execute(stmt)
-        return int(cast(CursorResult[Any], result).rowcount) > 0
+        return int(cast("Any", result).rowcount) > 0
 
     async def mark_failed(
         self,
@@ -176,7 +175,7 @@ class SqlaOutboxRepository(OutboxRepository):
             )
         )
         result = await self._w.execute(up)
-        return int(cast(CursorResult[Any], result).rowcount) > 0
+        return int(cast("Any", result).rowcount) > 0
 
     # ── Dispatcher-protocol-compatible helpers ─────────────────────────────────
 
@@ -229,7 +228,7 @@ class SqlaOutboxRepository(OutboxRepository):
 class _DispatchableOutboxRecord:
     """Adapts OutboxRecord to satisfy OutboxRecordProtocol for BaseOutboxDispatcher."""
 
-    __slots__ = ("_id", "_event_type", "_topic", "_payload", "_attempts", "_leased_until")
+    __slots__ = ("_attempts", "_event_type", "_id", "_leased_until", "_payload", "_topic")
 
     def __init__(
         self,

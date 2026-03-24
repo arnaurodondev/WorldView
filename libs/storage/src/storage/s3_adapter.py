@@ -56,7 +56,7 @@ class S3ObjectStorage(ObjectStorage):
     """
 
     def __init__(self, settings: StorageSettings) -> None:
-        import boto3
+        import boto3  # type: ignore[import-untyped]
 
         self._settings = settings
         self._client = boto3.client(
@@ -82,14 +82,14 @@ class S3ObjectStorage(ObjectStorage):
     def _handle_client_error(self, exc: Exception, bucket: str, key: str | None = None) -> None:
         """Re-raise *exc* as the appropriate domain exception."""
         try:
-            from botocore.exceptions import ClientError
+            from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
             if isinstance(exc, ClientError):
                 raise _map_client_error(exc, bucket, key) from exc
         except ImportError:
             pass
         try:
-            from botocore.exceptions import EndpointResolutionError
+            from botocore.exceptions import EndpointResolutionError  # type: ignore[import-untyped]
 
             if isinstance(exc, EndpointResolutionError):
                 raise StorageUnavailableError(str(exc)) from exc

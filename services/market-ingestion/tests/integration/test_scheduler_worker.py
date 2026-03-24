@@ -47,7 +47,7 @@ async def test_scheduler_tick_with_no_policies_completes():
 @pytest.mark.asyncio
 async def test_scheduler_process_tick_interval_respected():
     """Scheduler respects tick interval; multiple ticks are spread over time."""
-    from market_ingestion.scheduler.main import SchedulerProcess
+    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
 
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
@@ -57,10 +57,10 @@ async def test_scheduler_process_tick_interval_respected():
 
     with (
         patch(
-            "market_ingestion.scheduler.main._build_factories",
+            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.scheduler.main.ScheduleDueTasksUseCase") as mock_uc,
+        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_uc,
     ):
         mock_result = MagicMock()
         mock_result.tasks_enqueued = 0
@@ -87,7 +87,7 @@ async def test_scheduler_process_tick_interval_respected():
 @pytest.mark.asyncio
 async def test_worker_idle_back_pressure():
     """Worker correctly backs off when no tasks are available."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
@@ -101,11 +101,11 @@ async def test_worker_idle_back_pressure():
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
         patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
     ):
         worker = WorkerProcess(settings=settings, idle_sleep_seconds=5.0)

@@ -38,11 +38,11 @@ def _make_settings(**overrides) -> MagicMock:
 @pytest.mark.asyncio
 async def test_scheduler_stops_immediately_when_stop_called():
     """SchedulerProcess.run() exits as soon as stop() is called."""
-    from market_ingestion.scheduler.main import SchedulerProcess
+    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
 
     settings = _make_settings()
     with patch(
-        "market_ingestion.scheduler.main._build_factories",
+        "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
         return_value=(MagicMock(), MagicMock()),
     ):
         scheduler = SchedulerProcess(settings=settings, tick_interval_seconds=60.0)
@@ -57,13 +57,13 @@ async def test_scheduler_stops_immediately_when_stop_called():
 @pytest.mark.asyncio
 async def test_scheduler_calls_tick_once_before_stop():
     """SchedulerProcess runs one tick then stops."""
-    from market_ingestion.scheduler.main import SchedulerProcess
+    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
 
     settings = _make_settings()
     call_count = 0
 
     with patch(
-        "market_ingestion.scheduler.main._build_factories",
+        "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
         return_value=(MagicMock(), MagicMock()),
     ):
         scheduler = SchedulerProcess(settings=settings, tick_interval_seconds=0.01)
@@ -82,7 +82,7 @@ async def test_scheduler_calls_tick_once_before_stop():
 @pytest.mark.asyncio
 async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
     """SchedulerProcess._tick() calls ScheduleDueTasksUseCase.execute()."""
-    from market_ingestion.scheduler.main import SchedulerProcess
+    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
 
     settings = _make_settings()
     mock_result = MagicMock()
@@ -92,10 +92,10 @@ async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
 
     with (
         patch(
-            "market_ingestion.scheduler.main._build_factories",
+            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.scheduler.main.ScheduleDueTasksUseCase") as mock_use_case,
+        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
     ):
         mock_instance = mock_use_case.return_value
         mock_instance.execute = AsyncMock(return_value=mock_result)
@@ -109,16 +109,16 @@ async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
 @pytest.mark.asyncio
 async def test_scheduler_tick_error_does_not_crash():
     """SchedulerProcess._tick() swallows exceptions to keep the loop running."""
-    from market_ingestion.scheduler.main import SchedulerProcess
+    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.scheduler.main._build_factories",
+            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.scheduler.main.ScheduleDueTasksUseCase") as mock_use_case,
+        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
     ):
         mock_instance = mock_use_case.return_value
         mock_instance.execute = AsyncMock(side_effect=RuntimeError("db gone"))
@@ -136,17 +136,17 @@ async def test_scheduler_tick_error_does_not_crash():
 @pytest.mark.asyncio
 async def test_worker_stops_immediately_when_stop_called():
     """WorkerProcess.run() exits when stop_event is set before run()."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
     ):
         worker = WorkerProcess(settings=settings)
         worker.stop()
@@ -159,17 +159,17 @@ async def test_worker_stops_immediately_when_stop_called():
 @pytest.mark.asyncio
 async def test_worker_executes_claimed_tasks():
     """WorkerProcess.run() calls _execute_task for each claimed task."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
     ):
         worker = WorkerProcess(settings=settings)
 
@@ -195,17 +195,17 @@ async def test_worker_executes_claimed_tasks():
 @pytest.mark.asyncio
 async def test_worker_sleeps_when_no_tasks():
     """WorkerProcess sleeps when claim returns empty list."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
     ):
         worker = WorkerProcess(settings=settings, idle_sleep_seconds=0.001)
 
@@ -227,18 +227,18 @@ async def test_worker_sleeps_when_no_tasks():
 @pytest.mark.asyncio
 async def test_worker_claim_error_continues_loop():
     """WorkerProcess._claim_batch() swallows errors and returns empty list."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
-        patch("market_ingestion.worker.main.ClaimTasksUseCase") as mock_claim,
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.ClaimTasksUseCase") as mock_claim,
     ):
         mock_instance = mock_claim.return_value
         mock_instance.execute = AsyncMock(side_effect=OSError("db gone"))
@@ -252,18 +252,18 @@ async def test_worker_claim_error_continues_loop():
 @pytest.mark.asyncio
 async def test_worker_execute_error_does_not_crash():
     """WorkerProcess._execute_task() swallows ExecuteTaskUseCase errors."""
-    from market_ingestion.worker.main import WorkerProcess
+    from market_ingestion.infrastructure.workers.worker import WorkerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.worker.main._build_factories",
+            "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.worker.main.EODHDProviderAdapter"),
-        patch("market_ingestion.worker.main.S3ObjectStoreAdapter"),
-        patch("market_ingestion.worker.main.ExecuteTaskUseCase") as mock_exec,
+        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.ExecuteTaskUseCase") as mock_exec,
     ):
         mock_instance = mock_exec.return_value
         mock_instance.execute = AsyncMock(side_effect=RuntimeError("pipeline exploded"))
@@ -281,16 +281,18 @@ async def test_worker_execute_error_does_not_crash():
 
 def test_dispatcher_process_stop_delegates_to_dispatcher():
     """DispatcherProcess.stop() calls the underlying dispatcher's stop()."""
-    from market_ingestion.messaging.dispatcher_main import DispatcherProcess
+    from market_ingestion.infrastructure.messaging.outbox.dispatcher_main import DispatcherProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.messaging.dispatcher_main._build_factories",
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.messaging.dispatcher_main.build_market_ingestion_dispatcher") as mock_build,
+        patch(
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main.build_market_ingestion_dispatcher"
+        ) as mock_build,
     ):
         mock_dispatcher = MagicMock()
         mock_dispatcher.run = AsyncMock()
@@ -305,16 +307,18 @@ def test_dispatcher_process_stop_delegates_to_dispatcher():
 @pytest.mark.asyncio
 async def test_dispatcher_process_run_delegates_to_dispatcher():
     """DispatcherProcess.run() calls the underlying dispatcher's run()."""
-    from market_ingestion.messaging.dispatcher_main import DispatcherProcess
+    from market_ingestion.infrastructure.messaging.outbox.dispatcher_main import DispatcherProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.messaging.dispatcher_main._build_factories",
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.messaging.dispatcher_main.build_market_ingestion_dispatcher") as mock_build,
+        patch(
+            "market_ingestion.infrastructure.messaging.outbox.dispatcher_main.build_market_ingestion_dispatcher"
+        ) as mock_build,
     ):
         mock_dispatcher = MagicMock()
         mock_dispatcher.run = AsyncMock()

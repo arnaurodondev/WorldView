@@ -15,6 +15,17 @@ else
     exit 127
 fi
 
+if command -v kafka-configs >/dev/null 2>&1; then
+    KAFKA_CONFIGS_CMD="kafka-configs"
+elif [[ -x "/usr/bin/kafka-configs" ]]; then
+    KAFKA_CONFIGS_CMD="/usr/bin/kafka-configs"
+elif [[ -x "/opt/kafka/bin/kafka-configs.sh" ]]; then
+    KAFKA_CONFIGS_CMD="/opt/kafka/bin/kafka-configs.sh"
+else
+    echo "ERROR: kafka-configs CLI not found in container"
+    exit 127
+fi
+
 echo "=== Creating Kafka topics ==="
 
 # ── Time-retention topics ─────────────────────────────────────────────────────
@@ -68,25 +79,29 @@ echo "Creating compacted topic: entity.dirtied.v1"
 # ── Custom retention configuration ────────────────────────────────────────────
 # 14-day retention: signal and graph change topics (operational data, high volume)
 echo "Setting 14-day retention on nlp.signal.detected.v1"
-"$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
-    --topic nlp.signal.detected.v1 \
-    --config retention.ms=1209600000
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name nlp.signal.detected.v1 \
+    --add-config retention.ms=1209600000
 
 echo "Setting 14-day retention on graph.state.changed.v1"
-"$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
-    --topic graph.state.changed.v1 \
-    --config retention.ms=1209600000
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name graph.state.changed.v1 \
+    --add-config retention.ms=1209600000
 
 # 30-day retention: contradiction and relation type (lower volume; longer audit window)
 echo "Setting 30-day retention on intelligence.contradiction.v1"
-"$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
-    --topic intelligence.contradiction.v1 \
-    --config retention.ms=2592000000
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name intelligence.contradiction.v1 \
+    --add-config retention.ms=2592000000
 
 echo "Setting 30-day retention on relation.type.proposed.v1"
-"$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
-    --topic relation.type.proposed.v1 \
-    --config retention.ms=2592000000
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name relation.type.proposed.v1 \
+    --add-config retention.ms=2592000000
 
 # ── Verification ──────────────────────────────────────────────────────────────
 echo "All topics created. Current topic list:"

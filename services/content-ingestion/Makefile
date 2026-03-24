@@ -26,7 +26,13 @@ test:
 	$(VENV)/bin/pytest tests/ -m unit -v
 
 test-integration:
-	$(VENV)/bin/pytest tests/ -m integration -v
+	@$(VENV)/bin/pytest tests/ -m integration -v; \
+	EXIT=$$?; \
+	if [ $$EXIT -eq 5 ]; then \
+		echo "No integration tests collected (pytest exit 5)"; \
+		exit 0; \
+	fi; \
+	exit $$EXIT
 
 lint:
 	$(VENV)/bin/ruff check src/ tests/

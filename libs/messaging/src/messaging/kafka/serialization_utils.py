@@ -138,9 +138,7 @@ def deserialize_confluent_avro(schema_path: str, data: bytes) -> dict[str, Any]:
 
     if len(data) < header_size or data[0:1] != confluent_magic:
         raise ValueError(
-            f"Expected Confluent Avro magic byte 0x00 at position 0, " f"got 0x{data[0]:02x}"
-            if data
-            else "Empty payload"
+            f"Expected Confluent Avro magic byte 0x00 at position 0, got 0x{data[0]:02x}" if data else "Empty payload"
         )
     schema = load_schema(schema_path)
     return deserialize_avro(schema, data[header_size:])

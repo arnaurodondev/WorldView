@@ -136,7 +136,7 @@ class PgInstrumentRepository(InstrumentRepository):
             stmt = stmt.where(and_(*conditions))
 
         result = await self._session.execute(stmt)
-        return cast(int, result.scalar_one())
+        return cast("int", result.scalar_one())
 
     async def upsert(self, instrument: Instrument) -> Instrument:
         stmt = (

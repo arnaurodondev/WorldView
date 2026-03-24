@@ -13,7 +13,8 @@ env:
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │  Job dependency graph                                                       │
 # │                                                                             │
-# │  lint  validate-schemas  test-libs  test-frontend   (all parallel)         │
+# │  lint  validate-schemas  validate-service-structure  import-guards          │
+# │  architecture-tests  test-libs  test-frontend  (fast path, all parallel)   │
 # │                               │                                             │
 # │       ┌──────────┬────────────┼──────────────┐                             │
 # │       │          │            │              │                              │
@@ -21,6 +22,9 @@ env:
 # │  (unit, 9 svcs) (portfolio)  (portfolio +        (3 svcs, compose)         │
 # │                               market-data,                                 │
 # │                               testcontainers)                              │
+# │                                                                             │
+# │  validate-service-structure, import-guards, and architecture-tests gate    │
+# │  all long-running test jobs via needs: [...].                               │
 # └─────────────────────────────────────────────────────────────────────────────┘
 
 jobs:
@@ -52,9 +56,17 @@ jobs:
 
       - name: Install libs for type-checking
         run: |
-          for dir in libs/*/; do
-            python -m pip install -e "$dir[dev]" --quiet
-          done
+          # libs/messaging depends on observability at runtime.
+          # A per-lib loop installs alphabetically (m before o), so pip tries
+          # to resolve observability from PyPI and fails. One combined pip call
+          # lets the resolver see all local packages at once.
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
+          # Second pass adds [dev] extras; all local deps are now satisfied.
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s[dev]" "${dir%/}"; done) \
+            --quiet
 
       # Only type-check lib sources — service deps are not installed in this
       # job so running mypy on services/ would produce "missing import" noise.
@@ -103,6 +115,94 @@ jobs:
               sys.exit(1)
           "
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Service structure validator — fast path, no infra required
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  validate-service-structure:
+    name: Validate Service Structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install PyYAML
+        run: python -m pip install "pyyaml>=6" --quiet
+
+      - name: Validate service structure (strict)
+        run: >
+          python scripts/structure_checks/check_service_structure.py
+          --strict
+          --allow-exceptions-file scripts/structure_checks/exceptions.yaml
+          --report-json /tmp/structure-report.json
+
+      - name: Upload structure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: structure-violation-report
+          path: /tmp/structure-report.json
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Import guards — AST-based anti-pattern enforcement, fast path
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  import-guards:
+    name: Import Guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install PyYAML
+        run: python -m pip install "pyyaml>=6" --quiet
+
+      - name: Run import guards (strict)
+        run: >
+          python scripts/import_guards/check_import_guards.py
+          --strict
+          --baseline scripts/import_guards/baseline.json
+          --report-json /tmp/import-guards-report.json
+
+      - name: Upload import guard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-guard-violation-report
+          path: /tmp/import-guards-report.json
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Architecture tests — fast path pytest suite, no infra required
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  architecture-tests:
+    name: Architecture Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install pytest
+        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" --quiet
+
+      - name: Run architecture tests
+        run: pytest tests/architecture -v --tb=short
+
   test-libs:
     name: Test Libraries — ${{ matrix.lib }}
     runs-on: ubuntu-latest
@@ -119,8 +219,15 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # Install all local libs first in one pip call so cross-lib runtime deps
+      # (e.g. messaging → observability) resolve without hitting PyPI.
+      # Then install the target lib again with [dev] to add test/lint extras.
       - name: Install library
-        run: python -m pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
+        run: |
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
+          python -m pip install -e "libs/${{ matrix.lib }}[dev]" --quiet
 
       # `not integration` instead of `unit`: common/contracts/observability have
       # no pytestmark at all, so `-m unit` collects 0 tests and exits with code 5.
@@ -130,7 +237,7 @@ jobs:
   test-services:
     name: Test Services — ${{ matrix.service }} (unit)
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -155,9 +262,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          for dir in libs/*/; do
-            python -m pip install -e "$dir" --quiet
-          done
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
       # Excludes infra-dependent test tiers: those run in the jobs below.
@@ -216,7 +323,7 @@ jobs:
   test-contract:
     name: Contract Tests — portfolio
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     steps:
       - uses: actions/checkout@v4
 
@@ -228,9 +335,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          for dir in libs/*/; do
-            python -m pip install -e "$dir" --quiet
-          done
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
           python -m pip install -e "services/portfolio[dev]" --quiet
 
       - name: Run contract tests
@@ -250,7 +357,7 @@ jobs:
   test-integration:
     name: Integration Tests — ${{ matrix.service }} (testcontainers)
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -276,9 +383,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          for dir in libs/*/; do
-            python -m pip install -e "$dir" --quiet
-          done
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
       - name: Symlink alembic into expected venv path (portfolio only)
@@ -310,7 +417,7 @@ jobs:
   test-e2e:
     name: E2E — ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: [test-libs]
+    needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -344,9 +451,9 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          for dir in libs/*/; do
-            python -m pip install -e "$dir" --quiet
-          done
+          python -m pip install \
+            $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
+            --quiet
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
       # Kafka has a 30s start_period; TimescaleDB is also slow on first start.

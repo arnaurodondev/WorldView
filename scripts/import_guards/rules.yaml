@@ -1,0 +1,148 @@
+# Import Guard Rules
+#
+# Each rule defines a forbidden import pattern that must not appear in service code.
+# The import guard engine (check_import_guards.py) enforces these via AST analysis.
+#
+# Fields per rule:
+#   id          — unique rule identifier
+#   description — human-readable description
+#   message     — violation message shown to developers
+#   remediation — how to fix the violation
+#   forbidden_imports — list of module paths whose import is forbidden
+#   forbidden_from_imports — list of (module, name) pairs forbidden in "from X import Y"
+#   applies_to  — glob patterns for files to check (default: services/**/src/**/*.py)
+
+rules:
+
+  # ─── libs/common — IDs ────────────────────────────────────────────────────
+
+  - id: IG-COMMON-001
+    description: Forbid direct uuid.uuid4() in service code
+    message: >
+      Direct uuid.uuid4() bypasses the common.ids abstraction and breaks type safety.
+      Use common.ids.new_uuid(), common.ids.new_uuid7(), or common.ids.new_uuid7_str() instead.
+    remediation: >
+      Replace uuid.uuid4() with common.ids.new_uuid7() (new entities) or common.ids.new_uuid()
+      (legacy UUIDv4 columns). See docs/STANDARDS.md §2.1.
+    forbidden_imports: []
+    forbidden_from_imports:
+      - [uuid, uuid4]
+    # Note: bare `import uuid; uuid.uuid4()` is caught by the call-site checker
+    check_calls:
+      - [uuid, uuid4]
+
+  - id: IG-COMMON-002
+    description: Forbid naive datetime creation (datetime.now without tz, datetime.utcnow)
+    message: >
+      datetime.now() without timezone.utc produces naive datetimes — silent bugs in
+      financial data. datetime.utcnow() is deprecated and also naive.
+      Use common.time.utc_now() or datetime.now(tz=timezone.utc) instead.
+    remediation: >
+      Replace datetime.now() with common.time.utc_now() (preferred) or
+      datetime.now(tz=timezone.utc). Replace datetime.utcnow() with common.time.utc_now().
+      See docs/STANDARDS.md §2.2.
+    forbidden_imports: []
+    forbidden_from_imports:
+      - [datetime, utcnow]
+    check_calls:
+      - [datetime.datetime, utcnow]
+      - [datetime, utcnow]
+
+  # ─── libs/messaging — Kafka ───────────────────────────────────────────────
+
+  - id: IG-MSG-001
+    description: Forbid direct aiokafka imports in service code
+    message: >
+      Direct aiokafka imports bypass the messaging library abstractions and break
+      the outbox/consumer contract. Use messaging.kafka.* wrappers instead.
+    remediation: >
+      Use messaging.kafka.consumer.BaseKafkaConsumer and
+      messaging.kafka.dispatcher.BaseOutboxDispatcher.
+      See docs/libs/messaging.md.
+    forbidden_imports:
+      - aiokafka
+      - aiokafka.producer
+      - aiokafka.consumer
+    forbidden_from_imports: []
+
+  - id: IG-MSG-002
+    description: Forbid direct redis.asyncio / aioredis imports where messaging.valkey must be used
+    message: >
+      Direct redis.asyncio or aioredis imports bypass the messaging.valkey client
+      which provides pooling, structured key taxonomy, and observability hooks.
+    remediation: >
+      Use messaging.valkey client. See docs/libs/messaging.md §Valkey.
+    forbidden_imports:
+      - aioredis
+    forbidden_from_imports:
+      - [redis.asyncio, Redis]
+      - [redis.asyncio, StrictRedis]
+      - [redis, asyncio]
+
+  # ─── libs/storage ─────────────────────────────────────────────────────────
+
+  - id: IG-STORAGE-001
+    description: Forbid direct minio client usage in services
+    message: >
+      Direct minio.Minio instantiation bypasses the storage library adapter and
+      breaks retry, observability, and credential rotation support.
+    remediation: >
+      Use storage.ObjectStorageClient or the storage factory.
+      See docs/libs/storage.md.
+    forbidden_imports:
+      - minio
+    forbidden_from_imports:
+      - [minio, Minio]
+      - [minio.error, S3Error]
+
+  - id: IG-STORAGE-002
+    description: Forbid direct boto3 usage in services except approved adapter files
+    message: >
+      Direct boto3 usage in service code bypasses the storage library adapter.
+      boto3 is only permitted in approved adapter boundary files.
+    remediation: >
+      Use storage.ObjectStorageClient. If you must use boto3, add the file to
+      scripts/import_guards/allowlist.yaml with justification.
+    forbidden_imports:
+      - boto3
+    forbidden_from_imports:
+      - [boto3, client]
+      - [boto3, resource]
+      - [boto3, session]
+
+  # ─── libs/observability ───────────────────────────────────────────────────
+
+  - id: IG-OBS-001
+    description: Forbid stdlib logging.getLogger() and bare print() in service code
+    message: >
+      stdlib logging and print() bypass the observability library wrapper and
+      produce unstructured output incompatible with the JSON log aggregator.
+      Use structlog via the observability library setup.
+    remediation: >
+      Replace logging.getLogger() with structlog.get_logger().
+      Remove all print() calls from service code.
+      See docs/libs/observability.md.
+    forbidden_imports: []
+    forbidden_from_imports:
+      - [logging, getLogger]
+    check_calls:
+      - [logging, getLogger]
+    check_print: true
+
+  # ─── Layer boundaries ─────────────────────────────────────────────────────
+
+  - id: IG-LAYER-001
+    description: Forbid cross-layer imports violating domain purity
+    message: >
+      The domain layer must not import from application, api, or infrastructure.
+      Domain is the innermost layer — it has zero outward dependencies.
+    remediation: >
+      Move any infrastructure/application/api import out of domain/.
+      Domain may only import from stdlib, common, and contracts.
+      See docs/STANDARDS.md §1.2.
+    # This rule is enforced separately via layer boundary AST walk in
+    # the architecture tests (tests/architecture/test_layer_boundaries.py).
+    # The import guard engine flags it for reporting; the arch tests are authoritative.
+    forbidden_imports: []
+    forbidden_from_imports: []
+    layer_rule: domain_purity

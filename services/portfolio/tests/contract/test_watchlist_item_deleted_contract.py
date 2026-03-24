@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import fastavro
 import pytest
+from portfolio.application.messaging.mapper import watchlist_item_deleted_to_dict
 from portfolio.domain.events import WatchlistItemDeleted
-from portfolio.messaging.mapper import watchlist_item_deleted_to_dict
 
 pytestmark = pytest.mark.contract
 
@@ -31,7 +31,7 @@ def _round_trip(schema, record: dict) -> dict:  # type: ignore[type-arg]
 
 def test_watchlist_item_deleted_valid_schema() -> None:
     """watchlist.item_deleted mapper output is valid against its Avro schema."""
-    schema = _load_schema("watchlist.item_deleted.avsc")
+    schema = _load_schema("watchlist.item_deleted.v1.avsc")
     tenant_id = uuid4()
     entity_id = uuid4()
 
@@ -48,7 +48,7 @@ def test_watchlist_item_deleted_valid_schema() -> None:
 
 def test_watchlist_item_deleted_round_trip() -> None:
     """Encode → decode preserves all fields."""
-    schema = _load_schema("watchlist.item_deleted.avsc")
+    schema = _load_schema("watchlist.item_deleted.v1.avsc")
     tenant_id = uuid4()
     watchlist_id = uuid4()
     user_id = uuid4()

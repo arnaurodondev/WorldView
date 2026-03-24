@@ -8,8 +8,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-import structlog
-
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
@@ -18,6 +16,7 @@ from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from market_data.application.ports.uow import UnitOfWork
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
-logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+logger = get_logger(__name__)
 
 # Schema directory relative to repo root
 _SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
@@ -70,10 +69,10 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
         if schema_path:
             try:
-                return cast(dict[str, Any], deserialize_confluent_avro(schema_path, raw))
+                return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
             except Exception:
                 logger.debug("avro_deserialize_failed_falling_back_to_json", schema_path=schema_path)
-        return cast(dict[str, Any], json.loads(raw.decode()))
+        return cast("dict[str, Any]", json.loads(raw.decode()))
 
     def get_schema_path(self, topic: str) -> str | None:
         path = _SCHEMA_DIR / "market.dataset.fetched.avsc"

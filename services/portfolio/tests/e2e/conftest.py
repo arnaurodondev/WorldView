@@ -3,7 +3,7 @@
 These tests run against the LIVE service started by `make test-e2e`, which
 spins up docker-compose.test.yml --profile portfolio-test:
 
-  Postgres (localhost:5432/portfolio_db) ← portfolio-migrate ← portfolio API
+    Postgres (localhost:55433/portfolio_db) ← portfolio-migrate ← portfolio API
                                                                 (localhost:8001)
 
 The --wait flag in make test-e2e guarantees the service is healthy before
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 _BASE_URL = os.getenv("PORTFOLIO_E2E_BASE_URL", "http://localhost:8001")
 _DB_URL = os.getenv(
     "PORTFOLIO_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db",
+    "postgresql+asyncpg://postgres:postgres@localhost:55433/portfolio_db",
 )
 
 
@@ -43,7 +43,7 @@ async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 def _e2e_engine():
-    """SQLAlchemy engine connected directly to the test Postgres on localhost:5432."""
+    """SQLAlchemy engine connected directly to the test Postgres on localhost:55433."""
     engine = create_async_engine(_DB_URL, echo=False)
     return engine
 

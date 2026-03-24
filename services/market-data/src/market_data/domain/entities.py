@@ -3,31 +3,31 @@
 Entities represent the core business objects that have identity (ID) and can
 change state over time.  They carry no framework dependencies — no SQLAlchemy
 models, no Pydantic schemas.  ORM models are infrastructure concerns (wave 02).
-
-ID generation uses ``uuid.uuid4()`` (random UUID).  The ``common.ids`` lib
-exposes the same implementation; using stdlib directly keeps this module
-dependency-free.
 """
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
+from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.time import utc_now as _common_utc_now  # type: ignore[import-untyped]
 from market_data.domain.enums import FundamentalsSection, PeriodType, Timeframe
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
 
 
 def _new_id() -> str:
-    """Generate a new random UUID string."""
-    return str(uuid.uuid4())
+    """Generate a new UUIDv7 string for entity identity."""
+    return str(new_uuid7())
 
 
 def _utc_now() -> datetime:
     """Return current UTC-aware datetime."""
-    return datetime.now(tz=UTC)
+    return _common_utc_now()
 
 
 def _default_flags() -> InstrumentFlags:

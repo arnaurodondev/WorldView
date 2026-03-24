@@ -9,11 +9,11 @@ from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
 from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter
 
 __all__ = [
-    "OllamaEmbeddingAdapter",
-    "OllamaExtractionAdapter",
-    "GLiNERLocalAdapter",
     "AnthropicExtractionAdapter",
-    "GeminiExtractionAdapter",
     "ChatGPTExtractionAdapter",
     "DeepSeekExtractionAdapter",
+    "GLiNERLocalAdapter",
+    "GeminiExtractionAdapter",
+    "OllamaEmbeddingAdapter",
+    "OllamaExtractionAdapter",
 ]

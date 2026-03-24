@@ -1,0 +1,88 @@
+# Import Guard Allowlist
+#
+# Files and patterns listed here are exempt from specific import guard rules.
+# Each entry must include a rule_id, a path pattern, and a justification.
+#
+# Path patterns are matched against the file path relative to the repo root.
+# Supports glob patterns (fnmatch-style).
+#
+# Fields per entry:
+#   rule_id     — rule ID being exempted (or "*" for all rules)
+#   path        — glob pattern relative to repo root
+#   reason      — justification for the exemption
+
+allowlist:
+  # ─── Alembic migrations ───────────────────────────────────────────────────
+  # Migrations use raw SQL uuid generation (gen_random_uuid) and may import
+  # sqlalchemy constructs directly. uuid/datetime imports are also common.
+  - rule_id: IG-COMMON-001
+    path: "services/*/alembic/versions/*.py"
+    reason: Alembic migrations may reference raw uuid generation for column defaults.
+
+  - rule_id: IG-COMMON-002
+    path: "services/*/alembic/versions/*.py"
+    reason: Alembic migrations may use datetime for default values in column definitions.
+
+  # ─── Test fixtures ────────────────────────────────────────────────────────
+  # Test code may use raw uuid/datetime/print for test data generation,
+  # benchmarks, and integration test fixtures. Rules target service src/ code.
+  - rule_id: IG-COMMON-001
+    path: "services/*/tests/**/*.py"
+    reason: Test code may use uuid4() directly for fixture data generation.
+
+  - rule_id: IG-COMMON-002
+    path: "services/*/tests/**/*.py"
+    reason: Test code may use naive datetime for fixture data setup.
+
+  - rule_id: IG-OBS-001
+    path: "services/*/tests/**/*.py"
+    reason: Test code may use print() for benchmark output and test diagnostics.
+
+  - rule_id: IG-MSG-001
+    path: "services/*/tests/**/*.py"
+    reason: Test fixtures may mock aiokafka directly for unit test isolation.
+
+  - rule_id: IG-MSG-002
+    path: "services/*/tests/**/*.py"
+    reason: Test fixtures may use redis.asyncio directly to set up test state.
+
+  - rule_id: IG-STORAGE-001
+    path: "services/*/tests/**/*.py"
+    reason: Test fixtures may instantiate minio.Minio directly for integration tests.
+
+  - rule_id: IG-STORAGE-002
+    path: "services/*/tests/**/*.py"
+    reason: Test fixtures may use boto3 directly for integration tests.
+
+  # ─── Shared library internals ─────────────────────────────────────────────
+  # The messaging/storage/observability libraries are themselves permitted to
+  # import aiokafka, minio, redis, etc. — they ARE the adapter boundary.
+  - rule_id: IG-MSG-001
+    path: "libs/messaging/**/*.py"
+    reason: The messaging library is the adapter boundary for Kafka.
+
+  - rule_id: IG-MSG-002
+    path: "libs/messaging/**/*.py"
+    reason: The messaging library is the adapter boundary for Valkey/Redis.
+
+  - rule_id: IG-STORAGE-001
+    path: "libs/storage/**/*.py"
+    reason: The storage library is the adapter boundary for MinIO.
+
+  - rule_id: IG-STORAGE-002
+    path: "libs/storage/**/*.py"
+    reason: The storage library is the adapter boundary for S3/MinIO.
+
+  - rule_id: IG-OBS-001
+    path: "libs/observability/**/*.py"
+    reason: The observability library sets up structlog and may reference stdlib logging for bridge config.
+
+  # ─── Architecture test utilities ──────────────────────────────────────────
+  - rule_id: "*"
+    path: "tests/architecture/**/*.py"
+    reason: Architecture test utilities introspect imports directly — all rules exempt.
+
+  # ─── Scripts ──────────────────────────────────────────────────────────────
+  - rule_id: "*"
+    path: "scripts/**/*.py"
+    reason: CI scripts are infrastructure tooling, not service code.

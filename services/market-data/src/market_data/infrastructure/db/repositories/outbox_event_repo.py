@@ -7,13 +7,13 @@ that ``BaseOutboxDispatcher`` can call ``uow.outbox.fetch_pending(...)``,
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from common.ids import new_uuid7_str  # type: ignore[import-untyped]
 from market_data.application.ports.repositories import OutboxEventRepository
 from market_data.infrastructure.db.models.infrastructure import OutboxEventModel
 
@@ -29,14 +29,14 @@ class PgOutboxEventRepository(OutboxEventRepository):
         self._session = session
 
     async def create(self, event_type: str, topic: str, payload: dict) -> str:
-        record_id = str(uuid.uuid4())
+        record_id = new_uuid7_str()
         await self._session.execute(
             insert(OutboxEventModel).values(
                 id=record_id,
                 event_type=event_type,
                 topic=topic,
                 payload=payload,
-                status="PENDING",
+                status="pending",
             )
         )
         return record_id
@@ -46,7 +46,7 @@ class PgOutboxEventRepository(OutboxEventRepository):
         result = await self._session.execute(
             select(OutboxEventModel)
             .where(
-                OutboxEventModel.status == "PENDING",
+                OutboxEventModel.status == "pending",
                 (OutboxEventModel.lease_expires_at == None)  # noqa: E711
                 | (OutboxEventModel.lease_expires_at <= now),
             )
@@ -71,7 +71,7 @@ class PgOutboxEventRepository(OutboxEventRepository):
             update(OutboxEventModel)
             .where(
                 OutboxEventModel.id == event_id,
-                OutboxEventModel.status == "PENDING",
+                OutboxEventModel.status == "pending",
                 (OutboxEventModel.lease_expires_at == None)  # noqa: E711
                 | (OutboxEventModel.lease_expires_at <= now),
             )
@@ -81,14 +81,14 @@ class PgOutboxEventRepository(OutboxEventRepository):
                 lease_expires_at=lease_expires_at,
             )
         )
-        return int(cast(Any, cursor.rowcount)) > 0
+        return int(cast("Any", cursor.rowcount)) > 0
 
     async def mark_dispatched(self, event_id: str) -> None:
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == event_id)
             .values(
-                status="DISPATCHED",
+                status="delivered",
                 dispatched_at=datetime.now(tz=UTC),
             )
         )
@@ -97,12 +97,12 @@ class PgOutboxEventRepository(OutboxEventRepository):
         cursor: CursorResult = await self._session.execute(  # type: ignore[assignment]
             update(OutboxEventModel)
             .where(
-                OutboxEventModel.status == "PENDING",
+                OutboxEventModel.status == "pending",
                 OutboxEventModel.lease_expires_at <= stale_before,
             )
             .values(claimed_by=None, claimed_at=None, lease_expires_at=None)
         )
-        return int(cast(Any, cursor.rowcount))
+        return int(cast("Any", cursor.rowcount))
 
     # ── OutboxRepositoryProtocol (required by BaseOutboxDispatcher) ──────────
 
@@ -112,7 +112,7 @@ class PgOutboxEventRepository(OutboxEventRepository):
         lease_seconds: int,
         batch_size: int,
     ) -> list[OutboxEventModel]:
-        """Atomically claim and return up to *batch_size* unlocked PENDING records.
+        """Atomically claim and return up to *batch_size* unlocked pending records.
 
         Uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so concurrent dispatchers
         cannot pick the same rows.
@@ -124,7 +124,7 @@ class PgOutboxEventRepository(OutboxEventRepository):
         subq = (
             select(OutboxEventModel.id)
             .where(
-                OutboxEventModel.status == "PENDING",
+                OutboxEventModel.status == "pending",
                 (OutboxEventModel.lease_expires_at == None)  # noqa: E711
                 | (OutboxEventModel.lease_expires_at <= now),
             )
@@ -162,5 +162,5 @@ class PgOutboxEventRepository(OutboxEventRepository):
     async def move_to_dead_letter(self, record_id: str) -> None:
         """Move *record_id* to the dead-letter state (status=DEAD_LETTER)."""
         await self._session.execute(
-            update(OutboxEventModel).where(OutboxEventModel.id == record_id).values(status="DEAD_LETTER")
+            update(OutboxEventModel).where(OutboxEventModel.id == record_id).values(status="dead_letter")
         )

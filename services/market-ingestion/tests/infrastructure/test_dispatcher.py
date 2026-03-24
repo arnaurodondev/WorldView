@@ -17,7 +17,7 @@ from market_ingestion.infrastructure.db.models.outbox_event import OutboxEventMo
 from market_ingestion.infrastructure.db.repositories.outbox_repository import _DispatchableOutboxRecord
 from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.messaging.dispatcher import MarketIngestionOutboxDispatcher
-from market_ingestion.infrastructure.messaging.kafka.mapper import MarketDatasetFetchedMapper
+from market_ingestion.infrastructure.messaging.mapper import MarketDatasetFetchedMapper
 from sqlalchemy import select
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
@@ -77,7 +77,7 @@ def _make_dispatcher(settings=None) -> tuple[MarketIngestionOutboxDispatcher, Ma
 @pytest.mark.unit
 async def test_dispatcher_happy_path_marks_published():
     """Successful produce → outbox row marked published."""
-    dispatcher, write_factory = _make_dispatcher()
+    dispatcher, _ = _make_dispatcher()
     record = _make_record()
 
     # Mock the outbox repository methods

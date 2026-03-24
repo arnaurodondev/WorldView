@@ -2,4 +2,4 @@
 
 from messaging.kafka.consumer.errors import FatalError, RetryableError
 
-__all__ = ["RetryableError", "FatalError"]
+__all__ = ["FatalError", "RetryableError"]
