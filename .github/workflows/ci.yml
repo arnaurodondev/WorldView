@@ -423,13 +423,13 @@ jobs:
       matrix:
         include:
           # Port mappings (host ← container):
-          #   5432 ← postgres, 9092 ← kafka, 8081 ← schema-registry
+          #   55433 ← postgres, 9092 ← kafka, 8081 ← schema-registry
           #   8001 ← portfolio API
           - service: portfolio
             profile: portfolio-test
 
           # Port mappings:
-          #   5432 ← postgres, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
+          #   55433 ← postgres, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
           #   6379 ← valkey, 8002 ← market-ingestion API
           - service: market-ingestion
             profile: market-ingestion-test
@@ -483,7 +483,7 @@ jobs:
         if: matrix.service == 'market-ingestion'
         run: |
           {
-            echo "MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ingestion_db"
+            echo "MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/ingestion_db"
             echo "MARKET_INGESTION_STORAGE_ENDPOINT=http://localhost:7480"
             echo "MARKET_INGESTION_STORAGE_ACCESS_KEY=minioadmin"
             echo "MARKET_INGESTION_STORAGE_SECRET_KEY=minioadmin"

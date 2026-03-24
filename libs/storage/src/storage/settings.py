@@ -41,7 +41,7 @@ class StorageSettings(BaseSettings):
     default_bucket: str = "worldview"
     """Default bucket name used by the factory and health check."""
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[misc]
     @property
     def endpoint_url(self) -> str | None:
         """Return the endpoint URL for boto3.
@@ -51,7 +51,7 @@ class StorageSettings(BaseSettings):
         """
         return self.endpoint.strip() or None
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[misc]
     @property
     def is_aws(self) -> bool:
         """Return ``True`` when no custom endpoint is set (i.e. using AWS S3)."""
