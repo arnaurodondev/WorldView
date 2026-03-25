@@ -67,8 +67,7 @@ async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
     # Use a fresh session for cleanup to avoid transaction state issues
     from sqlalchemy import text
     
-    cleanup_session = factory()
-    try:
+    async with factory() as cleanup_session:
         await cleanup_session.execute(
             text(
                 "TRUNCATE TABLE "
@@ -82,8 +81,6 @@ async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
             )
         )
         await cleanup_session.commit()
-    finally:
-        await cleanup_session.close()
     
     # Now provide a fresh session for the test
     async with factory() as session:
