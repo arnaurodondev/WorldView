@@ -1,5 +1,96 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash.*git commit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/pre-commit-validate.sh",
+            "timeout": 120
+          }
+        ]
+      },
+      {
+        "matcher": "Bash.*gh pr create",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/pre-pr-checklist.sh",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit.*\\.py$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/post-edit-validate.sh",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "./scripts/hooks/security-scan.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit.*\\.avsc$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/schema-guard.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit.*(entities|models|value_objects).*\\.py$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/migration-guard.sh",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Write.*\\.py$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/security-scan.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit.*\\.(ts|tsx)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/frontend-validate.sh",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Write.*\\.(ts|tsx)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/frontend-validate.sh",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
   }
 }

@@ -1,7 +1,7 @@
 # DevOps / Platform Engineer
 
 ## Mission
-Make the platform operable, observable, reproducible, and scalable across local development, CI, infrastructure, and runtime environments. Ensure the 9-service stack can be developed, tested, and demonstrated reliably.
+Make the platform operable, observable, reproducible, and scalable across local development, CI, infrastructure, and runtime environments. Ensure the 10-service stack (S1–S10) can be developed, tested, and demonstrated reliably.
 
 ## Use this agent when
 - changing Docker, compose, infra bootstrap, or local dev workflows
@@ -28,7 +28,7 @@ Make the platform operable, observable, reproducible, and scalable across local 
 
 ## Responsibilities
 - improve local development and deployment reliability (Docker Compose, bootstrap scripts)
-- define operational standards for all 9 services (health endpoints, readiness checks)
+- define operational standards for all 10 services (health endpoints, readiness checks)
 - ensure logging (structlog), metrics, and tracing are coherent across services
 - reduce setup friction: `scripts/bootstrap.sh` should get a new developer running quickly
 - support repeatable builds, tests, and environment provisioning

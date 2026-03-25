@@ -1,34 +1,56 @@
 # Worldview Documentation Index
 
-> Single entry point for all project documentation.
+> Single entry point for all project documentation. Updated 2026-03-25.
+
+---
+
+## How to Navigate This Documentation
+
+### Starting a new session?
+Read in this order:
+1. `CLAUDE.md` (root) — workflow router, skill reference, hard rules
+2. `services/<service>/.claude-context.md` — quick context for the service you're working on
+3. Invoke the appropriate skill (`/implement`, `/fix-bug`, `/review`, etc.)
+
+### Need deeper understanding?
+- System architecture → [MASTER_PLAN.md](MASTER_PLAN.md)
+- Engineering standards → [STANDARDS.md](STANDARDS.md)
+- Known bug patterns → [ai-interactions/BUG_PATTERNS.md](ai-interactions/BUG_PATTERNS.md)
+- Service details → [services/](#services-s1s10)
+
+### Planning new work?
+1. `/prd` → creates spec in [specs/](specs/)
+2. `/plan` → creates plan in [plans/](plans/)
+3. `/implement` → executes waves from plan
 
 ---
 
 ## Architecture
 
-| Document | Description |
-|----------|-------------|
-| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | High-level explanation of the project, services, and infrastructure |
-| [MASTER_PLAN.md](MASTER_PLAN.md) | System architecture, service catalog, data lifecycle, contracts |
+| Document | Purpose |
+|----------|---------|
+| [MASTER_PLAN.md](MASTER_PLAN.md) | Single source of truth — services, data flows, infrastructure, roadmap |
+| [STANDARDS.md](STANDARDS.md) | Engineering standards, DDD patterns, testing conventions |
 | [Architecture Diagrams](architecture/diagrams.md) | Mermaid component, dataflow, and sequence diagrams |
-| [ADR-0001 — Initial Architecture](architecture/decisions/0001-initial-architecture.md) | Backend architecture decisions |
-| [ADR-0002 — Frontend Tooling](architecture/decisions/0002-frontend-tooling.md) | Vite + React + pnpm rationale |
+| [ADR Index](architecture/decisions/) | Architecture Decision Records (ADR-0001 through ADR-0006) |
 
 ---
 
-## Services (S1–S9)
+## Services (S1–S10)
 
-| Service | Port | Doc |
-|---------|------|-----|
-| S1 · Portfolio | 8001 | [portfolio.md](services/portfolio.md) |
-| S2 · Market Ingestion | 8002 | [market-ingestion.md](services/market-ingestion.md) |
-| S3 · Market Data | 8003 | [market-data.md](services/market-data.md) |
-| S4 · Content Ingestion | 8004 | [content-ingestion.md](services/content-ingestion.md) |
-| S5 · Content Store | 8005 | [content-store.md](services/content-store.md) |
-| S6 · NLP Pipeline | 8006 | [nlp-pipeline.md](services/nlp-pipeline.md) |
-| S7 · Knowledge Graph | 8007 | [knowledge-graph.md](services/knowledge-graph.md) |
-| S8 · RAG / Chat | 8008 | [rag-chat.md](services/rag-chat.md) |
-| S9 · API Gateway | 8000 | [api-gateway.md](services/api-gateway.md) |
+| Service | Port | Doc | Context |
+|---------|------|-----|---------|
+| S1 · Portfolio | 8001 | [portfolio.md](services/portfolio.md) | [.claude-context.md](../services/portfolio/.claude-context.md) |
+| S2 · Market Ingestion | 8002 | [market-ingestion.md](services/market-ingestion.md) | [.claude-context.md](../services/market-ingestion/.claude-context.md) |
+| S3 · Market Data | 8003 | [market-data.md](services/market-data.md) | [.claude-context.md](../services/market-data/.claude-context.md) |
+| S4 · Content Ingestion | 8004 | [content-ingestion.md](services/content-ingestion.md) | [.claude-context.md](../services/content-ingestion/.claude-context.md) |
+| S5 · Content Store | 8005 | [content-store.md](services/content-store.md) | [.claude-context.md](../services/content-store/.claude-context.md) |
+| S6 · NLP Pipeline | 8006 | [nlp-pipeline.md](services/nlp-pipeline.md) | [.claude-context.md](../services/nlp-pipeline/.claude-context.md) |
+| S7 · Knowledge Graph | 8007 | [knowledge-graph.md](services/knowledge-graph.md) | [.claude-context.md](../services/knowledge-graph/.claude-context.md) |
+| S8 · RAG / Chat | 8008 | [rag-chat.md](services/rag-chat.md) | [.claude-context.md](../services/rag-chat/.claude-context.md) |
+| S9 · API Gateway | 8000 | [api-gateway.md](services/api-gateway.md) | [.claude-context.md](../services/api-gateway/.claude-context.md) |
+| S10 · Alert | 8010 | [alert.md](services/alert.md) | [.claude-context.md](../services/alert/.claude-context.md) |
+| Init · Intelligence Migrations | — | — | [.claude-context.md](../services/intelligence-migrations/.claude-context.md) |
 
 ---
 
@@ -42,64 +64,91 @@
 
 ## Shared Libraries
 
-| Library | Doc |
-|---------|-----|
-| common | [common.md](libs/common.md) |
-| contracts | [contracts.md](libs/contracts.md) |
-| messaging | [messaging.md](libs/messaging.md) |
-| storage | [storage.md](libs/storage.md) |
-| observability | [observability.md](libs/observability.md) |
+| Library | Purpose | Doc |
+|---------|---------|-----|
+| common | IDs, time, constants | [common.md](libs/common.md) |
+| contracts | Canonical Pydantic models, event envelopes | [contracts.md](libs/contracts.md) |
+| messaging | Kafka, Avro, outbox, Valkey | [messaging.md](libs/messaging.md) |
+| storage | S3/MinIO abstraction | [storage.md](libs/storage.md) |
+| observability | structlog, metrics, tracing | [observability.md](libs/observability.md) |
+| ml-clients | ML model abstraction | [ml-clients.md](libs/ml-clients.md) |
 
 ---
 
-## Workflows
+## Workflows & Operations
 
-| Guide | Doc |
-|-------|-----|
-| Local Development | [local-dev.md](workflows/local-dev.md) |
-| CI / CD Pipeline | [ci-cd.md](workflows/ci-cd.md) |
-| Testing Strategy | [testing-strategy.md](workflows/testing-strategy.md) |
-| Release Process | [release-process.md](workflows/release-process.md) |
+| Guide | Purpose |
+|-------|---------|
+| [Local Development](workflows/local-dev.md) | Bootstrap, Docker profiles, port map, troubleshooting |
+| [Testing Strategy](workflows/testing-strategy.md) | Test pyramid, markers, coverage targets, infrastructure |
+| [CI/CD Pipeline](workflows/ci-cd.md) | GitHub Actions, fast path, gated jobs |
+| [Release Process](workflows/release-process.md) | Versioning, changelog, pre-release checklist |
+| [Testing Guide](testing/TESTING_GUIDE.md) | Quick reference for running tests |
+| [Docker Compose Testing](testing/DOCKER_COMPOSE_TEST_GUIDE.md) | Integration test infrastructure |
+| [Test Infrastructure Map](testing/TEST_INFRASTRUCTURE_MAP.md) | 155+ test files inventory |
+| [Test Report Guide](testing/TEST_REPORT_GUIDE.md) | How to read and generate test reports |
 
 ---
 
-## Governance
+## Operations Runbooks
+
+| Service | Runbook |
+|---------|---------|
+| Market Data (S3) | [market-data-operations.md](runbooks/market-data-operations.md) |
+| Market Ingestion (S2) | [market-ingestion-operations.md](runbooks/market-ingestion-operations.md) |
+
+---
+
+## Governance (Root-Level Files)
 
 | File | Purpose |
 |------|---------|
-| [AGENTS.md](../AGENTS.md) | AI agent operating guide |
-| [CLAUDE.md](../CLAUDE.md) | Claude-specific instructions |
-| [RULES.md](../RULES.md) | Hard rules for all contributors |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution workflow |
+| [CLAUDE.md](../CLAUDE.md) | Primary entry point — skills, hooks, hard rules, context loading |
+| [AGENTS.md](../AGENTS.md) | Coding standards, architecture patterns, shared libraries |
+| [RULES.md](../RULES.md) | 18 hard rules (MUST/NEVER) |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution workflow for humans and AI |
 
 ---
 
-## Migration
+## AI-Assisted Development
 
-| Doc | Description |
-|-----|-------------|
-| [REUSE_FROM_ORIGINAL_THESIS.md](migration/REUSE_FROM_ORIGINAL_THESIS.md) | Legacy repo reuse mapping |
+| Resource | Purpose |
+|----------|---------|
+| [AI Interactions README](ai-interactions/README.md) | Workflow overview, active vs archived artifacts |
+| [BUG_PATTERNS.md](ai-interactions/BUG_PATTERNS.md) | Living knowledge base of 13+ failure patterns |
+| [Orchestrator Runbook](ai-interactions/ORCHESTRATOR_RUNBOOK.md) | 1 orchestrator + N workers execution model |
+| [Workflow Map](ai-interactions/WORKFLOW_MAP.md) | Decision tree: bug fix, feature, refactor |
+| [Eval Framework](ai-interactions/evals/EVAL_FRAMEWORK.md) | Session tracking, quality metrics, improvement loop |
+| [PRD-0014 (Active)](ai-interactions/agent-responses/0014-PRD-v1-final.md) | Authoritative PRD for unstructured data pipeline |
+
+### Active Implementation Waves
+| Series | Scope | Waves |
+|--------|-------|-------|
+| 0011 | Foundation fixes (blocking prerequisites) | 5 waves |
+| 0012 | S4 + S5 (Content Ingestion + Content Store) | 7 waves |
+| 0013 | S6 + S7 + S10 (NLP + Knowledge Graph + Alerts) | 13 waves |
 
 ---
 
-## AI Interactions
+## Specs & Plans
 
-| Item | Description |
-|------|-------------|
-| [AI Interactions README](ai-interactions/README.md) | Canonical workflow for prompts and response reports |
-| [Orchestrator Runbook](ai-interactions/ORCHESTRATOR_RUNBOOK.md) | Operating procedure for 1 orchestrator + N worker agents |
-| [Interactions Registry](ai-interactions/INTERACTIONS_REGISTRY.md) | Audit log of prompt and response executions |
-| [Planning Prompt Index](ai-interactions/agent-planning/0000-prompt-library-index-and-conventions.md) | Naming conventions and planning prompt catalog |
-| [0005 Generic planning template](ai-interactions/agent-planning/0005-generic-implementation-plan-and-task-breakdown-template.md) | Reusable planning prompt template for non-migration work |
-| [Execution Prompt Index](ai-interactions/agent-prompts/0000-execution-prompt-index-and-conventions.md) | Naming conventions and implementation prompt catalog |
-| [0001 Exec shared libs wave 01](ai-interactions/agent-prompts/0001-exec-shared-libs-wave-01.md) | First implementation wave for shared libs |
-| [0002 Exec portfolio wave 01](ai-interactions/agent-prompts/0002-exec-portfolio-wave-01.md) | First implementation wave for portfolio |
-| [0003 Exec market-ingestion wave 01](ai-interactions/agent-prompts/0003-exec-market-ingestion-wave-01.md) | First implementation wave for market-ingestion |
-| [0004 Exec market-data wave 01](ai-interactions/agent-prompts/0004-exec-market-data-wave-01.md) | First implementation wave for market-data |
-| [Response Template](ai-interactions/agent-responses/0000-response-template.md) | Required implementation report format |
-| [Response Review Checklist](ai-interactions/agent-responses/0001-review-checklist.md) | Validation checklist for response quality and compliance |
-| [Response Evidence Add-on](ai-interactions/agent-responses/0002-response-evidence-addon-template.md) | Optional per-task evidence section for responses |
-| [0001 Shared libs migration](ai-interactions/agent-planning/0001-shared-libs-migration-detailed-plan-and-atomic-tasks.md) | Generate shared libs migration plan and atomic tasks |
-| [0002 Portfolio migration](ai-interactions/agent-planning/0002-portfolio-migration-detailed-plan-and-atomic-tasks.md) | Generate portfolio migration plan and atomic tasks |
-| [0003 Market Ingestion migration](ai-interactions/agent-planning/0003-market-ingestion-migration-detailed-plan-and-atomic-tasks.md) | Generate ingestion migration plan and atomic tasks |
-| [0004 Market Data migration](ai-interactions/agent-planning/0004-market-data-migration-detailed-plan-and-atomic-tasks.md) | Generate market data migration plan and atomic tasks |
+| Resource | Purpose |
+|----------|---------|
+| [PRD Template](specs/TEMPLATE.md) | Standardized format for product requirements |
+| [Plan Template](plans/TEMPLATE.md) | Standardized format for implementation plans |
+| [Plan Tracking](plans/TRACKING.md) | Active plans index |
+
+---
+
+## Reference
+
+| Resource | Purpose |
+|----------|---------|
+| [EODHD Endpoints Reference](ai-interactions/references/eodhd-endpoints-reference.md) | 72 EODHD API endpoints with params and response shapes |
+| [Legacy Repo Reuse](migration/REUSE_FROM_ORIGINAL_THESIS.md) | Maps old thesis repo to worldview architecture |
+
+---
+
+## Archive
+
+Historical artifacts (completed waves, old audits, test runs) are in [archive/](archive/). See [archive/README.md](archive/README.md) for contents.
