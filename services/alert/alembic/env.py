@@ -6,11 +6,11 @@ import asyncio
 import os
 from logging.config import fileConfig
 
+from alert.config import Settings as _Settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from alert.config import Settings as _Settings
 
 config = context.config
 

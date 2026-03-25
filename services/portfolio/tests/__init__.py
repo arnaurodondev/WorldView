@@ -1,1 +1,1 @@
-"""Portfolio tests package."""
+"""Portfolio test package."""

@@ -1,0 +1,178 @@
+version: 1
+created_at: 2026-03-24
+scope:
+  - worldview
+  - eodhd-claude-skills
+
+summary:
+  maturity_score_1_to_5: 3.6
+  compliance_score_percent: 74
+  risk_level: medium
+
+quick_wins:
+  - id: IMPROVE-001
+    title: Enforce per-service contract test baseline
+    priority: P0
+    impact: high
+    effort: medium
+    timeline: 5-7 days
+    owner_roles: [service-owners, qa-test-engineer]
+    dependencies: []
+    acceptance_criteria:
+      - Every event-producing service has at least one contract test module
+      - CI fails when a producing service has zero contract tests
+      - Contract tests run in PR checks
+
+  - id: IMPROVE-002
+    title: Add Avro mirror parity check
+    priority: P0
+    impact: high
+    effort: low
+    timeline: 2-3 days
+    owner_roles: [data-platform-engineer, devops-platform-engineer]
+    dependencies: []
+    acceptance_criteria:
+      - CI compares central infra/kafka/schemas and service mirror schemas
+      - Any mismatch blocks merge
+      - Parity report uploaded as CI artifact
+
+  - id: IMPROVE-003
+    title: Add OpenAPI lint and breaking-change diff gate
+    priority: P1
+    impact: high
+    effort: medium
+    timeline: 4-6 days
+    owner_roles: [backend-engineer, devops-platform-engineer]
+    dependencies: []
+    acceptance_criteria:
+      - OpenAPI documents linted on every PR
+      - Breaking contract changes require explicit approval label
+      - PR shows readable contract diff artifact
+
+  - id: IMPROVE-004
+    title: Introduce spec review checklist
+    priority: P1
+    impact: medium
+    effort: low
+    timeline: 1-2 days
+    owner_roles: [tech-lead]
+    dependencies: []
+    acceptance_criteria:
+      - Pull request template includes spec-impact section
+      - Reviewers must classify change as additive/non-breaking/breaking
+      - Checklist completion required before merge
+
+medium_term:
+  - id: IMPROVE-005
+    title: Generate contract test skeletons from Avro/OpenAPI
+    priority: P1
+    impact: high
+    effort: high
+    timeline: 2-3 weeks
+    owner_roles: [qa-test-engineer, backend-engineer]
+    dependencies: [IMPROVE-001, IMPROVE-003]
+    acceptance_criteria:
+      - New endpoint/event auto-produces baseline contract test stubs
+      - Generated tests integrated into CI
+      - Manual effort per new contract reduced by at least 50 percent
+
+  - id: IMPROVE-006
+    title: Formalize plan and task schemas
+    priority: P1
+    impact: high
+    effort: high
+    timeline: 3-4 weeks
+    owner_roles: [tech-lead, architecture-decision-lead]
+    dependencies: []
+    acceptance_criteria:
+      - Plan/task definitions expressed in machine-readable schema
+      - Static validator runs in CI for agent prompt artifacts
+      - At least 3 existing workflows migrated to formal schema
+
+  - id: IMPROVE-007
+    title: Add schema registry compatibility gate
+    priority: P1
+    impact: high
+    effort: medium
+    timeline: 1-2 weeks
+    owner_roles: [data-platform-engineer, devops-platform-engineer]
+    dependencies: [IMPROVE-002]
+    acceptance_criteria:
+      - Compatibility check runs against previous schema versions
+      - Backward-incompatible changes fail CI by default
+      - Exception path documented for planned version bumps
+
+  - id: IMPROVE-008
+    title: Automate eodhd endpoint doc drift checks
+    priority: P2
+    impact: medium
+    effort: medium
+    timeline: 1-2 weeks
+    owner_roles: [backend-engineer]
+    dependencies: []
+    acceptance_criteria:
+      - Nightly probe checks representative endpoints
+      - Drift report generated for changed params/fields/status behavior
+      - Maintainers notified via issue or workflow output
+
+long_term:
+  - id: IMPROVE-009
+    title: Full contract testing framework
+    priority: P2
+    impact: high
+    effort: high
+    timeline: 4-6 weeks
+    owner_roles: [qa-test-engineer, e2e-service-test-architect]
+    dependencies: [IMPROVE-005, IMPROVE-007]
+    acceptance_criteria:
+      - Contract matrix covers all producing and consuming services
+      - Compatibility trend tracked over time
+      - Failures correlated to owning service automatically
+
+  - id: IMPROVE-010
+    title: Runtime spec compliance telemetry
+    priority: P2
+    impact: medium
+    effort: high
+    timeline: 3-5 weeks
+    owner_roles: [backend-engineer, devops-platform-engineer]
+    dependencies: [IMPROVE-007]
+    acceptance_criteria:
+      - Request and event validation error metrics exposed
+      - Dashboards show spec compliance rates per service
+      - Alerts fire on sustained compliance degradation
+
+  - id: IMPROVE-011
+    title: Evaluate broader spec framework adoption
+    priority: P3
+    impact: medium
+    effort: high
+    timeline: 4-8 weeks
+    owner_roles: [architecture-decision-lead, tech-lead]
+    dependencies: [IMPROVE-006]
+    acceptance_criteria:
+      - Pilot compares internal evolution vs spec-kitty vs OpenSpec
+      - Decision ADR published with measured cost/benefit
+      - Migration plan approved or explicitly rejected
+
+resource_estimate:
+  total_engineer_weeks:
+    minimum: 10
+    maximum: 16
+  suggested_team:
+    - 1 tech lead
+    - 2 backend/platform engineers
+    - 1 QA/contract test engineer
+    - 0.5 DevOps support
+
+kpis:
+  - name: spec_lint_pass_rate
+    target: ">=95%"
+  - name: contract_test_coverage_services
+    target: ">=90%"
+  - name: schema_parity_drift_incidents
+    target: "0 per month"
+  - name: breaking_changes_detected_premerge
+    target: ">=99%"
+  - name: agent_plan_schema_validation_pass_rate
+    target: ">=95%"

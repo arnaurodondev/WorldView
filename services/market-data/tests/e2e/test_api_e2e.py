@@ -65,7 +65,7 @@ async def test_instruments_list_contains_seeded(
     resp = await e2e_client.get("/api/v1/instruments")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    ids = [i["id"] for i in body["instruments"]]
+    ids = [i["id"] for i in body["items"]]
     assert seeded_instrument["instrument_id"] in ids
 
 
@@ -114,10 +114,10 @@ async def test_ohlcv_returns_seeded_bars(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "bars" in body
-    assert len(body["bars"]) == 5
+    assert "items" in body
+    assert len(body["items"]) == 5
     # All bars belong to the right instrument
-    for bar in body["bars"]:
+    for bar in body["items"]:
         assert bar["instrument_id"] == instr_id
         assert bar["timeframe"] == "1d"
         # Price fields returned as strings (Decimal serialisation)
@@ -148,7 +148,7 @@ async def test_ohlcv_empty_range_returns_empty_list(
         params={"timeframe": "1d", "start": "2020-01-01", "end": "2020-01-31"},
     )
     assert resp.status_code == 200
-    assert resp.json()["bars"] == []
+    assert resp.json()["items"] == []
 
 
 async def test_ohlcv_available_timeframes(
@@ -159,7 +159,7 @@ async def test_ohlcv_available_timeframes(
     resp = await e2e_client.get(f"/api/v1/ohlcv/{instr_id}/timeframes")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "1d" in body["timeframes"]
+    assert "1d" in body
 
 
 async def test_ohlcv_date_range_endpoint(
@@ -170,17 +170,17 @@ async def test_ohlcv_date_range_endpoint(
     resp = await e2e_client.get(f"/api/v1/ohlcv/{instr_id}/range", params={"timeframe": "1d"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert "start" in body
-    assert "end" in body
-    assert body["start"] == "2024-06-01"
-    assert body["end"] == "2024-06-05"
+    assert "min_date" in body
+    assert "max_date" in body
+    assert body["min_date"] == "2024-06-01"
+    assert body["max_date"] == "2024-06-05"
 
 
 async def test_ohlcv_bulk_multiple_instruments(
     e2e_client: AsyncClient,
     seeded_ohlcv: dict,
 ) -> None:
-    """GET /ohlcv/bulk returns results keyed by instrument_id."""
+    """GET /ohlcv/bulk returns one list response per requested instrument."""
     instr_id = seeded_ohlcv["instrument_id"]
     resp = await e2e_client.get(
         "/api/v1/ohlcv/bulk",
@@ -193,7 +193,11 @@ async def test_ohlcv_bulk_multiple_instruments(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert instr_id in body
+    assert isinstance(body, list)
+    assert len(body) == 1
+    assert body[0]["timeframe"] == "1d"
+    assert body[0]["total"] == 5
+    assert len(body[0]["items"]) == 5
 
 
 # ── Quotes ────────────────────────────────────────────────────────────────────
@@ -273,7 +277,7 @@ async def test_securities_list_contains_seeded(
     resp = await e2e_client.get("/api/v1/securities")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    ids = [s["id"] for s in body["securities"]]
+    ids = [s["id"] for s in body["items"]]
     assert sec_id in ids
 
 
@@ -281,11 +285,11 @@ async def test_security_detail_by_id(
     e2e_client: AsyncClient,
     seeded_instrument: dict,
 ) -> None:
-    sec_id = seeded_instrument["security_id"]
-    resp = await e2e_client.get(f"/api/v1/securities/{sec_id}")
+    sec_figi = seeded_instrument["security_figi"]
+    resp = await e2e_client.get(f"/api/v1/securities/{sec_figi}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["id"] == sec_id
+    assert body["figi"] == sec_figi
     assert body["name"] == "E2E Apple Inc."
 
 

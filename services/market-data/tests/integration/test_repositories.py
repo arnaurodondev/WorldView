@@ -67,6 +67,20 @@ class TestPgSecurityRepository:
         assert found is not None
         assert found.name == "ISIN Corp"
 
+    async def test_upsert_same_figi_with_new_id_updates_existing_row(self, uow) -> None:
+        from market_data.domain.entities import Security
+
+        first = Security(figi="BBG-FIGI-UPSERT", isin="US1111111111", name="Original Name")
+        created = await uow.securities.upsert(first)
+        await uow.commit()
+
+        second = Security(figi="BBG-FIGI-UPSERT", isin="US1111111111", name="Updated Name")
+        updated = await uow.securities.upsert(second)
+        await uow.commit()
+
+        assert updated.id == created.id
+        assert updated.name == "Updated Name"
+
 
 # ── Instrument repository ─────────────────────────────────────────────────────
 
