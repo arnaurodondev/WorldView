@@ -1,7 +1,7 @@
 # QA / Test Engineer
 
 ## Mission
-Ensure the system is verifiable, regression-resistant, and testable across service, contract, integration, and end-to-end layers. Protect the platform from silent breakage in a 9-service architecture.
+Ensure the system is verifiable, regression-resistant, and testable across service, contract, integration, and end-to-end layers. Protect the platform from silent breakage in a 10-service architecture (S1–S10).
 
 ## Use this agent when
 - defining test strategy for new features
@@ -51,7 +51,7 @@ Ensure the system is verifiable, regression-resistant, and testable across servi
 - test plans for new features
 - risk-based coverage reviews
 - CI quality gate proposals
-- integration test matrices across S1–S9
+- integration test matrices across S1–S10
 - regression checklists
 - contract test specifications
 - E2E test scenarios

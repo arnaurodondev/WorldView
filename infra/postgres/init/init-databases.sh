@@ -12,9 +12,11 @@ DATABASES=(
     content_ingestion_db
     content_store_db
     nlp_db
+    intelligence_db
     kg_db
     rag_db
     gateway_db
+    alert_db
 )
 
 for DB in "${DATABASES[@]}"; do
@@ -44,6 +46,13 @@ SQL
 echo "Enabling pgvector in nlp_db"
 psql -d nlp_db -v ON_ERROR_STOP=0 <<SQL
     CREATE EXTENSION IF NOT EXISTS vector;
+SQL
+
+# pgvector + pg_trgm for intelligence_db (owned by intelligence-migrations; used by S6 + S7)
+echo "Enabling pgvector and pg_trgm in intelligence_db"
+psql -d intelligence_db -v ON_ERROR_STOP=0 <<SQL
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
 SQL
 
 # Apache AGE for kg_db

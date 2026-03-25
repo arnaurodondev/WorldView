@@ -1,570 +1,465 @@
-# Worldview — Master Plan
+# Worldview -- Master Plan
 
-> **Version**: 1.0 · **Date**: 2026-02-28
-> **Status**: Active · **Owner**: Arnau Rodon
+> **Version**: 2.0 | **Date**: 2026-03-25
+> **Status**: Active | **Owner**: Arnau Rodon
 > **Single source of truth** for the entire platform architecture.
 
 ---
 
 ## Table of Contents
 
-- [1. Product Scope](#1-product-scope)
-- [2. System Architecture](#2-system-architecture)
-- [3. Service Catalog](#3-service-catalog)
-- [4. Data Lifecycle](#4-data-lifecycle)
-- [5. Storage Design](#5-storage-design)
-- [6. Contracts](#6-contracts)
-- [7. Caching Strategy](#7-caching-strategy)
-- [8. RAG / Chat Design](#8-rag--chat-design)
-- [9. Security](#9-security)
-- [10. Observability](#10-observability)
-- [11. Developer Workflow](#11-developer-workflow)
-- [12. Phased Roadmap](#12-phased-roadmap)
+1. [Platform Overview](#1-platform-overview)
+2. [Architecture Diagram](#2-architecture-diagram)
+3. [Service Catalog](#3-service-catalog)
+4. [Shared Libraries](#4-shared-libraries)
+5. [Data Lifecycle](#5-data-lifecycle)
+6. [Infrastructure](#6-infrastructure)
+7. [Event Architecture](#7-event-architecture)
+8. [Storage Design](#8-storage-design)
+9. [RAG / Chat Architecture](#9-rag--chat-architecture)
+10. [Security Model](#10-security-model)
+11. [Observability](#11-observability)
+12. [AI-Assisted Development](#12-ai-assisted-development)
+13. [Frontend Architecture](#13-frontend-architecture)
+14. [Testing Strategy](#14-testing-strategy)
+15. [CI/CD Pipeline](#15-cicd-pipeline)
+16. [Developer Workflow](#16-developer-workflow)
+17. [Roadmap](#17-roadmap)
 
 ---
 
-## 1. Product Scope
+## 1. Platform Overview
 
-Worldview is a **thesis-grade market intelligence platform** that fuses structured
-financial data (OHLCV, fundamentals, corporate actions) with unstructured intelligence
-(news, filings, press releases) into a unified knowledge layer — queryable by APIs,
-visualizable in charts, and conversable through an LLM-powered chatbot with grounded,
-citation-backed answers.
+Worldview is a **thesis-grade market intelligence platform** that fuses structured financial data (OHLCV, fundamentals, corporate actions) with unstructured intelligence (news, filings, press releases) into a unified knowledge layer -- queryable by APIs, visualizable in charts, and conversable through an LLM-powered chatbot with grounded, citation-backed answers.
 
 ### Core User Journeys
 
 | # | Journey | Description |
 |---|---------|-------------|
-| J1 | **Interactive Charts** | TradingView-style OHLCV candlestick charts with indicators (SMA/EMA, RSI, MACD, Bollinger Bands). Sub-200ms p99 latency for 5-year daily bars via TimescaleDB. |
-| J2 | **Fundamentals Explorer** | Browse income statement, balance sheet, cash flow, valuation ratios, analyst consensus, dividends. Quarterly and annual views with stale-while-revalidate caching. |
-| J3 | **News Feed + Entity Linking** | Timeline of news articles linked to companies/tickers via NLP entity extraction. Each article shows source, date, linked entities, sentiment, and topic tags. |
-| J4 | **Signals / Events View** | Unified event stream: structured events (earnings surprises, dividends, splits) + unstructured events (M&A, executive changes, regulatory actions). Filterable by company, sector, event type, severity. |
-| J5 | **LLM Chatbot (RAG + KG)** | Conversational interface answering questions like *"What happened to NVDA this quarter?"*. Hybrid retrieval (vector search + knowledge graph traversal + SQL) produces grounded, cited answers. |
+| J1 | **Interactive Charts** | TradingView-style OHLCV candlestick charts with indicators. Sub-200ms p99 via TimescaleDB. |
+| J2 | **Fundamentals Explorer** | Income statement, balance sheet, cash flow, valuation ratios, analyst consensus, dividends. 18 sections. |
+| J3 | **News Feed + Entity Linking** | Timeline of articles linked to companies/tickers via NLP entity extraction with sentiment and topic tags. |
+| J4 | **Signals / Events View** | Unified event stream: structured + unstructured events. Filterable by entity, sector, type, severity. |
+| J5 | **LLM Chatbot (RAG + KG)** | Hybrid retrieval (vector search + knowledge graph + SQL). Grounded, cited answers via streaming SSE. |
 
 ### Non-Functional Goals
 
 | Attribute | Target |
 |-----------|--------|
-| **Reliability** | 99.5% uptime for read APIs; at-least-once Kafka delivery with idempotent consumers |
-| **Latency** | < 200ms p95 charts/fundamentals; < 500ms news timeline; < 5s chatbot first token |
-| **Cost** | $0 infra (local Docker); < $50/month cloud data APIs |
-| **Privacy** | No PII beyond email; local Ollama as default LLM; GDPR-aware design |
-| **Observability** | Structured logs (structlog), Prometheus metrics, OpenTelemetry traces on all services |
-| **Testability** | Property-based tests for domain logic; integration tests with testcontainers; contract tests for Avro schemas |
+| Reliability | 99.5% uptime read APIs; at-least-once Kafka with idempotent consumers |
+| Latency | < 200ms p95 charts/fundamentals; < 500ms news; < 5s chatbot first token |
+| Cost | $0 infra (local Docker); < $50/month cloud data APIs |
+| Privacy | No PII beyond email; local Ollama as default LLM; GDPR-aware |
+| Observability | structlog, Prometheus metrics, OpenTelemetry traces on all services |
 
 ---
 
-## 2. System Architecture
+## 2. Architecture Diagram
 
-### Design Principles
+**Design Principles**: (1) Data ownership -- each service owns its DB. (2) Event-driven integration via Kafka + Avro. (3) Synchronous reads via API Gateway. (4) Thesis pragmatism -- merge where overhead exceeds benefit.
 
-1. **Data ownership**: each service owns its database schema; no cross-service DB access.
-2. **Event-driven integration**: services communicate via Kafka topics with Avro-serialized events.
-3. **Synchronous reads**: API Gateway composes responses from service APIs for the UI.
-4. **Thesis pragmatism**: merge services where operational overhead exceeds benefit.
+### Service Topology
 
-### Component Diagram
+```
+                         ┌──────────────────────┐
+                         │   Web Frontend (UI)   │
+                         │  React + Vite  :5173  │
+                         └──────────┬───────────┘
+                                    │
+                         ┌──────────▼───────────┐
+                         │  S9 · API Gateway     │
+                         │  FastAPI + Valkey :8000│
+                         └──┬──┬──┬──┬──┬──┬────┘
+              ┌─────────────┘  │  │  │  │  └──────────────┐
+              ▼     ▼          ▼  ▼  ▼                    ▼
+           ┌─────┐┌─────┐ ┌─────┐┌─────┐┌─────┐   ┌──────┐
+           │ S1  ││ S3  │ │ S5  ││ S6  ││ S7  │   │ S8   │
+           │Port-││Mkt  │ │Cont.││NLP  ││Know.│   │RAG/  │
+           │folio││Data │ │Store││Pipe.││Graph│   │Chat  │
+           │:8001││:8003│ │:8005││:8006││:8007│   │:8008 │
+           └──┬──┘└──┬──┘ └──┬──┘└──┬──┘└──┬──┘   └──┬──┘
+  ┌───────────┴──────┴──────┴──────┴───────┘         │
+  │                    Kafka                          │
+  └────────┬──────────────────────────┐              │
+     ┌─────▼─────┐ ┌──────────┐ ┌────▼────┐         │
+     │ S2 · Mkt  │ │ S4 · Cont│ │S10·Alert│         │
+     │ Ingestion │ │ Ingestion│ │ :8010   │         │
+     │   :8002   │ │  :8004   │ └─────────┘         │
+     └─────┬─────┘ └────┬─────┘                     │
+     ┌─────▼─────┐ ┌────▼─────┐   ┌────────────────▼┐
+     │  EODHD    │ │ RSS/News │   │  LLM Providers   │
+     │  API      │ │   APIs   │   │ Ollama/Groq/OR   │
+     └───────────┘ └──────────┘   └──────────────────┘
 
-```mermaid
-graph TB
-    subgraph "Client Layer"
-        UI[Web Frontend<br/>React + Vite :5173]
-    end
+Infra: PostgreSQL 16 + TimescaleDB + pgvector + AGE | Kafka KRaft + Schema Registry
+       MinIO | Valkey | Ollama
+```
 
-    subgraph "Gateway Layer"
-        GW[S9 · API Gateway / BFF<br/>FastAPI + Valkey :8000]
-    end
+### Kafka Flow Summary
 
-    subgraph "Domain Services"
-        S1[S1 · Portfolio<br/>FastAPI :8001]
-        S2[S2 · Market Ingestion<br/>FastAPI + Scheduler :8002]
-        S3[S3 · Market Data<br/>FastAPI + Consumers :8003]
-        S4[S4 · Content Ingestion<br/>FastAPI + Pollers :8004]
-        S5[S5 · Content Store<br/>FastAPI + Consumers :8005]
-        S6[S6 · NLP Pipeline<br/>FastAPI + Workers :8006]
-        S7[S7 · Knowledge Graph<br/>FastAPI + Workers :8007]
-        S8[S8 · RAG / Chat<br/>FastAPI + SSE :8008]
-        S10[S10 · Alert Service<br/>FastAPI + WebSocket :8010]
-    end
-
-    subgraph "Infrastructure"
-        KAFKA[Apache Kafka<br/>+ Schema Registry]
-        PG[(PostgreSQL 16<br/>+ TimescaleDB<br/>+ pgvector<br/>+ Apache AGE)]
-        MINIO[(MinIO<br/>Object Storage)]
-        VALKEY[(Valkey / Redis<br/>Cache + Rate Limits)]
-        LLM_EXT[LLM Providers<br/>Ollama / Groq / OpenRouter]
-    end
-
-    subgraph "External Data"
-        EODHD[EODHD API]
-        RSS[RSS Feeds<br/>+ News APIs]
-    end
-
-    UI --> GW
-    GW --> S1 & S3 & S5 & S6 & S7 & S8
-
-    S2 --> EODHD
-    S4 --> RSS
-
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S10 --> PG
-    S2 & S4 --> MINIO
-    S3 & GW & S10 --> VALKEY
-    S8 --> LLM_EXT
-
-    S1 & S2 & S3 & S4 & S5 & S6 & S7 & S10 --> KAFKA
-
-    S8 -.->|vector search| S6
-    S8 -.->|graph query| S7
-    S8 -.->|SQL query| S3
-    S8 -.->|articles| S5
+```
+EODHD ──► S2 ──market.dataset.fetched──► S3 ──market.instrument.created/updated──► S1
+RSS   ──► S4 ──content.article.raw.v1──► S5 ──content.article.stored.v1──► S6
+S6 ──nlp.article.enriched.v1──► S7    S6 ──nlp.signal.detected.v1──► S10
+S7 ──graph.state.changed.v1──► S10    S7 ──intelligence.contradiction.v1──► S10
+S1 ──portfolio.watchlist.updated.v1──► S10
 ```
 
 ---
 
 ## 3. Service Catalog
 
-| # | Service | Database | Kafka Produces | Kafka Consumes | Port |
-|---|---------|----------|----------------|----------------|------|
-| S1 | **Portfolio** | `portfolio_db` | `portfolio.events.v1` | `market.instrument.created` | 8001 |
-| S2 | **Market Ingestion** | `market_ingestion_db` | `market.dataset.fetched` | — | 8002 |
-| S3 | **Market Data** | `market_data_db` (TimescaleDB) | `market.instrument.created/updated` | `market.dataset.fetched` | 8003 |
-| S4 | **Content Ingestion** | `content_ingestion_db` | `content.article.raw.v1` | — | 8004 |
-| S5 | **Content Store** | `content_store_db` | `content.article.stored.v1` | `content.article.raw.v1` | 8005 |
-| S6 | **NLP Pipeline** | `nlp_db` (pgvector, owned) + `intelligence_db` (shared, no DDL) | `nlp.article.enriched.v1`, `nlp.signal.detected.v1` | `content.article.stored.v1` | 8006 |
-| S7 | **Knowledge Graph** | `intelligence_db` (shared, no DDL) | `graph.state.changed.v1`, `intelligence.contradiction.v1`, `relation.type.proposed.v1`, `entity.dirtied.v1` | `nlp.article.enriched.v1` | 8007 |
-| S8 | **RAG / Chat** | — (stateless) | — | — | 8008 |
-| S9 | **API Gateway** | — (stateless) | — | — | 8000 |
-| S10 | **Alert Service** | `alert_db` | `alert.delivered.v1` | `nlp.signal.detected.v1`, `graph.state.changed.v1`, `intelligence.contradiction.v1`, `portfolio.watchlist.updated.v1` | 8010 |
-| — | **Frontend** | — | — | — | 5173 |
+| # | Service | Port | Database | Status | Mission |
+|---|---------|------|----------|--------|---------|
+| S1 | **Portfolio** | 8001 | `portfolio_db` | ✅ Mature | Tenant/user mgmt, portfolio CRUD, transactions, holdings, watchlists, alert prefs |
+| S2 | **Market Ingestion** | 8002 | `ingestion_db` | ✅ Mature | EODHD polling, raw/canonical MinIO storage, backfill orchestration |
+| S3 | **Market Data** | 8003 | `market_data_db` (TimescaleDB) | ✅ Mature | Materialize OHLCV/quotes/fundamentals; 30 query API routes |
+| S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | 🔄 In-progress | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
+| S5 | **Content Store** | 8005 | `content_store_db` | 🔄 In-progress | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
+| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | 🔄 In-progress | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
+| S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
+| S8 | **RAG / Chat** | 8008 | None (stateless) | ⏳ Planned | Hybrid retrieval, LLM completion, streaming SSE, citations |
+| S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
+| S10 | **Alert Service** | 8010 | `alert_db` | 🔄 In-progress | Fan-out alerts via WebSocket, watchlist resolution, dedup |
+| -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |
+| -- | **Frontend** | 5173 | -- | ⏳ Scaffolded | React + Vite + TypeScript web app |
 
-Each service has a detailed doc at `docs/services/<name>.md`. The web frontend is documented at `docs/apps/frontend.md`.
+**Status key**: ✅ Mature (production-ready, tested) | 🔄 In-progress (compliant scaffold, active PRD 0014) | ⏳ Planned (scaffolded only)
 
----
-
-## 4. Data Lifecycle
-
-### 4.1 Structured Data Pipeline
-
-```mermaid
-flowchart LR
-    EODHD[EODHD API] -->|poll| ING[Market Ingestion]
-    ING -->|raw + canonical| MINIO[(MinIO)]
-    ING -->|market.dataset.fetched| KAFKA{Kafka}
-    KAFKA -->|consume + claim-check| MD[Market Data]
-    MD -->|materialize| PG_MD[(market_data_db<br/>TimescaleDB)]
-    MD -->|instrument events| KAFKA
-    KAFKA -->|instrument.created| PF[Portfolio]
-    PF --> PG_PF[(portfolio_db)]
-```
-
-**Flow**:
-1. **Market Ingestion** polls EODHD (or fallback providers) on schedule
-2. Raw provider response stored in MinIO (`bronze` layer)
-3. Normalized canonical data stored in MinIO (`silver` layer, Parquet/JSONL)
-4. `market.dataset.fetched` event published via outbox (claim-check pointer)
-5. **Market Data** consumers download from MinIO, materialize to Postgres/TimescaleDB
-6. Instrument discovery triggers `market.instrument.created` event
-7. **Portfolio** consumes instrument events to maintain local mirror
-
-### 4.2 Unstructured Data Pipeline
-
-```mermaid
-flowchart LR
-    SRC["EODHD · SEC EDGAR<br/>Finnhub · NewsAPI"] -->|poll| S4[S4 · Content Ingestion]
-    S4 -->|raw HTML/JSON| MINIO[(MinIO bronze)]
-    S4 -->|content.article.raw.v1| KAFKA{Kafka}
-    KAFKA -->|consume| S5[S5 · Content Store]
-    S5 -->|clean text| MINIO2[(MinIO silver)]
-    S5 -->|dedup metadata| PG_CS[(content_store_db)]
-    S5 -->|content.article.stored.v1| KAFKA
-    KAFKA -->|consume| S6[S6 · NLP Pipeline]
-    S6 -->|embeddings + NLP data| PG_NLP[(nlp_db / pgvector)]
-    S6 -->|relations, claims| PG_INT[(intelligence_db)]
-    S6 -->|nlp.article.enriched.v1| KAFKA
-    S6 -->|nlp.signal.detected.v1| KAFKA
-    KAFKA -->|consume| S7[S7 · Knowledge Graph]
-    S7 -->|graph upserts| PG_INT
-    S7 -->|graph.state.changed.v1| KAFKA
-    S7 -->|intelligence.contradiction.v1| KAFKA
-    KAFKA -->|consume| S10[S10 · Alert Service]
-    S10 -->|alert_db| PG_ALERT[(alert_db)]
-    S10 -->|alert.delivered.v1| KAFKA
-```
-
-**Flow**:
-1. **Content Ingestion** polls EODHD, SEC EDGAR, Finnhub, and NewsAPI on schedule (15–30 min intervals); single-replica advisory lock prevents duplicate polling
-2. Raw article payload stored verbatim in MinIO bronze; `content.article.raw.v1` emitted via outbox
-3. **Content Store** consumer: downloads raw, cleans HTML (readability-lxml + bleach), runs three-stage dedup (exact URL hash → normalized hash → Valkey LSH near-dup), assigns canonical UUID, stores clean text in MinIO silver
-4. `content.article.stored.v1` triggers NLP enrichment
-5. **NLP Pipeline** (Blocks 3–10): sectioning → GLiNER NER (10 entity classes, `urchade/gliner_large-v2.1`) → additive routing score → suppression → chunk/section embeddings (`BAAI/bge-large-en-v1.5`, 1024-dim) → two-stage novelty gate (MinHash) → 4-step entity resolution cascade → deep LLM extraction (Qwen2.5-7B-Instruct)
-6. NLP artifacts written to `nlp_db` (pgvector embeddings, NER data) and `intelligence_db` (canonical entities, relations, claims); both enriched-article and signal events emitted
-7. **Knowledge Graph** consumes enriched events: canonicalizes relation types, materializes evidence to staging table (hot path), runs async derived-semantics workers (confidence recomputation, contradiction detection, relation summary generation, embedding refresh)
-8. `graph.state.changed.v1` and `intelligence.contradiction.v1` events trigger **Alert Service** (S10) fan-out to watching users via WebSocket
-
-### 4.3 News Ingestion → NLP Enrichment Sequence
-
-```mermaid
-sequenceDiagram
-    participant S as Scheduler
-    participant S4 as S4 Content Ingestion
-    participant MIO as MinIO
-    participant K as Kafka
-    participant S5 as S5 Content Store
-    participant S6 as S6 NLP Pipeline
-    participant DB as nlp_db + intelligence_db
-
-    S->>S4: trigger poll (source_id)
-    S4->>S4: fetch RSS feed (httpx, 15s timeout)
-    S4->>S4: parse feed (feedparser)
-    loop each new article
-        S4->>MIO: PUT raw HTML
-        S4->>S4: write to outbox (same txn)
-    end
-    S4-->>K: content.article.raw.v1 (via dispatcher)
-
-    K->>S5: consume raw event
-    S5->>MIO: GET raw HTML
-    S5->>S5: clean (readability + bleach)
-    S5->>S5: dedup (URL hash + title Jaccard)
-    alt new article
-        S5->>S5: assign canonical ID (UUIDv7)
-        S5->>S5: store cleaned text
-        S5-->>K: content.article.stored.v1
-    else duplicate
-        S5->>S5: mark is_duplicate=true
-    end
-
-    K->>S6: consume stored event
-    S6->>MIO: GET clean text (silver)
-    S6->>S6: Block 3 — sectioning (source-specific)
-    S6->>S6: Block 4 — GLiNER NER per section (urchade/gliner_large-v2.1)
-    S6->>S6: Block 5 — additive routing score (7 signals)
-    S6->>S6: Block 6 — suppression (low-score docs discarded)
-    S6->>S6: Block 7 — chunk + section embeddings (bge-large-en-v1.5, 1024-dim)
-    S6->>DB: INSERT chunk_embeddings, section_embeddings
-    S6->>S6: Block 8 — two-stage novelty gate (MinHash, Valkey LSH)
-    S6->>S6: Block 9 — entity resolution cascade (4 steps)
-    S6->>DB: UPSERT canonical_entities, entity_aliases
-    S6->>S6: Block 10 — deep LLM extraction (Qwen2.5-7B-Instruct)
-    S6->>DB: INSERT article_events, article_claims, relation_evidence_raw
-    S6-->>K: nlp.article.enriched.v1
-    opt confidence >= SIGNAL_CONFIDENCE_MIN
-        S6-->>K: nlp.signal.detected.v1
-    end
-```
+Each service has: detailed doc at `docs/services/<name>.md` and agent context at `services/<name>/.claude-context.md`.
 
 ---
 
-## 5. Storage Design
+## 4. Shared Libraries
 
-### 5.1 Postgres Databases
+Six shared Python packages in `libs/`, installable via `pip install -e libs/<name>`.
+
+| Library | Package | Purpose | Key Exports |
+|---------|---------|---------|-------------|
+| **common** | `common` | IDs, time, types | `new_uuid7()`, `utc_now()`, `ensure_utc()`, type aliases |
+| **contracts** | `contracts` | Canonical Pydantic models, event envelope | Event envelope model, shared schemas |
+| **messaging** | `messaging` | Kafka, outbox, Avro, Valkey | `BaseOutboxDispatcher`, `BaseKafkaConsumer`, `ValkeyClient` |
+| **storage** | `storage` | S3/MinIO abstraction | `build_object_storage()`, `ObjectStorage` protocol |
+| **observability** | `observability` | Logging, metrics, tracing, health | `configure_logging()`, `get_logger()`, `add_prometheus_middleware()` |
+| **ml-clients** | `ml_clients` | ML model protocols + adapters | `EmbeddingClient`, `NERClient`, `ExtractionClient` |
+
+**Hard rules**: `confluent-kafka` via `messaging` only (never `aiokafka`). MinIO via `storage.factory` only. Logging via `observability.logging` only.
+
+---
+
+## 5. Data Lifecycle
+
+### 5.1 Structured Data Pipeline (EODHD --> S2 --> S3)
+
+1. **S2** polls EODHD on schedule; raw JSON to MinIO bronze, canonical Parquet to MinIO silver
+2. `market.dataset.fetched` published via transactional outbox (claim-check pointer)
+3. **S3** downloads from MinIO, materializes to TimescaleDB (3 consumer groups: ohlcv, quotes, fundamentals)
+4. Instrument discovery triggers `market.instrument.created` --> **S1** maintains local mirror
+
+### 5.2 Unstructured Data Pipeline (RSS --> S4 --> S5 --> S6 --> S7)
+
+1. **S4** polls EODHD/EDGAR/Finnhub/NewsAPI (15-30 min); raw to MinIO bronze; `content.article.raw.v1` via outbox
+2. **S5** cleans HTML (readability-lxml + bleach), 3-stage dedup (URL hash, normalized hash, Valkey LSH), canonical text to MinIO silver; `content.article.stored.v1` via outbox
+3. **S6** (Blocks 3-10): sectioning --> GLiNER NER (10 classes) --> routing score (7 signals) --> suppression --> embeddings (BGE 1024-dim) --> novelty gate (MinHash) --> entity resolution (4-step cascade) --> LLM extraction (Qwen2.5-7B). Writes to `nlp_db` + `intelligence_db`; emits `nlp.article.enriched.v1` + `nlp.signal.detected.v1`
+4. **S7** (Blocks 11-14): relation canonicalization --> graph materialization + evidence staging --> async workers (confidence recomputation, contradiction detection, summary generation, embedding refresh) --> shadow AGE migration. Emits `graph.state.changed.v1` + `intelligence.contradiction.v1`
+5. **S10** consumes intelligence + watchlist events, resolves affected users, deduplicates, pushes via WebSocket
+
+### 5.3 Backfill Architecture
+
+S4 supports boot-time historical backfill via `BACKFILL_FROM_DATE`/`BACKFILL_TO_DATE`. All documents pass through the full pipeline. Events carry `is_backfill=true` to suppress S10 alert fan-out. Temporal decay formula handles aged evidence naturally.
+
+---
+
+## 6. Infrastructure
+
+All infrastructure runs via Docker Compose (`infra/compose/docker-compose.yml`).
+
+| Component | Image | Purpose | Ports |
+|-----------|-------|---------|-------|
+| **PostgreSQL 16** | `timescale/timescaledb:latest-pg16` + AGE | Primary data store | 5432 |
+| **TimescaleDB** | Extension in `market_data_db` | OHLCV hypertable, compression | -- |
+| **pgvector** | Extension in `nlp_db` | HNSW vector indexes | -- |
+| **Apache AGE** | Extension in `kg_db` | Graph queries (opt-in) | -- |
+| **Kafka** | `cp-kafka:7.6.0` (KRaft) | Event backbone, 14 topics | 9092 |
+| **Schema Registry** | `cp-schema-registry:7.6.0` | Avro schema mgmt, BACKWARD compat | 8081 |
+| **MinIO** | `minio:RELEASE.2024-01-16` | Object storage (bronze/silver/gold) | 7480 |
+| **Valkey** | `valkey:7.2-alpine` | Cache, rate limiting, LSH dedup | 6379 |
+| **Ollama** | Local install | LLM inference (Mistral-7B, Qwen2.5-7B, BGE) | 11434 |
+
+**Init containers**: `minio-init` (buckets), `kafka-init` (topics), `schema-registry-init` (Avro schemas), `portfolio-migrate` (Alembic), `intelligence-migrations` (DDL + seeds).
+
+**Databases**: `portfolio_db`, `ingestion_db`, `market_data_db`, `content_ingestion_db`, `content_store_db`, `nlp_db`, `kg_db`, `rag_db`, `gateway_db`.
+
+---
+
+## 7. Event Architecture
+
+### 7.1 Event Envelope Standard
+
+All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_past`), `schema_version` (int), `occurred_at` (ISO-8601 UTC), optional `correlation_id` and `causation_id`.
+
+### 7.2 Kafka Topics
+
+| Topic | Part. | Retention | Producer | Consumer(s) | Key |
+|-------|-------|-----------|----------|-------------|-----|
+| `portfolio.events.v1` | 3 | 7d | S1 | -- | `aggregate_id` |
+| `portfolio.watchlist.updated.v1` | 12 | 7d | S1 | S10 | `watchlist_id` |
+| `market.dataset.fetched` | 6 | 7d | S2 | S3 | `symbol` |
+| `market.instrument.created` | 3 | 7d | S3 | S1 | `instrument_id` |
+| `market.instrument.updated` | 3 | 7d | S3 | S1 | `instrument_id` |
+| `content.article.raw.v1` | 12 | 7d | S4 | S5 | `url_hash` |
+| `content.article.stored.v1` | 12 | 7d | S5 | S6 | `article_id` |
+| `nlp.article.enriched.v1` | 12 | 14d | S6 | S7 | `article_id` |
+| `nlp.signal.detected.v1` | 24 | 14d | S6 | S10 | `entity_id` |
+| `graph.state.changed.v1` | 12 | 14d | S7 | S10, S8 | `primary_entity_id` |
+| `intelligence.contradiction.v1` | 12 | 30d | S7 | S10 | `subject_entity_id` |
+| `relation.type.proposed.v1` | 4 | 30d | S7 | Human review | `proposed_type` |
+| `entity.dirtied.v1` | 24 | compact | S7 | S7 (async) | `entity_id` |
+| `alert.delivered.v1` | 12 | 7d | S10 | Audit | `alert_id` |
+
+### 7.3 Core Patterns
+
+- **Transactional Outbox**: All produces go through `outbox_events` in the same DB transaction. `BaseOutboxDispatcher` polls and publishes. No direct Kafka produce calls.
+- **Claim-Check**: Large payloads in MinIO; events carry `(bucket, key, content_type, etag)` pointers.
+- **Idempotent Consumers**: Check `event_id` against processed-events table. Use `INSERT ON CONFLICT DO NOTHING`.
+- **Dead-Letter via Status Column**: Failed events stay in `outbox_events` with `status='dead_letter'`.
+
+### 7.4 Avro Schema Policy
+
+Schemas as `.avsc` files in `infra/kafka/schemas/` and per-service `infrastructure/messaging/schemas/`. BACKWARD compatibility default. Forward-compatible evolution only: add fields with defaults, never remove/rename. `scripts/gen-contracts.sh` validates.
+
+---
+
+## 8. Storage Design
+
+### 8.1 Postgres Databases
 
 | Database | Owner | Extensions | Key Tables |
 |----------|-------|------------|------------|
-| `portfolio_db` | S1 Portfolio | — | tenants, users, portfolios, transactions, holdings, instruments, outbox_events, idempotency |
-| `market_ingestion_db` | S2 Market Ingestion | — | ingestion_tasks, outbox_events, polling_policies, provider_budgets, watermarks |
-| `market_data_db` | S3 Market Data | **TimescaleDB** | securities, instruments, ohlcv_bars (hypertable), quotes, fundamentals_*, corporate_actions, failed_tasks, ingestion_events, outbox_events |
-| `content_ingestion_db` | S4 Content Ingestion | — | sources, article_fetch_log, outbox_events |
-| `content_store_db` | S5 Content Store | — | articles, dedup_hashes, idempotency |
-| `nlp_db` | S6 NLP Pipeline | **pgvector** | chunk_embeddings, section_embeddings, entity_profile_embeddings, entities, entity_aliases, article_entities, article_events, article_sentiment, topic_clusters, article_clusters |
-| `intelligence_db` | `intelligence-migrations` (DDL owner); S6 + S7 (read/write, no DDL) | **pgvector** | canonical_entities, relations (hash-partitioned ×8), relation_evidence_raw, relation_summaries, relation_evidence, contradictions, article_claims, relation_type_registry |
-| `alert_db` | S10 Alert Service | — | alerts, pending_alerts, alert_dedup, watchlist_cache, outbox_events, idempotency |
+| `portfolio_db` | S1 | -- | tenants, users, portfolios, transactions, holdings, instruments, watchlists, alert_preferences, outbox_events |
+| `ingestion_db` | S2 | -- | ingestion_tasks, outbox_events, polling_policies, provider_budgets, watermarks |
+| `market_data_db` | S3 | TimescaleDB | securities, instruments, ohlcv_bars (hypertable), quotes, 18 fundamentals tables, outbox_events |
+| `content_ingestion_db` | S4 | -- | sources, fetch_logs, outbox_events |
+| `content_store_db` | S5 | -- | documents, minhash_signatures, minhash_entity_mentions, outbox_events |
+| `nlp_db` | S6 | pgvector | sections, chunks, entity_mentions, chunk_embeddings, section_embeddings, routing_decisions, outbox_events |
+| `intelligence_db` | intelligence-migrations (DDL); S6+S7 (r/w) | pgvector | canonical_entities, entity_aliases, relations (8x hash-partitioned), relation_evidence_raw, relation_summaries, article_claims, contradictions |
+| `alert_db` | S10 | -- | alert_subscriptions, alerts, pending_alerts, alert_dedup, outbox_events |
 
-### 5.2 MinIO Object Store
+### 8.2 MinIO Object Store
 
-Key conventions (enforced via `libs/storage` `KeyBuilder`):
+| Layer | Path Pattern | Content | Owner |
+|-------|-------------|---------|-------|
+| Bronze | `bronze/<service>/<source>/<id>/raw/v1.<ext>` | Raw provider JSON/HTML | S2, S4 |
+| Silver | `silver/<service>/<source>/<id>/canonical/v1.<ext>` | Normalized Parquet/JSONL/text | S2, S5 |
+| Gold | `gold/<service>/<entity>/<id>/<artifact>/v1.<ext>` | Enriched NLP outputs | S6, S7 |
 
-| Layer | Path Pattern | Content |
-|-------|-------------|---------|
-| Bronze (raw) | `market-ingestion/ohlcv/{symbol}/{date_range}/raw/v1.json` | Raw provider JSON |
-| Silver (canonical) | `market-ingestion/ohlcv/{symbol}/{date_range}/canonical/v2.parquet` | Normalized Parquet/JSONL |
-| Content raw | `content-ingestion/articles/{source}/{article_id}/raw/v1.html` | Raw article HTML |
-| Content clean | `content-store/articles/{canonical_id}/clean/v1.txt` | Cleaned article text |
+### 8.3 Valkey Cache
 
-### 5.3 Valkey Cache
-
-Key naming convention: `{scope}:{version}:{resource}:{id}[:{qualifier}]`
+Key naming: `{scope}:{version}:{resource}:{id}[:{qualifier}]`
 
 | Key Pattern | TTL | Scope |
 |-------------|-----|-------|
 | `gw:v1:quote:{instrument_id}` | 30s | Gateway |
 | `gw:v1:ohlcv:{id}:{tf}:{hash}` | 2 min | Gateway |
 | `md:v1:instrument:{id}` | 10 min | Market Data |
-| `cs:v1:article:{id}` | 5 min | Content |
-| `is:v1:entity:{id}` | 10 min | Intelligence |
+| `s10:v1:watchlist:by_entity:{id}` | 10 min | Alert |
 | `rag:v1:completion:{hash}` | 24h | RAG |
 | `neg:{scope}:{key}` | 120s | Negative sentinel |
 
-### 5.4 Vector Store (pgvector)
+### 8.4 Vector Store (pgvector in nlp_db)
 
-- **Model**: `BAAI/bge-large-en-v1.5` (1024-dim, ~1.34GB, served via Ollama)
-- **Index**: HNSW with `m=16, ef_construction=200`, cosine distance
-- **Embedding types**: chunk-level, section-level, relation summary, entity profile
-- **Scale**: comfortable to ~1M vectors on single node; thesis expects 50K–200K
+Model: `BAAI/bge-large-en-v1.5` (1024-dim, served via Ollama). Index: HNSW (`m=16, ef_construction=200`, cosine). Types: chunk, section, relation summary, entity profile. Scale: ~50K-200K vectors (thesis scope).
 
-### 5.5 Knowledge Graph (intelligence_db)
+### 8.5 Knowledge Graph (intelligence_db)
 
-- Primary model: **relational adjacency-list** (`relations` table, hash-partitioned by `subject_entity_id` into 8 partitions)
-- Shadow migration worker (Block 14) keeps an Apache AGE graph in sync for Cypher query experiments; AGE is opt-in, not on the critical path
-- Node types: Company, Person, Event, Article, Sector, Topic
-- Edge types: HAS_EXECUTIVE, IN_SECTOR, INVOLVED_IN, MENTIONS, REPORTS_ON, ABOUT_TOPIC, SUBSIDIARY_OF, PARTNER_OF, COMPETES_WITH, MOVED_TO, CAUSED_BY
-- DDL exclusively managed by `intelligence-migrations` init container; services connect with `ALEMBIC_ENABLED=false`
+Primary model: relational adjacency-list (`relations` table, hash-partitioned 8x by `subject_entity_id`). Two semantic modes: `RELATION_STATE` (stateful, validity-based) and `TEMPORAL_CLAIM` (historical point-in-time). DDL exclusively via `intelligence-migrations`. Shadow Apache AGE for experiments (opt-in). Confidence: 4-step formula, bounded [0,1], 6 decay classes (EPHEMERAL through PERMANENT).
 
 ---
 
-## 6. Contracts
+## 9. RAG / Chat Architecture
 
-### 6.1 Event Envelope Standard
+### 9.1 LLM Provider Fallback Chain
 
-All Kafka events carry these standard fields:
+Ollama (local, 10s) --> Groq (5s) --> OpenRouter (10s) --> OpenAI (10s). Negative cache (60s) prevents retry storms.
 
-```json
-{
-  "event_id": "UUIDv7",
-  "event_type": "domain.entity.verb_past",
-  "schema_version": 1,
-  "occurred_at": "2026-02-28T12:00:00Z",
-  "correlation_id": "UUIDv7 (optional)",
-  "causation_id": "UUIDv7 (optional)"
-}
+### 9.2 Retrieval Pipeline
+
+```
+Query --> Rewrite --> Intent Classification --> Parallel Retrieval:
+  A. Graph relations + summaries    B. Chunk embedding ANN
+  C. Section embedding ANN          D. Relation summary ANN
+  E. Claims retrieval               F. Delta merge (freshness)
+--> Fusion --> Rerank --> Context Assembly --> LLM (SSE) --> Citations
 ```
 
-### 6.2 Kafka Topics
+### 9.3 Query Entity Resolution
 
-| Topic | Producer | Consumer(s) | Key | Retention | Partitions |
-|-------|----------|-------------|-----|-----------|------------|
-| `portfolio.events.v1` | S1 Portfolio | *(future)* | `aggregate_id` | 7d | 3 |
-| `portfolio.watchlist.updated.v1` | S1 Portfolio | S10 Alert Service | `watchlist_id` | 7d | 3 |
-| `market.dataset.fetched` | S2 Market Ingestion | S3 Market Data | `symbol` | 7d | 6 |
-| `market.instrument.created` | S3 Market Data | S1 Portfolio | `instrument_id` | 7d | 3 |
-| `market.instrument.updated` | S3 Market Data | S1 Portfolio | `instrument_id` | 7d | 3 |
-| `content.article.raw.v1` | S4 Content Ingestion | S5 Content Store | `url_hash` | 3d | 3 |
-| `content.article.stored.v1` | S5 Content Store | S6 NLP Pipeline | `article_id` | 7d | 6 |
-| `nlp.article.enriched.v1` | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` | 14d | 6 |
-| `nlp.signal.detected.v1` | S6 NLP Pipeline | S10 Alert Service | `entity_id` | 7d | 3 |
-| `graph.state.changed.v1` | S7 Knowledge Graph | S10 Alert Service, S8 | `primary_entity_id` | 14d | 6 |
-| `intelligence.contradiction.v1` | S7 Knowledge Graph | S10 Alert Service | `subject_entity_id` | 14d | 3 |
-| `relation.type.proposed.v1` | S7 Knowledge Graph | *(human review)* | `proposed_type` | 30d | 3 |
-| `entity.dirtied.v1` | S7 Knowledge Graph | S7 (async workers) | `entity_id` | compact | 24 |
-| `alert.delivered.v1` | S10 Alert Service | *(audit)* | `alert_id` | 7d | 3 |
+1. Exact alias/ticker lookup  2. Valkey cached resolution  3. Lightweight NER  4. ANN fallback (entity_profile_embeddings)
 
-Event types on `portfolio.watchlist.updated.v1`: `watchlist.item_added`, `watchlist.item_deleted` (discriminated by `event_type` field per PRD §1.5 rule 5).
+### 9.4 Evaluation Metrics
 
-### 6.3 Avro Schema Policy
+| Metric | Target | | Metric | Target |
+|--------|--------|-|--------|--------|
+| Retrieval Recall@10 | > 0.70 | | Groundedness | > 0.85 |
+| Hallucination rate | < 0.10 | | Citation accuracy | > 0.90 |
+| First-token latency | P95 < 5s | | | |
 
-- Schemas live in `infra/kafka/schemas/<event_type>.avsc`
-- Subject naming strategy: `{topic}-{event_type}`
-- Forward-compatible evolution only (add fields with defaults)
-- `scripts/gen-contracts.sh` validates compatibility before merge
-- Schema Registry in dev: Confluent Schema Registry via Docker
+### 9.5 Safety
 
-### 6.4 REST API Policy
-
-- OpenAPI 3.1 auto-generated from FastAPI/Pydantic models
-- Versioned paths: `/api/v1/{domain}/{operation}`
-- Standardized error responses:
-  ```json
-  { "error": { "code": "NOT_FOUND", "message": "...", "status": 404, "details": {} } }
-  ```
-- 5xx responses never leak internal details (URLs, stack traces, API keys)
-
-### 6.5 Gateway Caching Tiers
-
-| Tier | `Cache-Control` | Use Cases |
-|------|----------------|-----------|
-| realtime | `s-maxage=30, stale-while-revalidate=10` | Live quotes |
-| fast | `s-maxage=120, stale-while-revalidate=30` | OHLCV latest, news, signals |
-| medium | `s-maxage=300, stale-while-revalidate=60` | Fundamentals, entity details |
-| slow | `s-maxage=900, stale-while-revalidate=120` | Instrument metadata |
-| private | `private, no-cache` | Portfolio, chat |
+Rate limit: 10 queries/min/tenant. Token budget: 4K output, 8K context. Output sanitization: strip `<think>`/`<reasoning>`. Input sanitization before prompt construction. Tenant-filtered retrieval.
 
 ---
 
-## 7. Caching Strategy
+## 10. Security Model
 
-Four-tier caching adapted from WorldMonitor:
+**Layer 1 -- Network/Gateway**: CORS allowlist, rate limiting (Valkey: 100/min auth, 20/min unauth), API key validation.
+**Layer 2 -- Application**: Tenant isolation (RLS), RBAC, Pydantic validation, SSRF protection (domain allowlist + private IP blocking), secret stripping from logs.
+**Layer 3 -- Data**: Encryption at rest (Postgres TDE, MinIO SSE-S3), TLS in transit, PII minimization, audit logging.
 
-```
-Client Cache (IndexedDB/memory) → Gateway Cache (Valkey) → Service Cache (Valkey) → Database
-```
+**Secrets**: Local dev = `.env` via `pydantic-settings`; CI = GitHub Actions secrets; Prod = K8s Secrets / sealed-secrets.
 
-**Key patterns**:
-- **In-flight dedup**: concurrent requests for the same key coalesce into one fetch
-- **Negative caching**: sentinel value `__NEG__` with 120s TTL prevents thundering herd on failures
-- **Stale-while-revalidate**: serve stale data while refreshing in background
-- **Environment isolation**: production = bare keys; staging = `stg:` prefix; dev = `dev:{user}:` prefix
+**Multi-tenant**: Portfolio/watchlist/alert data scoped by `tenant_id`. intelligence_db is shared; tenant isolation enforced at query/delivery layer.
 
 ---
 
-## 8. RAG / Chat Design
-
-### 8.1 LLM Provider Fallback
-
-| Tier | Provider | Privacy | Latency | Cost |
-|------|----------|---------|---------|------|
-| 1 | Ollama (local, Mistral-7B) | Full local | ~1–3s | Free |
-| 2 | Groq (Llama-3.1-70B) | Cloud | ~200ms | Free tier |
-| 3 | OpenRouter (various) | Cloud | ~500ms–3s | Free/$$ |
-| 4 | OpenAI (GPT-4o-mini) | Cloud | ~300ms–1s | ~$0.15/1M tokens |
-
-### 8.2 Pipeline
-
-```
-User Query → Query Rewrite → Intent Classification
-    → Parallel Retrieval (Vector + KG + SQL)
-    → Result Fusion → Rerank (cross-encoder)
-    → Context Assembly → Prompt Building
-    → LLM Completion (streaming SSE)
-    → Citation Injection → Response
-```
-
-### 8.3 Evaluation Metrics
-
-| Metric | Target |
-|--------|--------|
-| Retrieval Recall@10 | > 0.70 |
-| Groundedness | > 0.85 |
-| Hallucination rate | < 0.10 |
-| Citation accuracy | > 0.90 |
-| Latency (first token) | P95 < 5s |
-
----
-
-## 9. Security
-
-### Defense-in-Depth Layers
-
-1. **Network/Gateway**: CORS allowlist, rate limiting (Valkey sliding window), bot filtering, API key validation
-2. **Application**: tenant isolation (RLS), RBAC, Pydantic input validation, SSRF protection (domain allowlist + private IP blocking), secret stripping from logs
-3. **Data**: encryption at rest (Postgres TDE, MinIO SSE-S3), TLS in transit, PII minimization, audit logging
-
-### Secrets Management
-
-| Environment | Strategy |
-|-------------|----------|
-| Local dev | `.env` files (gitignored) via `python-dotenv` |
-| CI | GitHub Actions secrets |
-| Production | Kubernetes Secrets / sealed-secrets |
-
----
-
-## 10. Observability
-
-### Three Pillars
+## 11. Observability
 
 | Pillar | Tool | Implementation |
 |--------|------|---------------|
-| Logs | structlog → stdout | Consistent fields: `service`, `trace_id`, `tenant_id`, `correlation_id` |
-| Metrics | Prometheus scrape + Grafana | RED metrics (Rate, Errors, Duration) per endpoint; Kafka consumer lag; cache hit ratio |
-| Traces | OpenTelemetry → Jaeger/Tempo | Auto-instrumented (FastAPI, SQLAlchemy, httpx); Kafka header propagation |
+| Logs | structlog --> stdout | Fields: `service`, `trace_id`, `tenant_id`, `correlation_id`. JSON in prod, human in dev. |
+| Metrics | Prometheus + Grafana | RED per endpoint; Kafka consumer lag; cache hit ratio; NLP throughput |
+| Traces | OpenTelemetry --> Jaeger/Tempo | Auto-instrumented (FastAPI, SQLAlchemy, httpx); Kafka header propagation |
 
-### Key Dashboards
-
-- **Service Health**: request rate, error rate, p50/p95/p99 latency
-- **Kafka Pipeline**: consumer lag, messages/sec, failed tasks
-- **Cache Effectiveness**: hit/miss ratio, eviction rate
-- **NLP Pipeline**: articles/hour, embedding time, entity linking accuracy
-- **LLM Provider**: requests per provider, fallback frequency, cost
-
-### Alert Thresholds
-
-| Condition | Action |
-|-----------|--------|
-| Health non-200 > 2 min | Page on-call |
-| Consumer lag > 10K | Check logs, scale workers |
-| Cache hit ratio < 50% | Check TTLs |
-| Error rate > 5% | Check logs, recent deploys |
-| All LLM providers failing | Check API keys |
+**Dashboards**: Service Health (rate/errors/latency), Kafka Pipeline (lag/failed), Cache (hit ratio), NLP (articles/hr), LLM (fallback frequency/cost).
 
 ---
 
-## 11. Developer Workflow
+## 12. AI-Assisted Development
 
-### Local Development
+### Skills (11 workflows in `.claude/skills/`)
+
+`/prd` (PRD generation), `/plan` (implementation waves), `/implement` (code+test+validate+commit), `/review` (structured review), `/fix-bug` (diagnose+fix+test), `/investigate` (multi-hypothesis), `/test-feature` (test coverage), `/qa` (full QA pass), `/security-audit` (OWASP scan), `/refactor` (safe refactoring), `/docs-audit` (docs consistency).
+
+### Agents (13 roles in `.claude/agents/`)
+
+`backend-engineer`, `frontend-engineer`, `tech-lead`, `data-platform-engineer`, `machine-learning-lead`, `rag-knowledge-graph-engineer`, `security-engineer`, `qa-test-engineer`, `devops-platform-engineer`, `ux-ui-designer`, `architecture-decision-lead`, `e2e-service-test-architect`, `agent-orchestrator`.
+
+### Review Framework
+
+Checklists, high-risk pattern heuristics, PR investigation protocol in `.claude/review/`.
+
+### Hooks (Automatic)
+
+Pre-commit (ruff+mypy+unit tests), post-edit (ruff+targeted tests), schema guard (Avro compat), migration guard (missing Alembic warning), security scan (injection/secrets).
+
+### Evaluation
+
+Session outcomes in `docs/ai-interactions/evals/sessions/`. Monthly review compounds improvements into `BUG_PATTERNS.md`, checklists, skills, hooks. Framework: `docs/ai-interactions/evals/EVAL_FRAMEWORK.md`.
+
+---
+
+## 13. Frontend Architecture
+
+React 18 + TypeScript strict + Vite 5 + TanStack Query v5 + lightweight-charts v4. Tests: Vitest (unit) + Playwright (E2E). Lint: ESLint 9 + Prettier. Port 5173. **Hard rule**: Frontend talks **only** to S9 (API Gateway) at `:8000`.
+
+---
+
+## 14. Testing Strategy
+
+| Layer | Scope | Tool | Location |
+|-------|-------|------|----------|
+| Unit | Domain logic, use cases | pytest `-m unit` | `tests/unit/` per service |
+| Integration | DB, Kafka, MinIO flows | pytest + testcontainers `-m integration` | `tests/integration/` |
+| Contract | Avro schema compat | pytest `-m contract` | `tests/contract/` |
+| Architecture | Layer deps, import guards, structure | CI jobs | Repo-wide |
+| E2E | Multi-service | pytest + docker compose | `docker-compose.test.yml` |
+| Frontend unit | Components, hooks | Vitest | `apps/frontend/` |
+| Frontend E2E | User flows | Playwright | `apps/frontend/` |
+
+---
+
+## 15. CI/CD Pipeline
+
+GitHub Actions (`.github/workflows/ci.yml`), Python 3.12.
+
+```
+Fast path (parallel, no infra):
+  lint | validate-schemas | validate-service-structure | import-guards
+  architecture-tests | test-libs | test-frontend
+
+Gated (depends on fast path):
+  test-services (unit, all) | test-contract | test-integration (testcontainers) | test-e2e (compose)
+```
+
+---
+
+## 16. Developer Workflow
 
 ```bash
-# 1. Bootstrap (install deps, create venvs)
-./scripts/bootstrap.sh
-
-# 2. Start infrastructure
-docker compose -f infra/compose/docker-compose.yml --profile infra up -d
-
-# 3. Run migrations
-docker compose -f infra/compose/docker-compose.yml --profile init up
-
-# 4. Start a service (hot-reload)
-cd services/market-data && make run
-
-# 5. Run tests
-./scripts/test.sh                    # all
-./scripts/test.sh services/portfolio # one service
+./scripts/bootstrap.sh                                              # Install deps
+docker compose -f infra/compose/docker-compose.yml --profile infra up -d  # Start infra
+docker compose -f infra/compose/docker-compose.yml --profile init up      # Run migrations
+cd services/market-data && make run                                 # Start service
+./scripts/test.sh [services/portfolio]                              # Run tests
 ```
 
-### CI Pipeline
-
-```
-Push → Lint (ruff + mypy) → Unit Tests → Contract Tests → Avro Compat → Build Images
-PR → Integration Tests (testcontainers) → Schema Compat
-Merge → Build + Push → Deploy Staging → Smoke Tests → Deploy Prod (manual)
-```
-
-### Change Safety
-
-1. Read the relevant `docs/services/<service>.md` before making changes
-2. Write tests alongside code
-3. Run `scripts/lint.sh` + `scripts/test.sh` locally
-4. Update docs in the same PR as code changes
-5. For contract changes: ADR required, schema compatibility validated
+| Command | Purpose |
+|---------|---------|
+| `./scripts/lint.sh` | ruff + mypy |
+| `./scripts/test.sh [path]` | Tests (all or targeted) |
+| `./scripts/gen-contracts.sh` | Avro schema validation |
+| `./scripts/ci-local.sh` | Full CI locally |
+| `make run` / `make test` | Per-service dev/test |
 
 ---
 
-## 12. Phased Roadmap
+## 17. Roadmap
 
-### Pre-Implementation Repository Fixes (Blocking)
+### Phase 1: Core Stabilized ✅
 
-These three items are blocking prerequisites. No work on S10, `intelligence-migrations`, or any new service consuming the affected topics may begin until all three are resolved.
+S1, S2, S3 are **mature** with full hexagonal architecture, comprehensive tests, working outbox/consumers, and documented APIs.
 
-| Fix | Action |
-|-----|--------|
-| **Rename `watchlist.item_removed` → `watchlist.item_deleted`** | Rename event type in `infra/kafka/schemas/` and all Portfolio service code. S10 cannot be built against the old name. |
-| **Create missing Avro schemas** | `portfolio.watchlist.updated.avsc`, `graph.state.changed.v1.avsc`, `intelligence.contradiction.v1.avsc`, `relation.type.proposed.v1.avsc`, `alert.delivered.v1.avsc`. Required by `schema-init` at boot. |
-| **Fix knowledge-graph service config** | Change `DATABASE_URL` default from `kg_db` to `intelligence_db`. All intelligence_db connection strings must use `intelligence_db` consistently. |
+| Milestone | Status |
+|-----------|--------|
+| M1.1 S1-S3 event flow fixes | ✅ |
+| M1.2 TimescaleDB (OHLCV hypertable, compression) | ✅ |
+| M1.3 Fundamentals API (18 sections, 30 routes) | ✅ |
+| M1.4 Shared libraries (6 libs) | ✅ |
+| M1.5 CI pipeline (lint, type-check, unit, integration, contract, architecture) | ✅ |
+| M1.6 Portfolio watchlists + alert preferences | ✅ |
 
-### Phase 1: Stabilize Core (Weeks 1–4)
+### Phase 2: Unstructured Intelligence Pipeline 🔄
 
-| Milestone | Definition of Done |
-|-----------|-------------------|
-| M1.1 Fix critical bugs | All 3 existing services produce/consume events correctly |
-| M1.2 TimescaleDB migration | OHLCV queries < 100ms p95; compression > 5× |
-| M1.3 API Gateway | All frontend requests routed through gateway; rate limiting active |
-| M1.4 Fundamentals API | All 20+ fundamental sections queryable; OpenAPI spec complete |
-| M1.5 Content Ingestion baseline | 5 RSS feeds polled every 5 min; articles stored with dedup |
+Active PRD: `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md`. S4-S7, S9, S10, intelligence-migrations are scaffolded and compliant; implementation in progress.
 
-### Phase 2: Unstructured Intelligence (Weeks 5–10)
+| Milestone | Status |
+|-----------|--------|
+| Pre-implementation repo fixes (Avro schemas, event renames, DB config) | 🔄 |
+| S4 Content Ingestion (adapters, scheduler, outbox, MinIO) | 🔄 |
+| S5 Content Store (consumer, dedup, MinIO silver) | 🔄 |
+| S6 NLP Pipeline (8 blocks: sectioning through LLM extraction) | 🔄 |
+| S7 Knowledge Graph (materialization, confidence, contradiction) | 🔄 |
+| intelligence-migrations (DDL, seeds, partitions) | 🔄 |
+| S10 Alert Service (consumers, WebSocket, dedup) | 🔄 |
+| S9 API Gateway (routing, composition, rate limiting) | 🔄 |
 
-| Milestone | Definition of Done |
-|-----------|-------------------|
-| M2.1 Content Store | Dedup rate > 15%; canonical IDs; clean text |
-| M2.2 Embeddings pipeline | All articles have embeddings; vector similarity search works |
-| M2.3 Entity linking | > 70% articles linked to entities |
-| M2.4 Event extraction | Events extracted from > 50% relevant articles |
-| M2.5 Signals view | Signals queryable via API |
-| M2.6 Topic clustering | Clusters form correctly; trending topics flagged |
-| M2.7 Scale to 20 sources | 20 sources ingesting; < 5% failure rate |
+### Phase 3: RAG/Chatbot + Frontend ⏳
 
-### Phase 3: RAG/KG Chatbot (Weeks 11–16)
+| Milestone | Status |
+|-----------|--------|
+| S8 RAG/Chat (hybrid retrieval, LLM fallback, SSE, citations) | ⏳ |
+| Frontend (charts, fundamentals, news, signals, chatbot) | ⏳ |
+| Evaluation harness (retrieval recall, groundedness, citations) | ⏳ |
+| Security hardening (prompt injection tests, tenant isolation E2E) | ⏳ |
 
-| Milestone | Definition of Done |
-|-----------|-------------------|
-| M3.1 Knowledge Graph | > 500 entities, > 2000 relations; neighborhood queries work |
-| M3.2 RAG pipeline | Relevant context for 80% of test queries |
-| M3.3 LLM integration | 4-tier fallback works; response caching; streaming SSE |
-| M3.4 Citation system | > 90% answers include verifiable citations |
-| M3.5 Evaluation harness | All metrics meet targets |
-| M3.6 Security hardening | No prompt injection in test suite |
+### Blocking Prerequisites (PRD 0014 Section 1.4)
+
+| Fix | Action | Status |
+|-----|--------|--------|
+| Rename `watchlist.item_removed` --> `watchlist.item_deleted` | Event type in schemas + S1 code | 🔄 |
+| Create missing Avro schemas | 5 schemas for schema-init boot | 🔄 |
+| Fix knowledge-graph DB config | `DATABASE_URL` default `kg_db` --> `intelligence_db` | 🔄 |
 
 ---
 
-*This document is the single source of truth. All per-service and per-lib docs
-reference but never duplicate this content. Update this document when system-wide
-architecture changes.*
+*This document is the single source of truth for platform architecture. All per-service docs (`docs/services/`), per-lib docs (`docs/libs/`), and agent context files (`services/<name>/.claude-context.md`) reference but never duplicate this content. Update this document when system-wide architecture changes.*

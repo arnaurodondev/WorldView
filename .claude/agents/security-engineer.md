@@ -24,7 +24,7 @@ Protect the platform's data, services, credentials, and AI workflows by identify
 - `libs/common/**` and `libs/messaging/**` (shared security primitives)
 
 ## Responsibilities
-- evaluate attack surfaces across services S1–S9 and infra
+- evaluate attack surfaces across services S1–S10 and infra
 - enforce tenant isolation and least privilege in multi-tenant flows
 - identify risks in prompt injection, data exfiltration, insecure deserialization, and content ingestion
 - review secret handling — no secrets in code, use env vars or secret managers

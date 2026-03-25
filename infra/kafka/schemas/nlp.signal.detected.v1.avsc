@@ -1,18 +1,21 @@
 {
   "type": "record",
-  "name": "SignalDetectedV1",
-  "namespace": "com.worldview.nlp",
+  "name": "NlpSignalDetected",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S6 when a high-confidence financial signal is extracted from a document.",
   "fields": [
-    {"name": "event_id", "type": "string"},
-    {"name": "event_type", "type": "string", "default": "nlp.signal.detected"},
-    {"name": "schema_version", "type": "int", "default": 1},
-    {"name": "occurred_at", "type": "string"},
-    {"name": "entity_id", "type": "string"},
-    {"name": "signal_type", "type": "string"},
-    {"name": "severity", "type": "int", "default": 1},
-    {"name": "title", "type": "string"},
-    {"name": "details", "type": ["null", "string"], "default": null, "doc": "JSON-encoded details"},
-    {"name": "source_article_ids", "type": {"type": "array", "items": "string"}, "default": []},
-    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+    {"name": "event_id",             "type": "string"},
+    {"name": "event_type",           "type": "string",             "default": "nlp.signal.detected"},
+    {"name": "schema_version",       "type": "int",                "default": 1},
+    {"name": "occurred_at",          "type": "string"},
+    {"name": "doc_id",               "type": "string"},
+    {"name": "claim_id",             "type": "string"},
+    {"name": "claimer_entity_id",    "type": ["null", "string"],   "default": null},
+    {"name": "subject_entity_id",    "type": ["null", "string"],   "default": null},
+    {"name": "claim_type",           "type": "string",             "doc": "forward_guidance | factual | projection | denial | opinion"},
+    {"name": "polarity",             "type": "string",             "doc": "positive | negative | neutral"},
+    {"name": "extraction_confidence","type": "float"},
+    {"name": "is_backfill",          "type": "boolean",            "default": false},
+    {"name": "correlation_id",       "type": ["null", "string"],   "default": null}
   ]
 }
