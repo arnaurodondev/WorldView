@@ -9,6 +9,7 @@ description = "Market data storage, query, and streaming service"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "common",
+    "uuid6>=2024.1.12",
     "fastapi==0.111",
     "uvicorn[standard]==0.29",
     "pydantic==2.5",

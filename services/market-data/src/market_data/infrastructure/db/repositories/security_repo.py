@@ -66,29 +66,36 @@ class PgSecurityRepository(SecurityRepository):
         return securities, total
 
     async def upsert(self, security: Security) -> Security:
+        values = {
+            "id": security.id,
+            "figi": security.figi,
+            "isin": security.isin,
+            "name": security.name,
+            "sector": security.sector,
+            "industry": security.industry,
+            "country": security.country,
+            "currency": security.currency,
+        }
+        update_values = {
+            "figi": security.figi,
+            "isin": security.isin,
+            "name": security.name,
+            "sector": security.sector,
+            "industry": security.industry,
+            "country": security.country,
+            "currency": security.currency,
+        }
+
+        # Prefer FIGI as the natural identity when present so repeated seeds with
+        # different generated IDs do not violate the unique FIGI constraint.
+        conflict_columns = ["figi"] if security.figi else ["id"]
+
         stmt = (
             insert(SecurityModel)
-            .values(
-                id=security.id,
-                figi=security.figi,
-                isin=security.isin,
-                name=security.name,
-                sector=security.sector,
-                industry=security.industry,
-                country=security.country,
-                currency=security.currency,
-            )
+            .values(**values)
             .on_conflict_do_update(
-                index_elements=["id"],
-                set_={
-                    "figi": security.figi,
-                    "isin": security.isin,
-                    "name": security.name,
-                    "sector": security.sector,
-                    "industry": security.industry,
-                    "country": security.country,
-                    "currency": security.currency,
-                },
+                index_elements=conflict_columns,
+                set_=update_values,
             )
             .returning(SecurityModel)
         )
