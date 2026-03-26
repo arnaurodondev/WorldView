@@ -4,7 +4,7 @@ prd: QA Review + Code Review findings from 2026-03-26
 title: "S4 Content Ingestion — QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra"
 status: in-progress
 created: 2026-03-26
-updated: 2026-03-26
+updated: 2026-03-26  # W3+W4 completed
 plans: 1
 waves: 7
 tasks: 42
@@ -379,11 +379,12 @@ _(Same as original plan — 10+ tests)_
 
 ---
 
-## Wave 3: Robustness — Backoff, Supervision, Dispose, Exceptions
+## Wave 3: Robustness — Backoff, Supervision, Dispose, Exceptions ✅
 
 **Goal**: Make the service resilient to persistent failures, fix resource leaks, add proper exception mapping.
 **Depends on**: Wave 2
 **Estimated effort**: 45-60 minutes
+**Status**: **DONE** — 2026-03-26 · 165 S4 unit tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -480,17 +481,18 @@ _(Same as original plan — delete, replace imports)_
 - Dispatcher supervision: restart on crash (mock)
 
 ### Validation Gate
-- [ ] 9+ new tests
-- [ ] Local `advisory_lock.py` deleted
-- [ ] Engine disposed on shutdown
+- [x] 9+ new tests
+- [x] Local `advisory_lock.py` deleted
+- [x] Engine disposed on shutdown
 
 ---
 
-## Wave 4: Security Hardening + Port Abstractions
+## Wave 4: Security Hardening + Port Abstractions ✅
 
 **Goal**: Fix input validation, info leak, architecture layer violations.
 **Depends on**: Wave 3
 **Estimated effort**: 45-60 minutes
+**Status**: **DONE** — 2026-03-26 · 165 S4 unit tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -559,9 +561,9 @@ Define 4 port interfaces: `SourceAdapterPort` (ABC, moved from infra), `FetchLog
 **Tests**: URL validation (scheme, private IP), config dict constraint, DLQ limit bounds, setattr allowlist, port interface compliance.
 
 ### Validation Gate
-- [ ] 8+ new tests
-- [ ] Application layer has no infrastructure imports
-- [ ] ruff + mypy clean
+- [x] 8+ new tests
+- [x] Application layer has no infrastructure imports
+- [x] ruff + mypy clean
 
 ---
 

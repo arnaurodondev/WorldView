@@ -63,8 +63,9 @@ async def create_source(
     body: SourceCreateRequest,
     _auth: AdminAuthDep,
     session: DbSessionDep,
+    request: Request,
 ) -> SourceResponse:
-    """Create a new polling source."""
+    """Create a new polling source and hot-add to scheduler if running."""
     repo = SourceRepository(session)
     source = await repo.create(
         name=body.name,
@@ -73,6 +74,23 @@ async def create_source(
         enabled=body.enabled,
     )
     await session.commit()
+
+    # Hot-add to scheduler
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None and body.enabled:
+        from content_ingestion.domain.entities import Source as DomainSource
+        from content_ingestion.domain.entities import SourceType
+
+        domain_source = DomainSource(
+            name=source.name,
+            source_type=SourceType(source.source_type),
+            enabled=source.enabled,
+            config=source.config,
+            id=source.id,
+            created_at=source.created_at,
+        )
+        scheduler.add_source(domain_source)
+
     return _source_to_response(source)
 
 
@@ -82,18 +100,27 @@ async def update_source(
     body: SourceUpdateRequest,
     _auth: AdminAuthDep,
     session: DbSessionDep,
+    request: Request,
 ) -> SourceResponse:
     """Update an existing polling source."""
     repo = SourceRepository(session)
     existing = await repo.get_by_id(source_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Source not found")
+
+    was_enabled = existing.enabled
     updates = body.model_dump(exclude_unset=True)
     if updates:
         source = await repo.update(source_id, **updates)
     else:
         source = existing
     await session.commit()
+
+    # Hot-remove from scheduler if source was disabled
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None and was_enabled and not source.enabled:
+        scheduler.remove_source(source.name)
+
     return _source_to_response(source)
 
 

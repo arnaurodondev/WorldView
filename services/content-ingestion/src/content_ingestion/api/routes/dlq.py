@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from content_ingestion.api.dependencies import AdminAuthDep, DbSessionDep
 from content_ingestion.api.schemas import DLQEntryResponse, DLQListResponse, DLQResolveRequest
@@ -29,8 +29,8 @@ def _dlq_to_response(entry: DeadLetterQueueModel) -> DLQEntryResponse:
 async def list_dlq(
     _auth: AdminAuthDep,
     session: DbSessionDep,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> DLQListResponse:
     """List open DLQ entries."""
     repo = DLQRepository(session)

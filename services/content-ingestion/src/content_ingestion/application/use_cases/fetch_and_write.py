@@ -26,11 +26,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
     from uuid import UUID
 
+    from content_ingestion.application.ports import BronzeStoragePort, FetchLogPort, OutboxPort, SourceAdapterPort
     from content_ingestion.domain.entities import FetchResult, Source
-    from content_ingestion.infrastructure.adapters.base import SourceAdapter
-    from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
-    from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
-    from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -91,10 +88,10 @@ class FetchAndWriteUseCase:
 
     def __init__(
         self,
-        adapter: SourceAdapter,
-        bronze: MinioBronzeAdapter,
-        fetch_log_repo: FetchLogRepository,
-        outbox_repo: OutboxRepository,
+        adapter: SourceAdapterPort,
+        bronze: BronzeStoragePort,
+        fetch_log_repo: FetchLogPort,
+        outbox_repo: OutboxPort,
         commit_fn: Callable[[], Coroutine[Any, Any, None]],
         rollback_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> None:

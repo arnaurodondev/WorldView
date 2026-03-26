@@ -8,7 +8,11 @@ import prometheus_client
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
 
+from observability import get_logger  # type: ignore[import-untyped]
+
 router = APIRouter()
+
+_log = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 @router.get("/healthz")
@@ -28,16 +32,18 @@ async def readyz(request: Request) -> Response:
         async with request.app.state.session_factory() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
+    except Exception:
+        _log.warning("readyz_database_check_failed", exc_info=True)
+        checks["database"] = "error"
         ok = False
 
     # Valkey check
     try:
         await request.app.state.valkey.ping()
         checks["valkey"] = "ok"
-    except Exception as exc:
-        checks["valkey"] = f"error: {exc}"
+    except Exception:
+        _log.warning("readyz_valkey_check_failed", exc_info=True)
+        checks["valkey"] = "error"
         ok = False
 
     # MinIO check
@@ -49,9 +55,15 @@ async def readyz(request: Request) -> Response:
                 "__healthcheck__",
             )
         checks["minio"] = "ok"
-    except Exception as exc:
-        checks["minio"] = f"error: {exc}"
+    except Exception:
+        _log.warning("readyz_minio_check_failed", exc_info=True)
+        checks["minio"] = "error"
         ok = False
+
+    # Dispatcher health
+    dispatcher_healthy = getattr(request.app.state, "dispatcher_healthy", True)
+    if not dispatcher_healthy:
+        checks["dispatcher"] = "degraded"
 
     status_code = 200 if ok else 503
     return Response(

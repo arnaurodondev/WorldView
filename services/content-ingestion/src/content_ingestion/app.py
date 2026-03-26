@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import structlog.contextvars
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from content_ingestion.api.routes import admin, dlq, health, internal
@@ -19,9 +20,9 @@ from content_ingestion.infrastructure.db.repositories.outbox import OutboxReposi
 from content_ingestion.infrastructure.db.session import create_session_factory
 from content_ingestion.infrastructure.messaging.outbox.dispatcher import ContentIngestionOutboxDispatcher
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch, s4_dlq_total, s4_outbox_pending_total
-from content_ingestion.infrastructure.scheduler.advisory_lock import pg_advisory_lock
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY, IngestionScheduler
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
+from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -174,10 +175,28 @@ async def _metrics_poller(session_factory: object, interval: int) -> None:
         await asyncio.sleep(interval)
 
 
+async def _supervised_dispatcher(dispatcher: ContentIngestionOutboxDispatcher, app: FastAPI) -> None:
+    """Supervisor loop that restarts the outbox dispatcher on crash with exponential backoff."""
+    log = get_logger("content_ingestion.app")
+    failures = 0
+    while True:
+        try:
+            await dispatcher.run()
+            break  # clean exit
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            failures += 1
+            delay = min(5 * (2**failures), 300)
+            log.exception("dispatcher_crashed", restart_delay=delay, consecutive_failures=failures)
+            app.state.dispatcher_healthy = False
+            await asyncio.sleep(delay)
+            app.state.dispatcher_healthy = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = Settings()
-    app.state.settings = settings
+    settings: Settings = app.state.settings
 
     # 1. Logging — always first
     configure_logging(
@@ -200,8 +219,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         add_otel_middleware(app)
 
-    # 4. Database
-    session_factory = create_session_factory(settings)
+    # 4. Database — returns (engine, session_factory) so we can dispose engine on shutdown
+    engine, session_factory = create_session_factory(settings)
+    app.state.engine = engine
     app.state.session_factory = session_factory
 
     # 5. Valkey
@@ -223,13 +243,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
     app.state.http_client = http_client
 
-    # 8. Outbox dispatcher (background task)
+    # 8. Outbox dispatcher (supervised background task)
     dispatcher = ContentIngestionOutboxDispatcher(
         settings=settings,
         session_factory=session_factory,
     )
-    dispatch_task: asyncio.Task[Any] = asyncio.create_task(dispatcher.run())
     app.state.dispatcher = dispatcher
+    app.state.dispatcher_healthy = True
+    dispatch_task: asyncio.Task[Any] = asyncio.create_task(_supervised_dispatcher(dispatcher, app))
 
     # 9. Scheduler — fetch all sources and start polling
     async def run_fn(source: Source) -> None:
@@ -270,7 +291,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.scheduler = scheduler
 
-    # 9. Metrics poller (background task)
+    # 10. Metrics poller (background task)
     metrics_task: asyncio.Task[None] = asyncio.create_task(
         _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds)
     )
@@ -285,20 +306,62 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await scheduler.stop()
     dispatcher.stop()
-    await dispatch_task
+    dispatch_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await dispatch_task
     await http_client.aclose()
     await valkey.close()
+    await engine.dispose()
     log.info("service_stopped", service="content-ingestion")
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
+def _register_exception_handlers(app: FastAPI) -> None:
+    """Map domain exceptions to appropriate HTTP status codes."""
+    from content_ingestion.domain.exceptions import AdapterError, ConfigurationError, QuotaExhaustedError, StorageError
+
+    @app.exception_handler(AdapterError)
+    async def _adapter_error(_request: Request, exc: AdapterError) -> JSONResponse:
+        logger_mod.error("adapter_error", error=str(exc))
+        return JSONResponse(status_code=502, content={"error": "bad_gateway", "detail": "Upstream source error"})
+
+    @app.exception_handler(QuotaExhaustedError)
+    async def _quota_error(_request: Request, exc: QuotaExhaustedError) -> JSONResponse:
+        logger_mod.warning("quota_exhausted", error=str(exc))
+        return JSONResponse(status_code=429, content={"error": "too_many_requests", "detail": "Quota exhausted"})
+
+    @app.exception_handler(ConfigurationError)
+    async def _config_error(_request: Request, exc: ConfigurationError) -> JSONResponse:
+        logger_mod.error("configuration_error", error=str(exc))
+        return JSONResponse(status_code=500, content={"error": "internal_error", "detail": "Service misconfiguration"})
+
+    @app.exception_handler(StorageError)
+    async def _storage_error(_request: Request, exc: StorageError) -> JSONResponse:
+        logger_mod.error("storage_error", error=str(exc))
+        return JSONResponse(status_code=503, content={"error": "service_unavailable", "detail": "Storage unavailable"})
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
+        logger_mod.exception("unhandled_error", error=str(exc))
+        return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        settings: Optional pre-built settings (for testing). Created automatically if None.
+    """
     app = FastAPI(
         title="content-ingestion",
         version="2025.6.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings or Settings()
     app.add_middleware(RequestIdMiddleware)
+
+    # Domain exception handlers
+    _register_exception_handlers(app)
+
     app.include_router(health.router, tags=["health"])
     app.include_router(admin.router)
     app.include_router(dlq.router)
