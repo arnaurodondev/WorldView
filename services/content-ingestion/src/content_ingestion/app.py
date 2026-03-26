@@ -7,6 +7,7 @@ import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -67,10 +68,15 @@ async def _run_fetch_cycle(
     session_factory: object,
     storage: object,
     valkey: object,
+    http_client: httpx.AsyncClient,
 ) -> None:
     """Execute one fetch-and-write cycle for a source, with advisory lock."""
     from content_ingestion.application.use_cases.fetch_and_write import FetchAndWriteUseCase
     from content_ingestion.domain.value_objects import TokenBucket
+    from content_ingestion.infrastructure.adapters.eodhd.client import EODHDClient
+    from content_ingestion.infrastructure.adapters.finnhub.client import FinnhubClient
+    from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
+    from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
 
     async with session_factory() as session, pg_advisory_lock(session, f"s4:fetch:{source.name}") as acquired:  # type: ignore[operator]
         if not acquired:
@@ -82,38 +88,43 @@ async def _run_fetch_cycle(
 
         # Build adapter dependencies
         fetch_log_repo = FetchLogRepository(session)
-        client_module = __import__(
-            f"content_ingestion.infrastructure.adapters.{source.source_type}.client",
-            fromlist=["*"],
-        )
 
-        # Build client and adapter based on source type
-        import common.time as ct
+        import common.time as ct_mod
 
-        now = ct.utc_now()
+        now = ct_mod.utc_now()
         rate_limiter = TokenBucket(capacity=10, tokens=10.0, refill_rate=10.0, last_refill=now)
 
+        # Build client per source type — each has a different constructor signature
+        client: object
         if source.source_type.value == "eodhd":
-            client = client_module.EODHDClient(api_key=settings.eodhd_api_key)
+            client = EODHDClient(http_client=http_client, api_key=settings.eodhd_api_key)  # type: ignore[arg-type]
         elif source.source_type.value == "sec_edgar":
-            client = client_module.SECEdgarClient(user_agent=settings.sec_edgar_user_agent)
+            client = SECEdgarClient(http_client=http_client, user_agent=settings.sec_edgar_user_agent)  # type: ignore[arg-type]
         elif source.source_type.value == "finnhub":
-            client = client_module.FinnhubClient(api_key=settings.finnhub_api_key)
+            client = FinnhubClient(http_client=http_client, api_key=settings.finnhub_api_key)  # type: ignore[arg-type]
             rate_limiter = TokenBucket(capacity=55, tokens=55.0, refill_rate=55.0 / 60.0, last_refill=now)
         elif source.source_type.value == "newsapi":
-            client = client_module.NewsAPIClient(
+            client = NewsAPIClient(
+                http_client=http_client,  # type: ignore[arg-type]
                 api_key=settings.newsapi_key,
-                valkey=valkey,
+                valkey=valkey,  # type: ignore[arg-type]
                 daily_limit=settings.newsapi_daily_limit,
             )
         else:
             return
 
-        adapter = adapter_cls(  # type: ignore[call-arg]
-            client=client,
-            rate_limiter=rate_limiter,
-            exists_fn=fetch_log_repo.exists_by_url_hash,
-        )
+        # NewsAPI adapter doesn't use rate_limiter (uses Valkey quota instead)
+        if source.source_type.value == "newsapi":
+            adapter = adapter_cls(  # type: ignore[call-arg]
+                client=client,
+                exists_fn=fetch_log_repo.exists_by_url_hash,
+            )
+        else:
+            adapter = adapter_cls(  # type: ignore[call-arg]
+                client=client,
+                rate_limiter=rate_limiter,
+                exists_fn=fetch_log_repo.exists_by_url_hash,
+            )
 
         bronze = MinioBronzeAdapter(storage)  # type: ignore[arg-type]
         outbox_repo = OutboxRepository(session)
@@ -123,6 +134,7 @@ async def _run_fetch_cycle(
             fetch_log_repo=fetch_log_repo,
             outbox_repo=outbox_repo,
             commit_fn=session.commit,
+            rollback_fn=session.rollback,
         )
 
         summary = await use_case.execute(source, is_backfill=settings.backfill_enabled)
@@ -207,7 +219,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     storage = build_object_storage(settings=storage_settings)
     app.state.storage = storage
 
-    # 7. Outbox dispatcher (background task)
+    # 7. HTTP client (shared across adapters)
+    http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
+    app.state.http_client = http_client
+
+    # 8. Outbox dispatcher (background task)
     dispatcher = ContentIngestionOutboxDispatcher(
         settings=settings,
         session_factory=session_factory,
@@ -215,9 +231,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dispatch_task: asyncio.Task[Any] = asyncio.create_task(dispatcher.run())
     app.state.dispatcher = dispatcher
 
-    # 8. Scheduler — fetch all sources and start polling
+    # 9. Scheduler — fetch all sources and start polling
     async def run_fn(source: Source) -> None:
-        await _run_fetch_cycle(source, settings, session_factory, storage, valkey)
+        await _run_fetch_cycle(source, settings, session_factory, storage, valkey, http_client)
 
     app.state.trigger_fn = run_fn
 
@@ -270,6 +286,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await scheduler.stop()
     dispatcher.stop()
     await dispatch_task
+    await http_client.aclose()
     await valkey.close()
     log.info("service_stopped", service="content-ingestion")
 

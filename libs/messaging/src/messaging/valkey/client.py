@@ -145,6 +145,10 @@ class ValkeyClient:
         """Return ``True`` if *key* exists."""
         return bool(await self._redis.exists(key))
 
+    async def incr(self, key: str, amount: int = 1) -> int:
+        """Atomically increment *key* by *amount*.  Returns the new value."""
+        return await self._redis.incr(key, amount)  # type: ignore[no-any-return]
+
     async def expire(self, key: str, seconds: int) -> bool:
         """Set a TTL of *seconds* on *key*.  Returns ``True`` on success."""
         return bool(await self._redis.expire(key, seconds))

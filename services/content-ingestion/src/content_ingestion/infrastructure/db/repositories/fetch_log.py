@@ -31,9 +31,10 @@ class FetchLogRepository:
         fetched_at: datetime,
         published_at: datetime | None = None,
         is_backfill: bool = False,
+        row_id: UUID | None = None,
     ) -> None:
         row = FetchLogModel(
-            id=common.ids.new_uuid7(),
+            id=row_id or common.ids.new_uuid7(),
             source_id=source_id,
             url=url,
             url_hash=url_hash,

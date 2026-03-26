@@ -81,7 +81,25 @@ class OutboxRepository:
             )
         )
 
-    async def move_to_dead_letter(self, record_id: UUID) -> None:
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+        # Fetch the outbox record to copy its payload into the DLQ
+        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == record_id))
+        record = result.scalar_one_or_none()
+
+        if record is not None:
+            from content_ingestion.infrastructure.db.models import DeadLetterQueueModel
+
+            self._session.add(
+                DeadLetterQueueModel(
+                    dlq_id=common.ids.new_uuid7(),
+                    original_event_id=record.id,
+                    topic=record.topic,
+                    payload_avro=b"",  # Avro serialization may have failed
+                    payload_json=record.payload,
+                    error_detail=error_detail or None,
+                )
+            )
+
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)

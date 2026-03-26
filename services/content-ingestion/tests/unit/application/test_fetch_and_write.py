@@ -127,9 +127,18 @@ class TestFetchAndWriteUseCase:
         assert call_args.kwargs["event_type"] == "content.article.raw.v1"
         assert call_args.kwargs["topic"] == "content.article.raw.v1"
         payload = call_args.kwargs["payload"]
-        assert "url_hash" in payload
-        assert "minio_key" in payload
-        assert "byte_size" in payload
+        # Avro-aligned field names (content.article.raw.v1.avsc)
+        assert "event_id" in payload
+        assert payload["event_type"] == "content.article.raw"
+        assert payload["schema_version"] == 1
+        assert "occurred_at" in payload
+        assert "doc_id" in payload
+        assert "source_type" in payload
+        assert "source_url" in payload
+        assert "minio_bronze_key" in payload
+        assert "content_hash" in payload
+        assert "fetch_id" in payload
+        assert "is_backfill" in payload
 
     async def test_commit_called_per_article(self) -> None:
         results = [_make_result(url_hash=f"hash{i}") for i in range(3)]
