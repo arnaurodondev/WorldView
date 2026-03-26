@@ -421,4 +421,4 @@ Auth: `X-Internal-Token` header validated against `INTERNAL_SERVICE_TOKEN` env v
 |------|--------|-----------|-------------|----------|
 | 1 | **completed** | 5 | 5 | none |
 | 2 | **completed** | 5 | 5 | none |
-| 3 | pending | 0 | 5 | Wave 1 ✅ |
+| 3 | **completed** | 5 | 5 | none |
