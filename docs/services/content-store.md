@@ -1,7 +1,7 @@
 # S5 · Content Store Service
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Dedup pipeline complete (Wave B-2)
+> **Status**: Hot path complete (Wave B-3)
 
 ---
 
@@ -190,12 +190,18 @@ services/content-store/src/content_store/
 ├── domain/                             # Entities, enums, errors, value objects
 ├── application/
 │   ├── text_cleaning/cleaner.py        # extract/sanitize/normalize/clean pipeline
+│   ├── use_cases/process_article.py    # ProcessArticleUseCase (full hot path)
 │   └── deduplication/
 │       ├── stage_a_raw.py              # SHA-256 raw bytes hash
 │       ├── stage_b_normalized.py       # Normalized URL+text hash
 │       └── minhash_compute.py          # MinHash signature (datasketch)
 └── infrastructure/
     ├── db/                             # SQLAlchemy models, repositories
+    ├── storage/minio_silver.py         # Silver-tier canonical document storage
+    ├── consumer/article_consumer.py    # Kafka consumer for content.article.raw.v1
+    ├── outbox/
+    │   ├── dispatcher.py              # Outbox dispatcher (content.article.stored.v1)
+    │   └── unit_of_work.py            # SQLAlchemy UoW for dispatcher
     └── valkey/lsh_client.py            # 4-band LSH index over Valkey sorted sets
 ```
 
