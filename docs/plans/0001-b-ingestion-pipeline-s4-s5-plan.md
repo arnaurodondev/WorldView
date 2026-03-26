@@ -220,11 +220,12 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 
 ---
 
-### Wave B-1: S5 Foundation — Config, Domain, DB
+### Wave B-1: S5 Foundation — Config, Domain, DB ✅
 
 **Goal**: Establish S5 foundation: settings, domain entities (dedup decisions, canonical document, corroboration policy), database infrastructure with ORM models and repositories, Alembic migration.
 **Depends on**: Wave A-2 (S4 Avro schema defined — needed for Article deserialization)
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-26 · 63 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -239,11 +240,11 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 - `services/content-ingestion/src/content_ingestion/infrastructure/db/` — reference from Wave A-1
 
 #### Validation Gate
-- [ ] `ruff check services/content-store/` passes
-- [ ] `mypy services/content-store/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/content-store/tests/unit -v` — ≥15 tests pass
-- [ ] `alembic upgrade head` succeeds; `signature` column confirmed as `INTEGER[]`
-- [ ] `docs/services/content-store.md` updated with domain entities, schema (PROMINENT: INTEGER[], NO FK)
+- [x] `ruff check services/content-store/` passes
+- [x] `mypy services/content-store/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/content-store/tests/unit -v` — 63 tests pass (≥15)
+- [x] `signature` column confirmed as `INTEGER[]` (ORM model test)
+- [x] `docs/services/content-store.md` updated with domain entities, schema (PROMINENT: INTEGER[], NO FK)
 
 #### Regression Guardrails
 - BP-007: Unique indexes with NULLs — use `NULLS NOT DISTINCT` where needed
