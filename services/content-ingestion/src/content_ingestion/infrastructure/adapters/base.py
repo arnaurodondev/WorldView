@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from content_ingestion.application.ports.source_adapter import SourceAdapterPort
 from content_ingestion.domain.exceptions import AdapterError
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -39,8 +40,10 @@ def url_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-class SourceAdapter(ABC):
+class SourceAdapter(SourceAdapterPort):
     """Abstract base class for external content source adapters.
+
+    Inherits from :class:`SourceAdapterPort` (application-layer interface).
 
     Each adapter:
     - Fetches articles from one external API

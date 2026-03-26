@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -13,10 +13,17 @@ if TYPE_CHECKING:
     from content_ingestion.config import Settings
 
 
-def create_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
-    """Create an async session factory bound to the configured database URL."""
+def create_session_factory(
+    settings: Settings,
+) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    """Create an async engine and session factory bound to the configured database URL.
+
+    Returns:
+        A ``(engine, session_factory)`` tuple so the caller can dispose the engine on shutdown.
+    """
     engine = create_async_engine(settings.db_url, echo=False)
-    return async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    return engine, factory
 
 
 @asynccontextmanager

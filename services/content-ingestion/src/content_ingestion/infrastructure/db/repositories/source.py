@@ -46,11 +46,16 @@ class SourceRepository:
         await self._session.flush()
         return row
 
+    _MUTABLE_FIELDS: frozenset[str] = frozenset({"name", "enabled", "config"})
+
     async def update(self, source_id: UUID, **kwargs: Any) -> SourceModel:
         row = await self.get_by_id(source_id)
         if row is None:
             raise ValueError(f"Source {source_id} not found")
         for key, value in kwargs.items():
+            if key not in self._MUTABLE_FIELDS:
+                msg = f"Field '{key}' is not mutable"
+                raise ValueError(msg)
             setattr(row, key, value)
         await self._session.flush()
         return row

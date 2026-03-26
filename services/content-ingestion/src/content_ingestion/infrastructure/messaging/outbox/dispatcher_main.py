@@ -42,7 +42,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    session_factory = create_session_factory(settings)
+    _engine, session_factory = create_session_factory(settings)
     dispatcher = ContentIngestionOutboxDispatcher(settings, session_factory)
 
     try:
