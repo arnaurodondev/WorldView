@@ -66,6 +66,7 @@
 - [ ] Mocks are at port boundaries (not deep inside implementation)
 - [ ] Tests verify side effects (events published, DB updated), not just return values
 - [ ] No test interdependencies (each test is independent)
+- [ ] **Blast radius verified**: if Avro schemas, DB schemas, or shared lib APIs changed, downstream tests outside the immediate scope have been identified and run (see implement skill §2.4). Key files to check: `libs/contracts/tests/test_avro_alignment.py`, `tests/contract/test_avro_schemas.py`
 
 ## 9. Test Integrity (R19 — blocks approval if violated)
 

@@ -69,6 +69,7 @@ Step 10: Commit                → Stage scoped files, conventional commit
 - **test_commands**: List the exact pytest commands you'll run for validation
 - **doc_files**: List docs that may need updating
 - **PRD sections**: List the PRD sections you'll reference during implementation
+- **downstream_tests**: Identify tests OUTSIDE your write_paths that assert on artifacts you're changing (see §2.4 Blast Radius Analysis)
 
 Announce your scope to the user before proceeding.
 
@@ -108,6 +109,31 @@ After completing each task (NOT after all tasks):
 3. Run targeted pytest if tests exist for this area
 
 **Do NOT proceed to the next task if the current one has lint or test failures.**
+
+### 2.4 Blast Radius Analysis (Mandatory for Schema/Contract Changes)
+
+When modifying **Avro schemas, database schemas, API contracts, or shared library interfaces**, other tests outside your immediate scope may depend on the artifacts you changed. These tests will break silently if not identified and updated.
+
+**After any schema or contract change, run this checklist:**
+
+1. **Avro schema changes** → grep for the schema filename across the entire repo:
+   ```bash
+   grep -r "<schema_name>.avsc" --include="*.py" libs/ services/ tests/
+   ```
+   Pay special attention to `libs/contracts/tests/test_avro_alignment.py` — it asserts field-by-field alignment between canonical models and Avro schemas. If you change a schema's fields, this test WILL fail.
+
+2. **Database schema changes** → check for ORM model alignment tests, migration tests, and any test that seeds specific columns.
+
+3. **Shared library API changes** → grep for import usage across all services:
+   ```bash
+   grep -r "from <lib_module> import" services/ tests/
+   ```
+
+4. **Kafka topic changes** → check consumer/producer tests that reference the topic name or its schema.
+
+**Add all identified downstream tests to your `test_commands` list.** Run them during the validation gate (Step 4). If any fail, fix them as part of this wave — not as a follow-up.
+
+This prevents the failure pattern where a schema change passes local validation but breaks CI because downstream alignment tests were not in scope.
 
 ---
 
