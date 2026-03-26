@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from portfolio.application.ports.repositories import WatchlistMemberRepository
+from portfolio.application.ports.repositories import WatcherDTO, WatchlistMemberRepository
 from portfolio.domain.entities.watchlist_member import WatchlistMember
 from portfolio.infrastructure.db.models.watchlist import WatchlistModel
 from portfolio.infrastructure.db.models.watchlist_member import WatchlistMemberModel
@@ -57,6 +58,39 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             )
         )
         return [self._to_entity(r) for r in result.scalars()]
+
+    async def get_watchers_by_entity(self, entity_id: UUID) -> list[WatcherDTO]:
+        """Return watchers (user_id, watchlist_id) for a single entity."""
+        result = await self._session.execute(
+            select(WatchlistModel.user_id, WatchlistMemberModel.watchlist_id)
+            .join(WatchlistModel, WatchlistMemberModel.watchlist_id == WatchlistModel.id)
+            .where(
+                WatchlistMemberModel.entity_id == entity_id,
+                WatchlistModel.status == "active",
+            )
+        )
+        return [WatcherDTO(user_id=row[0], watchlist_id=row[1]) for row in result]
+
+    async def get_watchers_by_entities(self, entity_ids: list[UUID]) -> dict[UUID, list[WatcherDTO]]:
+        """Batch lookup: return watchers keyed by entity_id."""
+        if not entity_ids:
+            return {}
+        result = await self._session.execute(
+            select(
+                WatchlistMemberModel.entity_id,
+                WatchlistModel.user_id,
+                WatchlistMemberModel.watchlist_id,
+            )
+            .join(WatchlistModel, WatchlistMemberModel.watchlist_id == WatchlistModel.id)
+            .where(
+                WatchlistMemberModel.entity_id.in_(entity_ids),
+                WatchlistModel.status == "active",
+            )
+        )
+        watchers: dict[UUID, list[WatcherDTO]] = defaultdict(list)
+        for row in result:
+            watchers[row[0]].append(WatcherDTO(user_id=row[1], watchlist_id=row[2]))
+        return dict(watchers)
 
     async def save(self, member: WatchlistMember) -> None:
         row = await self._session.get(WatchlistMemberModel, member.id)

@@ -47,6 +47,14 @@ class IdempotencyRecord:
     processed_at: datetime
 
 
+@dataclass(frozen=True)
+class WatcherDTO:
+    """DTO for internal watchlist-by-entity lookup (S10 → S1)."""
+
+    user_id: UUID
+    watchlist_id: UUID
+
+
 class TenantRepository(ABC):
     @abstractmethod
     async def get(self, tenant_id: UUID) -> Tenant | None: ...
@@ -177,6 +185,12 @@ class WatchlistMemberRepository(ABC):
 
     @abstractmethod
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]: ...
+
+    @abstractmethod
+    async def get_watchers_by_entity(self, entity_id: UUID) -> list[WatcherDTO]: ...
+
+    @abstractmethod
+    async def get_watchers_by_entities(self, entity_ids: list[UUID]) -> dict[UUID, list[WatcherDTO]]: ...
 
     @abstractmethod
     async def save(self, member: WatchlistMember) -> None: ...
