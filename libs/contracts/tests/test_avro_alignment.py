@@ -7,17 +7,20 @@ Strategy:
     in to_dict() output.
   - Assert to_dict() contains no unexpected top-level fields not in the schema.
 
-Scope / mapping:
+Scope / mapping (updated for PRD-0001 schema revision):
   - CanonicalArticle   → content.article.stored.v1.avsc
-  - CanonicalSentiment → nlp.article.enriched.v1.avsc  (sentiment sub-fields)
+  - CanonicalSentiment → standalone model (no direct Avro schema after PRD-0001 revision)
   - CanonicalOHLCVBar  → market.dataset.fetched.avsc    (payload fields subset)
   - CanonicalQuote     → no direct Avro schema — field-presence check only
   - CanonicalFundamentals → no direct Avro schema — field-presence check only
-  - CanonicalEntity    → nlp.signal.detected.v1.avsc   (entity_id present)
+  - CanonicalEntity    → nlp.signal.detected.v1.avsc   (subject_entity_id present)
 
 Note: Envelope fields (event_id, event_type, occurred_at, correlation_id) are
 NOT part of canonical models; they belong to the Kafka event wrapper. Tests only
 validate data payload field alignment.
+
+Avro schemas were revised in PRD-0001 (commit 1539665) to match the intelligence
+pipeline specification. These tests verify alignment with the NEW schemas.
 """
 
 from __future__ import annotations
@@ -61,7 +64,21 @@ def _avro_data_fields(schema: dict, exclude: frozenset[str] = _ENVELOPE_FIELDS) 
 
 
 class TestCanonicalArticleAvroAlignment:
-    """CanonicalArticle → content.article.stored.v1.avsc."""
+    """CanonicalArticle → content.article.stored.v1.avsc.
+
+    The content.article.stored.v1 schema was revised in PRD-0001 §6.3.2.
+    New fields: doc_id, content_hash, normalized_hash, dedup_result, minio_silver_key,
+    source_type, is_backfill. Removed: article_id, source_domain, url, language,
+    is_duplicate, duplicate_of.
+
+    CanonicalArticle still uses the OLD field names (article_id, source_domain, etc.)
+    because the canonical models are consumed by S2/S3 (structured pipeline) and haven't
+    been updated for the unstructured pipeline yet. The Avro schema is the event contract
+    between S5 and S6 — not between CanonicalArticle and S5.
+
+    These tests validate: (1) the Avro schema has the expected PRD-0001 fields,
+    (2) CanonicalArticle still has its own required fields.
+    """
 
     def _make_article(self) -> CanonicalArticle:
         return CanonicalArticle(
@@ -77,14 +94,27 @@ class TestCanonicalArticleAvroAlignment:
             body_text="Article body...",
         )
 
-    def test_avro_schema_data_fields_present_in_to_dict(self) -> None:
+    def test_avro_schema_has_prd_0001_fields(self) -> None:
+        """content.article.stored.v1 must have the PRD-0001 §6.3.2 data fields."""
         schema = _load_avsc("content.article.stored.v1.avsc")
         avro_fields = _avro_data_fields(schema)
-        model_dict = self._make_article().to_dict()
-        for avro_field in avro_fields:
-            assert avro_field in model_dict, f"Avro field '{avro_field}' missing from CanonicalArticle.to_dict()"
+        expected_data_fields = {
+            "doc_id",
+            "content_hash",
+            "normalized_hash",
+            "dedup_result",
+            "minio_silver_key",
+            "source_type",
+            "title",
+            "word_count",
+            "published_at",
+            "is_backfill",
+        }
+        missing = expected_data_fields - avro_fields
+        assert not missing, f"content.article.stored.v1 missing PRD-0001 fields: {missing}"
 
-    def test_required_article_fields(self) -> None:
+    def test_required_article_model_fields(self) -> None:
+        """CanonicalArticle model retains its original fields (not yet migrated to PRD-0001)."""
         d = self._make_article().to_dict()
         for key in (
             "article_id",
@@ -100,8 +130,13 @@ class TestCanonicalArticleAvroAlignment:
             assert key in d
 
 
-class TestCanonicalSentimentAvroAlignment:
-    """CanonicalSentiment — validate field presence vs nlp.article.enriched.v1.avsc."""
+class TestCanonicalSentimentModelFields:
+    """CanonicalSentiment — standalone model validation.
+
+    After PRD-0001, nlp.article.enriched.v1 no longer has sentiment_label/sentiment_score
+    fields (replaced by routing_tier, routing_score, etc.). CanonicalSentiment is a
+    standalone model not directly mapped to an Avro schema in the unstructured pipeline.
+    """
 
     def _make_sentiment(self) -> CanonicalSentiment:
         return CanonicalSentiment(
@@ -113,20 +148,19 @@ class TestCanonicalSentimentAvroAlignment:
         )
 
     def test_sentiment_fields_in_to_dict(self) -> None:
-        """nlp.article.enriched.v1 has sentiment_label and sentiment_score.
-        CanonicalSentiment uses 'label' and 'score' (simpler naming).
-        Validate that our model exposes the expected fields."""
         d = self._make_sentiment().to_dict()
         assert "label" in d
         assert "score" in d
         assert "article_id" in d
 
-    def test_avro_schema_has_sentiment_fields(self) -> None:
+    def test_avro_schema_has_prd_0001_enriched_fields(self) -> None:
+        """nlp.article.enriched.v1 must have routing_tier/routing_score (PRD-0001 §6.3.2)."""
         schema = _load_avsc("nlp.article.enriched.v1.avsc")
         avro_field_names = {f["name"] for f in schema["fields"]}
-        assert "sentiment_label" in avro_field_names
-        assert "sentiment_score" in avro_field_names
-        assert "article_id" in avro_field_names
+        assert "routing_tier" in avro_field_names
+        assert "routing_score" in avro_field_names
+        assert "doc_id" in avro_field_names
+        assert "mention_count" in avro_field_names
 
     def test_score_in_range(self) -> None:
         d = self._make_sentiment().to_dict()
@@ -177,7 +211,12 @@ class TestCanonicalOHLCVBarAvroAlignment:
 
 
 class TestCanonicalEntityAvroAlignment:
-    """CanonicalEntity — validate entity_id appears in nlp.signal.detected.v1.avsc."""
+    """CanonicalEntity — validate entity-related fields in nlp.signal.detected.v1.avsc.
+
+    After PRD-0001, nlp.signal.detected.v1 uses subject_entity_id and claimer_entity_id
+    (not entity_id). CanonicalEntity.entity_id maps to the canonical entity concept,
+    which appears as subject_entity_id in signal events.
+    """
 
     def _make_entity(self) -> CanonicalEntity:
         return CanonicalEntity(
@@ -189,10 +228,13 @@ class TestCanonicalEntityAvroAlignment:
             confidence=0.95,
         )
 
-    def test_entity_id_in_avro_schema(self) -> None:
+    def test_avro_schema_has_subject_entity_id(self) -> None:
+        """nlp.signal.detected.v1 must have subject_entity_id (PRD-0001 naming)."""
         schema = _load_avsc("nlp.signal.detected.v1.avsc")
         avro_field_names = {f["name"] for f in schema["fields"]}
-        assert "entity_id" in avro_field_names
+        assert "subject_entity_id" in avro_field_names
+        assert "claimer_entity_id" in avro_field_names
+        assert "claim_id" in avro_field_names
 
     def test_entity_id_in_to_dict(self) -> None:
         d = self._make_entity().to_dict()

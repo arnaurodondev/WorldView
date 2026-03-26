@@ -55,18 +55,18 @@ async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
 @pytest.fixture
 async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Direct DB session for white-box assertions and test data seeding.
-    
+
     Clears all tables before each test to ensure test isolation. Uses TRUNCATE
     at fixture setup to eliminate any leftover data from docker-compose tmpfs
     state or previous test runs.
     """
     engine = create_async_engine(_DB_URL, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    
+
     # Clear all tables at START of test (not end) to ensure fresh slate
     # Use a fresh session for cleanup to avoid transaction state issues
     from sqlalchemy import text
-    
+
     async with factory() as cleanup_session:
         await cleanup_session.execute(
             text(
@@ -81,11 +81,11 @@ async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
             )
         )
         await cleanup_session.commit()
-    
+
     # Now provide a fresh session for the test
     async with factory() as session:
         yield session
-    
+
     await engine.dispose()
 
 
