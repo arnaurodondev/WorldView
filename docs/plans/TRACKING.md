@@ -7,7 +7,6 @@
 
 | Plan ID | Title | PRD | Status | Waves Done/Total | Updated |
 |---------|-------|-----|--------|-----------------|---------|
-| PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | in-progress | 2/3 | 2026-03-26 |
 | PLAN-0012 | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | draft | 0/8 | 2026-03-25 |
 | PLAN-0013 | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | draft | 0/11 | 2026-03-25 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | 2026-03-25 |
@@ -34,7 +33,7 @@ PLAN-0012 + PLAN-0013 C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves |
 |---------|-------|-----|-----------|-------|
-<!-- Completed plans are moved here -->
+| PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 |
 
 ## Conventions
 
