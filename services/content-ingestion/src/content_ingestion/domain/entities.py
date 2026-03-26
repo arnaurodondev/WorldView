@@ -21,6 +21,7 @@ class SourceType(StrEnum):
     SEC_EDGAR = "sec_edgar"
     FINNHUB = "finnhub"
     NEWSAPI = "newsapi"
+    MANUAL = "manual"
 
 
 @dataclass

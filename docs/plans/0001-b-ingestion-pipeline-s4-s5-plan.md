@@ -422,13 +422,13 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 ### Plan Status
 | Plan | Status | Waves Done | Waves Total |
 |------|--------|-----------|-------------|
-| A: S4 Content Ingestion | pending | 0 | 4 |
+| A: S4 Content Ingestion | in-progress | 1 | 4 |
 | B: S5 Content Store | pending | 0 | 4 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
 |------|--------|-----------|-------------|----------|
-| A-1 | pending | 0 | 6 | none |
+| A-1 | done | 6 | 6 | none |
 | A-2 | pending | 0 | 5 | A-1 |
 | A-3 | pending | 0 | 6 | A-2 |
 | A-4 | pending | 0 | 4 | A-3 |

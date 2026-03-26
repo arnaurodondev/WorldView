@@ -39,10 +39,25 @@ class SourceModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class SourceAdapterStateModel(Base):
+    """Per-source watermark state for incremental polling."""
+
+    __tablename__ = "source_adapter_state"
+
+    source_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), primary_key=True)
+    last_watermark: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class FetchLogModel(Base):
     """Record of a single URL fetch attempt."""
 
-    __tablename__ = "fetch_logs"
+    __tablename__ = "article_fetch_log"
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     source_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False)
@@ -51,22 +66,22 @@ class FetchLogModel(Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     byte_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # published_at: source-reported publication date extracted by the adapter.
-    # NULL when the API does not return a publication date.
-    # Used by S7 as relation_evidence.evidence_date (preferred over fetched_at).
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    __table_args__ = (UniqueConstraint("url_hash", name="uq_fetch_logs_url_hash"),)
+    __table_args__ = (
+        UniqueConstraint("url_hash", name="uq_article_fetch_log_url_hash"),
+        Index("ix_article_fetch_log_source", "source_id", "fetched_at"),
+    )
 
 
 class OutboxEventModel(Base):
-    """Transactional outbox event — canonical schema (STANDARDS.md §3.4).
+    """Transactional outbox event — canonical schema.
 
     Column names follow OutboxRecordProtocol from libs/messaging:
-      - ``attempts``    → dispatch attempt counter
-      - ``leased_until``→ lease expiry (None = unlocked)
+      - ``attempts``    -> dispatch attempt counter
+      - ``leased_until``-> lease expiry (None = unlocked)
     """
 
     __tablename__ = "outbox_events"
@@ -93,3 +108,19 @@ class OutboxEventModel(Base):
             postgresql_where=text("status IN ('pending', 'processing')"),
         ),
     )
+
+
+class DeadLetterQueueModel(Base):
+    """Failed events moved from the outbox for manual resolution."""
+
+    __tablename__ = "dead_letter_queue"
+
+    dlq_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    original_event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_avro: Mapped[bytes] = mapped_column(nullable=False)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="failed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
