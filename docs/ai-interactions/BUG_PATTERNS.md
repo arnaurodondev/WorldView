@@ -37,6 +37,10 @@
 | [BP-012](#bp-012) | Async SQLAlchemy expired-row access | `sqlalchemy.exc.MissingGreenlet` in polling loops after rollback | Async tests using `AsyncSession` and ORM objects in long polling loops |
 | [BP-013](#bp-013) | E2E perceived infinite loops | Test appears stuck for minutes due to long poll windows, noisy schedulers, or assertions on unstable async conditions | Service E2E tests with scheduler/worker/dispatcher and eventual consistency |
 | [BP-014](#bp-014) | Import guard allowlist `fnmatch` vs `**` | CI Import Guards job fails with violations that should be allowlisted — `services/*/tests/*.py` files not covered | Any service with test files directly in `tests/` (not in subdirectories) |
+| [BP-015](#bp-015) | Python `hash()` for cross-process coordination | Advisory lock IDs differ between processes — concurrent fetches not locked | Any service using `pg_try_advisory_lock` with Python `hash()` |
+| [BP-016](#bp-016) | Advisory lock spanning external I/O | DB connection held during multi-second HTTP fetch — pool exhaustion | Any service holding advisory lock during adapter.fetch() |
+| [BP-017](#bp-017) | Outbox payload fields mismatch Avro schema | `SerializationError` or silent field drops at dispatcher time | Any service writing outbox events that feed an Avro-serialized Kafka topic |
+| [BP-018](#bp-018) | Client constructor mismatch in wiring code | `TypeError: __init__() got an unexpected keyword argument` at runtime | Any service building adapter clients in a factory or lifespan function |
 
 ---
 
@@ -1062,6 +1066,126 @@ Import guards now run as Step 3/4 in the pre-commit hook (`scripts/hooks/pre-com
 | `services/intelligence-migrations/scripts/populate_embeddings.py` | Replaced `logging.getLogger()` with `structlog.get_logger()` and structlog-style kwargs |
 | `scripts/hooks/pre-commit-validate.sh` | Added import guards as Step 3/4 (scoped to changed services) |
 | `.claude/skills/implement/SKILL.md` | Added import guards to Step 4 validation gate |
+
+---
+
+## BP-015 — Python `hash()` for cross-process coordination
+
+**Date discovered**: 2026-03-26
+**Service affected**: `content-ingestion` (found during QA review)
+
+### Symptom
+
+Advisory lock IDs differ between Python processes. Multiple replicas acquire the "same" lock simultaneously because `hash("s4:fetch:eodhd")` returns different values per process (randomized by PYTHONHASHSEED).
+
+### Root cause
+
+Python's `hash()` is randomized per process (PEP 456). Using it for PostgreSQL advisory lock IDs produces different lock IDs in different pods/containers.
+
+### Correct implementation pattern
+
+```python
+import hashlib
+def advisory_lock_id(key: str) -> int:
+    digest = hashlib.sha256(key.encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+```
+
+Use `hashlib.sha256` for deterministic cross-process IDs. The shared `messaging.pg.advisory_lock` module does this correctly.
+
+### Test to add (prevents regression)
+
+```python
+def test_advisory_lock_id_deterministic():
+    assert advisory_lock_id("key") == advisory_lock_id("key")
+```
+
+---
+
+## BP-016 — Advisory lock spanning external I/O
+
+**Date discovered**: 2026-03-26
+**Service affected**: `content-ingestion` (found during QA review)
+
+### Symptom
+
+DB connection pool exhaustion under load. Advisory lock held for 10–30 seconds while adapter fetches from external API.
+
+### Root cause
+
+The advisory lock was acquired before the HTTP fetch, keeping a DB connection checked out during the entire external I/O. With 3 sources × 30s fetch × multiple replicas, the pool depletes.
+
+### Correct implementation pattern
+
+```python
+# Fetch OUTSIDE the lock
+results = await adapter.fetch(source)
+
+# Write INSIDE the lock (short, bounded duration)
+async with pg_advisory_lock(session, key) as acquired:
+    if acquired:
+        await use_case.write(results)
+```
+
+### Test to add (prevents regression)
+
+Verify that the session factory is called separately for the read (watermark) + fetch phase and the write phase.
+
+---
+
+## BP-017 — Outbox payload fields mismatch Avro schema
+
+**Date discovered**: 2026-03-26
+**Service affected**: `content-ingestion` (found during QA review)
+
+### Symptom
+
+`SerializationError` at dispatcher time, or fields silently dropped. The outbox payload used field names like `url`, `minio_key` while the Avro schema expected `source_url`, `minio_bronze_key`.
+
+### Root cause
+
+Outbox payload was built with domain field names instead of Avro schema field names. No compile-time or test-time validation of the payload structure.
+
+### Correct implementation pattern
+
+Build payloads using a dedicated helper that maps to Avro field names:
+
+```python
+def build_raw_article_payload(*, doc_id, source_type, source_url, minio_bronze_key, ...):
+    return {"event_id": ..., "source_url": source_url, "minio_bronze_key": minio_bronze_key, ...}
+```
+
+Add a test that asserts payload keys match the Avro schema fields.
+
+---
+
+## BP-018 — Client constructor mismatch in wiring code
+
+**Date discovered**: 2026-03-26
+**Service affected**: `content-ingestion` (found during QA review)
+
+### Symptom
+
+`TypeError: __init__() got an unexpected keyword argument 'rate_limiter'` when constructing adapter clients. Or: `http_client` not passed because generic `adapter_cls(**kwargs)` was used.
+
+### Root cause
+
+Each client has a different constructor signature (EODHD/Finnhub need `api_key`, SEC EDGAR needs `user_agent`, NewsAPI needs `valkey`). Generic wiring code doesn't handle these differences.
+
+### Correct implementation pattern
+
+Use explicit per-source-type wiring with type-checked constructors:
+
+```python
+if source_type == "eodhd":
+    client = EODHDClient(http_client=http_client, api_key=settings.eodhd_api_key)
+elif source_type == "newsapi":
+    client = NewsAPIClient(http_client=http_client, api_key=settings.newsapi_key, valkey=valkey)
+```
+
+### Test to add (prevents regression)
+
+HTTP client tests using `httpx.MockTransport` that verify each client can be constructed and called.
 
 ---
 

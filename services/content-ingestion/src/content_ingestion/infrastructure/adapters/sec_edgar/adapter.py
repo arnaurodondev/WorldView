@@ -59,7 +59,7 @@ class SECEdgarAdapter(SourceAdapter):
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
 
-    async def fetch(self, source: Source, *, is_backfill: bool = False) -> list[FetchResult]:
+    async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch and deduplicate SEC EDGAR filings.
 
         For each filing:
@@ -69,12 +69,12 @@ class SECEdgarAdapter(SourceAdapter):
         4. Build FetchResult with raw document bytes
         """
         config = source.config
-        from_date = config.get("from_date", "")
+        effective_from = from_date or config.get("from_date", "")
         to_date = config.get("to_date", "")
         forms = config.get("forms", "10-K,10-Q,8-K,DEF14A")
 
         filings = await self._retry_request(
-            lambda: self._client.search_filings(from_date=from_date, to_date=to_date, forms=forms),
+            lambda: self._client.search_filings(from_date=effective_from, to_date=to_date, forms=forms),
             retry_config=self._retry_config,
             context="sec_edgar:search",
         )

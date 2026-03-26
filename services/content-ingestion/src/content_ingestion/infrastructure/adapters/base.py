@@ -53,12 +53,13 @@ class SourceAdapter(SourceAdapterPort):
     """
 
     @abstractmethod
-    async def fetch(self, source: Source, *, is_backfill: bool = False) -> list[FetchResult]:
+    async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch articles from the external source.
 
         Args:
             source: The configured polling source with API config.
             is_backfill: Whether this is a historical backfill run.
+            from_date: Optional date override (YYYY-MM-DD) from watermarks.
 
         Returns:
             List of :class:`FetchResult` objects for new (non-duplicate) articles.

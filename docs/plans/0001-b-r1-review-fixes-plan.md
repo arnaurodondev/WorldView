@@ -2,9 +2,9 @@
 id: PLAN-0001-B-R1
 prd: QA Review + Code Review findings from 2026-03-26
 title: "S4 Content Ingestion — QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra"
-status: in-progress
+status: completed
 created: 2026-03-26
-updated: 2026-03-26  # W3+W4 completed
+updated: 2026-03-26  # All 7 waves completed
 plans: 1
 waves: 7
 tasks: 42
@@ -331,11 +331,12 @@ _(Same as original plan)_
 
 ---
 
-## Wave 2: Lock Restructure + Watermarks + Batch Commit
+## Wave 2: Lock Restructure + Watermarks + Batch Commit ✅
 
 **Goal**: Lock held only during DB writes. Watermarks wired into fetch cycle. Batch commits (25/batch).
 **Depends on**: Wave 1
 **Estimated effort**: 45-60 minutes
+**Status**: **DONE** — 2026-03-26 · 208 S4 unit tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -373,9 +374,9 @@ Replace per-article commit with batch commits every N articles (default 25). Cat
 _(Same as original plan — 10+ tests)_
 
 ### Validation Gate
-- [ ] 10+ new tests
-- [ ] Advisory lock NOT held during `adapter.fetch()`
-- [ ] Uses `messaging.pg.advisory_lock`
+- [x] 10+ new tests
+- [x] Advisory lock NOT held during `adapter.fetch()`
+- [x] Uses `messaging.pg.advisory_lock`
 
 ---
 
@@ -567,11 +568,12 @@ Define 4 port interfaces: `SourceAdapterPort` (ABC, moved from infra), `FetchLog
 
 ---
 
-## Wave 5: Test Coverage + Docker Compose Hybrid
+## Wave 5: Test Coverage + Docker Compose Hybrid ✅
 
 **Goal**: Fill critical test coverage gaps. Set up hybrid docker-compose for centralized + standalone testing.
 **Depends on**: Wave 4
 **Estimated effort**: 60-90 minutes
+**Status**: **DONE** — 2026-03-26 · 208 S4 unit tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -691,18 +693,19 @@ Add `content-ingestion` to the service list for the full test suite. Ensure the 
 - [ ] S4 integration tests run when `--profile all` or `--profile content-ingestion-test` is used
 
 ### Validation Gate
-- [ ] 40+ new tests in this wave
-- [ ] All 166+ total tests pass (126 original + 40 new)
-- [ ] Docker compose profiles work (both standalone and centralized)
-- [ ] ruff + mypy clean
+- [x] 40+ new tests in this wave
+- [x] All 208 total tests pass (165 prior + 43 new)
+- [x] Docker compose profiles work (both standalone and centralized)
+- [x] ruff + mypy clean
 
 ---
 
-## Wave 6: Documentation + Bug Patterns + Review Tooling
+## Wave 6: Documentation + Bug Patterns + Review Tooling ✅
 
 **Goal**: Update all documentation to reflect changes. Add new bug patterns, risk patterns, and review checklist items to prevent recurrence of all discovered issues.
 **Depends on**: Wave 5
 **Estimated effort**: 30-45 minutes
+**Status**: **DONE** — 2026-03-26 · BP-015–018, HR-017–018, 8 checklist items, docs updated
 
 ### Tasks
 
@@ -787,12 +790,12 @@ Add `content-ingestion` to the service list for the full test suite. Ensure the 
 - Comment explaining admin vs internal token
 
 ### Validation Gate
-- [ ] All doc files valid markdown
-- [ ] BP-012 through BP-015 added
-- [ ] HR-017, HR-018 added
-- [ ] 8 new checklist items added
-- [ ] `.claude-context.md` reflects all changes
-- [ ] Service doc reflects all changes
+- [x] All doc files valid markdown
+- [x] BP-015 through BP-018 added (renumbered — BP-012–014 were already taken)
+- [x] HR-017, HR-018 added
+- [x] 8 new checklist items added
+- [x] `.claude-context.md` reflects all changes
+- [x] Service doc reflects all changes
 
 ---
 

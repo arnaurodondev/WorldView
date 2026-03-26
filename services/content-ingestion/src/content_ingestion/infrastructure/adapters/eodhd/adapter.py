@@ -61,7 +61,7 @@ class EODHDAdapter(SourceAdapter):
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
 
-    async def fetch(self, source: Source, *, is_backfill: bool = False) -> list[FetchResult]:
+    async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch and deduplicate EODHD news articles.
 
         For each article returned by the API:
@@ -72,11 +72,11 @@ class EODHDAdapter(SourceAdapter):
         """
         config = source.config
         ticker = config.get("ticker", "")
-        from_date = config.get("from_date", "")
+        effective_from = from_date or config.get("from_date", "")
         to_date = config.get("to_date", "")
 
         articles = await self._retry_request(
-            lambda: self._client.fetch_all_pages(ticker=ticker, from_date=from_date, to_date=to_date),
+            lambda: self._client.fetch_all_pages(ticker=ticker, from_date=effective_from, to_date=to_date),
             retry_config=self._retry_config,
             context=f"eodhd:fetch:{ticker or 'general'}",
         )

@@ -140,7 +140,8 @@ class TestFetchAndWriteUseCase:
         assert "fetch_id" in payload
         assert "is_backfill" in payload
 
-    async def test_commit_called_per_article(self) -> None:
+    async def test_commit_called_as_final_batch(self) -> None:
+        """With batch_size=25 (default), 3 articles commit as one final batch."""
         results = [_make_result(url_hash=f"hash{i}") for i in range(3)]
         adapter = AsyncMock(fetch=AsyncMock(return_value=results))
         commit_fn = AsyncMock()
@@ -148,7 +149,8 @@ class TestFetchAndWriteUseCase:
 
         await use_case.execute(_make_source())
 
-        assert commit_fn.call_count == 3
+        # 3 articles < batch_size 25 → single final batch commit
+        assert commit_fn.call_count == 1
 
     async def test_never_calls_kafka_directly(self) -> None:
         """The use case must only write to outbox, never publish to Kafka."""

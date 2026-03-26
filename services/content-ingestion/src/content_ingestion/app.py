@@ -71,62 +71,83 @@ async def _run_fetch_cycle(
     valkey: object,
     http_client: httpx.AsyncClient,
 ) -> None:
-    """Execute one fetch-and-write cycle for a source, with advisory lock."""
+    """Execute one fetch-and-write cycle for a source.
+
+    Lock is held only during writes, not during external API fetches.
+    Watermarks from source_adapter_state drive incremental polling.
+    """
     from content_ingestion.application.use_cases.fetch_and_write import FetchAndWriteUseCase
     from content_ingestion.domain.value_objects import TokenBucket
     from content_ingestion.infrastructure.adapters.eodhd.client import EODHDClient
     from content_ingestion.infrastructure.adapters.finnhub.client import FinnhubClient
     from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
     from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
+    from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
 
-    async with session_factory() as session, pg_advisory_lock(session, f"s4:fetch:{source.name}") as acquired:  # type: ignore[operator]
-        if not acquired:
-            return
+    adapter_cls = ADAPTER_REGISTRY.get(source.source_type)
+    if adapter_cls is None:
+        return
 
-        adapter_cls = ADAPTER_REGISTRY.get(source.source_type)
-        if adapter_cls is None:
-            return
+    import common.time as ct_mod
 
-        # Build adapter dependencies
-        fetch_log_repo = FetchLogRepository(session)
+    # 1. Read watermark (outside lock — read-only)
+    watermark_date = ""
+    async with session_factory() as ro_session:  # type: ignore[operator]
+        state_repo = AdapterStateRepository(ro_session)
+        state = await state_repo.get(source.id)
+        if state and state.last_watermark:
+            watermark_date = state.last_watermark.strftime("%Y-%m-%d")
 
-        import common.time as ct_mod
+    # 2. Fetch articles from external API (outside lock — no DB writes)
+    now = ct_mod.utc_now()
+    rate_limiter = TokenBucket(capacity=10, tokens=10.0, refill_rate=10.0, last_refill=now)
 
-        now = ct_mod.utc_now()
-        rate_limiter = TokenBucket(capacity=10, tokens=10.0, refill_rate=10.0, last_refill=now)
+    client: object
+    if source.source_type.value == "eodhd":
+        client = EODHDClient(http_client=http_client, api_key=settings.eodhd_api_key)  # type: ignore[arg-type]
+    elif source.source_type.value == "sec_edgar":
+        client = SECEdgarClient(http_client=http_client, user_agent=settings.sec_edgar_user_agent)  # type: ignore[arg-type]
+    elif source.source_type.value == "finnhub":
+        client = FinnhubClient(http_client=http_client, api_key=settings.finnhub_api_key)  # type: ignore[arg-type]
+        rate_limiter = TokenBucket(capacity=55, tokens=55.0, refill_rate=55.0 / 60.0, last_refill=now)
+    elif source.source_type.value == "newsapi":
+        client = NewsAPIClient(
+            http_client=http_client,  # type: ignore[arg-type]
+            api_key=settings.newsapi_key,
+            valkey=valkey,  # type: ignore[arg-type]
+            daily_limit=settings.newsapi_daily_limit,
+        )
+    else:
+        return
 
-        # Build client per source type — each has a different constructor signature
-        client: object
-        if source.source_type.value == "eodhd":
-            client = EODHDClient(http_client=http_client, api_key=settings.eodhd_api_key)  # type: ignore[arg-type]
-        elif source.source_type.value == "sec_edgar":
-            client = SECEdgarClient(http_client=http_client, user_agent=settings.sec_edgar_user_agent)  # type: ignore[arg-type]
-        elif source.source_type.value == "finnhub":
-            client = FinnhubClient(http_client=http_client, api_key=settings.finnhub_api_key)  # type: ignore[arg-type]
-            rate_limiter = TokenBucket(capacity=55, tokens=55.0, refill_rate=55.0 / 60.0, last_refill=now)
-        elif source.source_type.value == "newsapi":
-            client = NewsAPIClient(
-                http_client=http_client,  # type: ignore[arg-type]
-                api_key=settings.newsapi_key,
-                valkey=valkey,  # type: ignore[arg-type]
-                daily_limit=settings.newsapi_daily_limit,
-            )
-        else:
-            return
+    # Build adapter — fetch happens outside lock
+    fetch_log_dedup_session_cm = session_factory()  # type: ignore[operator]
+    async with fetch_log_dedup_session_cm as dedup_session:
+        dedup_repo = FetchLogRepository(dedup_session)
 
-        # NewsAPI adapter doesn't use rate_limiter (uses Valkey quota instead)
         if source.source_type.value == "newsapi":
             adapter = adapter_cls(  # type: ignore[call-arg]
                 client=client,
-                exists_fn=fetch_log_repo.exists_by_url_hash,
+                exists_fn=dedup_repo.exists_by_url_hash,
             )
         else:
             adapter = adapter_cls(  # type: ignore[call-arg]
                 client=client,
                 rate_limiter=rate_limiter,
-                exists_fn=fetch_log_repo.exists_by_url_hash,
+                exists_fn=dedup_repo.exists_by_url_hash,
             )
 
+        results = await adapter.fetch(source, is_backfill=settings.backfill_enabled, from_date=watermark_date)
+
+    if not results:
+        return
+
+    # 3. Write results under advisory lock (lock only during writes)
+    async with session_factory() as session, pg_advisory_lock(session, f"s4:fetch:{source.name}") as acquired:  # type: ignore[operator]
+        if not acquired:
+            return
+
+        fetch_log_repo = FetchLogRepository(session)
         bronze = MinioBronzeAdapter(storage)  # type: ignore[arg-type]
         outbox_repo = OutboxRepository(session)
         use_case = FetchAndWriteUseCase(
@@ -138,16 +159,31 @@ async def _run_fetch_cycle(
             rollback_fn=session.rollback,
         )
 
-        summary = await use_case.execute(source, is_backfill=settings.backfill_enabled)
-
-        # Record metrics
-        record_fetch(
-            source.name,
-            fetched=summary.fetched,
-            skipped=summary.skipped,
-            failed=summary.failed,
-            duration=summary.duration_seconds,
+        summary = await use_case.execute(
+            source,
+            is_backfill=settings.backfill_enabled,
+            from_date=watermark_date,
+            prefetched_results=results,
         )
+
+        # Update watermark after successful writes
+        if summary.fetched > 0:
+            adapter_state_repo = AdapterStateRepository(session)
+            await adapter_state_repo.upsert(
+                source.id,
+                last_watermark=ct_mod.utc_now(),
+                last_run_at=ct_mod.utc_now(),
+            )
+            await session.commit()
+
+    # Record metrics
+    record_fetch(
+        source.name,
+        fetched=summary.fetched,
+        skipped=summary.skipped,
+        failed=summary.failed,
+        duration=summary.duration_seconds,
+    )
 
 
 async def _metrics_poller(session_factory: object, interval: int) -> None:

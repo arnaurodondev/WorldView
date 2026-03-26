@@ -22,14 +22,19 @@ Single-replica enforcement via Postgres advisory lock on adapter name.
 | Method | Path | Description | Cache |
 |--------|------|-------------|-------|
 | GET | `/healthz` | Liveness | - |
-| GET | `/readyz` | Readiness (DB + MinIO) | - |
+| GET | `/readyz` | Readiness (DB + MinIO + Valkey + dispatcher health) | - |
 | GET | `/metrics` | Prometheus metrics | - |
 | GET | `/api/v1/sources` | List configured sources | slow |
 | POST | `/api/v1/sources` | Add new source (admin) | - |
 | PUT | `/api/v1/sources/{id}` | Update source config | - |
 | POST | `/api/v1/sources/{id}/trigger` | Manual poll trigger for a source | - |
 | GET | `/api/v1/status` | Pipeline ingestion status summary | - |
-| POST | `/internal/v1/ingest/submit` | Accept raw document from S9 | - |
+| GET | `/admin/dlq` | List DLQ entries (paginated, max 1000) | - |
+| GET | `/admin/dlq/{id}` | Get DLQ entry details | - |
+| POST | `/admin/dlq/{id}/retry` | Requeue DLQ entry to outbox | - |
+| POST | `/admin/dlq/{id}/resolve` | Mark DLQ entry as resolved | - |
+| GET | `/internal/v1/health` | Internal health check | - |
+| POST | `/internal/v1/ingest/submit` | Accept raw document from S9 (SSRF-validated) | - |
 
 ---
 
@@ -243,17 +248,55 @@ Integration tests default to the shared platform infra (`infra/compose/docker-co
 Alternatively, use the standalone S4 compose (`tests/docker-compose.test.yml`) with env var overrides.
 
 ```bash
-# Preferred: shared infra (all services share one Postgres/Kafka/MinIO)
-docker compose -f infra/compose/docker-compose.yml --profile infra up -d
+# Preferred: centralized infra (content-ingestion-test profile)
+docker compose -f infra/compose/docker-compose.test.yml --profile content-ingestion-test up -d --wait
 python -m pytest tests/integration -v -m integration
 
-# Alternative: S4-only infra on non-conflicting ports
+# Alternative: standalone S4-only infra on non-conflicting ports
 docker compose -f tests/docker-compose.test.yml --profile s4-test up -d
 S4_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:54320/content_ingestion_test_db \
   python -m pytest tests/integration -v -m integration
+
+# Via Makefile
+make test                           # unit tests only
+make test-integration               # standalone compose
+make test-integration-centralized   # centralized compose
+make test-all                       # unit + integration
 ```
 
 Tests skip gracefully when infra is unavailable (BP-004).
+
+---
+
+## Authentication
+
+Two-token model:
+
+| Token | Header | Env Var | Used By |
+|-------|--------|---------|---------|
+| Admin token | `X-Admin-Token` | `CONTENT_INGESTION_ADMIN_TOKEN` | Human operators, admin endpoints |
+| Internal service token | `X-Internal-Token` | `INTERNAL_SERVICE_TOKEN` | S9 Gateway, internal endpoints |
+
+Both validated with `hmac.compare_digest()` (timing-safe).
+
+---
+
+## Scheduler & Lock Strategy
+
+- Advisory lock held **only during DB writes** (not during external API fetch)
+- Lock from shared `messaging.pg.advisory_lock` (SHA-256, deterministic across processes)
+- Watermarks in `source_adapter_state.last_watermark` drive incremental polling
+- Exponential backoff on persistent failures: `min(interval * 2^failures, max_backoff)`
+- Dispatcher supervised with restart-on-crash and exponential backoff
+
+---
+
+## Dead Letter Queue (DLQ)
+
+Events that fail Avro serialization or exceed max dispatch attempts are moved to the DLQ.
+- `payload_json` column stores the original outbox payload for inspection and requeue
+- Admin endpoints allow inspection (`GET /admin/dlq`), retry (`POST /admin/dlq/{id}/retry`), and resolution (`POST /admin/dlq/{id}/resolve`)
+- DLQ entries paginated with `limit` (1–1000) and `offset` (≥0) bounds
 
 ---
 

@@ -9,6 +9,8 @@
 - [ ] Temporary files/objects are cleaned up on all paths (success AND failure)
 - [ ] Partial failure doesn't leave orphaned resources (DB connections, file handles)
 - [ ] Async context managers properly used for DB sessions
+- [ ] Advisory/distributed locks do not span external I/O (fetch outside lock, write inside)
+- [ ] Lock duration is bounded and predictable (milliseconds, not seconds)
 
 ## 2. Exception Handling
 
@@ -24,6 +26,7 @@
 - [ ] DB + Kafka dual writes use outbox pattern (never separate transactions)
 - [ ] Failure during multi-step operations has cleanup or is idempotent
 - [ ] MinIO writes use claim-check pattern for Kafka events
+- [ ] Outbox payload field names match Avro schema exactly
 
 ## 4. Idempotency
 
@@ -31,6 +34,7 @@
 - [ ] Processing is safe to retry (no double-counting, no duplicate notifications)
 - [ ] Idempotency key checked before side effects
 - [ ] Database operations use upsert or check-before-insert
+- [ ] Outbox payload includes all required Avro envelope fields (event_id, event_type, schema_version, occurred_at)
 
 ## 5. Data Integrity
 
@@ -48,6 +52,9 @@
 - [ ] No PII or secrets in log output
 - [ ] Multi-tenant isolation: all queries filter by tenant_id
 - [ ] Error messages don't leak internal details to clients
+- [ ] Token comparisons use `hmac.compare_digest()` (not `==`)
+- [ ] Query pagination has upper bound (max limit parameter)
+- [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
 
 ## 7. Architecture Compliance
 
@@ -58,6 +65,7 @@
 - [ ] Uses shared libs correctly (`common`, `contracts`, `messaging`, `storage`, `observability`, `ml-clients`)
 - [ ] No direct imports of underlying packages (no `aiokafka`, `redis.asyncio`, `Minio`, `logging.getLogger`)
 - [ ] Import guards pass: `python3 scripts/import_guards/check_import_guards.py --strict --baseline scripts/import_guards/baseline.json`
+- [ ] `setattr` uses field allowlist, never user-controlled keys directly
 
 ## 8. Test Coverage
 
