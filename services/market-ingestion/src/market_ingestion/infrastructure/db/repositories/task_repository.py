@@ -225,14 +225,10 @@ class SqlaTaskRepository(TaskRepository):
         )
 
         exchange_predicate = (
-            IngestionTaskModel.exchange.is_(None)
-            if exchange is None
-            else IngestionTaskModel.exchange == exchange
+            IngestionTaskModel.exchange.is_(None) if exchange is None else IngestionTaskModel.exchange == exchange
         )
         timeframe_predicate = (
-            IngestionTaskModel.timeframe.is_(None)
-            if timeframe is None
-            else IngestionTaskModel.timeframe == timeframe
+            IngestionTaskModel.timeframe.is_(None) if timeframe is None else IngestionTaskModel.timeframe == timeframe
         )
         variant_predicate = (
             IngestionTaskModel.dataset_variant.is_(None)
