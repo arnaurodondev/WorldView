@@ -286,11 +286,12 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 
 ---
 
-### Wave B-3: S5 Canonical Write Pipeline + Kafka Consumer + Outbox
+### Wave B-3: S5 Canonical Write Pipeline + Kafka Consumer + Outbox ✅
 
 **Goal**: Implement the complete S5 hot path: ProcessArticleUseCase orchestrating clean → dedup → MinIO silver write → atomic DB transaction → Valkey LSH index; Kafka consumer for `content.article.raw.v1`; outbox dispatcher for `content.article.stored.v1`.
 **Depends on**: Wave B-2
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-03-26 · 162 unit tests pass (20 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -306,15 +307,15 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 - `services/content-ingestion/src/content_ingestion/infrastructure/outbox/` — S4 dispatcher reference
 
 #### Validation Gate
-- [ ] `ruff check services/content-store/` passes
-- [ ] `mypy services/content-store/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/content-store/tests/unit -v` — all tests pass (≥60 total)
-- [ ] Outbox pattern verified: no direct Kafka produce in use-case or consumer
-- [ ] `docs/services/content-store.md` updated with canonical write pipeline, consumer topology
+- [x] `ruff check services/content-store/` passes
+- [x] `mypy services/content-store/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/content-store/tests/unit -v` — 162 tests pass (≥60 total)
+- [x] Outbox pattern verified: no direct Kafka produce in use-case or consumer
+- [x] `docs/services/content-store.md` updated with canonical write pipeline, consumer topology
 
 #### Regression Guardrails
-- BP-001: OutboxEventValueSerializer for outbox dispatcher
-- BP-009: DispatcherConfig derived from settings
+- BP-001: OutboxEventValueSerializer for outbox dispatcher ✓
+- BP-009: DispatcherConfig derived from settings ✓
 
 ---
 
@@ -430,7 +431,7 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 | Plan | Status | Waves Done | Waves Total |
 |------|--------|-----------|-------------|
 | A: S4 Content Ingestion | in-progress | 3 | 4 |
-| B: S5 Content Store | in-progress | 2 | 4 |
+| B: S5 Content Store | in-progress | 3 | 4 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
@@ -441,5 +442,5 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 | A-4 | pending | 0 | 4 | A-3 |
 | B-1 | pending | 0 | 4 | A-2 |
 | B-2 | done | 5 | 5 | B-1 |
-| B-3 | pending | 0 | 5 | B-2 |
+| B-3 | done | 5 | 5 | B-2 |
 | B-4 | pending | 0 | 6 | B-3, A-4 |
