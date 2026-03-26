@@ -21,7 +21,9 @@ if _db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+from content_store.infrastructure.db.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

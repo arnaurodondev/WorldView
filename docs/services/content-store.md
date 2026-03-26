@@ -1,7 +1,7 @@
 # S5 · Content Store Service
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Foundation complete (Wave B-1)
 
 ---
 
@@ -54,29 +54,57 @@ generation (S6 NLP Pipeline), serve graphs (S7 Knowledge Graph).
 
 ## Database Schema
 
-Migration: `alembic/versions/0001_create_content_store_schema.py`
+Migrations:
+- `0001_create_content_store_schema.py` — 5 tables (documents, minhash_signatures, minhash_entity_mentions, outbox_events, dead_letter_queue)
+- `0002_add_dedup_and_corroboration.py` — adds dedup_hashes, duplicate_clusters tables; adds dedup_result, corroborates_doc_id, is_backfill columns to documents; fixes minio_silver_key nullability
 
 ```sql
--- content_store_db
+-- content_store_db (7 tables total)
 
 -- Canonical deduplicated document store.
 CREATE TABLE documents (
-    doc_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type      VARCHAR(50)  NOT NULL,
-    source_url       TEXT,
-    title            TEXT,
-    published_at     TIMESTAMPTZ,
-    ingested_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    content_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
-    normalized_hash  VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
-    status           VARCHAR(20)  NOT NULL DEFAULT 'stored',
-    minio_silver_key TEXT         NOT NULL,          -- MinIO silver-layer key
-    word_count       INT,
-    language         VARCHAR(10)  DEFAULT 'en',
+    doc_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type         VARCHAR(50)  NOT NULL,
+    source_url          TEXT,
+    title               TEXT,
+    published_at        TIMESTAMPTZ,
+    ingested_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    content_hash        VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
+    normalized_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
+    status              VARCHAR(20)  NOT NULL DEFAULT 'stored',
+    dedup_result        VARCHAR(30)  NOT NULL DEFAULT 'unique',
+    minio_silver_key    TEXT,                           -- NULL if suppressed/duplicate
+    word_count          INT,
+    language            VARCHAR(10)  DEFAULT 'en',
+    corroborates_doc_id UUID,                           -- set when dedup_result = 'corroborating'
+    is_backfill         BOOLEAN      NOT NULL DEFAULT FALSE,
     UNIQUE (content_hash)
 );
 CREATE INDEX idx_documents_normalized_hash ON documents (normalized_hash);
 CREATE INDEX idx_documents_source_published ON documents (source_type, published_at DESC);
+CREATE INDEX idx_documents_corroborates ON documents (corroborates_doc_id)
+    WHERE corroborates_doc_id IS NOT NULL;
+
+-- Stage A/B dedup hash tracking.
+CREATE TABLE dedup_hashes (
+    hash_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id      UUID        NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    hash_type   VARCHAR(30) NOT NULL,  -- raw_sha256 | normalized_sha256
+    hash_value  VARCHAR(64) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (hash_type, hash_value)
+);
+CREATE INDEX idx_dedup_hashes_lookup ON dedup_hashes (hash_type, hash_value);
+
+-- Duplicate/corroboration pair tracking.
+CREATE TABLE duplicate_clusters (
+    cluster_id       UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
+    primary_doc_id   UUID  NOT NULL REFERENCES documents(doc_id),
+    duplicate_doc_id UUID  NOT NULL REFERENCES documents(doc_id),
+    similarity       FLOAT NOT NULL,
+    detected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (primary_doc_id, duplicate_doc_id)
+);
 
 -- 128-band MinHash vectors for near-duplicate detection.
 -- signature MUST be INTEGER[] — BYTEA is not acceptable; band-by-band Jaccard
