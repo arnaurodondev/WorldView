@@ -23,6 +23,9 @@ COMPOSE_FILE="$ROOT_DIR/infra/compose/docker-compose.yml"
 
 # ── Resolve Python command ────────────────────────────────────────────────────
 PYTHON="${PYTHON:-}"
+if [[ -z "$PYTHON" && -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    PYTHON="$ROOT_DIR/.venv/bin/python"
+fi
 if [[ -z "$PYTHON" && -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
     PYTHON="${VIRTUAL_ENV}/bin/python"
 fi
@@ -119,6 +122,7 @@ fi
 # ── Test runner ───────────────────────────────────────────────────────────────
 FAILED=0
 PASSED=0
+SKIPPED=0
 MARKER_ARGS=()
 
 if [[ "$INTEGRATION" == "false" ]]; then
@@ -138,6 +142,16 @@ run_lib_tests() {
 
     echo ""
     echo "--- Testing lib: $lib_name ---"
+
+    if [[ "$lib_name" == "ml-clients" ]]; then
+        local py_minor
+        py_minor="$("$PYTHON" -c 'import sys; print(sys.version_info.minor)')"
+        if [[ "$py_minor" -lt 12 ]]; then
+            echo "  [SKIP] $lib_name — requires Python >=3.12"
+            SKIPPED=$((SKIPPED + 1))
+            return
+        fi
+    fi
 
     # Install lib + dev extras if needed
     if [[ -f "$lib_dir/pyproject.toml" ]]; then
@@ -159,6 +173,16 @@ run_lib_tests() {
 
 echo "=== Running lib tests (integration=$INTEGRATION) ==="
 
+echo "=== Installing all local libs in editable mode (dependency bootstrap) ==="
+if ! python_install -q \
+    -e "$ROOT_DIR/libs/common" \
+    -e "$ROOT_DIR/libs/contracts" \
+    -e "$ROOT_DIR/libs/messaging" \
+    -e "$ROOT_DIR/libs/storage" \
+    -e "$ROOT_DIR/libs/observability"; then
+    echo "WARNING: bootstrap install failed; continuing with per-lib installation attempts."
+fi
+
 if [[ -n "$TARGET_LIB" ]]; then
     lib_path="$ROOT_DIR/libs/$TARGET_LIB"
     if [[ ! -d "$lib_path" ]]; then
@@ -174,7 +198,7 @@ fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-echo "=== Summary: $PASSED passed, $FAILED failed ==="
+echo "=== Summary: $PASSED passed, $FAILED failed, $SKIPPED skipped ==="
 
 if [[ $FAILED -ne 0 ]]; then
     echo "=== FAILED ==="

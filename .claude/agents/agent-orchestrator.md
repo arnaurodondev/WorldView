@@ -86,7 +86,7 @@ When deciding which specialized agent should handle a task:
 |---|---|---|
 | Service boundary or ADR | Architecture Decision Lead | Tech Lead |
 | Delivery planning or phasing | Tech Lead | Architecture Decision Lead |
-| Python service code (S1–S9) | Backend Engineer | Data Platform Engineer |
+| Python service code (S1–S10) | Backend Engineer | Data Platform Engineer |
 | React/TypeScript frontend | Frontend Engineer | UX/UI Designer |
 | User flows, wireframes, UX | UX/UI Designer | Frontend Engineer |
 | Auth, secrets, tenant isolation | Security Engineer | Backend Engineer |

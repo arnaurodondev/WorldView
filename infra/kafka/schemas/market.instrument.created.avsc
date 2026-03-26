@@ -2,15 +2,19 @@
   "type": "record",
   "name": "InstrumentCreatedV1",
   "namespace": "com.worldview.market",
+  "doc": "Emitted by S3 when a new instrument is discovered during market data materialization. S1 syncs local instrument ref. S7 creates a canonical entity node with definition embedding.",
   "fields": [
     {"name": "event_id", "type": "string"},
     {"name": "event_type", "type": "string", "default": "market.instrument.created"},
-    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "schema_version", "type": "int", "default": 2},
     {"name": "occurred_at", "type": "string"},
     {"name": "instrument_id", "type": "string"},
     {"name": "symbol", "type": "string"},
     {"name": "exchange", "type": ["null", "string"], "default": null},
     {"name": "instrument_type", "type": ["null", "string"], "default": null},
+    {"name": "name", "type": ["null", "string"], "default": null, "doc": "From EODHD General.Name (e.g. Apple Inc). S3 populates from company_profiles."},
+    {"name": "description", "type": ["null", "string"], "default": null, "doc": "From EODHD General.Description (company profile text). Used by S7 for definition embedding."},
+    {"name": "isin", "type": ["null", "string"], "default": null, "doc": "ISIN if available from fundamentals data."},
     {"name": "correlation_id", "type": ["null", "string"], "default": null}
   ]
 }

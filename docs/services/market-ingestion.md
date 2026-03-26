@@ -247,7 +247,7 @@ sequenceDiagram
 | Unit | EODHD adapter (mocked) | `make test` (22 tests) |
 | Live | EODHD adapter with real demo API calls | `make test -- tests/live/test_eodhd_live.py` (56 tests: 48 passed, 8 xfailed for paid-only) |
 | Integration | Worker → MinIO round-trip | `make test-integration` |
-| Contract | Avro schema (market.dataset.fetched) | `scripts/gen-contracts.sh` |
+| Contract | Avro event contract (market.dataset.fetched mapper/topic/schema alignment) | `make test-contract` |
 
 ---
 

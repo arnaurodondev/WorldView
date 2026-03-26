@@ -32,7 +32,7 @@ _SAMPLE_OHLCV_JSONL = json.dumps(
         "symbol": "AAPL",
         "exchange": "XNAS",
         "timeframe": "1d",
-        "bar_date": "2024-06-01",
+        "date": "2024-06-01T00:00:00+00:00",
         "open": "180.00",
         "high": "185.00",
         "low": "178.00",
@@ -128,12 +128,12 @@ class TestOHLCVPipeline:
             config=config,
         )
 
-        event = _make_event("OHLCV")
+        event = _make_event("ohlcv")
 
         # Inject UoW directly as the consumer accesses self._current_uow
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             consumer._current_uow = uow  # type: ignore[attr-defined]
-            await consumer.process_message(event)
+            await consumer.process_message(key="AAPL", value=event, headers={})
             await uow.commit()
 
             # Verify instrument was created with has_ohlcv=True
@@ -195,11 +195,11 @@ class TestQuotesPipeline:
             config=config,
         )
 
-        event = _make_event("QUOTE")
+        event = _make_event("quotes")
 
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             consumer._current_uow = uow  # type: ignore[attr-defined]
-            await consumer.process_message(event)
+            await consumer.process_message(key="AAPL", value=event, headers={})
             await uow.commit()
 
             instr = await uow.instruments.find_by_symbol_exchange("AAPL", "XNAS")
@@ -247,7 +247,9 @@ class TestInstrumentLifecycle:
         )
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             ohlcv_consumer._current_uow = uow  # type: ignore[attr-defined]
-            await ohlcv_consumer.process_message(_make_event("OHLCV", {"symbol": "TSLA", "exchange": "XNAS"}))
+            await ohlcv_consumer.process_message(
+                key="TSLA", value=_make_event("ohlcv", {"symbol": "TSLA", "exchange": "XNAS"}), headers={}
+            )
             await uow.commit()
 
         # Step 2: Quote ingest for the same instrument
@@ -262,7 +264,9 @@ class TestInstrumentLifecycle:
         )
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             quote_consumer._current_uow = uow  # type: ignore[attr-defined]
-            await quote_consumer.process_message(_make_event("QUOTE", {"symbol": "TSLA", "exchange": "XNAS"}))
+            await quote_consumer.process_message(
+                key="TSLA", value=_make_event("quotes", {"symbol": "TSLA", "exchange": "XNAS"}), headers={}
+            )
             await uow.commit()
 
             # Both flags must be set on the same instrument row
@@ -308,7 +312,7 @@ class TestPriorityResolutionE2E:
                 "symbol": "NVDA",
                 "exchange": "XNAS",
                 "timeframe": "1d",
-                "bar_date": "2024-06-01",
+                "date": "2024-06-01T00:00:00+00:00",
                 "open": "198.00",
                 "high": "202.00",
                 "low": "196.00",
@@ -326,7 +330,7 @@ class TestPriorityResolutionE2E:
                 "symbol": "NVDA",
                 "exchange": "XNAS",
                 "timeframe": "1d",
-                "bar_date": "2024-06-01",
+                "date": "2024-06-01T00:00:00+00:00",
                 "open": "999.00",
                 "high": "999.00",
                 "low": "999.00",
@@ -345,7 +349,9 @@ class TestPriorityResolutionE2E:
         )
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             c1._current_uow = uow  # type: ignore[attr-defined]
-            await c1.process_message(_make_event("OHLCV", {"symbol": "NVDA", "provider": "polygon"}))
+            await c1.process_message(
+                key="NVDA", value=_make_event("ohlcv", {"symbol": "NVDA", "provider": "polygon"}), headers={}
+            )
             await uow.commit()
 
         # Ingest Yahoo (lower priority) for the same bar
@@ -356,7 +362,9 @@ class TestPriorityResolutionE2E:
         )
         async with SqlAlchemyUnitOfWork(factory, factory) as uow:
             c2._current_uow = uow  # type: ignore[attr-defined]
-            await c2.process_message(_make_event("OHLCV", {"symbol": "NVDA", "provider": "yahoo"}))
+            await c2.process_message(
+                key="NVDA", value=_make_event("ohlcv", {"symbol": "NVDA", "provider": "yahoo"}), headers={}
+            )
             await uow.commit()
 
         # Verify Polygon data survives

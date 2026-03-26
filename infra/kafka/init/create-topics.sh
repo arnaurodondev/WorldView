@@ -44,6 +44,7 @@ TOPICS=(
     "graph.state.changed.v1:12:1"
     "intelligence.contradiction.v1:12:1"
     "relation.type.proposed.v1:4:1"
+    "entity.canonical.created.v1:12:1"
     "alert.delivered.v1:12:1"
 )
 

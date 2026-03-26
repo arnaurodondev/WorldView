@@ -28,7 +28,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 # Connection URL for the live Postgres in the test compose.
 _DB_URL = os.getenv(
     "PORTFOLIO_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db",
+    "postgresql+asyncpg://postgres:postgres@localhost:55433/portfolio_db",
 )
 
 

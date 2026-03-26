@@ -2,18 +2,19 @@
   "type": "record",
   "name": "IntelligenceContradiction",
   "namespace": "com.worldview",
-  "doc": "Emitted by S7 when a new claim contradicts an existing relation in the knowledge graph.",
+  "doc": "Emitted by S7 when a new claim contradicts an existing claim for the same entity. S10 uses is_backfill to suppress alert fan-out for historical contradictions.",
   "fields": [
-    {"name": "event_id", "type": "string"},
-    {"name": "event_type", "type": "string", "default": "intelligence.contradiction"},
-    {"name": "schema_version", "type": "int", "default": 1},
-    {"name": "occurred_at", "type": "string"},
-    {"name": "subject_entity_id", "type": "string"},
-    {"name": "relation_id", "type": "string"},
-    {"name": "canonical_type", "type": "string"},
-    {"name": "contradicting_claim_id", "type": "string"},
-    {"name": "contradiction_strength", "type": "float"},
-    {"name": "contradiction_type", "type": "string"},
-    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+    {"name": "event_id",              "type": "string"},
+    {"name": "event_type",            "type": "string",             "default": "intelligence.contradiction"},
+    {"name": "schema_version",        "type": "int",                "default": 1},
+    {"name": "occurred_at",           "type": "string"},
+    {"name": "subject_entity_id",     "type": "string",             "doc": "Entity the contradiction is about"},
+    {"name": "claim_type",            "type": "string",             "doc": "Type of contradicting claims"},
+    {"name": "new_claim_id",          "type": "string"},
+    {"name": "contradicting_claim_id","type": "string"},
+    {"name": "contradiction_strength","type": "float",              "doc": "min(new_confidence, old_confidence)"},
+    {"name": "affected_relation_ids", "type": {"type": "array", "items": "string"}, "default": []},
+    {"name": "is_backfill",           "type": "boolean",            "default": false, "doc": "True if contradiction originates from backfill evidence"},
+    {"name": "correlation_id",        "type": ["null", "string"],   "default": null}
   ]
 }

@@ -42,31 +42,33 @@ _DB_URL = os.getenv(
 # ── Session-scoped HTTP client ─────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client pointing at the live market-data service on localhost:8003."""
     async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-# ── Session-scoped DB engine ───────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="session")
-def _e2e_engine():
-    return create_async_engine(_DB_URL, echo=False)
+# ── Function-scoped DB engine ──────────────────────────────────────────────────
 
 
 @pytest.fixture
-async def e2e_db_session(_e2e_engine) -> AsyncGenerator[AsyncSession, None]:
-    """Direct DB session for white-box assertions and test data seeding."""
-    factory = async_sessionmaker(_e2e_engine, expire_on_commit=False)
-    async with factory() as session:
-        yield session
-        # Clean up seeded data so tests remain isolated
-        from sqlalchemy import text
+async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Direct DB session for white-box assertions and test data seeding.
 
-        await session.execute(
+    Clears all tables before each test to ensure test isolation. Uses TRUNCATE
+    at fixture setup to eliminate any leftover data from docker-compose tmpfs
+    state or previous test runs.
+    """
+    engine = create_async_engine(_DB_URL, echo=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Clear all tables at START of test (not end) to ensure fresh slate
+    # Use a fresh session for cleanup to avoid transaction state issues
+    from sqlalchemy import text
+
+    async with factory() as cleanup_session:
+        await cleanup_session.execute(
             text(
                 "TRUNCATE TABLE "
                 "ohlcv_bars, quotes, "
@@ -78,7 +80,13 @@ async def e2e_db_session(_e2e_engine) -> AsyncGenerator[AsyncSession, None]:
                 "CASCADE"
             )
         )
-        await session.commit()
+        await cleanup_session.commit()
+
+    # Now provide a fresh session for the test
+    async with factory() as session:
+        yield session
+
+    await engine.dispose()
 
 
 # ── Seeding helpers ───────────────────────────────────────────────────────────
@@ -95,13 +103,23 @@ async def seeded_instrument(e2e_db_session: AsyncSession) -> dict:
     instr_repo = PgInstrumentRepository(e2e_db_session)
 
     sec = Security(name="E2E Apple Inc.", figi="BBG000B9XRY4", isin="US0378331005")
-    await sec_repo.upsert(sec)
+    upserted_sec = await sec_repo.upsert(sec)
+    # CRITICAL: Use the returned security from upsert, not the original
+    # (upsert may return a different instance, e.g., with DB-assigned ID)
+    await e2e_db_session.flush()  # Ensure security is written to DB
 
-    instr = Instrument(security_id=sec.id, symbol="AAPL", exchange="XNAS")
+    instr = Instrument(security_id=upserted_sec.id, symbol="AAPL", exchange="XNAS")
     created_instr = await instr_repo.upsert(instr)
     await e2e_db_session.commit()
 
-    return {"security_id": sec.id, "instrument_id": created_instr.id, "symbol": "AAPL", "exchange": "XNAS"}
+    return {
+        "security_id": upserted_sec.id,
+        "security_figi": upserted_sec.figi,
+        "security_isin": upserted_sec.isin,
+        "instrument_id": created_instr.id,
+        "symbol": "AAPL",
+        "exchange": "XNAS",
+    }
 
 
 @pytest.fixture

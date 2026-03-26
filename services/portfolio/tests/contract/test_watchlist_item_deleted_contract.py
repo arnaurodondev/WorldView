@@ -14,7 +14,7 @@ from portfolio.domain.events import WatchlistItemDeleted
 
 pytestmark = pytest.mark.contract
 
-_SCHEMA_DIR = Path(__file__).parent.parent.parent / "src/portfolio/messaging/schemas"
+_SCHEMA_DIR = Path(__file__).parent.parent.parent / "src/portfolio/infrastructure/messaging/schemas"
 
 
 def _load_schema(filename: str):  # type: ignore[no-untyped-def]

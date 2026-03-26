@@ -112,8 +112,9 @@ class FakeTransactionRepo(TransactionRepository):
     async def get(self, transaction_id, tenant_id):
         return next((t for t in self.saved if t.id == transaction_id), None)
 
-    async def list_by_portfolio(self, portfolio_id, tenant_id):
-        return [t for t in self.saved if t.portfolio_id == portfolio_id]
+    async def list_by_portfolio(self, portfolio_id, tenant_id, limit: int = 100, offset: int = 0):
+        txns = [t for t in self.saved if t.portfolio_id == portfolio_id]
+        return txns, len(txns)
 
     async def save(self, transaction):
         self.saved.append(transaction)
@@ -207,6 +208,22 @@ class FakeUoW(UnitOfWork):
     @property
     def idempotency(self):
         return self._idempotency
+
+    @property
+    def watchlists(self):
+        return None
+
+    @property
+    def watchlist_members(self):
+        return None
+
+    @property
+    def alert_preferences(self):
+        return None
+
+    @property
+    def entity_suppressions(self):
+        return None
 
     async def commit(self): ...
     async def rollback(self): ...

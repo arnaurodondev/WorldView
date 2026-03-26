@@ -91,7 +91,7 @@ async def test_ohlcv_priority_resolution_visible_via_api(
         params={"timeframe": "1d", "start": "2024-07-15", "end": "2024-07-15"},
     )
     assert resp.status_code == 200, resp.text
-    bars = resp.json()["bars"]
+    bars = resp.json()["items"]
     assert len(bars) == 1
     assert float(bars[0]["close"]) == pytest.approx(202.50), f"Expected Polygon close=202.50, got {bars[0]['close']}"
 
@@ -216,7 +216,6 @@ async def test_fundamentals_income_statement_accessible(
     from market_data.infrastructure.db.repositories.fundamentals_repo import PgFundamentalsRepository
 
     instr_id = seeded_instrument["instrument_id"]
-    sec_id = seeded_instrument["security_id"]
 
     repo = PgFundamentalsRepository(e2e_db_session)
     record = FundamentalsRecord(
@@ -234,8 +233,9 @@ async def test_fundamentals_income_statement_accessible(
     await repo.merge_upsert([record], instrument_id=instr_id)
     await e2e_db_session.commit()
 
-    resp = await e2e_client.get(f"/api/v1/fundamentals/{sec_id}/income-statement")
+    resp = await e2e_client.get(f"/api/v1/fundamentals/{instr_id}/income-statement")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     # Response must contain at least one period's data
-    assert isinstance(body, list | dict)
+    assert body["security_id"] == instr_id
+    assert len(body["records"]) >= 1
