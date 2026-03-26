@@ -3,9 +3,16 @@
 Revision ID: a1b2c3d4e5f6
 Revises:
 Create Date: 2026-03-22
-"""
 
-import calendar  # noqa: F401 — used inside Block H/K/L loops
+Full DDL for intelligence_db per PRD-0001 Section 6.4.4.
+Tables: decay_class_config, source_trust_weights, model_registry, prompt_templates,
+canonical_entities, entity_aliases, entity_embedding_state, llm_usage_log,
+relation_type_registry, relations (HASH x8), relation_evidence_raw,
+relation_evidence (RANGE monthly), relation_contradiction_links,
+relation_summaries, claims (RANGE monthly), events (RANGE monthly),
+event_entities, provisional_entity_queue, embedding_migration_state,
+outbox_events, dead_letter_queue.
+"""
 
 from alembic import op
 
@@ -17,21 +24,21 @@ depends_on = None
 
 def upgrade() -> None:
     # -------------------------------------------------------------------------
-    # Block A — Extensions
+    # Block A -- Extensions
     # -------------------------------------------------------------------------
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 
     # -------------------------------------------------------------------------
-    # Block B — decay_class_config (FK target for relations + relation_type_registry)
+    # Block B -- decay_class_config (FK target for relations + relation_type_registry)
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE decay_class_config (
-    decay_class               VARCHAR(20) PRIMARY KEY,
-    half_life_days            FLOAT,
-    decay_alpha               FLOAT        NOT NULL,
-    recompute_interval_minutes INT         NOT NULL,
-    description               TEXT
+    decay_class                VARCHAR(20) PRIMARY KEY,
+    half_life_days             FLOAT,
+    decay_alpha                FLOAT        NOT NULL,
+    recompute_interval_minutes INT          NOT NULL,
+    description                TEXT
 )
 """)
     op.execute("""
@@ -45,7 +52,32 @@ INSERT INTO decay_class_config VALUES
 """)
 
     # -------------------------------------------------------------------------
-    # Block C — model_registry
+    # Block B2 -- source_trust_weights (lookup, 11 seed rows)
+    # -------------------------------------------------------------------------
+    op.execute("""
+CREATE TABLE source_trust_weights (
+    source_type   VARCHAR(50) PRIMARY KEY,
+    trust_weight  FLOAT       NOT NULL,
+    description   TEXT
+)
+""")
+    op.execute("""
+INSERT INTO source_trust_weights VALUES
+    ('sec_10k',        0.95, 'SEC 10-K annual filing'),
+    ('sec_10q',        0.90, 'SEC 10-Q quarterly filing'),
+    ('sec_8k',         0.92, 'SEC 8-K current report'),
+    ('sec_def14a',     0.88, 'SEC proxy statement'),
+    ('earnings_call',  0.85, 'Earnings call transcript'),
+    ('analyst_report', 0.80, 'Analyst research report'),
+    ('press_release',  0.70, 'Company press release'),
+    ('eodhd_news',     0.60, 'EODHD news article'),
+    ('finnhub_news',   0.60, 'Finnhub news article'),
+    ('newsapi_news',   0.55, 'NewsAPI news article'),
+    ('manual',         0.50, 'Manually submitted content')
+""")
+
+    # -------------------------------------------------------------------------
+    # Block C -- model_registry
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE model_registry (
@@ -65,25 +97,25 @@ CREATE TABLE model_registry (
 """)
 
     # -------------------------------------------------------------------------
-    # Block D — prompt_templates (FK target for relation_summaries)
+    # Block D -- prompt_templates (FK target for relation_summaries)
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE prompt_templates (
-    template_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name             VARCHAR(200) NOT NULL,
-    version          INT          NOT NULL,
-    capability       VARCHAR(50)  NOT NULL,
-    template_text    TEXT         NOT NULL,
-    output_schema    JSONB        NOT NULL,
+    template_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name              VARCHAR(200) NOT NULL,
+    version           INT          NOT NULL,
+    capability        VARCHAR(50)  NOT NULL,
+    template_text     TEXT         NOT NULL,
+    output_schema     JSONB        NOT NULL,
     model_constraints JSONB,
-    is_active        BOOLEAN      NOT NULL DEFAULT true,
-    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    is_active         BOOLEAN      NOT NULL DEFAULT true,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
     UNIQUE (name, version)
 )
 """)
 
     # -------------------------------------------------------------------------
-    # Block E — canonical_entities + entity_aliases + entity_profile_embeddings
+    # Block E -- canonical_entities + entity_aliases + entity_embedding_state
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE canonical_entities (
@@ -107,41 +139,129 @@ CREATE INDEX idx_entities_ticker_exchange ON canonical_entities (ticker, exchang
 
     op.execute("""
 CREATE TABLE entity_aliases (
-    alias_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entity_id   UUID        NOT NULL REFERENCES canonical_entities(entity_id) ON DELETE CASCADE,
-    alias_text  VARCHAR(500) NOT NULL,
-    alias_type  VARCHAR(30)  NOT NULL,
-    source      VARCHAR(50),
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+    alias_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id             UUID         NOT NULL REFERENCES canonical_entities(entity_id) ON DELETE CASCADE,
+    alias_text            VARCHAR(500) NOT NULL,
+    normalized_alias_text VARCHAR(500) NOT NULL,
+    alias_type            VARCHAR(30)  NOT NULL,
+    is_active             BOOLEAN      NOT NULL DEFAULT true,
+    source                VARCHAR(50),
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
 )
+""")
+    op.execute("""
+CREATE UNIQUE INDEX uidx_entity_aliases_normalized ON entity_aliases (normalized_alias_text)
+    WHERE alias_type = 'EXACT' AND is_active = true
 """)
     op.execute(
-        "CREATE UNIQUE INDEX uidx_entity_aliases_exact ON entity_aliases (lower(alias_text)) WHERE alias_type = 'EXACT'"
+        "CREATE INDEX idx_entity_aliases_trgm ON entity_aliases " "USING gin (normalized_alias_text gin_trgm_ops)"
     )
-    op.execute("CREATE INDEX idx_entity_aliases_text ON entity_aliases USING gin (alias_text gin_trgm_ops)")
     op.execute("CREATE INDEX idx_entity_aliases_entity ON entity_aliases (entity_id)")
 
+    # entity_embedding_state: multi-view embeddings (definition, narrative, fundamentals_ohlcv)
     op.execute("""
-CREATE TABLE entity_profile_embeddings (
-    embedding_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entity_id         UUID        NOT NULL REFERENCES canonical_entities(entity_id) ON DELETE CASCADE,
-    embedding         VECTOR(1024) NOT NULL,
-    model_id          VARCHAR(200) NOT NULL,
-    profile_text      TEXT,
-    embedding_stale   BOOLEAN      NOT NULL DEFAULT false,
-    last_refreshed_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    UNIQUE (entity_id, model_id)
+CREATE TABLE entity_embedding_state (
+    entity_id        UUID         NOT NULL REFERENCES canonical_entities(entity_id) ON DELETE CASCADE,
+    view_type        VARCHAR(30)  NOT NULL,
+    embedding        VECTOR(1024),
+    model_id         VARCHAR(200),
+    source_text      TEXT,
+    source_hash      VARCHAR(64),
+    last_refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    next_refresh_at  TIMESTAMPTZ,
+    refresh_count    INT          NOT NULL DEFAULT 0,
+    PRIMARY KEY (entity_id, view_type)
 )
 """)
     op.execute("""
-CREATE INDEX idx_entity_profile_emb_hnsw ON entity_profile_embeddings
+CREATE INDEX idx_entity_emb_definition_hnsw ON entity_embedding_state
     USING hnsw (embedding vector_cosine_ops)
-    WHERE embedding_stale = false
+    WHERE view_type = 'definition' AND embedding IS NOT NULL
+""")
+    op.execute("""
+CREATE INDEX idx_entity_emb_narrative_hnsw ON entity_embedding_state
+    USING hnsw (embedding vector_cosine_ops)
+    WHERE view_type = 'narrative' AND embedding IS NOT NULL
+""")
+    op.execute("""
+CREATE INDEX idx_entity_emb_fstate_hnsw ON entity_embedding_state
+    USING hnsw (embedding vector_cosine_ops)
+    WHERE view_type = 'fundamentals_ohlcv' AND embedding IS NOT NULL
+""")
+    op.execute("""
+CREATE INDEX idx_entity_emb_refresh_due ON entity_embedding_state (next_refresh_at)
+    WHERE next_refresh_at IS NOT NULL AND next_refresh_at < now()
 """)
 
     # -------------------------------------------------------------------------
-    # Block F — relations (HASH-partitioned x 8)
-    # partition_key is GENERATED ALWAYS AS STORED — never include in INSERT
+    # Block E2 -- llm_usage_log (cost visibility from day one)
+    # -------------------------------------------------------------------------
+    op.execute("""
+CREATE TABLE llm_usage_log (
+    log_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    model_id          VARCHAR(200) NOT NULL,
+    provider          VARCHAR(50)  NOT NULL,
+    capability        VARCHAR(50)  NOT NULL,
+    entity_id         UUID,
+    relation_id       UUID,
+    tokens_in         INT          NOT NULL,
+    tokens_out        INT          NOT NULL,
+    estimated_cost_usd FLOAT       NOT NULL DEFAULT 0.0,
+    latency_ms        INT          NOT NULL,
+    success           BOOLEAN      NOT NULL DEFAULT true,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+)
+""")
+    op.execute("CREATE INDEX idx_llm_usage_provider ON llm_usage_log (provider, created_at DESC)")
+    op.execute("""
+CREATE INDEX idx_llm_usage_cost ON llm_usage_log (created_at DESC)
+    WHERE estimated_cost_usd > 0
+""")
+
+    # -------------------------------------------------------------------------
+    # Block F -- relation_type_registry (20-row seed, with embedding column)
+    # -------------------------------------------------------------------------
+    op.execute("""
+CREATE TABLE relation_type_registry (
+    type_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    canonical_type  VARCHAR(100) NOT NULL UNIQUE,
+    semantic_mode   VARCHAR(20)  NOT NULL,
+    decay_class     VARCHAR(20)  NOT NULL REFERENCES decay_class_config(decay_class),
+    base_confidence FLOAT        NOT NULL DEFAULT 0.5,
+    embedding       VECTOR(1024),
+    description     TEXT,
+    is_active       BOOLEAN      NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+)
+""")
+    op.execute("""
+INSERT INTO relation_type_registry (canonical_type, semantic_mode, decay_class, base_confidence, description)
+VALUES
+    ('employs',              'RELATION_STATE',  'DURABLE',   0.70, 'Board, C-suite roles; event-invalidatable'),
+    ('board_member_of',      'RELATION_STATE',  'DURABLE',   0.75, NULL),
+    ('subsidiary_of',        'RELATION_STATE',  'SLOW',      0.65, NULL),
+    ('acquired_by',          'RELATION_STATE',  'PERMANENT', 0.85, 'Finalized by merger_completed event'),
+    ('listed_on',            'RELATION_STATE',  'DURABLE',   0.80, 'Invalidated by delisted event'),
+    ('supplier_of',          'RELATION_STATE',  'SLOW',      0.55, NULL),
+    ('partner_of',           'RELATION_STATE',  'SLOW',      0.50, NULL),
+    ('competes_with',        'RELATION_STATE',  'MEDIUM',    0.45, NULL),
+    ('regulates',            'RELATION_STATE',  'DURABLE',   0.75, NULL),
+    ('headquartered_in',     'RELATION_STATE',  'PERMANENT', 0.80, NULL),
+    ('analyst_rating',       'TEMPORAL_CLAIM',  'FAST',      0.60, 'Historically anchored; not validity-gated'),
+    ('market_share_claim',   'TEMPORAL_CLAIM',  'MEDIUM',    0.50, NULL),
+    ('price_target',         'TEMPORAL_CLAIM',  'FAST',      0.55, NULL),
+    ('earnings_guidance',    'TEMPORAL_CLAIM',  'MEDIUM',    0.60, NULL),
+    ('sentiment_signal',     'TEMPORAL_CLAIM',  'EPHEMERAL', 0.45, NULL),
+    ('credit_rating',        'TEMPORAL_CLAIM',  'DURABLE',   0.70, NULL),
+    ('investment_in',        'RELATION_STATE',  'MEDIUM',    0.60, NULL),
+    ('owns_stake_in',        'RELATION_STATE',  'MEDIUM',    0.65, NULL),
+    ('issues_debt',          'TEMPORAL_CLAIM',  'MEDIUM',    0.55, NULL),
+    ('produces',             'RELATION_STATE',  'SLOW',      0.60, 'Commodity production')
+""")
+
+    # -------------------------------------------------------------------------
+    # Block G -- relations (HASH-partitioned x 8)
+    # partition_key is GENERATED ALWAYS AS STORED -- never include in INSERT
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relations (
@@ -184,9 +304,12 @@ CREATE TABLE relations_p{i} PARTITION OF relations
 """)
 
     op.execute(
-        "CREATE UNIQUE INDEX uidx_relations_triple ON relations (subject_entity_id, canonical_type, object_entity_id)"
+        "CREATE UNIQUE INDEX uidx_relations_triple "
+        "ON relations (subject_entity_id, canonical_type, object_entity_id)"
     )
-    op.execute("CREATE INDEX idx_relations_subject ON relations (subject_entity_id, canonical_type, confidence DESC)")
+    op.execute(
+        "CREATE INDEX idx_relations_subject " "ON relations (subject_entity_id, canonical_type, confidence DESC)"
+    )
     op.execute("CREATE INDEX idx_relations_object ON relations (object_entity_id, canonical_type)")
     op.execute("""
 CREATE INDEX idx_relations_stale_confidence ON relations (decay_class, latest_evidence_at DESC)
@@ -202,15 +325,16 @@ CREATE INDEX idx_relations_valid ON relations (subject_entity_id, canonical_type
 """)
 
     # -------------------------------------------------------------------------
-    # Block G — relation_evidence_raw (hot-path staging, append-only)
-    # partition_key is GENERATED ALWAYS AS STORED — never include in INSERT
+    # Block H -- relation_evidence_raw (hot-path staging, append-only)
+    # partition_key is GENERATED ALWAYS AS STORED -- never include in INSERT
+    # canonical_type is nullable (NULL until Block 11 canonicalization)
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relation_evidence_raw (
     raw_id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     subject_entity_id     UUID        NOT NULL,
     object_entity_id      UUID        NOT NULL,
-    canonical_type        VARCHAR(100) NOT NULL,
+    canonical_type        VARCHAR(100),
     polarity              VARCHAR(20)  NOT NULL DEFAULT 'positive',
     claim_id              UUID,
     chunk_id              UUID,
@@ -218,6 +342,10 @@ CREATE TABLE relation_evidence_raw (
     extraction_confidence FLOAT        NOT NULL,
     source_trust_weight   FLOAT        NOT NULL DEFAULT 1.0,
     extracted_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    evidence_date         TIMESTAMPTZ  NOT NULL,
+    is_backfill           BOOLEAN      NOT NULL DEFAULT false,
+    entity_provisional    BOOLEAN      NOT NULL DEFAULT false,
+    provisional_queue_id  UUID,
     processed             BOOLEAN      NOT NULL DEFAULT false,
     processed_at          TIMESTAMPTZ,
     worker_claim_id       UUID,
@@ -227,17 +355,23 @@ CREATE TABLE relation_evidence_raw (
 """)
     op.execute("""
 CREATE INDEX idx_raw_evidence_unprocessed ON relation_evidence_raw (extracted_at)
-    WHERE processed = false
+    WHERE processed = false AND entity_provisional = false
 """)
-    op.execute("CREATE INDEX idx_raw_evidence_subject ON relation_evidence_raw (subject_entity_id, extracted_at DESC)")
+    op.execute(
+        "CREATE INDEX idx_raw_evidence_subject " "ON relation_evidence_raw (subject_entity_id, extracted_at DESC)"
+    )
     op.execute("""
 CREATE INDEX idx_raw_evidence_partition_unprocessed
     ON relation_evidence_raw (partition_key, extracted_at)
-    WHERE processed = false
+    WHERE processed = false AND entity_provisional = false
+""")
+    op.execute("""
+CREATE INDEX idx_raw_evidence_provisional ON relation_evidence_raw (provisional_queue_id)
+    WHERE entity_provisional = true
 """)
 
     # -------------------------------------------------------------------------
-    # Block H — relation_evidence (RANGE-partitioned by month, immutable)
+    # Block I -- relation_evidence (RANGE-partitioned by month, immutable)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
     # -------------------------------------------------------------------------
     op.execute("""
@@ -261,22 +395,22 @@ CREATE TABLE relation_evidence (
             next_month = month + 1 if month < 12 else 1
             next_year = year if month < 12 else year + 1
             partition_name = f"relation_evidence_{year}_{month:02d}"
-            op.execute(f"""
-CREATE TABLE {partition_name} PARTITION OF relation_evidence
-    FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')
-""")
+            op.execute(
+                f"CREATE TABLE {partition_name} PARTITION OF relation_evidence "
+                f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')"
+            )
 
-    op.execute("CREATE INDEX idx_rel_evidence_relation ON relation_evidence (relation_id, evidence_date DESC)")
+    op.execute("CREATE INDEX idx_rel_evidence_relation " "ON relation_evidence (relation_id, evidence_date DESC)")
     op.execute("CREATE INDEX idx_rel_evidence_doc ON relation_evidence (doc_id)")
-    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id) WHERE claim_id IS NOT NULL")
+    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id) " "WHERE claim_id IS NOT NULL")
 
     # -------------------------------------------------------------------------
-    # Block I — relation_contradiction_links
+    # Block J -- relation_contradiction_links
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relation_contradiction_links (
     link_id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    relation_evidence_id UUID        NOT NULL REFERENCES relation_evidence(evidence_id),
+    relation_evidence_id UUID        NOT NULL,
     claim_id             UUID        NOT NULL,
     contradiction_type   VARCHAR(50) NOT NULL,
     strength             FLOAT       NOT NULL DEFAULT 1.0,
@@ -286,7 +420,7 @@ CREATE TABLE relation_contradiction_links (
     UNIQUE (relation_evidence_id, claim_id)
 )
 """)
-    op.execute("CREATE INDEX idx_contra_links_evidence ON relation_contradiction_links (relation_evidence_id)")
+    op.execute("CREATE INDEX idx_contra_links_evidence " "ON relation_contradiction_links (relation_evidence_id)")
     op.execute("CREATE INDEX idx_contra_links_claim ON relation_contradiction_links (claim_id)")
     op.execute("""
 CREATE INDEX idx_contra_links_active ON relation_contradiction_links (detected_at DESC)
@@ -294,7 +428,7 @@ CREATE INDEX idx_contra_links_active ON relation_contradiction_links (detected_a
 """)
 
     # -------------------------------------------------------------------------
-    # Block J — relation_summaries (with HNSW index on summary_embedding)
+    # Block K -- relation_summaries (with HNSW index on summary_embedding)
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relation_summaries (
@@ -316,7 +450,7 @@ CREATE TABLE relation_summaries (
 CREATE UNIQUE INDEX uidx_relation_summaries_current ON relation_summaries (relation_id)
     WHERE is_current = true
 """)
-    op.execute("CREATE INDEX idx_relation_summaries_relation ON relation_summaries (relation_id, generated_at DESC)")
+    op.execute("CREATE INDEX idx_relation_summaries_relation " "ON relation_summaries (relation_id, generated_at DESC)")
     op.execute("""
 CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
     USING hnsw (summary_embedding vector_cosine_ops)
@@ -324,7 +458,7 @@ CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
 """)
 
     # -------------------------------------------------------------------------
-    # Block K — claims (RANGE-partitioned by month)
+    # Block L -- claims (RANGE-partitioned by month)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
     # -------------------------------------------------------------------------
     op.execute("""
@@ -338,6 +472,7 @@ CREATE TABLE claims (
     polarity              VARCHAR(20)  NOT NULL DEFAULT 'positive',
     claim_text            TEXT         NOT NULL,
     extraction_confidence FLOAT        NOT NULL,
+    is_backfill           BOOLEAN      NOT NULL DEFAULT false,
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
 ) PARTITION BY RANGE (created_at)
 """)
@@ -345,10 +480,10 @@ CREATE TABLE claims (
         for month in range(1, 13):
             next_month = month + 1 if month < 12 else 1
             next_year = year if month < 12 else year + 1
-            op.execute(f"""
-CREATE TABLE claims_{year}_{month:02d} PARTITION OF claims
-    FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')
-""")
+            op.execute(
+                f"CREATE TABLE claims_{year}_{month:02d} PARTITION OF claims "
+                f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')"
+            )
     op.execute("""
 CREATE INDEX idx_claims_contradiction_detection ON claims
     (subject_entity_id, claim_type, polarity, created_at DESC)
@@ -361,7 +496,7 @@ CREATE INDEX idx_claims_by_claimer ON claims
 """)
 
     # -------------------------------------------------------------------------
-    # Block L — events (RANGE-partitioned by month)
+    # Block M -- events (RANGE-partitioned by month)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
     # -------------------------------------------------------------------------
     op.execute("""
@@ -380,17 +515,31 @@ CREATE TABLE events (
         for month in range(1, 13):
             next_month = month + 1 if month < 12 else 1
             next_year = year if month < 12 else year + 1
-            op.execute(f"""
-CREATE TABLE events_{year}_{month:02d} PARTITION OF events
-    FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')
-""")
+            op.execute(
+                f"CREATE TABLE events_{year}_{month:02d} PARTITION OF events "
+                f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')"
+            )
     op.execute("""
 CREATE INDEX idx_events_subject ON events (subject_entity_id, event_type, event_date DESC)
     WHERE subject_entity_id IS NOT NULL
 """)
 
     # -------------------------------------------------------------------------
-    # Block M — embedding_migration_state
+    # Block M2 -- event_entities (many-to-many: events involve multiple entities)
+    # -------------------------------------------------------------------------
+    op.execute("""
+CREATE TABLE event_entities (
+    event_id  UUID        NOT NULL,
+    entity_id UUID        NOT NULL,
+    role      VARCHAR(50) NOT NULL DEFAULT 'participant',
+    PRIMARY KEY (event_id, entity_id),
+    UNIQUE (event_id, entity_id, role)
+)
+""")
+    op.execute("CREATE INDEX idx_event_entities_entity ON event_entities (entity_id, event_id)")
+
+    # -------------------------------------------------------------------------
+    # Block N -- embedding_migration_state
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE embedding_migration_state (
@@ -398,6 +547,7 @@ CREATE TABLE embedding_migration_state (
     model_from         VARCHAR(200) NOT NULL,
     model_to           VARCHAR(200) NOT NULL,
     target_table       VARCHAR(100) NOT NULL,
+    target_column      VARCHAR(100) NOT NULL DEFAULT 'embedding',
     phase              VARCHAR(30)  NOT NULL,
     backfill_progress  FLOAT        NOT NULL DEFAULT 0.0,
     started_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -407,25 +557,30 @@ CREATE TABLE embedding_migration_state (
 """)
 
     # -------------------------------------------------------------------------
-    # Block N — provisional_entity_queue
+    # Block O -- provisional_entity_queue
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE provisional_entity_queue (
     queue_id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mention_text       VARCHAR(500) NOT NULL,
+    normalized_surface VARCHAR(500) NOT NULL,
     mention_class      VARCHAR(50)  NOT NULL,
     context_snippet    TEXT,
+    source_doc_id      UUID,
     status             VARCHAR(20)  NOT NULL DEFAULT 'pending',
     assigned_entity_id UUID,
     created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     resolved_at        TIMESTAMPTZ,
-    retry_count        INT          NOT NULL DEFAULT 0
+    retry_count        INT          NOT NULL DEFAULT 0,
+    UNIQUE (normalized_surface, mention_class)
 )
 """)
-    op.execute("CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at) WHERE status = 'pending'")
+    op.execute(
+        "CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at) " "WHERE status = 'pending'"
+    )
 
     # -------------------------------------------------------------------------
-    # Block O — outbox_events + dead_letter_queue
+    # Block P -- outbox_events + dead_letter_queue
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE outbox_events (
@@ -440,7 +595,7 @@ CREATE TABLE outbox_events (
     failed_at      TIMESTAMPTZ
 )
 """)
-    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at) WHERE status = 'pending'")
+    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at) " "WHERE status = 'pending'")
 
     op.execute("""
 CREATE TABLE dead_letter_queue (
@@ -456,53 +611,13 @@ CREATE TABLE dead_letter_queue (
 )
 """)
 
-    # -------------------------------------------------------------------------
-    # Block P — relation_type_registry (20-row seed from PRD §8)
-    # -------------------------------------------------------------------------
-    op.execute("""
-CREATE TABLE relation_type_registry (
-    type_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    canonical_type  VARCHAR(100) NOT NULL UNIQUE,
-    semantic_mode   VARCHAR(20)  NOT NULL,
-    decay_class     VARCHAR(20)  NOT NULL REFERENCES decay_class_config(decay_class),
-    base_confidence FLOAT        NOT NULL DEFAULT 0.5,
-    description     TEXT,
-    is_active       BOOLEAN      NOT NULL DEFAULT true,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
-)
-""")
-    op.execute("""
-INSERT INTO relation_type_registry (canonical_type, semantic_mode, decay_class, base_confidence, description)
-VALUES
-    ('employs',              'RELATION_STATE',  'DURABLE',   0.70, 'Board, C-suite roles; event-invalidatable'),
-    ('board_member_of',      'RELATION_STATE',  'DURABLE',   0.75, NULL),
-    ('subsidiary_of',        'RELATION_STATE',  'SLOW',      0.65, NULL),
-    ('acquired_by',          'RELATION_STATE',  'PERMANENT', 0.85, 'Finalized by merger_completed event'),
-    ('listed_on',            'RELATION_STATE',  'DURABLE',   0.80, 'Invalidated by delisted event'),
-    ('supplier_of',          'RELATION_STATE',  'SLOW',      0.55, NULL),
-    ('partner_of',           'RELATION_STATE',  'SLOW',      0.50, NULL),
-    ('competes_with',        'RELATION_STATE',  'MEDIUM',    0.45, NULL),
-    ('regulates',            'RELATION_STATE',  'DURABLE',   0.75, NULL),
-    ('headquartered_in',     'RELATION_STATE',  'PERMANENT', 0.80, NULL),
-    ('analyst_rating',       'TEMPORAL_CLAIM',  'FAST',      0.60, 'Historically anchored; not validity-gated'),
-    ('market_share_claim',   'TEMPORAL_CLAIM',  'MEDIUM',    0.50, NULL),
-    ('price_target',         'TEMPORAL_CLAIM',  'FAST',      0.55, NULL),
-    ('earnings_guidance',    'TEMPORAL_CLAIM',  'MEDIUM',    0.60, NULL),
-    ('sentiment_signal',     'TEMPORAL_CLAIM',  'EPHEMERAL', 0.45, NULL),
-    ('credit_rating',        'TEMPORAL_CLAIM',  'DURABLE',   0.70, NULL),
-    ('investment_in',        'RELATION_STATE',  'MEDIUM',    0.60, NULL),
-    ('owns_stake_in',        'RELATION_STATE',  'MEDIUM',    0.65, NULL),
-    ('issues_debt',          'TEMPORAL_CLAIM',  'MEDIUM',    0.55, NULL),
-    ('produces',             'RELATION_STATE',  'SLOW',      0.60, 'Commodity production')
-""")
-
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS relation_type_registry CASCADE")
     op.execute("DROP TABLE IF EXISTS dead_letter_queue CASCADE")
     op.execute("DROP TABLE IF EXISTS outbox_events CASCADE")
     op.execute("DROP TABLE IF EXISTS provisional_entity_queue CASCADE")
     op.execute("DROP TABLE IF EXISTS embedding_migration_state CASCADE")
+    op.execute("DROP TABLE IF EXISTS event_entities CASCADE")
     op.execute("DROP TABLE IF EXISTS events CASCADE")
     op.execute("DROP TABLE IF EXISTS claims CASCADE")
     op.execute("DROP TABLE IF EXISTS relation_summaries CASCADE")
@@ -510,11 +625,14 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS relation_evidence CASCADE")
     op.execute("DROP TABLE IF EXISTS relation_evidence_raw CASCADE")
     op.execute("DROP TABLE IF EXISTS relations CASCADE")
-    op.execute("DROP TABLE IF EXISTS entity_profile_embeddings CASCADE")
+    op.execute("DROP TABLE IF EXISTS relation_type_registry CASCADE")
+    op.execute("DROP TABLE IF EXISTS llm_usage_log CASCADE")
+    op.execute("DROP TABLE IF EXISTS entity_embedding_state CASCADE")
     op.execute("DROP TABLE IF EXISTS entity_aliases CASCADE")
     op.execute("DROP TABLE IF EXISTS canonical_entities CASCADE")
     op.execute("DROP TABLE IF EXISTS prompt_templates CASCADE")
     op.execute("DROP TABLE IF EXISTS model_registry CASCADE")
+    op.execute("DROP TABLE IF EXISTS source_trust_weights CASCADE")
     op.execute("DROP TABLE IF EXISTS decay_class_config CASCADE")
     op.execute("DROP EXTENSION IF EXISTS pg_trgm")
     op.execute("DROP EXTENSION IF EXISTS vector")
