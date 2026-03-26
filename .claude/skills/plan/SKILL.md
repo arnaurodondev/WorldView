@@ -101,6 +101,13 @@ For each entity, class, or module this task creates:
 - Edge cases to cover: <list>
 - Error paths to cover: <list>
 
+**Downstream test impact** (mandatory for schema/config/contract tasks):
+List tests OUTSIDE the target files that assert on the artifacts being changed.
+These tests will break if not updated in this wave.
+- `libs/contracts/tests/test_avro_alignment.py` — if any Avro schema field names/counts change
+- `tests/contract/test_avro_schemas.py` — if schema file added/removed or field counts change
+- `<service>/tests/` — if shared lib API, Kafka topic name, or DB schema changes
+
 **Acceptance criteria**:
 - [ ] <Specific, verifiable condition>
 - [ ] <Specific, verifiable condition>
@@ -110,7 +117,7 @@ For each entity, class, or module this task creates:
 - **impl** — Write production code. Must include inline test specifications.
 - **test** — Write test code only (integration, contract, E2E tests that require infrastructure)
 - **config** — Configuration changes (env vars, Docker, Kafka topics)
-- **schema** — Avro schema changes, DB migrations. Must include exact column types.
+- **schema** — Avro schema changes, DB migrations. Must include exact column types. **Must list downstream test impact.**
 - **docs** — Documentation updates
 
 ### Task Granularity Rules
