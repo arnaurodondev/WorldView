@@ -8,6 +8,7 @@ import common.ids
 import common.time as ct
 from content_ingestion.api.dependencies import DbSessionDep, InternalAuthDep
 from content_ingestion.api.schemas import IngestSubmitRequest, IngestSubmitResponse
+from content_ingestion.application.use_cases.fetch_and_write import build_raw_article_payload
 from content_ingestion.domain.entities import SourceType
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
 from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
@@ -44,8 +45,6 @@ async def ingest_submit(
         raw_bytes = body.raw_content.encode("utf-8")
         url = body.url or f"manual://{common.ids.new_ulid()}"
     else:
-        # For URL-based submissions, store the URL as a placeholder
-        # (actual fetching could be done by the adapter later)
         raw_bytes = (body.url or "").encode("utf-8")
         url = body.url or ""
 
@@ -57,7 +56,15 @@ async def ingest_submit(
     try:
         source_type = SourceType(body.source_type)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid source_type: {body.source_type}")  # noqa: B904
+        raise HTTPException(  # noqa: B904
+            status_code=400,
+            detail="Invalid source_type. Allowed: eodhd, sec_edgar, finnhub, newsapi, manual",
+        )
+
+    # Dedup check BEFORE MinIO write to avoid orphaned objects
+    fetch_log_repo = FetchLogRepository(session)
+    if await fetch_log_repo.exists_by_url_hash(url_hash_val):
+        return IngestSubmitResponse(doc_id=doc_id, status="duplicate")
 
     # Write to MinIO bronze
     storage = request.app.state.storage
@@ -72,21 +79,29 @@ async def ingest_submit(
     )
 
     # Insert fetch_log + outbox atomically
-    fetch_log_repo = FetchLogRepository(session)
     outbox_repo = OutboxRepository(session)
-
-    # Dedup check
-    if await fetch_log_repo.exists_by_url_hash(url_hash_val):
-        return IngestSubmitResponse(doc_id=doc_id, status="duplicate")
+    fetch_log_id = common.ids.new_uuid7()
 
     await fetch_log_repo.create(
         url=url,
         url_hash=url_hash_val,
-        source_id=doc_id,  # Use doc_id as source reference for manual submissions
+        source_id=doc_id,
         http_status=200,
         byte_size=len(raw_bytes),
         fetched_at=now,
         published_at=body.published_at,
+        row_id=fetch_log_id,
+    )
+
+    payload = build_raw_article_payload(
+        doc_id=doc_id,
+        source_type=str(source_type),
+        source_url=url,
+        minio_bronze_key=minio_key,
+        raw_bytes=raw_bytes,
+        fetch_id=fetch_log_id,
+        published_at=ct.to_iso8601(body.published_at) if body.published_at else None,
+        is_backfill=False,
     )
 
     await outbox_repo.append(
@@ -94,17 +109,7 @@ async def ingest_submit(
         aggregate_id=doc_id,
         event_type="content.article.raw.v1",
         topic="content.article.raw.v1",
-        payload={
-            "doc_id": str(doc_id),
-            "source_type": str(source_type),
-            "url": url,
-            "url_hash": url_hash_val,
-            "minio_key": minio_key,
-            "fetched_at": ct.to_iso8601(now),
-            "byte_size": len(raw_bytes),
-            "published_at": ct.to_iso8601(body.published_at) if body.published_at else None,
-            "is_backfill": False,
-        },
+        payload=payload,
     )
 
     await session.commit()

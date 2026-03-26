@@ -137,9 +137,9 @@ class TestNewsAPIAdapterFetch:
 
 class TestNewsAPIClientQuota:
     async def test_check_quota_increments_counter(self) -> None:
-        """Valkey counter should be incremented on each request."""
+        """Valkey counter should be atomically incremented on each request."""
         mock_valkey = AsyncMock()
-        mock_valkey.get.return_value = "5"
+        mock_valkey.incr.return_value = 6  # After increment: was 5, now 6
         mock_http = AsyncMock()
 
         client = NewsAPIClient(
@@ -149,12 +149,27 @@ class TestNewsAPIClientQuota:
             daily_limit=100,
         )
         await client._check_quota()
-        mock_valkey.set.assert_called_once()
+        mock_valkey.incr.assert_called_once()
+
+    async def test_check_quota_sets_ttl_on_first_increment(self) -> None:
+        """TTL should be set when incr returns 1 (first call of the day)."""
+        mock_valkey = AsyncMock()
+        mock_valkey.incr.return_value = 1
+        mock_http = AsyncMock()
+
+        client = NewsAPIClient(
+            http_client=mock_http,
+            api_key="test-key",
+            valkey=mock_valkey,
+            daily_limit=100,
+        )
+        await client._check_quota()
+        mock_valkey.expire.assert_called_once()
 
     async def test_check_quota_raises_on_limit(self) -> None:
-        """Should raise QuotaExhaustedError when limit reached."""
+        """Should raise QuotaExhaustedError when limit exceeded."""
         mock_valkey = AsyncMock()
-        mock_valkey.get.return_value = "100"
+        mock_valkey.incr.return_value = 101  # Over the limit of 100
         mock_http = AsyncMock()
 
         client = NewsAPIClient(

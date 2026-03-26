@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,7 +46,9 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # ── Security ──────────────────────────────────────────────────────────────
-    admin_token: str = ""
+    admin_token: str = ""  # CONTENT_INGESTION_ADMIN_TOKEN — admin/DevOps only
+    # Inter-service token shared across all services (no CONTENT_INGESTION_ prefix)
+    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
 
     # ── Scheduler / outbox ────────────────────────────────────────────────────
     scheduler_interval_seconds: int = 300

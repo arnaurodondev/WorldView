@@ -53,7 +53,9 @@ class NewsAPIClient:
         return f"newsapi:daily_requests:{today}"
 
     async def _check_quota(self) -> None:
-        """Check and increment the daily quota counter.
+        """Check and increment the daily quota counter atomically.
+
+        Uses Redis INCR for atomic increment — safe under concurrent access.
 
         Raises:
             QuotaExhaustedError: If the daily limit has been reached.
@@ -62,14 +64,15 @@ class NewsAPIClient:
             return
 
         key = self._quota_key()
-        raw = await self._valkey.get(key)
-        current = int(raw) if raw else 0
+        # Atomic increment — no race condition between get and set
+        current = await self._valkey.incr(key)
+        # Set TTL on first increment only
+        if current == 1:
+            await self._valkey.expire(key, _QUOTA_TTL_SECONDS)
 
-        if current >= self._daily_limit:
+        if current > self._daily_limit:
             msg = f"NewsAPI daily quota exhausted ({current}/{self._daily_limit})"
             raise QuotaExhaustedError(msg)
-
-        await self._valkey.set(key, str(current + 1), ttl=_QUOTA_TTL_SECONDS)
 
     async def fetch_articles(
         self,

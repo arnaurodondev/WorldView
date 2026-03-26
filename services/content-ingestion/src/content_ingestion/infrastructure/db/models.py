@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -118,7 +119,8 @@ class DeadLetterQueueModel(Base):
     dlq_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     original_event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
-    payload_avro: Mapped[bytes] = mapped_column(nullable=False)
+    payload_avro: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="failed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
