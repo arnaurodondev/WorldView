@@ -1,7 +1,7 @@
 # S4 · Content Ingestion Service
 
 > **Owner**: Content domain · **Database**: `content_ingestion_db` · **Port**: 8004
-> **Status**: Wave 01 implemented — foundation layer (domain, DB infra, outbox dispatcher, MinIO adapter)
+> **Status**: Wave A-1 complete — foundation layer (domain, DB infra, outbox dispatcher, MinIO bronze adapter, Avro schema)
 
 ---
 
@@ -21,14 +21,15 @@ Single-replica enforcement via Postgres advisory lock on adapter name.
 
 | Method | Path | Description | Cache |
 |--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (DB + MinIO) | — |
-| GET | `/metrics` | Prometheus metrics | — |
+| GET | `/healthz` | Liveness | - |
+| GET | `/readyz` | Readiness (DB + MinIO) | - |
+| GET | `/metrics` | Prometheus metrics | - |
 | GET | `/api/v1/sources` | List configured sources | slow |
-| POST | `/api/v1/sources` | Add new source (admin) | — |
-| PUT | `/api/v1/sources/{id}` | Update source config | — |
-| POST | `/api/v1/ingest/trigger` | Manual poll trigger for a source | — |
-| GET | `/api/v1/ingest/status` | Recent fetch log | — |
+| POST | `/api/v1/sources` | Add new source (admin) | - |
+| PUT | `/api/v1/sources/{id}` | Update source config | - |
+| POST | `/api/v1/sources/{id}/trigger` | Manual poll trigger for a source | - |
+| GET | `/api/v1/status` | Pipeline ingestion status summary | - |
+| POST | `/internal/v1/ingest/submit` | Accept raw document from S9 | - |
 
 ---
 
@@ -36,13 +37,13 @@ Single-replica enforcement via Postgres advisory lock on adapter name.
 
 ### Produced
 
-| Topic | Event Type | Key | Description |
-|-------|-----------|-----|-------------|
-| `content.article.raw.v1` | `ArticleRawV1` | `url_hash` | Raw article fetched, stored in MinIO |
+| Topic | Schema | Key | Description |
+|-------|--------|-----|-------------|
+| `content.article.raw.v1` | `ContentArticleRaw` | `url_hash` | Raw article fetched, stored in MinIO bronze |
 
 ### Consumed
 
-None — S4 is a pure producer.
+None - S4 is a pure producer.
 
 ---
 
@@ -50,10 +51,10 @@ None — S4 is a pure producer.
 
 | Entity | Type | Key Fields | Notes |
 |--------|------|------------|-------|
-| `SourceType` | `str Enum` | `EODHD`, `SEC_EDGAR`, `FINNHUB`, `NEWSAPI` | Identifies adapter |
+| `SourceType` | `StrEnum` | `EODHD`, `SEC_EDGAR`, `FINNHUB`, `NEWSAPI`, `MANUAL` | 5 source types |
 | `Source` | dataclass (mutable) | `id: UUID`, `name`, `source_type`, `enabled`, `config` | Polling config |
-| `FetchResult` | dataclass (frozen) | `source_id`, `url`, `url_hash`, `raw_bytes`, `http_status` | Single HTTP attempt |
-| `RawArticle` | dataclass (frozen) | `id: UUID`, `source_type`, `url_hash`, `raw_bytes`, `byte_size` | Ready for storage |
+| `FetchResult` | dataclass (frozen) | `source_id`, `url`, `url_hash`, `raw_bytes`, `http_status`, `published_at`, `is_backfill` | Single HTTP attempt |
+| `RawArticle` | dataclass (frozen) | `id: UUID`, `source_type`, `url_hash`, `raw_bytes`, `byte_size`, `published_at`, `is_backfill` | Ready for storage |
 | `TokenBucket` | dataclass | `capacity`, `tokens`, `refill_rate`, `last_refill` | Per-adapter rate limiter |
 
 All `UUID` fields default to `common.ids.new_uuid7()`. All `datetime` fields default to `common.time.utc_now()`.
@@ -62,7 +63,9 @@ All `UUID` fields default to `common.ids.new_uuid7()`. All `datetime` fields def
 
 ## Database Schema
 
-Migration: `alembic/versions/0001_initial_s4_schema.py`
+Migration: `alembic/versions/0001_initial_s4_schema.py` (single consolidated migration)
+
+**5 tables**: `sources`, `source_adapter_state`, `article_fetch_log`, `outbox_events`, `dead_letter_queue`
 
 ```sql
 -- content_ingestion_db
@@ -76,67 +79,64 @@ CREATE TABLE sources (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE fetch_logs (
-    id          UUID        PRIMARY KEY,
-    source_id   UUID        NOT NULL REFERENCES sources(id),
-    url         TEXT        NOT NULL,
-    url_hash    TEXT        NOT NULL,
-    http_status INT,
-    byte_size   INT,
-    fetched_at  TIMESTAMPTZ NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_fetch_logs_url_hash UNIQUE (url_hash)
+CREATE TABLE source_adapter_state (
+    source_id       UUID        PRIMARY KEY REFERENCES sources(id),
+    last_watermark  TIMESTAMPTZ,
+    last_cursor     TEXT,
+    last_run_at     TIMESTAMPTZ,
+    next_run_at     TIMESTAMPTZ,
+    error_count     INT         NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE article_fetch_log (
+    id           UUID        PRIMARY KEY,
+    source_id    UUID        NOT NULL REFERENCES sources(id),
+    url          TEXT        NOT NULL,
+    url_hash     TEXT        NOT NULL,
+    http_status  INT,
+    byte_size    INT,
+    fetched_at   TIMESTAMPTZ NOT NULL,
+    published_at TIMESTAMPTZ,
+    is_backfill  BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_article_fetch_log_url_hash UNIQUE (url_hash)
+);
+CREATE INDEX ix_article_fetch_log_source ON article_fetch_log (source_id, fetched_at);
+CREATE INDEX ix_article_fetch_log_published_at ON article_fetch_log (published_at DESC)
+    WHERE published_at IS NOT NULL;
 
 CREATE TABLE outbox_events (
     id             UUID        PRIMARY KEY,
     aggregate_type TEXT        NOT NULL,
     aggregate_id   UUID        NOT NULL,
     event_type     TEXT        NOT NULL,
-    payload        JSONB       NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    dispatched_at  TIMESTAMPTZ,
-    retry_count    INT         NOT NULL DEFAULT 0,
+    topic          TEXT        NOT NULL DEFAULT 'content.article.raw.v1',
+    payload        JSONB       NOT NULL DEFAULT '{}',
     status         TEXT        NOT NULL DEFAULT 'pending',
-    error          TEXT
+    lease_owner    TEXT,
+    leased_until   TIMESTAMPTZ,
+    attempts       SMALLINT    NOT NULL DEFAULT 0,
+    max_attempts   SMALLINT    NOT NULL DEFAULT 5,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at  TIMESTAMPTZ
 );
-CREATE INDEX ix_outbox_events_status_created_at ON outbox_events (status, created_at);
+CREATE INDEX ix_outbox_claimable ON outbox_events (status, leased_until)
+    WHERE status IN ('pending', 'processing');
 
-CREATE TABLE dlq_events (
-    id                UUID        PRIMARY KEY,
+CREATE TABLE dead_letter_queue (
+    dlq_id            UUID        PRIMARY KEY,
     original_event_id UUID        NOT NULL,
-    payload           JSONB       NOT NULL,
-    error             TEXT        NOT NULL,
+    topic             TEXT        NOT NULL,
+    payload_avro      BYTEA       NOT NULL,
+    error_detail      TEXT,
+    status            TEXT        NOT NULL DEFAULT 'failed',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at       TIMESTAMPTZ,
-    status            TEXT        NOT NULL DEFAULT 'open'
+    resolution_note   TEXT
 );
 ```
-
----
-
-## Common Pitfalls
-
-1. **Using TIMESTAMP instead of TIMESTAMPTZ**: All timestamp columns are `TIMESTAMPTZ`
-   (timezone-aware). Using `TIMESTAMP` silently drops timezone information and will
-   cause subtle ordering bugs when comparing timestamps from different system clocks.
-
-2. **Writing to DB and Kafka in separate transactions**: Every fetch result must be
-   written to `fetch_logs` and the corresponding `outbox_events` row in the same
-   database transaction. Publishing directly to Kafka outside a transaction risks
-   losing events if the process crashes between the DB commit and the Kafka send.
-
-3. **Using `uuid.uuid4()` or `uuid6.uuid7()` directly**: Always use
-   `common.ids.new_uuid7()` for all entity PKs. Direct use of `uuid6.uuid7()` bypasses
-   the shared wrapper and may diverge if the ID generation strategy changes.
-
-4. **Calling `datetime.now()` without `utc_now()`**: Never use `datetime.now()` or
-   `datetime.utcnow()`. Always use `common.time.utc_now()` to ensure all timestamps
-   are timezone-aware UTC datetimes.
-
-5. **Mocking `asyncio.to_thread` incorrectly in tests**: The MinIO adapter wraps the
-   sync client with `asyncio.to_thread`. Tests must patch `asyncio.to_thread` at the
-   call site (`content_ingestion.infrastructure.storage.minio_bronze`) not globally.
 
 ---
 
@@ -144,54 +144,61 @@ CREATE TABLE dlq_events (
 
 | Path Pattern | Content |
 |-------------|---------|
-| `content-ingestion/{source_type}/{url_hash}/raw/v1.json` | Raw article bytes (JSON envelope) |
+| `content-ingestion/{source_type}/{url_hash}/raw/v1.json` | Raw article (JSON envelope with base64 payload) |
 
 Example: `content-ingestion/eodhd/a3f8c1.../raw/v1.json`
 
 ---
 
-## Avro Schema — `ArticleRawV1`
+## Avro Schema - `content.article.raw.v1`
 
-Published on topic `content.article.raw.v1`. Serialised with `fastavro.schemaless_writer`.
+Published on topic `content.article.raw.v1`. Serialized via Schema Registry + `OutboxEventValueSerializer`.
 
 | Field | Avro Type | Description |
 |-------|-----------|-------------|
-| `article_id` | `string` | UUIDv7 of the `RawArticle` |
-| `source_type` | `string` | `eodhd` / `sec_edgar` / `finnhub` / `newsapi` |
-| `url` | `string` | Original article URL |
-| `url_hash` | `string` | SHA-256 hex of normalised URL |
-| `minio_key` | `string` | MinIO bronze key where bytes are stored |
-| `fetched_at` | `string` | ISO-8601 UTC timestamp |
-| `byte_size` | `int` | Raw byte count |
+| `event_id` | `string` | UUIDv7 event identifier |
+| `event_type` | `string` | `content.article.raw` |
+| `schema_version` | `int` | Default `1` |
+| `occurred_at` | `string` | ISO-8601 UTC timestamp |
+| `doc_id` | `string` | UUIDv7 document identifier |
+| `source_type` | `string` | `eodhd` / `sec_edgar` / `finnhub` / `newsapi` / `manual` |
+| `source_url` | `null\|string` | Original article URL |
+| `minio_bronze_key` | `string` | MinIO bronze key |
+| `content_hash` | `string` | SHA-256 hex of raw bytes |
+| `fetch_id` | `string` | UUIDv7 of article_fetch_log row |
+| `title` | `null\|string` | Article title from source |
+| `published_at` | `null\|string` | ISO-8601 UTC publication date |
+| `is_backfill` | `boolean` | True during backfill run |
+| `correlation_id` | `null\|string` | Propagated trace correlation |
 
 ---
 
-## Internal Modules
+## Common Pitfalls
 
-```
-services/content-ingestion/src/content_ingestion/
-├── app.py              # FastAPI app factory
-├── config.py           # Settings (DB, MinIO, Kafka, polling, API keys)
-├── api/                # Routes, Pydantic schemas
-├── domain/             # Source, Article entities
-├── application/        # Polling use-cases
-├── scheduler/          # APScheduler cron jobs, advisory lock
-├── adapters/           # eodhd.py, edgar.py, finnhub.py, newsapi.py
-└── infrastructure/     # DB, MinIO, Kafka adapters, outbox dispatcher
-```
+1. **Using TIMESTAMP instead of TIMESTAMPTZ**: All timestamp columns are `TIMESTAMPTZ`
+   (timezone-aware). Using `TIMESTAMP` silently drops timezone information.
+
+2. **Writing to DB and Kafka in separate transactions**: Every fetch result must be
+   written to `article_fetch_log` and the corresponding `outbox_events` row in the same
+   database transaction (outbox pattern).
+
+3. **Using `uuid.uuid4()` directly**: Always use `common.ids.new_uuid7()`.
+
+4. **Calling `datetime.now()` without `utc_now()`**: Always use `common.time.utc_now()`.
+
+5. **Using `KafkaEventValueSerializer`**: The outbox dispatcher must use
+   `OutboxEventValueSerializer` (guard BP-001).
 
 ---
 
 ## Source Adapters
 
-| Source | Interval | Auth |
-|--------|----------|------|
-| EODHD News API | 15 min (`EODHD_POLL_INTERVAL_SECONDS=900`) | `EODHD_API_KEY` |
-| SEC EDGAR EFTS | 30 min (`EDGAR_POLL_INTERVAL_SECONDS=1800`) | None (public) |
-| Finnhub | 15 min | `FINNHUB_API_KEY` |
-| NewsAPI | 15 min | `NEWSAPI_KEY` |
-
-Each adapter runs as an APScheduler cron. Only one replica fires per tick (Postgres advisory lock on adapter name). Raw payloads are written to MinIO bronze and `outbox_events` in a **single DB transaction**.
+| Source | Interval | Auth | Rate Limit |
+|--------|----------|------|------------|
+| EODHD News API | 15 min | `EODHD_API_KEY` | Token bucket |
+| SEC EDGAR EFTS | 30 min | User-Agent required | Semaphore(8) |
+| Finnhub | 15 min | `FINNHUB_API_KEY` | 55/min token bucket |
+| NewsAPI | 15 min | `NEWSAPI_KEY` | Daily quota (Valkey) |
 
 ---
 
@@ -199,30 +206,32 @@ Each adapter runs as an APScheduler cron. Only one replica fires per tick (Postg
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EODHD_API_KEY` | — | Required |
-| `EODHD_POLL_INTERVAL_SECONDS` | `900` | 15 minutes |
-| `EDGAR_POLL_INTERVAL_SECONDS` | `1800` | 30 minutes |
-| `FINNHUB_API_KEY` | — | Required |
-| `NEWSAPI_KEY` | — | Required |
-| `NEWSAPI_QUERIES` | — | Comma-separated query strings |
-| `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
-| `OUTBOX_BATCH_SIZE` | `100` | Rows per dispatch cycle |
+| `CONTENT_INGESTION_DB_URL` | `postgresql+asyncpg://...` | Database URL |
+| `EODHD_API_KEY` | - | Required |
+| `SEC_EDGAR_USER_AGENT` | `worldview/1.0...` | Required |
+| `FINNHUB_API_KEY` | - | Required |
+| `NEWSAPI_KEY` | - | Required |
+| `CONTENT_INGESTION_NEWSAPI_DAILY_LIMIT` | `100` | Daily request quota |
+| `CONTENT_INGESTION_ADMIN_TOKEN` | - | X-Admin-Token auth |
+| `CONTENT_INGESTION_BACKFILL_ENABLED` | `false` | Historical backfill on startup |
 
 ---
 
 ## Observability
 
-- **Metrics**: `articles_fetched_total`, `fetch_errors_total`, `source_poll_duration_seconds`
+- **Metrics**: `s4_fetches_total{source,status}`, `s4_fetch_duration_seconds`, `s4_outbox_pending_total`
 - **Log fields**: `service=content-ingestion`, `source_id`, `source_type`, `url_hash`
 
 ---
 
-## Testing Plan
+## Testing
 
 | Type | What | Command |
 |------|------|---------|
-| Unit | Polling logic, URL hash, dedup check | `make test` |
-| Integration | Real DB + MinIO + Kafka | `make test-integration` |
+| Unit | Domain, repos, bronze adapter, schema | `.venv/bin/python -m pytest tests/unit -v -m unit` |
+| Integration | Real DB + MinIO + Kafka | `.venv/bin/python -m pytest tests/integration -v -m integration` |
+
+**45 unit tests passing** (Wave A-1).
 
 ---
 
@@ -231,7 +240,6 @@ Each adapter runs as an APScheduler cron. Only one replica fires per tick (Postg
 ```bash
 cd services/content-ingestion
 cp configs/dev.local.env.example .env
-make run       # port 8004
-make test
-make lint
+.venv/bin/python -m uvicorn content_ingestion.app:create_app --factory --port 8004
+.venv/bin/python -m pytest tests/unit -v
 ```

@@ -36,6 +36,7 @@
 | [BP-011](#bp-011) | Missing runtime non-code assets in image | `FileNotFoundError` for Avro/schema/config files only in containers (works locally) | Services loading schemas/files from `infra/` or repo-relative paths |
 | [BP-012](#bp-012) | Async SQLAlchemy expired-row access | `sqlalchemy.exc.MissingGreenlet` in polling loops after rollback | Async tests using `AsyncSession` and ORM objects in long polling loops |
 | [BP-013](#bp-013) | E2E perceived infinite loops | Test appears stuck for minutes due to long poll windows, noisy schedulers, or assertions on unstable async conditions | Service E2E tests with scheduler/worker/dispatcher and eventual consistency |
+| [BP-014](#bp-014) | Import guard allowlist `fnmatch` vs `**` | CI Import Guards job fails with violations that should be allowlisted — `services/*/tests/*.py` files not covered | Any service with test files directly in `tests/` (not in subdirectories) |
 
 ---
 
@@ -1000,6 +1001,67 @@ environment:
 |------|--------|
 | `infra/compose/docker-compose.test.yml` | Added deterministic scheduler test env vars |
 | `services/market-ingestion/tests/e2e/test_api_workflows.py` | Reworked full-flow test to bounded, stable progress assertion |
+
+---
+
+## BP-014 — Import guard allowlist `fnmatch` pattern does not match direct children
+
+**Date discovered**: 2026-03-26
+**Service affected**: `intelligence-migrations` (found during CI Import Guards job)
+**Prompts updated**: `.claude/skills/implement/SKILL.md` Step 4 — added import guards to validation gate
+
+### Symptom
+
+CI Import Guards job fails with 3 net-new violations that should be covered by the allowlist:
+```
+[IG-OBS-001] services/intelligence-migrations/scripts/populate_embeddings.py:30
+    Forbidden call: `logging.getLogger()` (rule IG-OBS-001)
+[IG-COMMON-001] services/intelligence-migrations/tests/test_migration.py:129
+    Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)
+[IG-COMMON-001] services/intelligence-migrations/tests/test_migration.py:130
+    Forbidden call: `uuid.uuid4()` (rule IG-COMMON-001)
+```
+
+### Root cause
+
+Two independent issues:
+
+1. **`fnmatch` does not support recursive `**` like `pathlib.Path.glob()`**. The allowlist used patterns like `services/*/tests/**/*.py`, but Python's `fnmatch.fnmatch()` treats `*` as "match any characters" (including `/`). The `**/` in the pattern requires at least one path separator after `tests/`, so files directly in `tests/` (like `tests/test_migration.py`) are NOT matched — only files in subdirectories (like `tests/unit/test_foo.py`) match.
+
+2. **Service-level scripts not covered**. The allowlist had `scripts/**/*.py` for repo-root scripts, but `services/intelligence-migrations/scripts/populate_embeddings.py` is under `services/`, not the root `scripts/` directory.
+
+3. **No pre-commit import guard check**. The pre-commit hook (`pre-commit-validate.sh`) ran ruff + mypy + unit tests but did NOT run import guards, so violations passed local validation and only failed in CI.
+
+### Correct implementation pattern
+
+When writing `fnmatch`-style allowlist patterns, always include **both** direct-child and recursive patterns:
+
+```yaml
+# Direct children — fnmatch does NOT support ** recursion
+- rule_id: IG-COMMON-001
+  path: "services/*/tests/*.py"
+  reason: Test code may use uuid4() directly.
+
+# Nested children — still needed for tests/unit/*.py, tests/integration/*.py
+- rule_id: IG-COMMON-001
+  path: "services/*/tests/**/*.py"
+  reason: Test code may use uuid4() directly.
+```
+
+When adding new service directories (like `services/*/scripts/`), add corresponding allowlist entries if the files don't follow service-code conventions.
+
+### Test to add (prevents regression)
+
+Import guards now run as Step 3/4 in the pre-commit hook (`scripts/hooks/pre-commit-validate.sh`), so violations are caught before commit — not just in CI.
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `scripts/import_guards/allowlist.yaml` | Added `services/*/tests/*.py` patterns alongside existing `**/*.py` patterns; added `services/*/scripts/*.py` entries |
+| `services/intelligence-migrations/scripts/populate_embeddings.py` | Replaced `logging.getLogger()` with `structlog.get_logger()` and structlog-style kwargs |
+| `scripts/hooks/pre-commit-validate.sh` | Added import guards as Step 3/4 (scoped to changed services) |
+| `.claude/skills/implement/SKILL.md` | Added import guards to Step 4 validation gate |
 
 ---
 

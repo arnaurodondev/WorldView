@@ -21,9 +21,7 @@
       "Bash(cp:*)",
       "Bash(mv:*)",
       "Bash(sudo:*)",
-      "Bash(chmod:*)",
-      "Bash(find:* -exec *)",
-      "Bash(find:* -delete *)"
+      "Bash(chmod:*)"
     ]
   },
   "hooks": {

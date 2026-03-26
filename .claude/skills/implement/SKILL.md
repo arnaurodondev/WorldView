@@ -180,13 +180,18 @@ ruff format --check <changed_files>
 # 3. Type check on changed packages
 mypy <changed_packages>/src --config-file mypy.ini
 
-# 4. Unit tests for affected services/libs
+# 4. Import guards on changed services (catches forbidden patterns like uuid4(), logging.getLogger(), print())
+python3 scripts/import_guards/check_import_guards.py --strict \
+  --baseline scripts/import_guards/baseline.json \
+  --services <changed_service_names>
+
+# 5. Unit tests for affected services/libs
 python -m pytest <service>/tests -m "unit" -v
 
-# 5. Integration tests (if infra is running and tests exist)
+# 6. Integration tests (if infra is running and tests exist)
 python -m pytest <service>/tests -m "integration" -v
 
-# 6. Architecture tests (if service structure changed)
+# 7. Architecture tests (if service structure changed)
 python -m pytest tests/architecture -v
 ```
 

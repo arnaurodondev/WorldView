@@ -17,17 +17,22 @@ populated on next restart or via a manual re-run.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 import urllib.error
 import urllib.request
 
 import sqlalchemy as sa
+import structlog
 from sqlalchemy import text
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
-log = logging.getLogger("populate_embeddings")
+structlog.configure(
+    processors=[
+        structlog.dev.ConsoleRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(0),
+)
+log = structlog.get_logger("populate_embeddings")
 
 EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "http://ollama:11434")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-large-en-v1.5")
@@ -58,13 +63,13 @@ def embed_text(text_input: str) -> list[float] | None:
             if embedding and len(embedding) == EXPECTED_DIM:
                 return embedding  # type: ignore[no-any-return]
             log.warning(
-                "Unexpected embedding dimension: got %d, expected %d",
-                len(embedding) if embedding else 0,
-                EXPECTED_DIM,
+                "Unexpected embedding dimension",
+                got=len(embedding) if embedding else 0,
+                expected=EXPECTED_DIM,
             )
             return None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        log.warning("Embedding service unavailable: %s", exc)
+        log.warning("Embedding service unavailable", error=str(exc))
         return None
 
 
@@ -82,7 +87,7 @@ def main() -> None:
             log.info("All relation types already have embeddings — nothing to do.")
             return
 
-        log.info("Found %d relation types needing embeddings.", len(rows))
+        log.info("Found relation types needing embeddings", count=len(rows))
         updated = 0
 
         for type_id, canonical_type, description in rows:
@@ -91,8 +96,8 @@ def main() -> None:
 
             if embedding is None:
                 log.warning(
-                    "Skipping %s — embedding service returned no result. " "Embeddings will be populated on next run.",
-                    canonical_type,
+                    "Skipping — embedding service returned no result, will retry on next run",
+                    canonical_type=canonical_type,
                 )
                 continue
 
@@ -101,10 +106,10 @@ def main() -> None:
                 {"embedding": str(embedding), "type_id": type_id},
             )
             updated += 1
-            log.info("Embedded: %s", canonical_type)
+            log.info("Embedded", canonical_type=canonical_type)
 
         conn.commit()
-        log.info("Done. Updated %d / %d relation types.", updated, len(rows))
+        log.info("Done", updated=updated, total=len(rows))
 
 
 if __name__ == "__main__":

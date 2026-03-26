@@ -26,29 +26,59 @@ allowlist:
   # ─── Test fixtures ────────────────────────────────────────────────────────
   # Test code may use raw uuid/datetime/print for test data generation,
   # benchmarks, and integration test fixtures. Rules target service src/ code.
+  # NOTE: fnmatch does not support recursive ** like pathlib — we need both
+  # services/*/tests/*.py (direct children) and services/*/tests/**/*.py (nested).
+  - rule_id: IG-COMMON-001
+    path: "services/*/tests/*.py"
+    reason: Test code may use uuid4() directly for fixture data generation.
+
   - rule_id: IG-COMMON-001
     path: "services/*/tests/**/*.py"
     reason: Test code may use uuid4() directly for fixture data generation.
+
+  - rule_id: IG-COMMON-002
+    path: "services/*/tests/*.py"
+    reason: Test code may use naive datetime for fixture data setup.
 
   - rule_id: IG-COMMON-002
     path: "services/*/tests/**/*.py"
     reason: Test code may use naive datetime for fixture data setup.
 
   - rule_id: IG-OBS-001
+    path: "services/*/tests/*.py"
+    reason: Test code may use print() for benchmark output and test diagnostics.
+
+  - rule_id: IG-OBS-001
     path: "services/*/tests/**/*.py"
     reason: Test code may use print() for benchmark output and test diagnostics.
+
+  - rule_id: IG-MSG-001
+    path: "services/*/tests/*.py"
+    reason: Test fixtures may mock aiokafka directly for unit test isolation.
 
   - rule_id: IG-MSG-001
     path: "services/*/tests/**/*.py"
     reason: Test fixtures may mock aiokafka directly for unit test isolation.
 
   - rule_id: IG-MSG-002
+    path: "services/*/tests/*.py"
+    reason: Test fixtures may use redis.asyncio directly to set up test state.
+
+  - rule_id: IG-MSG-002
     path: "services/*/tests/**/*.py"
     reason: Test fixtures may use redis.asyncio directly to set up test state.
 
   - rule_id: IG-STORAGE-001
+    path: "services/*/tests/*.py"
+    reason: Test fixtures may instantiate minio.Minio directly for integration tests.
+
+  - rule_id: IG-STORAGE-001
     path: "services/*/tests/**/*.py"
     reason: Test fixtures may instantiate minio.Minio directly for integration tests.
+
+  - rule_id: IG-STORAGE-002
+    path: "services/*/tests/*.py"
+    reason: Test fixtures may use boto3 directly for integration tests.
 
   - rule_id: IG-STORAGE-002
     path: "services/*/tests/**/*.py"
@@ -86,3 +116,26 @@ allowlist:
   - rule_id: "*"
     path: "scripts/**/*.py"
     reason: CI scripts are infrastructure tooling, not service code.
+
+  - rule_id: "*"
+    path: "scripts/*.py"
+    reason: CI scripts are infrastructure tooling, not service code.
+
+  # ─── Service-level utility scripts ─────────────────────────────────────
+  # Standalone scripts in services/*/scripts/ are init-container or CLI
+  # utilities — they may use stdlib patterns for minimal dependencies.
+  - rule_id: IG-COMMON-001
+    path: "services/*/scripts/*.py"
+    reason: Service utility scripts may use uuid4() for one-off operations.
+
+  - rule_id: IG-COMMON-001
+    path: "services/*/scripts/**/*.py"
+    reason: Service utility scripts may use uuid4() for one-off operations.
+
+  - rule_id: IG-COMMON-002
+    path: "services/*/scripts/*.py"
+    reason: Service utility scripts may use naive datetime for one-off operations.
+
+  - rule_id: IG-COMMON-002
+    path: "services/*/scripts/**/*.py"
+    reason: Service utility scripts may use naive datetime for one-off operations.
