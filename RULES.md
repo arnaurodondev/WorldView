@@ -135,6 +135,18 @@ No exceptions.
 - Docs: `docs/<short-description>`
 - Refactors: `refactor/<short-description>`
 
+### R19: MUST NOT delete or skip tests to make the test suite pass
+**Why**: Tests are evidence of intended behavior. A failing test — even a pre-existing
+one unrelated to your current change — signals a real problem in the codebase. The
+correct response to a test failure is always to fix the underlying issue:
+1. **Assume the implementation is wrong** until proven otherwise.
+2. If investigation confirms the test itself is wrong (testing outdated behavior, incorrect
+   assertion), fix the test to reflect the correct expected behavior — document why.
+3. Never use `pytest.mark.skip`, `@pytest.mark.xfail`, or test deletion as a workaround
+   for a failing test. If a test cannot be fixed immediately, escalate to the user.
+4. Pre-existing test failures encountered during unrelated work must still be fixed or
+   explicitly reported — they are not someone else's problem.
+
 ---
 
 ## Summary Table
@@ -159,3 +171,4 @@ No exceptions.
 | R16 | Process | MUST NOT |
 | R17 | Process | MUST |
 | R18 | Process | MUST |
+| R19 | Testing | MUST NOT |

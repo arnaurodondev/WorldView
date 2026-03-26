@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from market_ingestion.domain.entities.ingestion_task import IngestionTask
 from market_ingestion.domain.enums import IngestionTaskStatus, Provider
 from market_ingestion.domain.events import MarketDatasetFetched
@@ -128,6 +129,30 @@ async def test_task_repo_count_by_status_returns_dict():
     repo = SqlaTaskRepository(write_session=session, read_session=session)
     counts = await repo.count_by_status()
     assert counts == {"pending": 3, "running": 1}
+
+
+@pytest.mark.unit
+async def test_task_repo_has_active_task_uses_is_null_for_nullable_tuple_fields():
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.first.return_value = None
+    session.execute = AsyncMock(return_value=mock_result)
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    found = await repo.has_active_task(
+        provider=Provider.EODHD,
+        dataset_type=_make_task().dataset_type,
+        symbol="AAPL",
+        exchange=None,
+        timeframe="1d",
+        variant=None,
+    )
+
+    assert found is False
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "exchange IS NULL" in sql
+    assert "dataset_variant IS NULL" in sql
 
 
 # ---------------------------------------------------------------------------

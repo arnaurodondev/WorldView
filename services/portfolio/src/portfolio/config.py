@@ -57,4 +57,5 @@ class Settings(BaseSettings):
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
     log_json: bool = True
+    log_format: str = "json"
     otlp_endpoint: str = ""

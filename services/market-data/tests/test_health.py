@@ -14,7 +14,7 @@ async def test_healthz(client) -> None:
     assert response.json()["status"] == "ok"
 
 
-@pytest.mark.integration
+@pytest.mark.e2e
 @pytest.mark.asyncio
 async def test_readyz(client) -> None:
     response = await client.get("/readyz")

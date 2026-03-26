@@ -12,6 +12,8 @@ build/
 
 # Virtual environments
 .venv/
+.venv-ci-local/
+.venv312
 venv/
 env/
 .env
@@ -36,6 +38,11 @@ apps/*/configs/*.env
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+docs/testing/test-runs/*
+.tmp
+
+# Archives
+docs/archive/*
 
 # OS
 .DS_Store

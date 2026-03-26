@@ -1,71 +1,74 @@
 # AI Interactions
 
-This directory is the canonical location for AI-driven execution artifacts.
+This directory contains AI-driven execution artifacts, workflow governance, and the knowledge base that compounds over time.
 
-## Structure
+## Active System
 
-- `agent-planning/`: planning prompts that produce detailed plans/task backlogs
-- `agent-responses/`: planning responses linked to a prompt ID
-- `agent-prompts/`: execution prompts for implementation agents (derived from plans)
-- `INTERACTIONS_REGISTRY.md`: audit log of prompt/response executions
+The worldview project uses a **skill-based AI workflow** defined in `.claude/skills/`. Skills enforce structured pipelines with validation gates, documentation updates, and compounding knowledge.
 
-## Required Workflow
+### Entry Points
+- **`CLAUDE.md`** (root) — Primary entry point, routes to skills
+- **`.claude/skills/`** — 11 workflow skills (`/prd`, `/plan`, `/implement`, `/review`, `/fix-bug`, `/investigate`, `/test-feature`, `/qa`, `/security-audit`, `/refactor`, `/docs-audit`)
+- **`.claude/agents/`** — 13 role-specific agent definitions
+- **`.claude/review/`** — Code review framework (protocols, checklists, heuristics, knowledge)
+- **`.claude/settings.json`** — Hooks for automatic enforcement
 
-1. Select or create a planning prompt in `agent-planning/`.
-2. Execute the planning prompt with an AI agent.
-3. Store the planning output as an agent response in `agent-responses/`.
-4. Generate execution prompts in `agent-prompts/` using that planning response as source context.
-5. Execute implementation prompts with AI agent(s).
-6. Append implementation evidence/results to the corresponding response artifact in `agent-responses/`.
-7. Register the run in `INTERACTIONS_REGISTRY.md`.
-8. Validate the final response using `agent-responses/0001-review-checklist.md`.
+### Workflow
+```
+/prd (interactive)  → docs/specs/<NNNN>.md
+/plan               → docs/plans/<NNNN>-plan.md
+/implement (per wave) → code + tests + docs + commit
+/review             → structured review report
+/qa                 → full quality assurance pass
+```
 
-## Efficiency + Quality Gate Policy (Mandatory)
+## Directory Structure
 
-All implementation waves must enforce these defaults:
+### Active References
+| Path | Purpose | Updated By |
+|------|---------|------------|
+| `BUG_PATTERNS.md` | Known failure patterns (BP-001+). Mandatory pre-read for all agents. | `/fix-bug`, `/investigate`, `/review` |
+| `WORKFLOW_MAP.md` | Decision tree for task types (bug fix, feature, refactor) | Manual |
+| `ORCHESTRATOR_RUNBOOK.md` | 1 orchestrator + N workers topology, task state machine | Manual |
+| `bug-patterns/` | Extended debugging guides and hotfix procedures | `/fix-bug` |
+| `references/` | EODHD endpoint reference | Manual |
+| `evals/` | Evaluation framework, session logs, outcome tracking | `/implement`, manual |
 
-1. Validate each task incrementally (targeted tests, changed-path lint, changed-package type-check) before moving on.
-2. Do not batch unresolved ruff/mypy failures into end-of-wave cleanup.
-3. Keep execution prompts task-scoped; avoid full backlog/context dumps in worker prompts.
-4. Include a bounded `write_paths` scope in each worker task.
-5. Require a command/result ledger in response artifacts for every mandatory gate.
-6. Run full-suite checks only at wave/final handoff unless explicitly required earlier.
-7. Require `docs/ai-interactions/BUG_PATTERNS.md` scan in every execution prompt pre-read.
-8. In every wave prompt, include a regression-guardrails subsection referencing relevant `BP-xxx` IDs for the task scope.
+### Active Specifications (Unstructured Data Ingestion Block)
+| Path | Purpose |
+|------|---------|
+| `agent-responses/0014-PRD-v1-final.md` | **Authoritative PRD** for S4-S7, S10 ingestion pipeline |
+| `agent-responses/0011-PRD-*.md` | Merged PRD (v4.0, superseded by 0014 but useful reference) |
+| `agent-prompts/0011-*` | Foundation waves (blocking fixes) |
+| `agent-prompts/0012-*` | S4+S5 implementation waves (7 waves) |
+| `agent-prompts/0013-*` | S6+S7+S10 implementation waves (13 waves) |
+| `agent-responses/0011-response-*` | Planning responses for foundation waves |
+| `agent-responses/0012-response-*` | Planning responses for S4+S5 waves |
+| `agent-responses/0013-response-*` | Planning responses for S6+S7+S10 waves |
+| `agent-responses/0014-response-*` | Common library extension response |
 
-## Orchestration Model
+### Templates (Active)
+| Path | Purpose |
+|------|---------|
+| `agent-planning/0000-*` | Prompt library index and conventions |
+| `agent-planning/0005-*` | Generic implementation plan template |
+| `agent-planning/PLANNING_TEMPLATE.md` | Planning prompt template |
+| `agent-planning/PLANNING_CHECKLIST.md` | Pre-planning checklist |
+| `agent-prompts/0000-*` | Execution prompt index and wave generation template |
+| `agent-responses/0000-response-template.md` | Response artifact template |
+| `agent-responses/0001-review-checklist.md` | Review checklist for responses |
 
-- Topology: **1 orchestrator + N workers**
-- Worker scope: one atomic task at a time
-- Orchestrator scope: assignment, dependency control, quality gates, final acceptance
+### Archived
+Historical wave artifacts (Waves 0001-0010, 0015-0016) have been moved to `docs/archive/ai-interactions/`.
 
-Reference docs:
+## Compounding Knowledge
 
-- `ORCHESTRATOR_RUNBOOK.md`
+Every skill execution should check whether these documents need updating:
+- `BUG_PATTERNS.md` — New failure patterns
+- `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` — New risk signals
+- `.claude/review/checklists/REVIEW_CHECKLIST.md` — New checks
+- `docs/STANDARDS.md` — New conventions
+- Service `.claude-context.md` files — Changed capabilities
 
-## Response Naming Rule
-
-Use:
-
-`<prompt-id>-response-<YYYYMMDD>-<short-scope>.md`
-
-Example:
-
-`0002-response-20260306-portfolio-domain-migration.md`
-
-## Documentation Consistency Rule
-
-All agents must:
-
-- read relevant docs before implementation (`AGENTS.md`, `CLAUDE.md`, service/lib docs)
-- scan `docs/ai-interactions/BUG_PATTERNS.md` and cite applicable pattern IDs in implementation handoff evidence
-- update documentation when behavior/contracts/config/schema/API changes
-- include doc updates in the response report
-
-## Useful Templates
-
-- Generic planning template: `agent-planning/0005-generic-implementation-plan-and-task-breakdown-template.md`
-- Execution prompt index: `agent-prompts/0000-execution-prompt-index-and-conventions.md`
-- Response template: `agent-responses/0000-response-template.md`
-- Review checklist: `agent-responses/0001-review-checklist.md`
-- Evidence add-on template: `agent-responses/0002-response-evidence-addon-template.md`
+## Evaluation
+Session outcomes are logged in `evals/sessions/` using `evals/SESSION_TEMPLATE.md`. Monthly reviews aggregate data into `evals/OUTCOME_LOG.md`. See `evals/EVAL_FRAMEWORK.md` for the full process.

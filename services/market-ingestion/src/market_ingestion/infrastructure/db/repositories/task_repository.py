@@ -223,15 +223,28 @@ class SqlaTaskRepository(TaskRepository):
             IngestionTaskStatus.RUNNING.value,
             IngestionTaskStatus.RETRY.value,
         )
+
+        exchange_predicate = (
+            IngestionTaskModel.exchange.is_(None) if exchange is None else IngestionTaskModel.exchange == exchange
+        )
+        timeframe_predicate = (
+            IngestionTaskModel.timeframe.is_(None) if timeframe is None else IngestionTaskModel.timeframe == timeframe
+        )
+        variant_predicate = (
+            IngestionTaskModel.dataset_variant.is_(None)
+            if variant is None
+            else IngestionTaskModel.dataset_variant == variant
+        )
+
         stmt = (
             select(IngestionTaskModel.id)
             .where(
                 IngestionTaskModel.provider == provider.value,
                 IngestionTaskModel.dataset_type == dataset_type.value,
                 IngestionTaskModel.symbol == symbol,
-                IngestionTaskModel.exchange == exchange,
-                IngestionTaskModel.timeframe == timeframe,
-                IngestionTaskModel.dataset_variant == variant,
+                exchange_predicate,
+                timeframe_predicate,
+                variant_predicate,
                 IngestionTaskModel.status.in_(active),
             )
             .limit(1)

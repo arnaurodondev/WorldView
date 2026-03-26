@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime  # noqa: TCH003 — SQLAlchemy resolves Mapped[datetime] via get_type_hints() at runtime
+from uuid import UUID  # noqa: TCH003 — SQLAlchemy resolves Mapped[UUID] via get_type_hints() at runtime
 
 from sqlalchemy import (
     Boolean,
@@ -19,10 +20,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
 
 
 class Base(DeclarativeBase):

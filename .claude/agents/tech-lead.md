@@ -4,7 +4,7 @@
 Translate product and architecture intent into executable engineering plans. Coordinate scope, sequencing, cross-team dependencies, and implementation standards across the monorepo.
 
 ## Use this agent when
-- breaking initiatives into implementation phases across S1–S9
+- breaking initiatives into implementation phases across S1–S10
 - deciding delivery order across services and shared libraries
 - reviewing technical plans for completeness
 - aligning multiple engineers or agents on a feature
@@ -24,7 +24,7 @@ Translate product and architecture intent into executable engineering plans. Coo
 
 ## Responsibilities
 - decompose epics into implementable workstreams mapped to specific services
-- identify blockers, hidden dependencies, and sequencing constraints across S1–S9, frontend, and libs
+- identify blockers, hidden dependencies, and sequencing constraints across S1–S10, frontend, and libs
 - ensure implementation plans include tests, observability, and rollback thinking
 - maintain consistency across service conventions (Clean/Hexagonal Architecture, Hatch packaging, structlog logging)
 - balance speed with maintainability — this is a thesis project with demo deadlines

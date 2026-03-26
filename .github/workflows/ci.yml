@@ -423,13 +423,13 @@ jobs:
       matrix:
         include:
           # Port mappings (host ← container):
-          #   5432 ← postgres, 9092 ← kafka, 8081 ← schema-registry
+          #   55433 ← postgres, 9092 ← kafka, 8081 ← schema-registry
           #   8001 ← portfolio API
           - service: portfolio
             profile: portfolio-test
 
           # Port mappings:
-          #   5432 ← postgres, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
+          #   55433 ← postgres, 7480 ← minio, 9092 ← kafka, 8081 ← schema-registry
           #   6379 ← valkey, 8002 ← market-ingestion API
           - service: market-ingestion
             profile: market-ingestion-test
@@ -456,12 +456,29 @@ jobs:
             --quiet
           python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
+      # docker.env is gitignored (contains local secrets). In CI, bootstrap
+      # from the committed .example files which have correct Docker-network values.
+      - name: Create docker.env from example
+        run: |
+          for svc in portfolio market-ingestion market-data; do
+            example="services/$svc/configs/docker.env.example"
+            target="services/$svc/configs/docker.env"
+            if [ -f "$example" ] && [ ! -f "$target" ]; then
+              cp "$example" "$target"
+            fi
+          done
+
       # Kafka has a 30s start_period; TimescaleDB is also slow on first start.
       # --wait blocks here until every service healthcheck passes.
       - name: Start test stack
         run: |
-          docker compose -f infra/compose/docker-compose.test.yml \
-            --profile ${{ matrix.profile }} up --build --wait
+          if ! docker compose -f infra/compose/docker-compose.test.yml \
+              --profile ${{ matrix.profile }} up --build --wait; then
+            echo "=== migrate container logs ==="
+            docker compose -f infra/compose/docker-compose.test.yml \
+              --profile ${{ matrix.profile }} logs --no-color "${{ matrix.service }}-migrate" 2>/dev/null || true
+            exit 1
+          fi
         timeout-minutes: 12
 
       # market-ingestion integration tests connect directly to Postgres, MinIO,
@@ -471,7 +488,7 @@ jobs:
         if: matrix.service == 'market-ingestion'
         run: |
           {
-            echo "MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ingestion_db"
+            echo "MARKET_INGESTION_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/ingestion_db"
             echo "MARKET_INGESTION_STORAGE_ENDPOINT=http://localhost:7480"
             echo "MARKET_INGESTION_STORAGE_ACCESS_KEY=minioadmin"
             echo "MARKET_INGESTION_STORAGE_SECRET_KEY=minioadmin"

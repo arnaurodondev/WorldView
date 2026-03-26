@@ -21,6 +21,11 @@ from __future__ import annotations
 
 from alembic import op
 
+revision = "003"
+down_revision = "002"
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     # outbox_events
