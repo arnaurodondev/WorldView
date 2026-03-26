@@ -94,6 +94,7 @@ class FetchAndWriteUseCase:
         outbox_repo: OutboxPort,
         commit_fn: Callable[[], Coroutine[Any, Any, None]],
         rollback_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        batch_size: int = 25,
     ) -> None:
         self._adapter = adapter
         self._bronze = bronze
@@ -101,29 +102,49 @@ class FetchAndWriteUseCase:
         self._outbox = outbox_repo
         self._commit_fn = commit_fn
         self._rollback_fn = rollback_fn
+        self._batch_size = batch_size
 
-    async def execute(self, source: Source, *, is_backfill: bool = False) -> FetchSummary:
-        """Run one fetch cycle for *source* and return a summary."""
+    async def execute(
+        self,
+        source: Source,
+        *,
+        is_backfill: bool = False,
+        from_date: str = "",
+        prefetched_results: list[FetchResult] | None = None,
+    ) -> FetchSummary:
+        """Run one fetch cycle for *source* and return a summary.
+
+        Args:
+            source: Polling source configuration.
+            is_backfill: Whether this is a backfill run.
+            from_date: Optional watermark date override for incremental polling.
+            prefetched_results: Pre-fetched results (skip adapter.fetch if provided).
+                Used when fetch happens outside the advisory lock.
+        """
         start = time.monotonic()
         fetched = 0
         skipped = 0
         failed = 0
         errors: list[str] = []
+        pending_in_batch = 0
 
-        # 1. Fetch from external API
-        try:
-            results: list[FetchResult] = await self._adapter.fetch(source, is_backfill=is_backfill)
-        except Exception as exc:
-            duration = time.monotonic() - start
-            logger.error("fetch_failed", source=source.name, error=str(exc))
-            return FetchSummary(
-                source_name=source.name,
-                failed=1,
-                duration_seconds=round(duration, 3),
-                errors=[str(exc)],
-            )
+        # 1. Fetch from external API (or use pre-fetched results)
+        if prefetched_results is not None:
+            results: list[FetchResult] = prefetched_results
+        else:
+            try:
+                results = await self._adapter.fetch(source, is_backfill=is_backfill, from_date=from_date)
+            except Exception as exc:
+                duration = time.monotonic() - start
+                logger.error("fetch_failed", source=source.name, error=str(exc))
+                return FetchSummary(
+                    source_name=source.name,
+                    failed=1,
+                    duration_seconds=round(duration, 3),
+                    errors=[str(exc)],
+                )
 
-        # 2. Process each result
+        # 2. Process each result with batch commits
         for result in results:
             try:
                 # 2a. Dedup check
@@ -175,8 +196,13 @@ class FetchAndWriteUseCase:
                     payload=payload,
                 )
 
-                await self._commit_fn()
                 fetched += 1
+                pending_in_batch += 1
+
+                # Batch commit: flush every batch_size articles
+                if pending_in_batch >= self._batch_size:
+                    await self._commit_fn()
+                    pending_in_batch = 0
 
             except Exception as exc:
                 # Rollback to restore session state so subsequent articles can still process
@@ -185,9 +211,25 @@ class FetchAndWriteUseCase:
                         await self._rollback_fn()
                     except Exception:
                         logger.debug("rollback_failed_after_article_error", url_hash=result.url_hash)
+                pending_in_batch = 0  # batch lost on rollback
                 failed += 1
                 errors.append(f"{result.url_hash}: {exc}")
                 logger.error("article_write_failed", url_hash=result.url_hash, error=str(exc))
+
+        # Commit final partial batch
+        if pending_in_batch > 0:
+            try:
+                await self._commit_fn()
+            except Exception as exc:
+                if self._rollback_fn:
+                    try:
+                        await self._rollback_fn()
+                    except Exception:
+                        logger.debug("rollback_failed_after_final_batch")
+                failed += pending_in_batch
+                fetched -= pending_in_batch
+                errors.append(f"final_batch: {exc}")
+                logger.error("final_batch_commit_failed", error=str(exc))
 
         duration = time.monotonic() - start
         logger.info(

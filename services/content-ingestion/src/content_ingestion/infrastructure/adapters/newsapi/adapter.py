@@ -60,17 +60,17 @@ class NewsAPIAdapter(SourceAdapter):
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
 
-    async def fetch(self, source: Source, *, is_backfill: bool = False) -> list[FetchResult]:
+    async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch and deduplicate NewsAPI articles.
 
         QuotaExhaustedError propagates immediately — no retry.
         """
         config = source.config
         query = config.get("query", "")
-        from_date = config.get("from_date", "")
+        effective_from = from_date or config.get("from_date", "")
 
         try:
-            articles = await self._client.fetch_all_pages(query=query, from_date=from_date)
+            articles = await self._client.fetch_all_pages(query=query, from_date=effective_from)
         except QuotaExhaustedError:
             logger.warning("newsapi_quota_exhausted", query=query)
             raise

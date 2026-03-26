@@ -60,14 +60,14 @@ class FinnhubAdapter(SourceAdapter):
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
 
-    async def fetch(self, source: Source, *, is_backfill: bool = False) -> list[FetchResult]:
+    async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch news + transcripts from Finnhub for the configured symbol.
 
         Dedup uses sha256(str(article_id)). On 429, backs off to next minute boundary.
         """
         config = source.config
         symbol = config.get("symbol", "")
-        from_date = config.get("from_date", "")
+        effective_from = from_date or config.get("from_date", "")
         to_date = config.get("to_date", "")
 
         results: list[FetchResult] = []
@@ -75,14 +75,14 @@ class FinnhubAdapter(SourceAdapter):
         # Fetch company news
         try:
             articles = await self._retry_request(
-                lambda: self._client.fetch_company_news(symbol=symbol, from_date=from_date, to_date=to_date),
+                lambda: self._client.fetch_company_news(symbol=symbol, from_date=effective_from, to_date=to_date),
                 retry_config=self._retry_config,
                 context=f"finnhub:news:{symbol}",
             )
         except RateLimitError as e:
             logger.warning("finnhub_rate_limited", sleep_secs=e.sleep_secs)
             await asyncio.sleep(e.sleep_secs)
-            articles = await self._client.fetch_company_news(symbol=symbol, from_date=from_date, to_date=to_date)
+            articles = await self._client.fetch_company_news(symbol=symbol, from_date=effective_from, to_date=to_date)
 
         if isinstance(articles, list):
             for article in articles:

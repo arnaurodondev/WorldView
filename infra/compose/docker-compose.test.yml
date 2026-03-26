@@ -35,7 +35,7 @@ services:
   # Shared across profiles. tmpfs ensures a clean slate on every run.
   postgres:
     image: postgres:16-alpine
-    profiles: [portfolio-test, market-ingestion-test, dev-tools, all]
+    profiles: [portfolio-test, market-ingestion-test, content-ingestion-test, dev-tools, all]
     ports:
       - "55433:5432"
     environment:
@@ -75,7 +75,7 @@ services:
   # ── Valkey for market-data quote cache ────────────────────────────────────────
   valkey:
     image: valkey/valkey:7
-    profiles: [market-data-test, dev-tools, all]
+    profiles: [market-data-test, content-ingestion-test, dev-tools, all]
     ports:
       - "6379:6379"
     tmpfs:
@@ -91,7 +91,7 @@ services:
   minio:
     image: minio/minio:RELEASE.2024-01-16T16-07-38Z
     command: server /data --console-address ":9001"
-    profiles: [market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     ports:
       - "7480:9000"
       - "7481:9001"
@@ -109,7 +109,7 @@ services:
 
   minio-init-test:
     image: minio/mc:latest
-    profiles: [market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     depends_on:
       minio:
         condition: service_healthy
@@ -125,7 +125,7 @@ services:
   # ── Kafka ─────────────────────────────────────────────────────────────────────
   kafka:
     image: confluentinc/cp-kafka:7.6.0
-    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     ports:
       - "9092:9092"
     environment:
@@ -150,7 +150,7 @@ services:
   # ── Schema Registry (starts only after Kafka is healthy) ────────────────────
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
-    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     ports:
       - "8081:8081"
     environment:
@@ -170,7 +170,7 @@ services:
   # ── Kafka topic initialization (one-shot) ─────────────────────────────────
   kafka-init:
     image: confluentinc/cp-kafka:7.6.0
-    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     depends_on:
       kafka:
         condition: service_healthy
@@ -183,7 +183,7 @@ services:
   # ── Schema Registry: register all Avro schemas (one-shot) ─────────────────
   schema-registry-init:
     image: python:3.12-slim
-    profiles: [portfolio-test, market-ingestion-test, market-data-test, dev-tools, all]
+    profiles: [portfolio-test, market-ingestion-test, market-data-test, content-ingestion-test, dev-tools, all]
     depends_on:
       schema-registry:
         condition: service_healthy
@@ -474,6 +474,21 @@ services:
         condition: service_healthy
       timescaledb:
         condition: service_healthy
+
+  # ── Content Ingestion (S4) ─────────────────────────────────────────────────
+  content-ingestion-migrate:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+      target: base
+    profiles: [content-ingestion-test, all]
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/content_ingestion_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   pgadmin_data:

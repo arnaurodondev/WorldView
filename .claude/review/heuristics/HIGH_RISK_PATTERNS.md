@@ -149,3 +149,27 @@ logger = logging.getLogger(__name__)
 ```
 **Risk**: Bypasses structlog; violates project convention.
 **Fix**: `import structlog; logger = structlog.get_logger()`
+
+---
+
+## RED — Added from S4 QA Review (2026-03-26)
+
+### HR-017: Python `hash()` for Distributed Coordination
+```python
+lock_id = hash(f"s4:fetch:{source.name}")
+await session.execute(text(f"SELECT pg_try_advisory_lock({lock_id})"))
+```
+**Risk**: `hash()` is randomized per process (PEP 456). Different pods compute different lock IDs, defeating mutual exclusion.
+**Fix**: Use `hashlib.sha256` for deterministic cross-process hashing. See `messaging.pg.advisory_lock`.
+
+---
+
+## ORANGE — Added from S4 QA Review (2026-03-26)
+
+### HR-018: `setattr` with User-Controlled Keys Without Allowlist
+```python
+for key, value in kwargs.items():
+    setattr(model, key, value)
+```
+**Risk**: Mass-assignment vulnerability — callers can overwrite internal fields (`id`, `created_at`, `status`) if not constrained.
+**Fix**: Define `_MUTABLE_FIELDS = frozenset({"name", "enabled", "config"})` and reject keys not in the set.
