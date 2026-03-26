@@ -6,6 +6,7 @@ status: in-progress
 created: 2026-03-25
 updated: 2026-03-26
 plans: 2
+
 waves: 8
 tasks: 28
 supersedes: "Original draft based on PRD-0014"
@@ -252,11 +253,12 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 
 ---
 
-### Wave B-2: S5 Text Cleaning + 3-Tier Deduplication
+### Wave B-2: S5 Text Cleaning + 3-Tier Deduplication ✅
 
 **Goal**: Implement the complete dedup pipeline: text extraction/cleaning (4 content types), Stage A (raw SHA-256), Stage B (normalized hash), MinHash computation, and Valkey LSH lookup.
 **Depends on**: Wave B-1
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-26 · 142 unit tests pass (80 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -272,11 +274,11 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 - `libs/messaging/src/messaging/valkey/` — ValkeyClient reference
 
 #### Validation Gate
-- [ ] `ruff check services/content-store/` passes
-- [ ] `mypy services/content-store/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/content-store/tests/unit -v` — all tests pass (≥45 total)
-- [ ] `compute_minhash()` return type verified as `list[int]` (not numpy)
-- [ ] `docs/services/content-store.md` updated with dedup flowchart (Mermaid), text cleaning content types, MinHash/LSH parameters
+- [x] `ruff check services/content-store/` passes
+- [x] `mypy services/content-store/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/content-store/tests/unit -v` — 142 tests pass (≥45 total)
+- [x] `compute_minhash()` return type verified as `list[int]` (not numpy)
+- [x] `docs/services/content-store.md` updated with dedup flowchart (Mermaid), text cleaning content types, MinHash/LSH parameters
 
 #### Regression Guardrails
 - BP-001: Ensure dedup decision metadata compatible with outbox serialization
@@ -428,7 +430,7 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 | Plan | Status | Waves Done | Waves Total |
 |------|--------|-----------|-------------|
 | A: S4 Content Ingestion | in-progress | 3 | 4 |
-| B: S5 Content Store | pending | 0 | 4 |
+| B: S5 Content Store | in-progress | 2 | 4 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
@@ -438,6 +440,6 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 | A-3 | done | 6 | 6 | none |
 | A-4 | pending | 0 | 4 | A-3 |
 | B-1 | pending | 0 | 4 | A-2 |
-| B-2 | pending | 0 | 5 | B-1 |
+| B-2 | done | 5 | 5 | B-1 |
 | B-3 | pending | 0 | 5 | B-2 |
 | B-4 | pending | 0 | 6 | B-3, A-4 |
