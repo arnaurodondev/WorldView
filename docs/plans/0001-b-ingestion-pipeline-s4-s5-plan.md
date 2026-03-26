@@ -97,11 +97,12 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 
 ---
 
-### Wave A-2: S4 Source Adapters — 4 External API Clients
+### Wave A-2: S4 Source Adapters — 4 External API Clients ✅
 
 **Goal**: Implement all 4 external API adapters (EODHD, SEC EDGAR, Finnhub, NewsAPI) with rate limiting, dedup-by-URL-hash, retry (3x backoff), DLQ routing, and backfill support.
 **Depends on**: Wave A-1
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-26 · 89 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -118,11 +119,11 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 - `libs/messaging/src/messaging/valkey/` — Valkey client for NewsAPI quota
 
 #### Validation Gate
-- [ ] `ruff check services/content-ingestion/` passes
-- [ ] `mypy services/content-ingestion/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/content-ingestion/tests/unit -v` — all tests pass (≥45 total)
-- [ ] No inter-adapter imports (each adapter is self-contained)
-- [ ] `docs/services/content-ingestion.md` updated with adapter table (rate limits, dedup methods, DLQ triggers)
+- [x] `ruff check services/content-ingestion/` passes
+- [x] `mypy services/content-ingestion/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/content-ingestion/tests/unit -v` — 89 tests pass (≥45 total)
+- [x] No inter-adapter imports (each adapter is self-contained)
+- [x] `docs/services/content-ingestion.md` updated with adapter table (rate limits, dedup methods, DLQ triggers)
 
 #### Regression Guardrails
 - BP-002: Ensure env vars for API keys are loaded from settings, not hardcoded

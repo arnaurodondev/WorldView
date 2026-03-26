@@ -1,7 +1,7 @@
 # S4 · Content Ingestion Service
 
 > **Owner**: Content domain · **Database**: `content_ingestion_db` · **Port**: 8004
-> **Status**: Wave A-1 complete — foundation layer (domain, DB infra, outbox dispatcher, MinIO bronze adapter, Avro schema)
+> **Status**: Wave A-2 complete — foundation layer + 4 source adapters (EODHD, SEC EDGAR, Finnhub, NewsAPI)
 
 ---
 
@@ -193,12 +193,16 @@ Published on topic `content.article.raw.v1`. Serialized via Schema Registry + `O
 
 ## Source Adapters
 
-| Source | Interval | Auth | Rate Limit |
-|--------|----------|------|------------|
-| EODHD News API | 15 min | `EODHD_API_KEY` | Token bucket |
-| SEC EDGAR EFTS | 30 min | User-Agent required | Semaphore(8) |
-| Finnhub | 15 min | `FINNHUB_API_KEY` | 55/min token bucket |
-| NewsAPI | 15 min | `NEWSAPI_KEY` | Daily quota (Valkey) |
+All adapters inherit from `SourceAdapter` (ABC) at `infrastructure/adapters/base.py`. Each has a `client.py` (HTTP communication) and `adapter.py` (dedup, rate limiting, result mapping).
+
+| Source | Interval | Auth | Rate Limit | Dedup Method | DLQ Trigger | Backfill |
+|--------|----------|------|------------|-------------|-------------|----------|
+| EODHD News API | 15 min | `EODHD_API_KEY` | Token bucket (10 req/s) | `sha256(article.link)` | 3x retry exhausted | Date-range via `from`/`to` |
+| SEC EDGAR EFTS | 30 min | User-Agent required | `asyncio.Semaphore(8)` | `sha256(accession_no + filename)` | 3x retry exhausted | Date-range via `startdt`/`enddt` |
+| Finnhub | 15 min | `FINNHUB_API_KEY` | Token bucket (55/min) | `sha256(str(article_id))` | 3x retry; 429 → sleep to minute boundary | Date-range on news + transcripts |
+| NewsAPI | 15 min | `NEWSAPI_KEY` (X-Api-Key header) | Valkey daily counter (`newsapi:daily_requests:{date}`, 86400s TTL) | `sha256(article.url)` | QuotaExhaustedError breaks immediately (no retry) | Date-range via `from` |
+
+**Shared retry**: All adapters use `_retry_request()` with 3x exponential backoff (1s/2s/4s) via `RetryConfig`. `AdapterError` is raised after exhaustion.
 
 ---
 
@@ -231,7 +235,7 @@ Published on topic `content.article.raw.v1`. Serialized via Schema Registry + `O
 | Unit | Domain, repos, bronze adapter, schema | `.venv/bin/python -m pytest tests/unit -v -m unit` |
 | Integration | Real DB + MinIO + Kafka | `.venv/bin/python -m pytest tests/integration -v -m integration` |
 
-**45 unit tests passing** (Wave A-1).
+**89 unit tests passing** (Wave A-2: 46 foundation + 43 adapter tests).
 
 ---
 
