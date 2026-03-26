@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from messaging.enums import OutboxStatus as OutboxStatus  # — canonical re-export
+
 
 class Provider(StrEnum):
     EODHD = "eodhd"
@@ -36,14 +38,6 @@ class IngestionTaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     RETRY = "retry"
     FAILED = "failed"
-
-
-class OutboxStatus(StrEnum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    DELIVERED = "delivered"
-    FAILED = "failed"
-    DEAD_LETTER = "dead_letter"
 
 
 class BackfillStatus(StrEnum):

@@ -44,9 +44,15 @@ class TestSourceType:
 
 
 class TestOutboxStatus:
+    def test_all_five_values(self) -> None:
+        # OutboxStatus now comes from libs/messaging with all 5 canonical values
+        expected = {"pending", "processing", "delivered", "failed", "dead_letter"}
+        assert {v.value for v in OutboxStatus} == expected
+
     def test_values(self) -> None:
         assert OutboxStatus.PENDING == "pending"
         assert OutboxStatus.DELIVERED == "delivered"
+        assert OutboxStatus.FAILED == "failed"
 
 
 class TestResolutionStatus:

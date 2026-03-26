@@ -33,6 +33,7 @@ Topics:
     Topic name constants (see messaging.topics)
 """
 
+from messaging.enums import OutboxStatus
 from messaging.kafka.consumer.base import (
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -113,6 +114,7 @@ __all__ = [
     "MissingRequiredFieldError",
     "NetworkTimeoutError",
     "OutboxEventValueSerializer",
+    "OutboxStatus",
     "OutboxKafkaValue",
     "OutboxRecordProtocol",
     "OutboxRepositoryProtocol",
