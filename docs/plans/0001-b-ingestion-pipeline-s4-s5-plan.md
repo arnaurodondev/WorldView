@@ -168,11 +168,12 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 
 ---
 
-### Wave A-4: S4 Integration Tests
+### Wave A-4: S4 Integration Tests ✅
 
 **Goal**: Validate the complete S4 pipeline end-to-end against real infrastructure (Postgres, Kafka, MinIO). This wave is the exit gate before S5 can consume S4 output.
 **Depends on**: Wave A-3
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-26 · 24 integration tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -188,10 +189,10 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 - `services/market-data/tests/integration/` — reference fixtures
 
 #### Validation Gate
-- [ ] `python -m pytest services/content-ingestion/tests/integration -v -m integration` — all integration tests pass
-- [ ] `python -m pytest services/content-ingestion/tests/unit -v` — no unit test regression
-- [ ] `ruff check` + `mypy` clean
-- [ ] S4 pipeline confirmed: raw article → MinIO bronze → outbox → Kafka `content.article.raw.v1`
+- [x] `python -m pytest services/content-ingestion/tests/integration -v -m integration` — 24 integration tests pass
+- [x] `python -m pytest services/content-ingestion/tests/unit -v` — 126 unit tests pass (no regression)
+- [x] `ruff check` + `mypy` clean
+- [x] S4 pipeline confirmed: raw article → MinIO bronze → outbox → Kafka `content.article.raw.v1`
 
 #### Regression Guardrails
 - BP-003: Async fixture teardown — use `asyncio_mode=auto`, scope carefully

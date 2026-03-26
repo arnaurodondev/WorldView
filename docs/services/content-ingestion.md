@@ -1,7 +1,7 @@
 # S4 · Content Ingestion Service
 
 > **Owner**: Content domain · **Database**: `content_ingestion_db` · **Port**: 8004
-> **Status**: Wave A-2 complete — foundation layer + 4 source adapters (EODHD, SEC EDGAR, Finnhub, NewsAPI)
+> **Status**: Wave A-4 complete — foundation + adapters + scheduler/API + integration tests
 
 ---
 
@@ -232,10 +232,28 @@ All adapters inherit from `SourceAdapter` (ABC) at `infrastructure/adapters/base
 
 | Type | What | Command |
 |------|------|---------|
-| Unit | Domain, repos, bronze adapter, schema | `.venv/bin/python -m pytest tests/unit -v -m unit` |
-| Integration | Real DB + MinIO + Kafka | `.venv/bin/python -m pytest tests/integration -v -m integration` |
+| Unit | Domain, repos, adapters, use-cases, API, scheduler | `python -m pytest tests/unit -v -m unit` |
+| Integration | Real DB + MinIO pipeline, idempotency, admin API, outbox | `python -m pytest tests/integration -v -m integration` |
 
-**89 unit tests passing** (Wave A-2: 46 foundation + 43 adapter tests).
+**126 unit tests + 24 integration tests passing** (Wave A-4 complete).
+
+### Integration Test Setup
+
+Integration tests default to the shared platform infra (`infra/compose/docker-compose.yml`).
+Alternatively, use the standalone S4 compose (`tests/docker-compose.test.yml`) with env var overrides.
+
+```bash
+# Preferred: shared infra (all services share one Postgres/Kafka/MinIO)
+docker compose -f infra/compose/docker-compose.yml --profile infra up -d
+python -m pytest tests/integration -v -m integration
+
+# Alternative: S4-only infra on non-conflicting ports
+docker compose -f tests/docker-compose.test.yml --profile s4-test up -d
+S4_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:54320/content_ingestion_test_db \
+  python -m pytest tests/integration -v -m integration
+```
+
+Tests skip gracefully when infra is unavailable (BP-004).
 
 ---
 

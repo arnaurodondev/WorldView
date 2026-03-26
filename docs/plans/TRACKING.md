@@ -7,9 +7,10 @@
 
 | Plan ID | Title | PRD | Status | Waves Done/Total | Updated |
 |---------|-------|-----|--------|-----------------|---------|
-| PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | in-progress | 2/8 | 2026-03-26 |
+| PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | in-progress | 4/8 | 2026-03-26 |
 | PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | draft | 0/11 | 2026-03-25 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | 2026-03-25 |
+| PLAN-0001-B-R1 | S4 Review Fixes: Advisory Lock, Watermarks, Auth Tokens, Robustness | Review | draft | 0/4 | 2026-03-26 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
@@ -17,17 +18,17 @@
 ```
 PLAN-0001-A Wave 1 (Avro schemas, repo fixes) ──→ PLAN-0001-B (S4+S5)
           │                                              │
-          ├─→ PLAN-0001-A Wave 2 (intelligence-migrations) ──→ PLAN-0013 Sub-Plan C (S6)
+          ├─→ PLAN-0001-A Wave 2 (intelligence-migrations) ──→ PLAN-0001-C Sub-Plan C (S6)
           │                                                           │
           └─→ PLAN-0001-A Wave 3 (S1 internal endpoints)            │
                     │                                                │
-                    └──→ PLAN-0013 Sub-Plan E (S10) ←────────────── │
+                    └──→ PLAN-0001-C Sub-Plan E (S10) ←────────────── │
                                                                      │
-PLAN-0001-B + PLAN-0013 C+D ──→ PLAN-0001-D (S9 Gateway)
+PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 ```
 
-**Critical path**: 0001-A W1 → 0012 A-1..A-4 → 0012 B-1..B-4 → 0013 C-1..C-4 → 0013 D-1..D-4 → 0013 E-1..E-3
-**Parallelizable**: 0001-A W2 ∥ W3 (after W1); 0001-D W1 (after 0012); S10 (after S1 internal + S7)
+**Critical path**: 0001-A W1 → 0001-B A-1..A-4 → 0001-B B-1..B-4 → 0001-C C-1..C-4 → 0001-C D-1..D-4 → 0001-C E-1..E-3
+**Parallelizable**: 0001-A W2 ∥ W3 (after W1); 0001-D W1 (after 0001-B); S10 (after S1 internal + S7)
 
 ## Completed Plans
 
