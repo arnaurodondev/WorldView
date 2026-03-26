@@ -1,7 +1,7 @@
 # S5 · Content Store Service
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Foundation complete (Wave B-1)
+> **Status**: Dedup pipeline complete (Wave B-2)
 
 ---
 
@@ -184,32 +184,88 @@ CREATE TABLE dead_letter_queue (
 
 ```
 services/content-store/src/content_store/
-├── app.py              # FastAPI app factory
-├── config.py           # Settings
-├── api/                # Article query routes
-├── domain/             # Article entity, dedup logic
-├── application/        # Store use-cases
-└── infrastructure/     # DB, Kafka adapters
+├── app.py                              # FastAPI app factory
+├── config.py                           # Settings
+├── api/                                # Article query routes
+├── domain/                             # Entities, enums, errors, value objects
+├── application/
+│   ├── text_cleaning/cleaner.py        # extract/sanitize/normalize/clean pipeline
+│   └── deduplication/
+│       ├── stage_a_raw.py              # SHA-256 raw bytes hash
+│       ├── stage_b_normalized.py       # Normalized URL+text hash
+│       └── minhash_compute.py          # MinHash signature (datasketch)
+└── infrastructure/
+    ├── db/                             # SQLAlchemy models, repositories
+    └── valkey/lsh_client.py            # 4-band LSH index over Valkey sorted sets
 ```
 
 ---
 
 ## Three-Stage Deduplication
 
-| Stage | Method | Action on Match |
-|-------|--------|----------------|
-| 1 — Exact hash | SHA-256 of normalized URL | Hard duplicate → skip, mark `is_duplicate=true` |
-| 2 — Normalized hash | SHA-256 of lowercased canonical URL (strip UTM params, etc.) | Hard duplicate → skip |
-| 3 — Valkey LSH near-dup | MinHash (128 perms) + LSH bands (4 × 32); Jaccard threshold varies by doc type | Hard dup (≥ threshold) → skip; Soft dup (Tier 2) → store with `is_duplicate=false` but `near_duplicate_of` set |
+```mermaid
+flowchart TD
+    A[Raw article bytes] --> B[Stage A: SHA-256 raw hash]
+    B -->|Found in dedup_hashes| C[DUPLICATE_EXACT → suppress]
+    B -->|Not found| D[Text Cleaning Pipeline]
+    D --> E[Stage B: Normalized hash]
+    E -->|Found| F[DUPLICATE_NORMALIZED → suppress]
+    E -->|Not found| G[Stage C: MinHash + LSH]
+    G --> H[compute_shingles: word bigrams + char trigrams]
+    H --> I[compute_minhash: 128 perms → list of int]
+    I --> J[Tier 1: Valkey band lookup across 4 bands]
+    J -->|No candidates| K[UNIQUE → store]
+    J -->|Candidates found| L[Tier 2: Exact Jaccard comparison]
+    L -->|J >= hard, same source| M[SAME_SOURCE_DUPLICATE → suppress]
+    L -->|J >= hard, diff source| N[CORROBORATING → retain both, link]
+    L -->|soft <= J < hard| O[SEMANTIC_NEAR_DUPLICATE → store]
+    L -->|J < soft| K
+```
 
-Dedup thresholds (configurable via ENV):
+### Text Cleaning Pipeline
 
-| Doc Type | Hard Threshold | Soft (Tier 2) Threshold | LSH Window |
-|----------|---------------|------------------------|------------|
-| News | 0.72 | 0.55 | 7 days |
-| Filings | 0.85 | — | 180 days |
-| Transcripts | 0.75 | — | 60 days |
-| Research | — | — | 30 days |
+| Content Type | Extraction Method | Library |
+|-------------|------------------|---------|
+| HTML | readability-lxml → bleach strip | `readability-lxml`, `bleach` |
+| XML | bleach strip all tags | `bleach` |
+| JSON | Recursive string field extraction | stdlib `json` |
+| Plain text | UTF-8 decode with error replacement | stdlib |
+
+Normalization: NFC Unicode → strip zero-width chars → collapse whitespace.
+
+### MinHash Computation
+
+- **Text normalization**: NFC, lowercase, strip punctuation, remove FINANCIAL_STOPWORDS + tokens ≤1 char
+- **Shingling**: union of word bigrams (`w:{t1}_{t2}`) + char trigrams (`c:{text[i:i+3]}`)
+- **Signature**: 128 permutations via `datasketch.MinHash` → `list[int]` (CRITICAL: never numpy)
+- **Storage**: PostgreSQL `INTEGER[]` column
+
+### Valkey LSH Index
+
+- **Configuration**: 4 bands × 32 rows per band
+- **Band hash**: MD5 of band slice integers
+- **Key format**: `lsh:band:{band_id}:{bucket_hash}:{source_type}`
+- **Score**: Unix timestamp (for time-window expiry via ZRANGEBYSCORE)
+- **Member format**: `{doc_id}:{source_name}` (enables same-source detection)
+
+### Dedup Thresholds (per source type)
+
+| Source Type | Hard Threshold | Soft Threshold | LSH Window |
+|-------------|---------------|----------------|------------|
+| News (EODHD, NewsAPI) | 0.72 | 0.55 | 7 days |
+| Filings (SEC EDGAR) | 0.85 | 0.70 | 180 days |
+| Transcripts (Finnhub) | 0.75 | 0.60 | 60 days |
+| Research (Manual) | 0.70 | 0.55 | 30 days |
+| Press Release | — | — | 14 days |
+
+### Decision Matrix
+
+| Jaccard | Source | Outcome |
+|---------|--------|---------|
+| ≥ hard_threshold | Same source_name | `SAME_SOURCE_DUPLICATE` — suppress |
+| ≥ hard_threshold | Different source_name | `CORROBORATING` — retain both, link |
+| soft ≤ J < hard | Any | `SEMANTIC_NEAR_DUPLICATE` — store |
+| < soft_threshold | Any | `UNIQUE` — store |
 
 ---
 
