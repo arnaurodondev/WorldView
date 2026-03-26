@@ -2,9 +2,9 @@
 id: PLAN-0001-B
 prd: PRD-0001
 title: "Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store — Implementation Plan"
-status: draft
+status: in-progress
 created: 2026-03-25
-updated: 2026-03-25
+updated: 2026-03-26
 plans: 2
 waves: 8
 tasks: 28
@@ -60,11 +60,12 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 
 ---
 
-### Wave A-1: S4 Foundation — Config, Domain, DB, MinIO
+### Wave A-1: S4 Foundation — Config, Domain, DB, MinIO ✅
 
 **Goal**: Establish the zero-dependency foundation layer: settings, domain entities, database infrastructure with repositories, MinIO bronze adapter, and Avro schema definition.
 **Depends on**: none
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-26
 
 #### Tasks
 
@@ -131,11 +132,12 @@ S4 is a polling-based content ingestion service. It uses APScheduler to periodic
 
 ---
 
-### Wave A-3: S4 Scheduler, Use-Case, Admin API, DLQ, Observability
+### Wave A-3: S4 Scheduler, Use-Case, Admin API, DLQ, Observability ✅
 
 **Goal**: Complete S4 service with APScheduler polling, fetch-and-write use-case (outbox pattern), admin API endpoints, DLQ management, health probes, Prometheus metrics, and `main.py` wiring.
 **Depends on**: Wave A-2
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-26 · 126 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -423,15 +425,15 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 ### Plan Status
 | Plan | Status | Waves Done | Waves Total |
 |------|--------|-----------|-------------|
-| A: S4 Content Ingestion | in-progress | 1 | 4 |
+| A: S4 Content Ingestion | in-progress | 3 | 4 |
 | B: S5 Content Store | pending | 0 | 4 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
 |------|--------|-----------|-------------|----------|
 | A-1 | done | 6 | 6 | none |
-| A-2 | pending | 0 | 5 | A-1 |
-| A-3 | pending | 0 | 6 | A-2 |
+| A-2 | done | 5 | 5 | none |
+| A-3 | done | 6 | 6 | none |
 | A-4 | pending | 0 | 4 | A-3 |
 | B-1 | pending | 0 | 4 | A-2 |
 | B-2 | pending | 0 | 5 | B-1 |

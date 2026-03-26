@@ -1,9 +1,10 @@
-"""Health and readiness endpoints."""
+"""Health, readiness, and metrics endpoints."""
 
 from __future__ import annotations
 
 import json
 
+import prometheus_client
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
 
@@ -39,9 +40,29 @@ async def readyz(request: Request) -> Response:
         checks["valkey"] = f"error: {exc}"
         ok = False
 
-    status = 200 if ok else 503
+    # MinIO check
+    try:
+        storage = getattr(request.app.state, "storage", None)
+        if storage is not None:
+            await storage.exists(
+                request.app.state.settings.minio_bucket,
+                "__healthcheck__",
+            )
+        checks["minio"] = "ok"
+    except Exception as exc:
+        checks["minio"] = f"error: {exc}"
+        ok = False
+
+    status_code = 200 if ok else 503
     return Response(
         content=json.dumps({"status": "ok" if ok else "degraded", **checks}),
-        status_code=status,
+        status_code=status_code,
         media_type="application/json",
     )
+
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    data = prometheus_client.generate_latest()
+    return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
