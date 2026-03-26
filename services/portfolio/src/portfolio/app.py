@@ -14,6 +14,7 @@ from observability import configure_logging, configure_tracing, get_logger  # ty
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
+from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
 from portfolio.config import Settings
 from portfolio.domain.errors import DomainError
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
 
     # API routes
     app.include_router(api_router)
+    app.include_router(internal_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

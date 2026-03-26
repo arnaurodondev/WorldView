@@ -166,6 +166,22 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Intelligence DB migrations (one-shot) ────────────────────────────────────
+  # Owns ALL DDL for intelligence_db. S6/S7 must set ALEMBIC_ENABLED=false.
+  intelligence-migrations:
+    build:
+      context: ../../services/intelligence-migrations
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres:5432/intelligence_db"
+      EMBEDDING_BASE_URL: "http://ollama:11434"
+      EMBEDDING_MODEL: "bge-large-en-v1.5"
+    restart: "no"
+
   # ── Portfolio migrations (one-shot) ──────────────────────────────────────────
   portfolio-migrate:
     build:

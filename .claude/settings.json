@@ -2,6 +2,30 @@
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(stat:*)",
+      "Bash(du:*)",
+      "Bash(diff:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(sudo:*)",
+      "Bash(chmod:*)",
+      "Bash(find:* -exec *)",
+      "Bash(find:* -delete *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

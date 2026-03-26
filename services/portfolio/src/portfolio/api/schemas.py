@@ -233,3 +233,32 @@ class EntitySuppressionCreateRequest(BaseModel):
 class AlertPreferencesListResponse(BaseModel):
     preferences: list[AlertPreferenceResponse]
     suppressions: list[EntitySuppressionResponse]
+
+
+# ── Internal API schemas (S10 → S1) ─────────────────────────────────────────
+
+
+class WatcherInfo(BaseModel):
+    """A user watching an entity via a specific watchlist."""
+
+    user_id: UUID
+    watchlist_id: UUID
+    alert_types: list[str] = []
+
+
+class WatchersByEntityResponse(BaseModel):
+    entity_id: UUID
+    watchers: list[WatcherInfo]
+
+
+class BatchEntityLookupRequest(BaseModel):
+    entity_ids: list[UUID]
+
+
+class BatchEntityLookupResponse(BaseModel):
+    results: dict[str, list[WatcherInfo]]
+
+
+class WatchlistEntitiesResponse(BaseModel):
+    watchlist_id: UUID
+    entity_ids: list[UUID]

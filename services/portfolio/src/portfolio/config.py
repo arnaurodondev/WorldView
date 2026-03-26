@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
     watchlist_cache_ttl_seconds: int = 300
 
+    # Internal service-to-service auth (S10 → S1)
+    internal_service_token: str = ""
+
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
     log_json: bool = True

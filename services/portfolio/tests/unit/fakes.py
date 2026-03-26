@@ -16,6 +16,7 @@ from portfolio.application.ports.repositories import (
     TenantRepository,
     TransactionRepository,
     UserRepository,
+    WatcherDTO,
     WatchlistMemberRepository,
     WatchlistRepository,
 )
@@ -225,8 +226,9 @@ class FakeWatchlistRepository(WatchlistRepository):
 class FakeWatchlistMemberRepository(WatchlistMemberRepository):
     """In-memory watchlist member store keyed by (watchlist_id, entity_id)."""
 
-    def __init__(self) -> None:
+    def __init__(self, watchlist_store: dict[UUID, Watchlist] | None = None) -> None:
         self._store: dict[tuple[UUID, UUID], WatchlistMember] = {}
+        self._watchlist_store: dict[UUID, Watchlist] = watchlist_store if watchlist_store is not None else {}
 
     async def get(self, watchlist_id: UUID, entity_id: UUID) -> WatchlistMember | None:
         return self._store.get((watchlist_id, entity_id))
@@ -236,6 +238,24 @@ class FakeWatchlistMemberRepository(WatchlistMemberRepository):
 
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]:
         return [m for (_, eid), m in self._store.items() if eid == entity_id]
+
+    async def get_watchers_by_entity(self, entity_id: UUID) -> list[WatcherDTO]:
+        # Requires access to watchlist store to get user_id — use _uow reference
+        members = await self.list_by_entity(entity_id)
+        watchers: list[WatcherDTO] = []
+        for m in members:
+            wl = self._watchlist_store.get(m.watchlist_id)
+            if wl is not None:
+                watchers.append(WatcherDTO(user_id=wl.user_id, watchlist_id=m.watchlist_id))
+        return watchers
+
+    async def get_watchers_by_entities(self, entity_ids: list[UUID]) -> dict[UUID, list[WatcherDTO]]:
+        result: dict[UUID, list[WatcherDTO]] = {}
+        for eid in entity_ids:
+            w = await self.get_watchers_by_entity(eid)
+            if w:
+                result[eid] = w
+        return result
 
     async def save(self, member: WatchlistMember) -> None:
         self._store[(member.watchlist_id, member.entity_id)] = member
@@ -289,7 +309,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._outbox = FakeOutboxRepository()
         self._idempotency = FakeIdempotencyRepository()
         self._watchlists = FakeWatchlistRepository()
-        self._watchlist_members = FakeWatchlistMemberRepository()
+        self._watchlist_members = FakeWatchlistMemberRepository(watchlist_store=self._watchlists._store)
         self._alert_preferences = FakeAlertPreferenceRepository()
         self._entity_suppressions = FakeEntitySuppressionRepository()
         self.committed = False
