@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-import structlog.contextvars  # context binding only — logger via observability.get_logger
+import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from content_ingestion.api.routes import health
+from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
+from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
+from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
 from content_ingestion.infrastructure.db.session import create_session_factory
 from content_ingestion.infrastructure.messaging.outbox.dispatcher import ContentIngestionOutboxDispatcher
+from content_ingestion.infrastructure.metrics.prometheus import record_fetch, s4_dlq_total, s4_outbox_pending_total
+from content_ingestion.infrastructure.scheduler.advisory_lock import pg_advisory_lock
+from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY, IngestionScheduler
+from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -23,6 +30,10 @@ from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+
+    from content_ingestion.domain.entities import Source
+
+logger_mod = get_logger("content_ingestion.app")  # type: ignore[no-any-return]
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -50,6 +61,107 @@ def _normalize_endpoint(endpoint: str) -> str:
     return f"http://{endpoint}"
 
 
+async def _run_fetch_cycle(
+    source: Source,
+    settings: Settings,
+    session_factory: object,
+    storage: object,
+    valkey: object,
+) -> None:
+    """Execute one fetch-and-write cycle for a source, with advisory lock."""
+    from content_ingestion.application.use_cases.fetch_and_write import FetchAndWriteUseCase
+    from content_ingestion.domain.value_objects import TokenBucket
+
+    async with session_factory() as session, pg_advisory_lock(session, f"s4:fetch:{source.name}") as acquired:  # type: ignore[operator]
+        if not acquired:
+            return
+
+        adapter_cls = ADAPTER_REGISTRY.get(source.source_type)
+        if adapter_cls is None:
+            return
+
+        # Build adapter dependencies
+        fetch_log_repo = FetchLogRepository(session)
+        client_module = __import__(
+            f"content_ingestion.infrastructure.adapters.{source.source_type}.client",
+            fromlist=["*"],
+        )
+
+        # Build client and adapter based on source type
+        import common.time as ct
+
+        now = ct.utc_now()
+        rate_limiter = TokenBucket(capacity=10, tokens=10.0, refill_rate=10.0, last_refill=now)
+
+        if source.source_type.value == "eodhd":
+            client = client_module.EODHDClient(api_key=settings.eodhd_api_key)
+        elif source.source_type.value == "sec_edgar":
+            client = client_module.SECEdgarClient(user_agent=settings.sec_edgar_user_agent)
+        elif source.source_type.value == "finnhub":
+            client = client_module.FinnhubClient(api_key=settings.finnhub_api_key)
+            rate_limiter = TokenBucket(capacity=55, tokens=55.0, refill_rate=55.0 / 60.0, last_refill=now)
+        elif source.source_type.value == "newsapi":
+            client = client_module.NewsAPIClient(
+                api_key=settings.newsapi_key,
+                valkey=valkey,
+                daily_limit=settings.newsapi_daily_limit,
+            )
+        else:
+            return
+
+        adapter = adapter_cls(  # type: ignore[call-arg]
+            client=client,
+            rate_limiter=rate_limiter,
+            exists_fn=fetch_log_repo.exists_by_url_hash,
+        )
+
+        bronze = MinioBronzeAdapter(storage)  # type: ignore[arg-type]
+        outbox_repo = OutboxRepository(session)
+        use_case = FetchAndWriteUseCase(
+            adapter=adapter,
+            bronze=bronze,
+            fetch_log_repo=fetch_log_repo,
+            outbox_repo=outbox_repo,
+            commit_fn=session.commit,
+        )
+
+        summary = await use_case.execute(source, is_backfill=settings.backfill_enabled)
+
+        # Record metrics
+        record_fetch(
+            source.name,
+            fetched=summary.fetched,
+            skipped=summary.skipped,
+            failed=summary.failed,
+            duration=summary.duration_seconds,
+        )
+
+
+async def _metrics_poller(session_factory: object, interval: int) -> None:
+    """Periodically update outbox/DLQ gauge metrics."""
+    from sqlalchemy import func, select
+
+    from content_ingestion.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
+
+    while True:
+        try:
+            async with session_factory() as session:  # type: ignore[operator]
+                outbox_result = await session.execute(
+                    select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending")
+                )
+                s4_outbox_pending_total.set(outbox_result.scalar() or 0)
+
+                dlq_result = await session.execute(
+                    select(func.count())
+                    .select_from(DeadLetterQueueModel)
+                    .where(DeadLetterQueueModel.status == "failed")
+                )
+                s4_dlq_total.set(dlq_result.scalar() or 0)
+        except Exception:
+            logger_mod.debug("metrics_poll_error", exc_info=True)
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
@@ -61,7 +173,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         level=settings.log_level,
         json=settings.log_json,
     )
-    logger = get_logger("content_ingestion.app")
+    log = get_logger("content_ingestion.app")
 
     # 2. Metrics
     metrics = create_metrics(service_name="content-ingestion")
@@ -92,9 +204,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         use_ssl=settings.minio_secure,
         default_bucket=settings.minio_bucket,
     )
-    storage = build_object_storage(
-        settings=storage_settings,
-    )
+    storage = build_object_storage(settings=storage_settings)
     app.state.storage = storage
 
     # 7. Outbox dispatcher (background task)
@@ -105,13 +215,63 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dispatch_task: asyncio.Task[Any] = asyncio.create_task(dispatcher.run())
     app.state.dispatcher = dispatcher
 
-    logger.info("service_started", service="content-ingestion")
+    # 8. Scheduler — fetch all sources and start polling
+    async def run_fn(source: Source) -> None:
+        await _run_fetch_cycle(source, settings, session_factory, storage, valkey)
+
+    app.state.trigger_fn = run_fn
+
+    from content_ingestion.infrastructure.db.repositories.source import SourceRepository
+
+    scheduler = IngestionScheduler(
+        interval_seconds=settings.scheduler_interval_seconds,
+        run_fn=run_fn,
+    )
+
+    # Load sources from DB
+    try:
+        async with session_factory() as session:
+            repo = SourceRepository(session)
+            sources_models = await repo.get_all()
+
+        from content_ingestion.domain.entities import Source as DomainSource
+        from content_ingestion.domain.entities import SourceType
+
+        domain_sources = [
+            DomainSource(
+                name=s.name,
+                source_type=SourceType(s.source_type),
+                enabled=s.enabled,
+                config=s.config,
+                id=s.id,
+                created_at=s.created_at,
+            )
+            for s in sources_models
+        ]
+        await scheduler.start(domain_sources)
+    except Exception:
+        log.warning("scheduler_source_load_failed", exc_info=True)
+
+    app.state.scheduler = scheduler
+
+    # 9. Metrics poller (background task)
+    metrics_task: asyncio.Task[None] = asyncio.create_task(
+        _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds)
+    )
+
+    log.info("service_started", service="content-ingestion")
     yield
 
+    # Shutdown
+    metrics_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await metrics_task
+
+    await scheduler.stop()
     dispatcher.stop()
     await dispatch_task
     await valkey.close()
-    logger.info("service_stopped", service="content-ingestion")
+    log.info("service_stopped", service="content-ingestion")
 
 
 def create_app() -> FastAPI:
@@ -123,4 +283,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestIdMiddleware)
     app.include_router(health.router, tags=["health"])
+    app.include_router(admin.router)
+    app.include_router(dlq.router)
+    app.include_router(internal.router)
     return app
