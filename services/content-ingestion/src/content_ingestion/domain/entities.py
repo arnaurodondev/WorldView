@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -12,16 +11,7 @@ if TYPE_CHECKING:
 
 import common.ids
 import common.time
-
-
-class SourceType(StrEnum):
-    """Supported ingestion sources."""
-
-    EODHD = "eodhd"
-    SEC_EDGAR = "sec_edgar"
-    FINNHUB = "finnhub"
-    NEWSAPI = "newsapi"
-    MANUAL = "manual"
+from contracts.enums import ContentSourceType as SourceType  # noqa: TCH001 — runtime re-export
 
 
 @dataclass

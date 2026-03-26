@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from messaging.enums import OutboxStatus as OutboxStatus  # — canonical re-export
+
 
 class TenantStatus(StrEnum):
     ACTIVE = "active"
@@ -35,14 +37,6 @@ class TransactionType(StrEnum):
 class TransactionDirection(StrEnum):
     INFLOW = "INFLOW"
     OUTFLOW = "OUTFLOW"
-
-
-class OutboxStatus(StrEnum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    DELIVERED = "delivered"
-    FAILED = "failed"
-    DEAD_LETTER = "dead_letter"
 
 
 class IdempotencyState(StrEnum):

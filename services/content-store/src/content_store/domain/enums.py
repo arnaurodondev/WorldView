@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from contracts.enums import ContentSourceType as SourceType
+from messaging.enums import OutboxStatus as OutboxStatus
+
+__all__ = [  # — intentional grouping: re-exports first, then local
+    "OutboxStatus",
+    "SourceType",
+    "DedupOutcome",
+    "DocumentStatus",
+    "ResolutionStatus",
+]
+
 
 class DedupOutcome(StrEnum):
     """Result of the 3-stage deduplication pipeline."""
@@ -26,28 +37,9 @@ class DocumentStatus(StrEnum):
     DUPLICATE_NEAR = "duplicate_near"
 
 
-class OutboxStatus(StrEnum):
-    """Outbox event lifecycle status."""
-
-    PENDING = "pending"
-    PROCESSING = "processing"
-    DELIVERED = "delivered"
-    DEAD_LETTER = "dead_letter"
-
-
 class ResolutionStatus(StrEnum):
     """Entity mention resolution status."""
 
     UNRESOLVED = "UNRESOLVED"
     RESOLVED = "RESOLVED"
     FAILED = "FAILED"
-
-
-class SourceType(StrEnum):
-    """Content source types matching S4 output."""
-
-    EODHD = "eodhd"
-    SEC_EDGAR = "sec_edgar"
-    FINNHUB = "finnhub"
-    NEWSAPI = "newsapi"
-    MANUAL = "manual"

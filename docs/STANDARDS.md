@@ -221,6 +221,26 @@ def store_document(doc_id: UUID, key: str) -> None: ...
 | `TopicName` | `str` | Kafka topic name |
 | `EventId` | `UUID` | Outbox / domain event identifier |
 
+### 2.4 Shared Enums — Placement Rules
+
+Some enums are shared across multiple services. Use the correct canonical location:
+
+| Enum | Location | Used By | Purpose |
+|------|----------|---------|---------|
+| `OutboxStatus` | `messaging.enums` | S1, S2, S4, S5+ | Outbox event lifecycle (PENDING → PROCESSING → DELIVERED \| FAILED → DEAD_LETTER) |
+| `ContentSourceType` | `contracts.enums` | S4, S5 | Content source discriminator in Avro events |
+
+**Decision criteria for new shared enums:**
+1. **3+ services need it** with identical semantics → shared lib
+2. **Cross-service event discriminator** (producer sets, consumer reads) → `libs/contracts/enums.py`
+3. **Infrastructure lifecycle** (outbox, consumer, dispatcher states) → `libs/messaging/enums.py`
+4. **Service-local domain logic** (even if names overlap) → keep in `domain/enums.py`
+
+**Re-export pattern** — services re-export shared enums from `domain/enums.py` to preserve internal import paths:
+```python
+from messaging.enums import OutboxStatus as OutboxStatus  # re-export
+```
+
 ---
 
 ## 3. libs/messaging — Outbox, Dispatcher, Kafka, Valkey
@@ -460,6 +480,20 @@ class ArticleRawConsumer(BaseKafkaConsumer):
 **Error classification** (see `docs/architecture/decisions/0005-messaging-error-classification.md`):
 - `RetryableError` — transient failures (DB unavailable, network timeout): automatic backoff + retry.
 - `FatalError` — permanent failures (schema mismatch, invalid payload): immediate dead-letter, no retry.
+
+### 3.8 Outbox Design Rules
+
+New services implementing the outbox pattern MUST follow these rules:
+
+**R-OUTBOX-1: Canonical column names** — Use protocol-standard names: `id` (UUID), `event_type`, `topic`, `payload` (JSONB), `status`, `attempts`, `leased_until`, `lease_owner`, `created_at`, `dispatched_at`.
+
+**R-OUTBOX-2: Canonical status values** — Import `OutboxStatus` from `messaging.enums`: PENDING → PROCESSING → DELIVERED | FAILED → DEAD_LETTER. Services MAY add service-specific statuses but MUST support the canonical 5.
+
+**R-OUTBOX-3: DLQ population** — If a service defines a `dead_letter_queue` table, `move_to_dead_letter()` MUST insert a row into it (not just change the outbox status). If no DLQ table exists, changing the outbox status to `dead_letter` is sufficient.
+
+**R-OUTBOX-4: Payload format** — Outbox payload SHOULD be stored as JSONB for debuggability. Services that need binary Avro payloads MUST document the reason.
+
+**R-OUTBOX-5: ID type** — Outbox event IDs MUST use UUIDv7 (`common.ids.new_uuid7()`).
 
 ---
 

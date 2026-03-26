@@ -11,7 +11,6 @@
 | PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | draft | 0/11 | 2026-03-25 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | 2026-03-25 |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | in-progress | 2/7 | 2026-03-26 |
-| PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | draft | 0/2 | 2026-03-26 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
@@ -36,6 +35,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | Plan ID | Title | PRD | Completed | Waves |
 |---------|-------|-----|-----------|-------|
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 |
+| PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | 2026-03-26 | 2 |
 
 ## Conventions
 
