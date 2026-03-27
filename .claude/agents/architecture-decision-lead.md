@@ -21,7 +21,7 @@ Own cross-cutting architectural decisions across services, shared libraries, dat
 - `docs/architecture/**`
 - `docs/services/**`
 - `docs/libs/**`
-- `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` — §1.4 (pre-implementation fixes), §5 (all pipeline blocks), §6 (DB schema ownership), §13 (model migration shadow strategy)
+- `docs/specs/0014-PRD-v1-final.md` — §1.4 (pre-implementation fixes), §5 (all pipeline blocks), §6 (DB schema ownership), §13 (model migration shadow strategy)
 
 ## Responsibilities
 - map dependencies between S1 Portfolio, S2 Market Ingestion, S3 Market Data, S4 Content Ingestion, S5 Content Store, S6 NLP Pipeline, S7 Knowledge Graph, S8 RAG/Chat, S9 API Gateway, S10 Alert Service, the frontend, libs, and infra

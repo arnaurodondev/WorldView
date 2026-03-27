@@ -9,22 +9,22 @@ description = "Alert fan-out service: watchlist-driven signal delivery via WebSo
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "common",
-    "fastapi>=0.111",
-    "uvicorn[standard]>=0.29",
-    "pydantic>=2.5",
-    "pydantic-settings>=2.0",
-    "sqlalchemy[asyncio]>=2.0",
-    "asyncpg>=0.29",
-    "alembic>=1.13",
-    "structlog>=24.0",
+    "fastapi==0.111",
+    "uvicorn[standard]==0.29",
+    "pydantic==2.5",
+    "pydantic-settings==2.1",
+    "sqlalchemy[asyncio]==2.0",
+    "asyncpg==0.29",
+    "alembic==1.13",
+    "structlog==25.5.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.4",
-    "mypy>=1.10",
+    "pytest==8.0",
+    "pytest-asyncio==0.23",
+    "ruff==0.4",
+    "mypy==1.10",
 ]
 
 [tool.hatch.build.targets.wheel]

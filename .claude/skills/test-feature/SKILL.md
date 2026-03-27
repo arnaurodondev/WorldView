@@ -28,7 +28,7 @@ Test target: `$ARGUMENTS`
 - Read `services/<service>/.claude-context.md` (if exists)
 - Read `docs/services/<service>.md` for expected behavior
 - Read existing tests in the service's `tests/` directory
-- Read `docs/ai-interactions/BUG_PATTERNS.md` for relevant patterns
+- Read `docs/BUG_PATTERNS.md` for relevant patterns
 - Read `docs/workflows/testing-strategy.md` for test conventions
 
 ### 1.3 Understand Existing Coverage
@@ -243,13 +243,22 @@ After writing tests, check:
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **If tests reveal bugs**: `/fix-bug` — diagnose and fix the discovered issues
+- **If coverage is now complete**: `/review` — review the test code itself
+- **If ready for full validation**: `/qa` — run the full multi-agent QA pass
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

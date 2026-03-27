@@ -23,7 +23,7 @@ PRD reference: `$ARGUMENTS`
 6. Read per-service context: `services/<service>/.claude-context.md`
 7. Read existing plans in `docs/plans/` to avoid conflicts
 8. Read `docs/plans/TRACKING.md` for active work
-9. Read `docs/ai-interactions/BUG_PATTERNS.md` for patterns to guard against
+9. Read `docs/BUG_PATTERNS.md` for patterns to guard against
 10. Read existing service source code (especially mature services like portfolio, market-ingestion, market-data) to understand implementation patterns the agent should follow
 
 ## Phase 1 — Plan Decomposition Strategy
@@ -248,7 +248,7 @@ Before completing this skill, check if any of these documents should be updated 
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

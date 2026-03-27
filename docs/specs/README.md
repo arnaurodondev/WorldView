@@ -19,7 +19,9 @@ See [TEMPLATE.md](TEMPLATE.md) for the standardized PRD format.
 
 | ID | Title | Status | Priority | Services | Created |
 |----|-------|--------|----------|----------|---------|
-<!-- PRDs are indexed here as they are created -->
+| PRD-0001 | Intelligence Pipeline | approved | P0 | S2, S3 | 2026-03 |
+| PRD-0002 | Multi-Tenant SaaS Foundation | approved | P0 | S1, S9 | 2026-03 |
+| PRD-0014 | Unstructured Data Pipeline (v1) | in-progress | P0 | S4, S5, S6, S7, S10 | 2026-03 |
 
 ## Conventions
 

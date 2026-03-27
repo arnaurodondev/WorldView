@@ -19,7 +19,7 @@ Review scope: `$ARGUMENTS` (if empty, review all uncommitted changes)
 2. Read `.claude/review/protocols/PR_INVESTIGATION_PROTOCOL.md` — your reasoning framework
 3. Read `.claude/review/checklists/REVIEW_CHECKLIST.md` — your checklist
 4. Read `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` — your pattern detector
-5. Read `docs/ai-interactions/BUG_PATTERNS.md` — known historical bugs
+5. Read `docs/BUG_PATTERNS.md` — known historical bugs
 6. Read service docs for affected services: `docs/services/<service>.md`
 7. Get the diff: `git diff` (unstaged) + `git diff --cached` (staged)
 
@@ -136,7 +136,7 @@ Scan all changes against the high-risk pattern catalog:
 
 ## Phase 5 — Bug Pattern Regression Check
 
-Cross-reference changes against `docs/ai-interactions/BUG_PATTERNS.md`:
+Cross-reference changes against `docs/BUG_PATTERNS.md`:
 
 For each BP-XXX entry, ask: "Could this change introduce or be affected by this pattern?"
 
@@ -211,13 +211,24 @@ These observations should be reported to the user for potential documentation up
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **If APPROVE**: Suggest committing the changes
+- **If APPROVE_WITH_NOTES**: Suggest addressing notes, then committing
+- **If REQUEST_CHANGES**: `/fix-bug` for specific bugs, or `/refactor` for structural issues
+- **If BLOCK (security)**: `/security-audit` for a deeper security analysis
+- **If test gaps found**: `/test-feature` to add missing coverage
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

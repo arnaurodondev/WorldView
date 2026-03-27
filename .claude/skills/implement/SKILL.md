@@ -59,7 +59,7 @@ Step 10: Commit                → Stage scoped files, conventional commit
 ### Always read:
 1. `RULES.md` — hard rules
 2. `services/<service>/.claude-context.md` — per-service context (if exists)
-3. `docs/ai-interactions/BUG_PATTERNS.md` — scan for applicable patterns; note BP-XXX IDs
+3. `docs/BUG_PATTERNS.md` — scan for applicable patterns; note BP-XXX IDs
 4. Relevant `docs/libs/<lib>.md` if touching shared libraries
 5. Existing test files in the service to understand test patterns and conventions
 6. `.claude/review/` — skim relevant checklists and protocols for later self-review
@@ -246,7 +246,7 @@ Invoke a security analysis on the changes:
    - Authentication/authorization checks on new endpoints
    - OWASP Top 10 relevance
 
-2. Cross-reference with `docs/ai-interactions/BUG_PATTERNS.md` security-related patterns
+2. Cross-reference with `docs/BUG_PATTERNS.md` security-related patterns
 
 3. If any security issues found:
    - Fix them immediately
@@ -338,7 +338,7 @@ Check and update all affected documentation:
   - Bump the version and date in the MASTER_PLAN header
 
 ### 8.5 Bug Patterns
-- If you discovered a new failure pattern → add it to `docs/ai-interactions/BUG_PATTERNS.md`
+- If you discovered a new failure pattern → add it to `docs/BUG_PATTERNS.md`
 
 ### 8.6 Per-Service Context
 - Update `services/<service>/.claude-context.md` if the service gained new endpoints, topics, or entities
@@ -460,7 +460,7 @@ Before completing this skill, check if any of these documents should be updated 
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

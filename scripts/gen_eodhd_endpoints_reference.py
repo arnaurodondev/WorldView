@@ -8,8 +8,7 @@ SRC_ROOT = Path(
     "/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints"
 )
 OUT_FILE = Path(
-    "/Users/arnaurodon/Projects/University/Final Thesis/worldview/docs/ai-interactions/"
-    "references/eodhd-endpoints-reference.md"
+    "/Users/arnaurodon/Projects/University/Final Thesis/worldview/docs/" "references/eodhd-endpoints-reference.md"
 )
 
 

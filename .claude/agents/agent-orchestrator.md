@@ -8,20 +8,12 @@ Plan, decompose, sequence, and coordinate AI-agent-driven execution across the r
 - decomposing a large implementation plan into atomic, dependency-ordered tasks
 - assigning tasks to worker agents and managing their execution
 - validating handoff evidence, quality gates, and definition of done
-- managing the `docs/ai-interactions/` workflow end-to-end
 - resolving blocked tasks, re-sequencing waves, or escalating failures
 - auditing task coverage across waves (no orphans, no duplicates)
 - deciding which specialized agent should handle a given task
 - coordinating multi-service or multi-domain work that spans several agents
 
 ## Read first
-- `docs/ai-interactions/README.md`
-- `docs/ai-interactions/ORCHESTRATOR_RUNBOOK.md`
-- `docs/ai-interactions/INTERACTIONS_REGISTRY.md`
-- `docs/ai-interactions/agent-prompts/0000-exec-wave-generation-template.md`
-- `docs/ai-interactions/agent-planning/0000-prompt-library-index-and-conventions.md`
-- `docs/ai-interactions/agent-responses/0000-response-template.md`
-- `docs/ai-interactions/agent-responses/0001-review-checklist.md`
 - `AGENTS.md`
 - `CLAUDE.md`
 - `RULES.md`
@@ -77,7 +69,6 @@ Plan, decompose, sequence, and coordinate AI-agent-driven execution across the r
 - PR title format: `[<task-id>] <short title>`
 - max worker retries per task: 2 before escalation
 - max tasks per wave: 3–6 (target), max effort per wave: 6–14 hours (target)
-- treat the orchestrator runbook as the source of truth for process rules
 
 ## Agent routing heuristics
 When deciding which specialized agent should handle a task:
