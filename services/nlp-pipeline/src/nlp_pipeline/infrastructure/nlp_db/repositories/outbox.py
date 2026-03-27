@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 from sqlalchemy import select, update
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import OutboxEventModel
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -21,7 +22,7 @@ class OutboxRepository:
 
     async def add(self, topic: str, partition_key: str, payload_avro: bytes) -> UUID:
         """Insert a pending outbox event and return its ID."""
-        event_id = uuid.uuid4()
+        event_id = common.ids.new_uuid7()
         row = OutboxEventModel(
             event_id=event_id,
             topic=topic,

@@ -6,15 +6,15 @@ explicit invariant: zero mentions NEVER suppresses a document.
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
-from uuid import UUID
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import MentionClass
 from nlp_pipeline.domain.models import DocumentEntityStats, EntityMention, Section
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from uuid import UUID
 
     from ml_clients.protocols import NERClient  # type: ignore[import-not-found]
 
@@ -168,7 +168,7 @@ async def run_ner_block(
 
                 section_mentions.append(
                     EntityMention(
-                        mention_id=uuid.uuid4(),
+                        mention_id=common.ids.new_uuid7(),
                         doc_id=doc_id,
                         section_id=section.section_id,
                         mention_text=ml_mention.text.strip(),

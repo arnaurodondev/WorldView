@@ -5,12 +5,13 @@ Uses raw SQL (text()) — S6 does not own intelligence_db DDL.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import text
+
+import common.ids  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,7 +55,7 @@ class CanonicalEntityRepository:
         metadata: dict[str, object] | None = None,
     ) -> UUID:
         """Insert a new canonical entity and return its ID."""
-        entity_id = uuid.uuid4()
+        entity_id = common.ids.new_uuid7()
         now = datetime.now(tz=UTC)
         await self._session.execute(
             text(

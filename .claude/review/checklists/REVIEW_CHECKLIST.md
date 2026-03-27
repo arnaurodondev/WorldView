@@ -27,6 +27,8 @@
 - [ ] Failure during multi-step operations has cleanup or is idempotent
 - [ ] MinIO writes use claim-check pattern for Kafka events
 - [ ] Outbox payload field names match Avro schema exactly
+- [ ] MinIO write before DB commit: compensating delete implemented on rollback (§4.4)
+- [ ] Compensating GC failures logged as WARNING, original exception preserved and re-raised
 
 ## 4. Idempotency
 
@@ -72,12 +74,16 @@
 
 - [ ] Domain layer has zero infrastructure imports
 - [ ] Application layer depends only on domain + ports (no direct DB/Kafka)
+- [ ] Application layer has `application/ports/` directory with port ABCs (R20, DOMAIN-PORTS)
 - [ ] Infrastructure layer implements port interfaces
 - [ ] No cross-service DB access (use Kafka events or REST)
 - [ ] Uses shared libs correctly (`common`, `contracts`, `messaging`, `storage`, `observability`, `ml-clients`)
 - [ ] No direct imports of underlying packages (no `aiokafka`, `redis.asyncio`, `Minio`, `logging.getLogger`)
 - [ ] Import guards pass: `python3 scripts/import_guards/check_import_guards.py --strict --baseline scripts/import_guards/baseline.json`
 - [ ] `setattr` uses field allowlist, never user-controlled keys directly
+- [ ] All Kafka consumers extend `BaseKafkaConsumer` — no direct `confluent_kafka.Consumer` (R20)
+- [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
+- [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
 
 ## 8. Test Coverage
 

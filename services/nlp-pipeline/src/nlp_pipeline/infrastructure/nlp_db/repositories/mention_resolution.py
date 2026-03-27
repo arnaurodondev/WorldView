@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 from sqlalchemy import select
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import MentionResolutionModel
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import MentionResolution
@@ -22,7 +23,7 @@ class MentionResolutionRepository:
 
     async def add(self, resolution: MentionResolution) -> None:
         row = MentionResolutionModel(
-            resolution_id=uuid.uuid4(),
+            resolution_id=common.ids.new_uuid7(),
             mention_id=resolution.mention_id,
             stage=resolution.stage,
             candidate_entity_id=resolution.candidate_entity_id,

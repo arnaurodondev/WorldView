@@ -25,7 +25,7 @@
 9. [Error Handling](#9-error-handling)
 10. [Testing Conventions](#10-testing-conventions)
 11. [Anti-Patterns — What NOT To Do](#11-anti-patterns--what-not-to-do)
-12. [Platform Rules (R1–R18)](#12-platform-rules-r1r18)
+12. [Platform Rules (R1–R21)](#12-platform-rules-r1r21)
 13. [Automated Enforcement — CI Gates](#13-automated-enforcement--ci-gates)
 
 ---
@@ -495,6 +495,53 @@ New services implementing the outbox pattern MUST follow these rules:
 
 **R-OUTBOX-5: ID type** — Outbox event IDs MUST use UUIDv7 (`common.ids.new_uuid7()`).
 
+### 3.9 Kafka Consumer Standard (R20)
+
+Every Kafka consumer in a service **must** extend `BaseKafkaConsumer` from
+`messaging.kafka.consumer.base`. Direct use of `confluent_kafka.Consumer` is forbidden
+in service code.
+
+```python
+# ✅ CORRECT
+# services/my-service/src/my_service/infrastructure/consumer/my_consumer.py
+from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
+from messaging.kafka.consumer.errors import FatalError, RetryableError
+
+class MyConsumer(BaseKafkaConsumer[None]):
+    def __init__(self, config: ConsumerConfig, ...) -> None:
+        super().__init__(config)
+        ...
+
+    def is_duplicate(self, event_id: str) -> bool:
+        # Check processed_events table
+        ...
+
+    def get_unit_of_work(self) -> ...:
+        ...
+
+    async def process_message(self, msg: Any) -> None:
+        # Business logic — do NOT call commit here
+        ...
+
+# ❌ FORBIDDEN
+from confluent_kafka import Consumer  # direct consumer import
+consumer = Consumer({"bootstrap.servers": "..."})
+```
+
+**Required abstract methods** (all must be implemented):
+- `is_duplicate(event_id)` — idempotency check before processing
+- `get_unit_of_work()` — returns UoW for the message
+- `process_message(msg)` — business logic
+
+**`_handle_message` override rule**: When overriding `_handle_message` for post-commit
+side effects (e.g., LSH indexing after DB commit), always:
+1. Set `self._current_uow = None` and any summary fields at the top of the override
+2. Call `await super()._handle_message(msg)` inside a try-except
+3. Perform post-commit work (e.g., cache writes) outside the try block, only on success
+4. On exception, run compensating deletes (MinIO GC) before re-raising
+
+Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
 ---
 
 ## 4. libs/storage — Object Storage (MinIO)
@@ -569,6 +616,52 @@ except StorageError as exc:
     # Retryable — let the caller handle or raise as RetryableError
     raise
 ```
+
+### 4.4 MinIO Compensating Delete (GC on DB rollback)
+
+When a service writes to MinIO **before** the DB transaction commits, it must implement
+a compensating delete if the commit fails. This prevents orphaned MinIO objects that
+consume storage and cannot be garbage-collected.
+
+**Pattern: track pending keys, delete on failure**
+
+```python
+# In use cases or consumers that write to MinIO then commit the DB:
+pending_minio_keys: list[str] = []
+
+try:
+    key = await storage_port.put_object(...)
+    pending_minio_keys.append(key)  # track before DB commit
+
+    await db_repo.create(...)          # DB write
+    await outbox.append(...)           # outbox write
+    await commit()                     # commit — success
+    pending_minio_keys = []            # committed: no longer orphaned
+
+except Exception:
+    # Rollback DB session first
+    await rollback()
+    # Then GC all MinIO objects written in this failed batch
+    for key in pending_minio_keys:
+        try:
+            await storage_port.delete_object(key)
+        except Exception:
+            logger.warning("minio_gc_delete_failed", key=key)  # best-effort
+    raise
+```
+
+**Rules**:
+- The `BronzeStoragePort` and `SilverStoragePort` ABCs must include `delete_object(key: str) -> None`
+- GC failures MUST be logged as `WARNING` but MUST NOT mask the original exception
+- GC is **best-effort** — callers should never depend on GC succeeding
+- The storage lib's `ObjectStorage.delete(bucket, key)` raises `ObjectNotFoundError` on missing keys;
+  wrap in `try/except` to handle race conditions
+
+**Affected services**: S4 (bronze MinIO after fetch), S5 (silver MinIO after article processing)
+
+Enforced by:
+- `services/content-ingestion/tests/unit/application/test_minio_gc.py`
+- `services/content-store/tests/unit/infrastructure/test_minio_gc.py`
 
 ---
 
@@ -1075,15 +1168,22 @@ Every service **must** define these fields in its `Settings` class:
 
 ## 9. Error Handling
 
-### 9.1 Domain exception hierarchy
+### 9.1 Domain exception hierarchy (R21)
 
-Every service **must** define a domain exception base class in `domain/exceptions.py`:
+Every service **must** define `DomainError` as the root exception in
+`domain/errors.py` (preferred) or `domain/exceptions.py`:
 
 ```python
-# services/my-service/src/my_service/domain/exceptions.py
-class MyServiceError(Exception):
-    """Base class for all my-service domain errors."""
-    pass
+# services/my-service/src/my_service/domain/errors.py
+class DomainError(Exception):
+    """Base exception for all my-service domain errors (R21 canonical name)."""
+
+
+# Optional descriptive alias — define as a SUBCLASS, not an assignment alias,
+# so that architecture tests can trace the inheritance chain via AST.
+class MyServiceError(DomainError):
+    """Descriptive alias preserved for readability within this service."""
+
 
 class EntityNotFoundError(MyServiceError):
     def __init__(self, entity_type: str, entity_id: Any) -> None:
@@ -1098,6 +1198,14 @@ class ConfigurationError(MyServiceError):
     """Raised when required configuration is missing or invalid."""
     pass
 ```
+
+**Why the class-based alias matters**: Architecture tests use AST analysis to verify
+that all exception classes inherit from `DomainError`. A simple assignment
+`MyServiceError = DomainError` is invisible to AST class-def scanning and causes
+subclasses like `EntityNotFoundError(MyServiceError)` to fail the check.
+Always use `class MyServiceError(DomainError): ...`.
+
+Enforced by `tests/architecture/test_domain_error_enforcement.py`.
 
 ### 9.2 HTTP status mapping — `api/error_mapping.py`
 

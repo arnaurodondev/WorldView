@@ -2,10 +2,10 @@
 id: PLAN-0001-B-R3
 prd: PRD-0001
 title: "S4+S5 Architecture Enforcement: ABCs, BaseKafkaConsumer, MinIO GC, DomainError, Standards"
-status: in-progress
+status: completed
 created: 2026-03-27
 updated: 2026-03-27
-waves_done: 2
+waves_done: 5
 plans: 1
 waves: 5
 tasks: 22
@@ -182,11 +182,12 @@ Waves 1 and 3 are **parallelizable** (different files). Wave 2 depends on Wave 1
 
 ---
 
-## Wave 3: MinIO Orphan GC on DB Rollback
+## Wave 3: MinIO Orphan GC on DB Rollback ✅
 
 **Goal**: Add inline compensating MinIO delete when DB commit fails.
 **Depends on**: none (parallel with Wave 1)
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-27 · 11 new GC tests pass · ruff + mypy clean
 
 #### T-R3-3-01: Add compensating delete to S4 fetch_and_write
 
@@ -217,15 +218,16 @@ Waves 1 and 3 are **parallelizable** (different files). Wave 2 depends on Wave 1
 **What to build**: Verify `delete(bucket, key)` exists. If not, add to ABC + implement in S3ObjectStorage.
 
 ### Validation Gate
-- [ ] `ruff check` + `mypy` clean | ≥6 new tests | GC only on failure paths
+- [x] `ruff check` + `mypy` clean | ≥6 new tests | GC only on failure paths
 
 ---
 
-## Wave 4: Architecture Enforcement Tests
+## Wave 4: Architecture Enforcement Tests ✅
 
 **Goal**: Automated tests enforcing architectural invariants across all services.
 **Depends on**: Wave 1, Wave 2, Wave 3
 **Estimated effort**: 30–45 minutes
+**Status**: **DONE** — 2026-03-27 · 35 architecture tests pass (6 new) · ruff clean
 
 #### T-R3-4-01: Port directory enforcement test
 
@@ -249,15 +251,16 @@ Waves 1 and 3 are **parallelizable** (different files). Wave 2 depends on Wave 1
 **Tests**: (≥2) All consumer classes extend `BaseKafkaConsumer`; no direct `confluent_kafka.Consumer` usage outside `libs/messaging`.
 
 ### Validation Gate
-- [ ] ≥6 architecture tests | All pass for current codebase
+- [x] ≥6 architecture tests | All pass for current codebase
 
 ---
 
-## Wave 5: Standards, Rules, and Documentation
+## Wave 5: Standards, Rules, and Documentation ✅
 
 **Goal**: Codify all patterns in RULES.md, STANDARDS.md, review checklist, and service context docs.
 **Depends on**: Waves 1–4
 **Estimated effort**: 20–30 minutes
+**Status**: **DONE** — 2026-03-27 · R20 + R21 in RULES.md · 3 new STANDARDS.md sections · context + checklist updated
 
 #### T-R3-5-01: Add R20 — Kafka consumers must extend BaseKafkaConsumer
 
@@ -278,7 +281,7 @@ Waves 1 and 3 are **parallelizable** (different files). Wave 2 depends on Wave 1
 **Type**: docs | **Target files**: S4 + S5 `.claude-context.md`, `.claude/review/checklists/REVIEW_CHECKLIST.md`
 
 ### Validation Gate
-- [ ] All docs updated | R20, R21 in RULES.md | 3 new sections in STANDARDS.md
+- [x] All docs updated | R20, R21 in RULES.md | 3 new sections in STANDARDS.md
 
 ---
 
@@ -296,6 +299,6 @@ Waves 1 and 3 are **parallelizable** (different files). Wave 2 depends on Wave 1
 |------|--------|-----------|-------------|
 | W1 | done | 5 | 5 |
 | W2 | done | 5 | 5 |
-| W3 | pending | 0 | 4 |
-| W4 | pending | 0 | 3 |
-| W5 | pending | 0 | 4 |
+| W3 | done | 4 | 4 |
+| W4 | done | 3 | 3 |
+| W5 | done | 4 | 4 |
