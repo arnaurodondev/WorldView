@@ -135,6 +135,21 @@ class FakeTransactionRepository(TransactionRepository):
             return None
         return t
 
+    async def find_by_external_ref(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        external_ref: str,
+    ) -> Transaction | None:
+        return next(
+            (
+                t
+                for t in self._store.values()
+                if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id and t.external_ref == external_ref
+            ),
+            None,
+        )
+
     async def list_by_portfolio(
         self,
         portfolio_id: UUID,
@@ -219,7 +234,7 @@ class FakeWatchlistRepository(WatchlistRepository):
     async def save(self, watchlist: Watchlist) -> None:
         self._store[watchlist.id] = watchlist
 
-    async def delete(self, watchlist_id: UUID) -> None:
+    async def hard_delete(self, watchlist_id: UUID) -> None:
         self._store.pop(watchlist_id, None)
 
 

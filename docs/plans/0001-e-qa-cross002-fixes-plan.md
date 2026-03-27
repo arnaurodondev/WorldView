@@ -9,6 +9,7 @@ plans: 4
 <!-- Wave E1-4 completed 2026-03-27 -->
 <!-- Waves E2-1 + E2-2 completed 2026-03-27 -->
 <!-- Wave E2-3 completed 2026-03-28 -->
+<!-- Waves E3-1 + E3-2 completed 2026-03-28 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -1197,11 +1198,12 @@ Update docs to reflect the rename.
 
 ## Sub-Plan E-3: Portfolio (S1) Fixes
 
-### Wave E3-1: BLOCKING + CRITICAL — Idempotency, Avro Schema, Outbox Status, ON CONFLICT
+### Wave E3-1: BLOCKING + CRITICAL — Idempotency, Avro Schema, Outbox Status, ON CONFLICT ✅
 
 **Goal**: Fix record_transaction idempotency swallow bug, flatten Portfolio Avro schema, align outbox status, add ON CONFLICT to idempotency repo.
 **Depends on**: none
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-03-28 · 287 unit tests pass · ruff + format clean
 **Architecture layer**: application + infrastructure + schema
 
 #### Pre-read
@@ -1429,19 +1431,20 @@ async def record(self, event_id: UUID) -> None:
 - [ ] 1 new test passes
 
 #### Validation Gate (Wave E3-1)
-- [ ] `ruff check services/portfolio/` clean
-- [ ] `mypy services/portfolio/src/` clean
-- [ ] All unit tests pass
-- [ ] Avro schemas validate
-- [ ] No outbox routing uses fallback
+- [x] `ruff check services/portfolio/` clean
+- [x] `mypy services/portfolio/src/` clean (3 pre-existing redis async_timeout errors only)
+- [x] All unit tests pass (287 passed)
+- [x] Avro schemas validate (flat per-event schemas)
+- [x] No outbox routing uses fallback
 
 ---
 
-### Wave E3-2: CRITICAL — Tenant Auth + UoW Exception Masking
+### Wave E3-2: CRITICAL — Tenant Auth + UoW Exception Masking ✅
 
 **Goal**: Add X-Internal-Token auth to tenant endpoints, fix UoW __aexit__ exception masking, fix dual outbox partial failure.
 **Depends on**: Wave E3-1
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-28 · 287 unit tests pass · ruff + format clean
 **Architecture layer**: API + infrastructure
 
 #### Tasks
@@ -1562,9 +1565,9 @@ This ensures mapper failures (serialization errors) surface before any DB write,
 - [ ] 1 new test passes
 
 #### Validation Gate (Wave E3-2)
-- [ ] `ruff check services/portfolio/` clean
-- [ ] `mypy services/portfolio/src/` clean
-- [ ] All unit tests pass
+- [x] `ruff check services/portfolio/` clean
+- [x] `mypy services/portfolio/src/` clean (3 pre-existing redis async_timeout errors only)
+- [x] All unit tests pass (287 passed)
 
 ---
 

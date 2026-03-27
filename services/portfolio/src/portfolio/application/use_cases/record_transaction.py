@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -18,6 +17,7 @@ from portfolio.domain.enums import TransactionDirection, TransactionType
 from portfolio.domain.errors import (
     AuthorizationError,
     CurrencyMismatchError,
+    IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
     PortfolioNotFoundError,
     TenantInactiveError,
@@ -61,20 +61,22 @@ class RecordTransactionUseCase:
     async def execute(self, cmd: RecordTransactionCommand, uow: UnitOfWork) -> RecordTransactionResult:
         from uuid import UUID as _UUID
 
-        # Idempotency check
+        # Idempotency check — fail-fast on invalid key (D-007)
+        idem_uuid: _UUID | None = None
         if cmd.idempotency_key is not None:
             try:
                 idem_uuid = _UUID(cmd.idempotency_key)
-                already_done = await uow.idempotency.exists(idem_uuid)
-                if already_done:
-                    # Look up the prior transaction directly by external_ref.
-                    existing = await uow.transactions.find_by_external_ref(
-                        cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
-                    )
-                    if existing is not None:
-                        return RecordTransactionResult(transaction=existing)
-            except (ValueError, AttributeError):
-                pass
+            except (ValueError, AttributeError) as exc:
+                raise IdempotencyKeyInvalidError(
+                    f"idempotency_key must be a valid UUID: {exc}",
+                ) from exc
+            already_done = await uow.idempotency.exists(idem_uuid)
+            if already_done:
+                existing = await uow.transactions.find_by_external_ref(
+                    cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
+                )
+                if existing is not None:
+                    return RecordTransactionResult(transaction=existing)
 
         # Validate tenant
         tenant = await uow.tenants.get(cmd.tenant_id)
@@ -114,7 +116,7 @@ class RecordTransactionUseCase:
                 details={"instrument_id": str(cmd.instrument_id)},
             )
 
-        # Create transaction
+        # Create transaction entity (in memory)
         transaction = Transaction(
             id=new_uuid(),
             tenant_id=cmd.tenant_id,
@@ -129,9 +131,8 @@ class RecordTransactionUseCase:
             executed_at=cmd.executed_at,
             external_ref=cmd.external_ref or cmd.idempotency_key,
         )
-        await uow.transactions.save(transaction)
 
-        # Update or create holding
+        # Update or create holding (in memory)
         holding = await uow.holdings.get(cmd.portfolio_id, cmd.instrument_id)
         if holding is None:
             holding = Holding(
@@ -144,9 +145,9 @@ class RecordTransactionUseCase:
         # Compute quantity delta: positive for inflow, negative for outflow
         qty_delta = cmd.quantity if cmd.direction == TransactionDirection.INFLOW else -cmd.quantity
         holding.apply_delta(qty_delta, cmd.price)
-        await uow.holdings.save(holding)
 
-        # Emit outbox events
+        # Pre-validate: build outbox event dicts BEFORE any DB writes (M-009).
+        # Serialization errors surface here, not after partial DB writes.
         tx_event = TransactionRecorded(
             tenant_id=cmd.tenant_id,
             transaction_id=transaction.id,
@@ -170,14 +171,19 @@ class RecordTransactionUseCase:
             average_cost=str(holding.average_cost),
             currency=holding.currency,
         )
+        tx_event_dict = transaction_recorded_to_dict(tx_event)
+        holding_event_dict = holding_changed_to_dict(holding_event)
 
+        # All DB writes together — atomic within the UoW transaction
+        await uow.transactions.save(transaction)
+        await uow.holdings.save(holding)
         await uow.outbox.save(
             OutboxRecord(
                 id=new_uuid(),
                 tenant_id=cmd.tenant_id,
                 event_type=TransactionRecorded.EVENT_TYPE,
                 topic=EVENT_TOPIC_MAP[TransactionRecorded.EVENT_TYPE],
-                payload=transaction_recorded_to_dict(tx_event),
+                payload=tx_event_dict,
                 status="pending",
                 attempt_count=0,
                 lease_owner=None,
@@ -190,7 +196,7 @@ class RecordTransactionUseCase:
                 tenant_id=cmd.tenant_id,
                 event_type=HoldingChanged.EVENT_TYPE,
                 topic=EVENT_TOPIC_MAP[HoldingChanged.EVENT_TYPE],
-                payload=holding_changed_to_dict(holding_event),
+                payload=holding_event_dict,
                 status="pending",
                 attempt_count=0,
                 lease_owner=None,
@@ -199,9 +205,8 @@ class RecordTransactionUseCase:
         )
 
         # Record idempotency
-        if cmd.idempotency_key is not None:
-            with contextlib.suppress(ValueError):
-                await uow.idempotency.record(_UUID(cmd.idempotency_key))
+        if idem_uuid is not None:
+            await uow.idempotency.record(idem_uuid)
 
         log = logger.bind(
             tenant_id=str(cmd.tenant_id),

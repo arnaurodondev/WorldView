@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from portfolio.application.ports.repositories import IdempotencyRepository
 from portfolio.infrastructure.db.models.idempotency import IdempotencyModel
@@ -27,5 +28,5 @@ class SqlAlchemyIdempotencyRepository(IdempotencyRepository):
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None:
         if processed_at is None:
             processed_at = datetime.now(tz=UTC)
-        row = IdempotencyModel(event_id=event_id, processed_at=processed_at)
-        self._session.add(row)
+        stmt = insert(IdempotencyModel).values(event_id=event_id, processed_at=processed_at).on_conflict_do_nothing()
+        await self._session.execute(stmt)

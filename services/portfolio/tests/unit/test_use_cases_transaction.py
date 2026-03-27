@@ -41,6 +41,7 @@ from portfolio.domain.enums import (
 )
 from portfolio.domain.errors import (
     CurrencyMismatchError,
+    IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
     InsufficientHoldingsError,
 )
@@ -111,6 +112,12 @@ class FakeTransactionRepo(TransactionRepository):
 
     async def get(self, transaction_id, tenant_id):
         return next((t for t in self.saved if t.id == transaction_id), None)
+
+    async def find_by_external_ref(self, portfolio_id, tenant_id, external_ref):
+        return next(
+            (t for t in self.saved if t.portfolio_id == portfolio_id and t.external_ref == external_ref),
+            None,
+        )
 
     async def list_by_portfolio(self, portfolio_id, tenant_id, limit: int = 100, offset: int = 0):
         txns = [t for t in self.saved if t.portfolio_id == portfolio_id]
@@ -422,4 +429,36 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
 
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_transaction_invalid_idempotency_key_raises(uow, cmd) -> None:
+    """Malformed idempotency key raises IdempotencyKeyInvalidError (D-007)."""
+    bad_cmd = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": "not-a-uuid"})
+    uc = RecordTransactionUseCase()
+    with pytest.raises(IdempotencyKeyInvalidError, match="idempotency_key must be a valid UUID"):
+        await uc.execute(bad_cmd, uow)
+
+
+@pytest.mark.asyncio
+async def test_record_transaction_valid_idempotency_key_respected(uow, cmd) -> None:
+    """Valid UUID idempotency key is accepted and dedup works."""
+    from uuid import uuid4 as _uuid4
+
+    idem_key = str(_uuid4())
+    cmd_with_key = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+    uc = RecordTransactionUseCase()
+    result = await uc.execute(cmd_with_key, uow)
+    assert result.transaction is not None
+    assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_transaction_no_idempotency_key_proceeds(uow, cmd) -> None:
+    """Null idempotency key — no error, transaction proceeds normally."""
+    assert cmd.idempotency_key is None
+    uc = RecordTransactionUseCase()
+    result = await uc.execute(cmd, uow)
+    assert result.transaction is not None
     assert len(uow._transactions.saved) == 1
