@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
-from content_store.infrastructure.db.models import OutboxEventModel
+from content_store.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -81,7 +81,30 @@ class OutboxRepository:
             )
         )
 
-    async def move_to_dead_letter(self, record_id: UUID) -> None:
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+        """Move an outbox record to the dead_letter_queue table and update status.
+
+        Follows S4 pattern: INSERT a DLQ row with the original payload,
+        then UPDATE the outbox status to 'dead_letter'.
+        """
+        # 1. Fetch the outbox record
+        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == record_id))
+        record = result.scalar_one_or_none()
+
+        if record is not None:
+            # 2. INSERT a DLQ row with the original payload
+            self._session.add(
+                DeadLetterQueueModel(
+                    dlq_id=common.ids.new_uuid7(),
+                    original_event_id=record.id,
+                    topic=record.topic,
+                    payload_avro=b"",
+                    payload_json=record.payload,
+                    error_detail=error_detail,
+                )
+            )
+
+        # 3. UPDATE outbox status
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)

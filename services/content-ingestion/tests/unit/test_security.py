@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import socket
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from content_ingestion.api.schemas import IngestSubmitRequest, SourceCreateRequest, SourceUpdateRequest
@@ -51,7 +52,10 @@ class TestURLValidation:
         assert req.url is not None
 
     def test_hostname_accepted(self) -> None:
-        req = IngestSubmitRequest(url="https://api.example.com/v1/data", source_type="manual")
+        # Mock DNS to return a public IP (test env may not resolve example.com)
+        public_addr = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+        with patch("content_ingestion.api.schemas.socket.getaddrinfo", return_value=public_addr):
+            req = IngestSubmitRequest(url="https://api.example.com/v1/data", source_type="manual")
         assert req.url is not None
 
     def test_none_url_accepted(self) -> None:

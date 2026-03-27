@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
 from datetime import datetime
 from urllib.parse import urlparse
 from uuid import UUID
@@ -18,7 +19,55 @@ _PRIVATE_NETWORKS = (
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
 )
+
+# IPv6 loopback
+_PRIVATE_NETWORKS_V6 = (
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+
+def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Check if an IP address is in a private/reserved range."""
+    if isinstance(addr, ipaddress.IPv4Address):
+        return any(addr in net for net in _PRIVATE_NETWORKS)
+    return any(addr in net for net in _PRIVATE_NETWORKS_V6)
+
+
+def _check_ip_not_private(hostname: str) -> None:
+    """Resolve hostname and check ALL IPs against private ranges.
+
+    Handles both literal IPs and DNS hostnames. Raises ValueError
+    if any resolved address is private (SSRF prevention via DNS rebinding).
+    """
+    # Try as literal IP first
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if _is_private_ip(addr):
+            msg = "URL must not target private IP ranges"
+            raise ValueError(msg)
+        return
+    except ValueError as exc:
+        if "private IP" in str(exc):
+            raise
+        # Not a literal IP — resolve via DNS below
+
+    # DNS resolution — check ALL addresses
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        msg = f"Could not resolve hostname: {hostname}"
+        raise ValueError(msg)  # noqa: B904
+
+    for _family, _type, _proto, _canonname, sockaddr in addr_infos:
+        ip_str = sockaddr[0]
+        addr = ipaddress.ip_address(ip_str)
+        if _is_private_ip(addr):
+            msg = "URL must not target private IP ranges"
+            raise ValueError(msg)
 
 
 class SourceResponse(BaseModel):
@@ -80,7 +129,11 @@ class IngestSubmitRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url_scheme_and_host(cls, v: str | None) -> str | None:
-        """Enforce http(s) scheme and reject private IP ranges (SSRF prevention)."""
+        """Enforce http(s) scheme and reject private IP ranges (SSRF prevention).
+
+        Resolves DNS hostnames and checks ALL resolved addresses against
+        private IP ranges to prevent DNS rebinding attacks (CR-2).
+        """
         if v is None:
             return v
         parsed = urlparse(v)
@@ -88,16 +141,10 @@ class IngestSubmitRequest(BaseModel):
             msg = "URL must use http or https scheme"
             raise ValueError(msg)
         hostname = parsed.hostname
-        if hostname is not None:
-            try:
-                addr = ipaddress.ip_address(hostname)
-                if any(addr in net for net in _PRIVATE_NETWORKS):
-                    msg = "URL must not target private IP ranges"
-                    raise ValueError(msg)
-            except ValueError as exc:
-                # Not an IP address (it's a hostname) — that's fine, unless it was our own raise
-                if "private IP" in str(exc) or "http or https" in str(exc):
-                    raise
+        if hostname is None:
+            return v
+
+        _check_ip_not_private(hostname)
         return v
 
 

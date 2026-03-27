@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import socket
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
+
+_PUBLIC_ADDR = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
 
 pytestmark = pytest.mark.unit
 
@@ -34,7 +39,8 @@ class TestIngestSubmitSchema:
     def test_valid_url_accepted(self) -> None:
         from content_ingestion.api.schemas import IngestSubmitRequest
 
-        req = IngestSubmitRequest(source_type="eodhd", url="https://example.com/article")
+        with patch("content_ingestion.api.schemas.socket.getaddrinfo", return_value=_PUBLIC_ADDR):
+            req = IngestSubmitRequest(source_type="eodhd", url="https://example.com/article")
         assert req.url == "https://example.com/article"
 
     def test_private_ip_rejected(self) -> None:
