@@ -2,9 +2,9 @@
 id: PLAN-0001-B
 prd: PRD-0001
 title: "Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store — Implementation Plan"
-status: in-progress
+status: completed
 created: 2026-03-25
-updated: 2026-03-26
+updated: 2026-03-27
 plans: 2
 
 waves: 8
@@ -319,11 +319,12 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 
 ---
 
-### Wave B-4: S5 Observability + Integration Tests + S4→S5 Continuity
+### Wave B-4: S5 Observability + Integration Tests + S4→S5 Continuity ✅
 
 **Goal**: Complete S5 with health probes, Prometheus metrics, DLQ management, main.py wiring, and comprehensive integration tests validating the full S4→S5 pipeline end-to-end.
 **Depends on**: Wave B-3 + Wave A-4 (S4 integration tests must pass)
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-27 · 184 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -340,11 +341,11 @@ S5 is a Kafka consumer service. It consumes `content.article.raw.v1` events from
 - `services/content-ingestion/tests/integration/` — S4 integration test reference
 
 #### Validation Gate
-- [ ] `python -m pytest services/content-store/tests/integration -v -m integration` — all integration tests pass
-- [ ] `python -m pytest services/content-store/tests/unit -v` — all unit tests pass (≥70 total)
-- [ ] `ruff check` + `mypy` clean across both S4 and S5
-- [ ] S4→S5 continuity test confirms full pipeline: raw article → MinIO bronze → outbox → Kafka → S5 consumer → canonical doc → MinIO silver → outbox → Kafka
-- [ ] `docs/services/content-store.md` updated with observability, integration test coverage
+- [x] `python -m pytest services/content-store/tests/integration -v -m integration` — all integration tests pass
+- [x] `python -m pytest services/content-store/tests/unit -v` — 184 unit tests pass (≥70 total)
+- [x] `ruff check` + `mypy` clean across both S4 and S5
+- [x] S4→S5 continuity test confirms full pipeline: raw article → MinIO bronze → outbox → Kafka → S5 consumer → canonical doc → MinIO silver → outbox → Kafka
+- [x] `docs/services/content-store.md` updated with observability, integration test coverage
 
 #### Regression Guardrails
 - BP-003: Async fixture teardown — asyncio_mode=auto, scope carefully
@@ -430,8 +431,8 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 ### Plan Status
 | Plan | Status | Waves Done | Waves Total |
 |------|--------|-----------|-------------|
-| A: S4 Content Ingestion | in-progress | 3 | 4 |
-| B: S5 Content Store | in-progress | 3 | 4 |
+| A: S4 Content Ingestion | done | 4 | 4 |
+| B: S5 Content Store | done | 4 | 4 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
@@ -439,8 +440,8 @@ Each wave leaves the codebase green. If a wave fails mid-way:
 | A-1 | done | 6 | 6 | none |
 | A-2 | done | 5 | 5 | none |
 | A-3 | done | 6 | 6 | none |
-| A-4 | pending | 0 | 4 | A-3 |
-| B-1 | pending | 0 | 4 | A-2 |
+| A-4 | done | 4 | 4 | none |
+| B-1 | done | 4 | 4 | none |
 | B-2 | done | 5 | 5 | B-1 |
 | B-3 | done | 5 | 5 | B-2 |
-| B-4 | pending | 0 | 6 | B-3, A-4 |
+| B-4 | done | 6 | 6 | none |
