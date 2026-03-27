@@ -2,7 +2,7 @@
 id: PLAN-0001-B-R4
 prd: QA Review
 title: "S4+S5 QA Review Fixes: DLQ Fidelity, SSRF Hardening, DDL Alignment, Test Gaps, Process Compounding"
-status: in-progress
+status: completed
 created: 2026-03-27
 updated: 2026-03-27
 plans: 1
@@ -426,12 +426,13 @@ http_client = httpx.AsyncClient(transport=SSRFSafeTransport())
 
 ---
 
-## Wave 3: Test Coverage + Code Fixes ✦
+## Wave 3: Test Coverage + Code Fixes ✅
 
 **Goal**: Expand DDL alignment tests to all tables, add missing test paths, fix code quality issues.
 **Depends on**: Wave 1
 **Estimated effort**: 30–45 minutes
 **Architecture layer**: tests + minor infrastructure fixes
+**Status**: **DONE** — 2026-03-27 · 221 S5 tests + 254 S4 tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -557,18 +558,19 @@ Fix: Remove `lsh_client.index.side_effect` line and rename test to `test_unique_
 ---
 
 ### Validation Gate
-- [ ] `ruff check` + `mypy` clean
-- [ ] All S4 + S5 unit tests pass
-- [ ] DDL alignment tests cover all tables in both services
+- [x] `ruff check` + `mypy` clean
+- [x] All S4 + S5 unit tests pass
+- [x] DDL alignment tests cover all tables in both services
 
 ---
 
-## Wave 4: Documentation + Process Compounding ✦
+## Wave 4: Documentation + Process Compounding ✅
 
 **Goal**: Fix documentation issues, update compounding documents, analyze process failures.
 **Depends on**: Wave 1, Wave 2, Wave 3
 **Estimated effort**: 20–30 minutes
 **Architecture layer**: docs only
+**Status**: **DONE** — 2026-03-27 · docs only · no code changes
 
 ### Tasks
 
@@ -692,9 +694,9 @@ Add to section 6b:
 ---
 
 ### Validation Gate
-- [ ] All documentation files updated
-- [ ] No code changes in this wave (docs only)
-- [ ] Bug patterns have proper ID, symptom, root cause, prevention sections
+- [x] All documentation files updated
+- [x] No code changes in this wave (docs only)
+- [x] Bug patterns have proper ID, symptom, root cause, prevention sections
 
 ---
 
@@ -734,5 +736,5 @@ Each wave is independent and leaves the codebase green. DLQ column additions are
 |------|--------|-----------|-------------|
 | W1 | done | 5 | 5 |
 | W2 | done | 4 | 4 |
-| W3 | pending | 0 | 6 |
-| W4 | pending | 0 | 6 |
+| W3 | done | 6 | 6 |
+| W4 | done | 6 | 6 |

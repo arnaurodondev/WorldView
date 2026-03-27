@@ -275,6 +275,9 @@ def _guess_content_type(source_type: str) -> str:
 
 def _build_stored_payload(doc: CanonicalDocument, article: RawArticleEvent) -> dict:
     """Build the outbox event payload matching content.article.stored.v1 schema."""
+    if doc.minio_silver_key is None:
+        msg = "minio_silver_key must be set before building stored payload"
+        raise ValueError(msg)
     return {
         "event_id": str(common.ids.new_uuid7()),
         "event_type": "content.article.stored",
@@ -284,7 +287,7 @@ def _build_stored_payload(doc: CanonicalDocument, article: RawArticleEvent) -> d
         "content_hash": doc.content_hash,
         "normalized_hash": doc.normalized_hash,
         "dedup_result": doc.dedup_result,
-        "minio_silver_key": doc.minio_silver_key or "",
+        "minio_silver_key": doc.minio_silver_key,
         "source_type": doc.source_type,
         "title": doc.title,
         "word_count": doc.word_count,

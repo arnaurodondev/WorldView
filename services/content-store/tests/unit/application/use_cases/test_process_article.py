@@ -205,8 +205,13 @@ class TestProcessArticleUseCase:
         assert summary.suppressed is True
         assert summary.decision.outcome == DedupOutcome.SAME_SOURCE_DUPLICATE
 
-    async def test_lsh_index_failure_does_not_break_pipeline(self) -> None:
-        """LSH index failure is best-effort — pipeline continues."""
+    async def test_unique_article_returns_signature_for_post_commit_lsh(self) -> None:
+        """execute() returns signature data so the consumer can index in LSH post-commit (CR-3).
+
+        Note: execute() does NOT call lsh.index() directly — that is the consumer's
+        responsibility after session.commit(). This test verifies the use case returns
+        the signature in ProcessingSummary so the consumer can act on it.
+        """
         dedup_repo = AsyncMock()
         dedup_repo.check_exists.return_value = None
 
@@ -222,13 +227,16 @@ class TestProcessArticleUseCase:
             outcome=DedupOutcome.UNIQUE,
             stage="stage_c",
         )
-        lsh_client.index.side_effect = RuntimeError("Valkey down")
 
         uc = _make_use_case(dedup_repo=dedup_repo, object_store=store, lsh_client=lsh_client)
-        # Should not raise
         summary = await uc.execute(_make_article())
+
         assert summary.suppressed is False
         assert summary.doc_id is not None
+        # Signature must be returned for consumer to index post-commit
+        assert summary.signature is not None
+        # execute() must NOT call lsh.index() directly — consumer's job
+        lsh_client.index.assert_not_called()
 
     async def test_no_kafka_publish_in_use_case(self) -> None:
         """Verify the use case NEVER publishes to Kafka directly."""

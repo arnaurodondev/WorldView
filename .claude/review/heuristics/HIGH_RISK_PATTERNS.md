@@ -173,3 +173,30 @@ for key, value in kwargs.items():
 ```
 **Risk**: Mass-assignment vulnerability — callers can overwrite internal fields (`id`, `created_at`, `status`) if not constrained.
 **Fix**: Define `_MUTABLE_FIELDS = frozenset({"name", "enabled", "config"})` and reject keys not in the set.
+
+
+---
+
+## ORANGE — Added from PLAN-0001-B-R4 QA Review (2026-03-27)
+
+### HR-019: Blocking I/O in Pydantic Validators
+```python
+@field_validator("url")
+@classmethod
+def validate_url(cls, v: str) -> str:
+    addrs = socket.getaddrinfo(hostname, None)  # BLOCKS THE EVENT LOOP
+    requests.get(url)                           # BLOCKS THE EVENT LOOP
+    open(path).read()                           # BLOCKS THE EVENT LOOP
+    ...
+```
+**Risk**: Pydantic validators called from async FastAPI handlers run synchronously on the event loop. Any blocking I/O (DNS, HTTP, file I/O) freezes the entire service for the duration of that operation.
+**Fix**: Only do fast, CPU-bound checks in Pydantic validators (scheme check, regex, literal IP check). Move DNS/HTTP/file I/O to the async route handler using `asyncio.to_thread`.
+
+### HR-020: SSRF With IPv4-Only IP Range Checks
+```python
+_PRIVATE = [ipaddress.ip_network("10.0.0.0/8"), ipaddress.ip_network("127.0.0.0/8")]
+def is_private(addr):
+    return any(addr in net for net in _PRIVATE)  # misses ::ffff:127.0.0.1
+```
+**Risk**: IPv4-mapped IPv6 addresses (e.g., `::ffff:127.0.0.1`) bypass manual IPv4 range lists because the list entries are `IPv4Network` objects but `addr` is `IPv6Address`.
+**Fix**: Use `addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_multicast`, and unwrap IPv4-mapped IPv6 first: `if isinstance(addr, IPv6Address) and addr.ipv4_mapped: addr = addr.ipv4_mapped`.

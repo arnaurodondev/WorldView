@@ -4,7 +4,7 @@ prd: PRD-0001
 title: "S4+S5 QA Fixes: DDL Alignment, DLQ, SSRF, LSH Ordering, Contract Tests, Compounding"
 status: completed
 created: 2026-03-27
-updated: 2026-03-27
+updated: 2026-03-28
 plans: 1
 waves: 4
 tasks: 19
