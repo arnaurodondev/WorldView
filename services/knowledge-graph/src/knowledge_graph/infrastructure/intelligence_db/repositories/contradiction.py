@@ -1,0 +1,163 @@
+"""Contradiction repository (PRD §6.7 Block 12b).
+
+Uses raw SQL via ``text()`` — S7 does not own intelligence_db DDL.
+
+Contradiction detection is subject-based (NOT claimer-based):
+- Query claims on (subject_entity_id, claim_type, polarity) within a 90-day window.
+- A contradiction requires opposite polarity AND both non-neutral.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from sqlalchemy import text
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+# 90-day window for contradiction detection
+_CONTRADICTION_WINDOW_DAYS: int = 90
+
+
+class ContradictionRepository:
+    """Read/write repository for ``relation_contradiction_links``."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def find_opposing_claims(
+        self,
+        subject_entity_id: UUID,
+        claim_type: str,
+        polarity: str,
+        window_days: int = _CONTRADICTION_WINDOW_DAYS,
+    ) -> list[dict[str, object]]:
+        """Find claims with opposite polarity on the same subject/type within window.
+
+        Returns claims that:
+        - Share the same subject_entity_id and claim_type
+        - Have opposite, non-neutral polarity to *polarity*
+        - Were created within the last *window_days* days
+        """
+        # Determine the opposite polarity
+        opposite = _opposite_polarity(polarity)
+        if opposite is None:
+            # neutral cannot form a contradiction
+            return []
+
+        result = await self._session.execute(
+            text("""
+SELECT claim_id, claimer_entity_id, polarity, claim_text,
+       extraction_confidence, created_at
+FROM claims
+WHERE subject_entity_id = :subject_entity_id
+  AND claim_type        = :claim_type
+  AND polarity          = :opposite_polarity
+  AND polarity         != 'neutral'
+  AND created_at       >= now() - make_interval(days => :window_days)
+ORDER BY created_at DESC
+"""),
+            {
+                "subject_entity_id": str(subject_entity_id),
+                "claim_type": claim_type,
+                "opposite_polarity": opposite,
+                "window_days": window_days,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "claim_id": UUID(str(r[0])),
+                "claimer_entity_id": UUID(str(r[1])) if r[1] else None,
+                "polarity": r[2],
+                "claim_text": r[3],
+                "extraction_confidence": float(r[4]),
+                "created_at": r[5],
+            }
+            for r in rows
+        ]
+
+    async def insert_link(
+        self,
+        relation_evidence_id: UUID,
+        claim_id: UUID,
+        contradiction_type: str,
+        strength: float,
+        detected_at: datetime,
+    ) -> UUID:
+        """Insert a contradiction link into ``relation_contradiction_links``.
+
+        Temporal weights are NOT cached — computed on read.
+        """
+        result = await self._session.execute(
+            text("""
+INSERT INTO relation_contradiction_links (
+    relation_evidence_id, claim_id, contradiction_type, strength, detected_at
+) VALUES (
+    :relation_evidence_id, :claim_id, :contradiction_type, :strength, :detected_at
+)
+ON CONFLICT (relation_evidence_id, claim_id) DO NOTHING
+RETURNING link_id
+"""),
+            {
+                "relation_evidence_id": str(relation_evidence_id),
+                "claim_id": str(claim_id),
+                "contradiction_type": contradiction_type,
+                "strength": strength,
+                "detected_at": detected_at,
+            },
+        )
+        row = result.fetchone()
+        if row is None:
+            # ON CONFLICT DO NOTHING — link already existed, fetch existing
+            existing = await self._session.execute(
+                text("""
+SELECT link_id FROM relation_contradiction_links
+WHERE relation_evidence_id = :rel_ev_id AND claim_id = :claim_id
+"""),
+                {
+                    "rel_ev_id": str(relation_evidence_id),
+                    "claim_id": str(claim_id),
+                },
+            )
+            existing_row = existing.fetchone()
+            return UUID(str(existing_row[0]))  # type: ignore[index]
+        return UUID(str(row[0]))
+
+    async def fetch_active_for_subject(
+        self,
+        subject_entity_id: UUID,
+        window_days: int = _CONTRADICTION_WINDOW_DAYS,
+    ) -> list[dict[str, object]]:
+        """Fetch active contradiction links for the top-K calculation (confidence formula)."""
+        result = await self._session.execute(
+            text("""
+SELECT rcl.link_id, rcl.strength, rcl.detected_at
+FROM relation_contradiction_links rcl
+JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
+WHERE rer.subject_entity_id = :subject_entity_id
+  AND rcl.invalidated_at IS NULL
+  AND rcl.detected_at    >= now() - make_interval(days => :window_days)
+ORDER BY rcl.detected_at DESC
+"""),
+            {"subject_entity_id": str(subject_entity_id), "window_days": window_days},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "link_id": UUID(str(r[0])),
+                "strength": float(r[1]),
+                "detected_at": r[2],
+            }
+            for r in rows
+        ]
+
+
+def _opposite_polarity(polarity: str) -> str | None:
+    """Return the opposite non-neutral polarity, or None for neutral."""
+    _map = {"positive": "negative", "negative": "positive"}
+    return _map.get(polarity)

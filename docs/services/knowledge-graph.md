@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Wave D-1 complete — domain, confidence formula, intelligence_db adapter implemented
 
 ---
 
@@ -113,6 +113,48 @@ and performs read/write operations only.
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
 
 ---
+
+## Domain Models (Wave D-1)
+
+| Class | Location | Notes |
+|-------|----------|-------|
+| `Relation` | `domain/models.py` | Frozen DC; maps to `relations` table (hash-partitioned ×8) |
+| `RelationEvidence` | `domain/models.py` | Frozen DC; `is_backfill` flag for historical loads |
+| `RelationSummary` | `domain/models.py` | LLM-generated; `evidence_hash` for change-detection skip |
+| `ContradictionLink` | `domain/models.py` | Row in `relation_contradiction_links`; no cached temporal weight |
+| `Contradiction` | `domain/models.py` | Event aggregate: subject-based, opposite+non-neutral polarities |
+| `ConfidenceComponents` | `domain/models.py` | 4-step result; call `.validate()` to assert bounds |
+| `SemanticMode` | `domain/enums.py` | `RELATION_STATE` \| `TEMPORAL_CLAIM` (exactly 2 values) |
+| `DecayClass` | `domain/enums.py` | `STANDARD` \| `TEMPORAL` — formula meta-class |
+| `RelationType` | `domain/enums.py` | 8 well-known types; full registry in DB |
+
+## Confidence Formula (PRD §10.1)
+
+```
+Support        = sum(w_i * source_weight_i) / sum(w_i)
+                 where w_i = exp(-alpha * days_since(evidence_date))
+Corroboration  = min(distinct_qualifying_sources * 0.05, 0.20)
+                 qualifying = temporal_weight >= 0.1
+Contradiction  = min(sum(top-3 decayed link strengths), 0.60)
+Final          = clamp(support + corroboration - contradiction, 0.0, 1.0)
+```
+
+**Decay alpha selection**:
+- `RELATION_STATE` → uses the relation's `decay_alpha` from `decay_class_config` row
+- `TEMPORAL_CLAIM` → always uses `0.02310` (30-day half-life, regardless of decay_class)
+
+`ConfidenceComponents.validate()` asserts: final ∈ [0,1], corroboration ≤ 0.20, contradiction ≤ 0.60.
+
+## DB Topology
+
+S7 uses **two session factories** for `intelligence_db` (no Alembic — DDL owned by `intelligence-migrations`):
+
+| Factory | Usage |
+|---------|-------|
+| `create_intelligence_session_factory` | Read/write — hot path writes, worker updates |
+| `create_readonly_session_factory` | Read-only — query endpoints, aggregation reads |
+
+**Critical constraint**: `partition_key` is a `GENERATED ALWAYS AS STORED` column in `relations` and `relation_evidence_raw` — **never included in INSERT statements**.
 
 ## Internal Modules
 

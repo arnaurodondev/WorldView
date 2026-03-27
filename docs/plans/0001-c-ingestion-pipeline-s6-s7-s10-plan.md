@@ -4,7 +4,7 @@ prd: PRD-0001
 title: "Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service — Implementation Plan"
 status: in-progress
 created: 2026-03-25
-updated: 2026-03-27
+updated: 2026-03-28
 plans: 3
 
 waves: 11
@@ -233,11 +233,12 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 
 ---
 
-### Wave D-1: S7 Foundation — Config, Domain, intelligence_db Adapter
+### Wave D-1: S7 Foundation — Config, Domain, intelligence_db Adapter ✅
 
 **Goal**: Establish S7 foundation: settings (confidence formula params, worker intervals), domain models (SemanticMode, DecayClass, Relation, RelationEvidence, ConfidenceComponents), and intelligence_db dual-session adapter with `ALEMBIC_ENABLED=false` guard.
 **Depends on**: Wave C-4 (S6 integration test `test_full_pipeline` must pass)
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-03-28 · 62 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -253,12 +254,12 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 - `services/intelligence-migrations/` — DDL definitions for intelligence_db tables
 
 #### Validation Gate
-- [ ] `ruff check services/knowledge-graph/` passes
-- [ ] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/knowledge-graph/tests/unit -v` — ≥25 tests pass
-- [ ] ConfidenceComponents.validate() confirms all bounds
-- [ ] ALEMBIC_ENABLED=true raises RuntimeError
-- [ ] `docs/services/knowledge-graph.md` updated with domain models, confidence formula, DB topology
+- [x] `ruff check services/knowledge-graph/` passes
+- [x] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/knowledge-graph/tests/unit -v` — 62 tests pass (≥25 ✓)
+- [x] ConfidenceComponents.validate() confirms all bounds
+- [x] ALEMBIC_ENABLED=true raises RuntimeError
+- [x] `docs/services/knowledge-graph.md` updated with domain models, confidence formula, DB topology
 
 #### Regression Guardrails
 - BP-008: intelligence_db tables match DDL from intelligence-migrations (not S7's responsibility to create)
