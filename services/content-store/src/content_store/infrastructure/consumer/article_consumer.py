@@ -114,6 +114,18 @@ class ArticleConsumer:
                 # Commit the DB transaction BEFORE acknowledging offset
                 await session.commit()
 
+                # Index in LSH AFTER commit — best-effort (CR-3 fix)
+                if summary.signature is not None and summary.doc_id is not None:
+                    try:
+                        await self._lsh.index(
+                            summary.doc_id,
+                            summary.signature,
+                            summary.source_type or article.source_type,
+                            summary.source_type or article.source_type,
+                        )
+                    except Exception:
+                        log.warning("lsh_index_failed", doc_id=str(summary.doc_id))
+
                 log.info(
                     "article_processed",
                     suppressed=summary.suppressed,

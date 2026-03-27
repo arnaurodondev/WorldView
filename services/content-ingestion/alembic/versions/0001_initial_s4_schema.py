@@ -94,6 +94,7 @@ def upgrade() -> None:
             original_event_id UUID        NOT NULL,
             topic             TEXT        NOT NULL,
             payload_avro      BYTEA       NOT NULL,
+            payload_json      JSONB,
             error_detail      TEXT,
             status            TEXT        NOT NULL DEFAULT 'failed',
             created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

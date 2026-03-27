@@ -14,21 +14,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── Fix documents table: add missing columns, make minio_silver_key nullable ──
-    op.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS dedup_result VARCHAR(30) NOT NULL DEFAULT 'unique'")
-    op.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS corroborates_doc_id UUID")
-    op.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_backfill BOOLEAN NOT NULL DEFAULT FALSE")
-    op.execute("ALTER TABLE documents ALTER COLUMN minio_silver_key DROP NOT NULL")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_documents_corroborates"
-        " ON documents (corroborates_doc_id)"
-        " WHERE corroborates_doc_id IS NOT NULL"
-    )
-
-    # ── dedup_hashes ──
+    # ── dedup_hashes — app-generated UUIDv7 (R10, M-8) ──
     op.execute("""
         CREATE TABLE IF NOT EXISTS dedup_hashes (
-            hash_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            hash_id     UUID        PRIMARY KEY,
             doc_id      UUID        NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
             hash_type   VARCHAR(30) NOT NULL,
             hash_value  VARCHAR(64) NOT NULL,
@@ -38,10 +27,10 @@ def upgrade() -> None:
     """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_dedup_hashes_lookup ON dedup_hashes (hash_type, hash_value)")
 
-    # ── duplicate_clusters ──
+    # ── duplicate_clusters — app-generated UUIDv7 (R10, M-8) ──
     op.execute("""
         CREATE TABLE IF NOT EXISTS duplicate_clusters (
-            cluster_id       UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
+            cluster_id       UUID  PRIMARY KEY,
             primary_doc_id   UUID  NOT NULL REFERENCES documents(doc_id),
             duplicate_doc_id UUID  NOT NULL REFERENCES documents(doc_id),
             similarity       FLOAT NOT NULL,
@@ -54,8 +43,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS duplicate_clusters")
     op.execute("DROP TABLE IF EXISTS dedup_hashes")
-    op.execute("DROP INDEX IF EXISTS idx_documents_corroborates")
-    op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS is_backfill")
-    op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS corroborates_doc_id")
-    op.execute("ALTER TABLE documents DROP COLUMN IF EXISTS dedup_result")
-    op.execute("ALTER TABLE documents ALTER COLUMN minio_silver_key SET NOT NULL")

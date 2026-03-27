@@ -66,6 +66,8 @@ class ProcessingSummary:
     decision: DeduplicationDecision
     doc_id: UUID | None
     suppressed: bool
+    signature: list[int] | None = None
+    source_type: str | None = None
 
 
 class ProcessArticleUseCase:
@@ -247,17 +249,15 @@ class ProcessArticleUseCase:
             silver_key=silver_key,
         )
 
-        # 8. Index in LSH (after DB commit — best-effort)
-        try:
-            await self._lsh.index(doc_id, signature, article.source_type, article.source_type)
-        except Exception:
-            log.warning("lsh_index_failed", doc_id=str(doc_id))
-
+        # 8. Return signature data for LSH indexing AFTER DB commit (CR-3)
+        #    The consumer is responsible for calling lsh.index() post-commit.
         return ProcessingSummary(
             article_id=article.doc_id,
             decision=decision,
             doc_id=doc_id,
             suppressed=False,
+            signature=signature,
+            source_type=article.source_type,
         )
 
 

@@ -178,7 +178,7 @@ class FetchAndWriteUseCase:
                 )
 
                 payload = build_raw_article_payload(
-                    doc_id=result.source_id,
+                    doc_id=common.ids.new_uuid7(),
                     source_type=str(source.source_type),
                     source_url=result.url,
                     minio_bronze_key=minio_key,

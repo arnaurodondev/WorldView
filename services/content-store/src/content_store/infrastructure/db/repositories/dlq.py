@@ -73,7 +73,7 @@ class DLQRepository:
                 aggregate_id=entry.original_event_id,
                 event_type="content.article.stored.v1",
                 topic=entry.topic,
-                payload={},
+                payload=entry.payload_json or {},
             )
         )
 
