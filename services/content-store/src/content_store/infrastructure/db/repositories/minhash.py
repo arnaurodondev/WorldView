@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from content_store.application.ports.repositories import MinHashRepositoryPort
 from content_store.infrastructure.db.models import MinHashEntityMentionModel, MinHashSignatureModel
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from content_store.domain.entities import EntityMention, MinHashSignature
 
 
-class MinHashRepository:
+class MinHashRepository(MinHashRepositoryPort):
     """PostgreSQL repository for MinHash signatures and entity mentions."""
 
     def __init__(self, session: AsyncSession) -> None:

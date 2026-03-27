@@ -34,25 +34,31 @@ def _make_article(**overrides: object) -> RawArticleEvent:
     return RawArticleEvent(**defaults)  # type: ignore[arg-type]
 
 
+def _make_silver_storage() -> AsyncMock:
+    """Create a default silver_storage mock that returns a valid key string."""
+    mock = AsyncMock()
+    mock.put_canonical.return_value = "content-store/canonical/test/body.json"
+    return mock
+
+
 def _make_use_case(
     *,
-    session: AsyncMock | None = None,
     document_repo: AsyncMock | None = None,
     dedup_repo: AsyncMock | None = None,
     minhash_repo: AsyncMock | None = None,
     outbox_repo: AsyncMock | None = None,
     object_store: AsyncMock | None = None,
+    silver_storage: AsyncMock | None = None,
     lsh_client: AsyncMock | None = None,
 ) -> ProcessArticleUseCase:
     return ProcessArticleUseCase(
-        session=session or AsyncMock(),
         document_repo=document_repo or AsyncMock(),
         dedup_repo=dedup_repo or AsyncMock(),
         minhash_repo=minhash_repo or AsyncMock(),
         outbox_repo=outbox_repo or AsyncMock(),
         object_store=object_store or AsyncMock(),
         bronze_bucket="worldview-bronze",
-        silver_bucket="worldview-silver",
+        silver_storage=silver_storage or _make_silver_storage(),
         lsh_client=lsh_client or AsyncMock(),
     )
 
@@ -107,7 +113,8 @@ class TestProcessArticleUseCase:
         minhash_repo = AsyncMock()
         minhash_repo.get_signature_by_doc_id.return_value = None
         outbox_repo = AsyncMock()
-        session = AsyncMock()
+        silver_storage = AsyncMock()
+        silver_storage.put_canonical.return_value = "content-store/canonical/xyz/body.json"
 
         lsh_client = AsyncMock()
         lsh_client.query.return_value = DeduplicationDecision(
@@ -116,12 +123,12 @@ class TestProcessArticleUseCase:
         )
 
         uc = _make_use_case(
-            session=session,
             dedup_repo=dedup_repo,
             document_repo=document_repo,
             minhash_repo=minhash_repo,
             outbox_repo=outbox_repo,
             object_store=store,
+            silver_storage=silver_storage,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article())
@@ -135,7 +142,7 @@ class TestProcessArticleUseCase:
         dedup_repo.insert_pair.assert_called_once()
         minhash_repo.create_signature.assert_called_once()
         outbox_repo.append.assert_called_once()
-        session.flush.assert_called_once()
+        silver_storage.put_canonical.assert_called_once()
 
         # Verify outbox payload
         call_kwargs = outbox_repo.append.call_args

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from content_store.application.ports.repositories import DedupHashRepositoryPort
 from content_store.infrastructure.db.models import DedupHashModel
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class DedupHashRepository:
+class DedupHashRepository(DedupHashRepositoryPort):
     """PostgreSQL dedup hash repository for Stage A and Stage B lookups."""
 
     def __init__(self, session: AsyncSession) -> None:

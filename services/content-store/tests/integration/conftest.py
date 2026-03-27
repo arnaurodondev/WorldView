@@ -126,6 +126,7 @@ async def _clean_tables(db_engine):
             # Truncate in reverse dependency order
             await conn.execute(text("TRUNCATE dead_letter_queue CASCADE"))
             await conn.execute(text("TRUNCATE outbox_events CASCADE"))
+            await conn.execute(text("TRUNCATE processed_events CASCADE"))
             await conn.execute(text("TRUNCATE minhash_entity_mentions CASCADE"))
             await conn.execute(text("TRUNCATE minhash_signatures CASCADE"))
             await conn.execute(text("TRUNCATE duplicate_clusters CASCADE"))

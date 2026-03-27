@@ -201,6 +201,25 @@ class OutboxEventModel(Base):
     )
 
 
+# ── processed_events ───────────────────────────────────────────────────────────
+
+
+class ProcessedEventModel(Base):
+    """Idempotency table for the article consumer.
+
+    ``event_id`` is the Avro envelope ``event_id`` field extracted from each
+    consumed Kafka message.  Inserted atomically with the article document
+    write so the consumer never re-processes an event that was already stored.
+    """
+
+    __tablename__ = "processed_events"
+
+    event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("idx_processed_events_processed_at", "processed_at"),)
+
+
 # ── dead_letter_queue ──────────────────────────────────────────────────────────
 
 

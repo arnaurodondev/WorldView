@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from content_store.application.ports.repositories import DocumentRepositoryPort
 from content_store.infrastructure.db.models import DocumentModel
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from content_store.domain.entities import CanonicalDocument
 
 
-class DocumentRepository:
+class DocumentRepository(DocumentRepositoryPort):
     """PostgreSQL document repository."""
 
     def __init__(self, session: AsyncSession) -> None:
