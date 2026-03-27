@@ -7,7 +7,7 @@ API surface:
   GET  /api/v1/policies         — List enabled polling policies
   GET  /healthz                 — Liveness probe (always 200)
   GET  /readyz                  — Readiness probe (checks DB + storage)
-  GET  /metrics                 — Prometheus exposition (via middleware)
+  GET  /metrics                 — Prometheus metrics endpoint
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import prometheus_client
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from market_ingestion.api.dependencies import (
     get_object_store,
@@ -236,3 +237,15 @@ async def list_policies(
         for p in policies
     ]
     return PolicyListResponse(policies=summaries, total=len(summaries))
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/metrics", tags=["probes"])
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    data = prometheus_client.generate_latest()
+    return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)

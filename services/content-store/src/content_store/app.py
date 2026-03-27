@@ -6,7 +6,9 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+import structlog.contextvars
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from content_store.api.dlq import router as dlq_router
 from content_store.api.health import router as health_router
@@ -14,12 +16,32 @@ from content_store.config import Settings
 from content_store.infrastructure.consumer.article_consumer import ArticleConsumer, ArticleConsumerConfig
 from content_store.infrastructure.db.session import create_session_factory
 from content_store.infrastructure.outbox.dispatcher import ContentStoreOutboxDispatcher
-from observability import get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle."""
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        import common.ids
+
+        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
+        return response
 
 
 async def _poll_metrics(settings: Settings, session_factory: object) -> None:
@@ -56,12 +78,36 @@ async def _poll_metrics(settings: Settings, session_factory: object) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — start consumer, dispatcher, metrics poller."""
     settings = Settings()
-    session_factory = create_session_factory(settings)
+
+    # 1. Logging — always first
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    log = get_logger("content_store.app")
+
+    # 2. Metrics
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    app.state.metrics = metrics
+
+    # 3. Tracing (optional)
+    if settings.otlp_endpoint:
+        configure_tracing(
+            service_name=settings.service_name,
+            otlp_endpoint=settings.otlp_endpoint,
+        )
+        add_otel_middleware(app)
+
+    # 4. Database — returns (engine, factory) so we can dispose on shutdown (M-3)
+    engine, session_factory = create_session_factory(settings)
 
     app.state.settings = settings
     app.state.session_factory = session_factory
+    app.state.engine = engine
 
-    # Build object storage
+    # 5. Object storage
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
@@ -73,7 +119,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     object_store = build_object_storage(settings=storage_settings)
 
-    # Build Valkey LSH client
+    # 6. Valkey LSH client
     from content_store.infrastructure.valkey.lsh_client import LSHConfig, ValkeyLSHClient
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
@@ -87,7 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey = valkey_client
     app.state.lsh_client = lsh_client
 
-    # Build consumer
+    # 7. Consumer
     consumer_config = ArticleConsumerConfig(settings)
     consumer = ArticleConsumer(
         config=consumer_config,
@@ -98,10 +144,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.consumer = consumer
     app.state.consumer_alive = True
 
-    # Build dispatcher (stored on app.state for lifecycle management)
+    # 8. Dispatcher
     app.state.dispatcher = ContentStoreOutboxDispatcher(settings, session_factory)
 
-    # Start background tasks
+    # 9. Background tasks
     tasks: list[asyncio.Task[None]] = []
 
     async def _run_metrics() -> None:
@@ -109,7 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     tasks.append(asyncio.create_task(_run_metrics()))
 
-    _log.info("content_store_started", port=settings.port)
+    log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
 
@@ -117,7 +163,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for task in tasks:
         task.cancel()
     consumer.stop()
-    _log.info("content_store_stopped")
+    await engine.dispose()
+    log.info("service_stopped", service=settings.service_name)
 
 
 def create_app() -> FastAPI:
@@ -127,6 +174,8 @@ def create_app() -> FastAPI:
         version="2025.6.0",
         lifespan=lifespan,
     )
+
+    app.add_middleware(RequestIdMiddleware)
 
     app.include_router(health_router)
     app.include_router(dlq_router)
