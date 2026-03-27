@@ -68,6 +68,37 @@ class TestInstrumentCreatedEvent:
         assert InstrumentCreated.schema_version == 1  # type: ignore[attr-defined]
 
 
+# ── T-E2-2-02: ClassVar fields not in dataclass fields ────────────────────────
+
+
+class TestClassVarFields:
+    """Verify event_type and schema_version are ClassVar — not dataclass instance fields.
+
+    dataclasses.fields() only returns true instance fields; ClassVar fields are
+    excluded.  __dataclass_fields__ includes ClassVar entries but marks them as
+    _FIELD_CLASSVAR, so we use dataclasses.fields() for the canonical check.
+    """
+
+    def test_event_type_not_an_instance_field(self) -> None:
+        """event_type must NOT appear in dataclasses.fields() — it is a ClassVar."""
+        field_names = {f.name for f in dataclasses.fields(InstrumentCreated)}
+        assert "event_type" not in field_names
+
+    def test_schema_version_not_an_instance_field(self) -> None:
+        """schema_version must NOT appear in dataclasses.fields() — it is a ClassVar."""
+        field_names = {f.name for f in dataclasses.fields(InstrumentCreated)}
+        assert "schema_version" not in field_names
+
+    def test_event_type_accessible_on_class(self) -> None:
+        """event_type is accessible as a class attribute (ClassVar access pattern)."""
+        assert InstrumentCreated.event_type == "market.instrument.created"  # type: ignore[attr-defined]
+
+    def test_event_type_accessible_on_instance(self) -> None:
+        """event_type is accessible on an instance (inherited from class)."""
+        event = InstrumentCreated()
+        assert event.event_type == "market.instrument.created"
+
+
 class TestInstrumentUpdatedEvent:
     def test_instrument_updated_event_envelope(self) -> None:
         event = InstrumentUpdated(

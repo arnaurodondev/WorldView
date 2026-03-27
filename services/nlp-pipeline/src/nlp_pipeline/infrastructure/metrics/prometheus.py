@@ -1,0 +1,61 @@
+"""Prometheus metrics definitions for the NLP Pipeline service (S6).
+
+Custom metrics — STANDARDS.md §5 requires using create_metrics() from observability
+for the generic service metrics (request counts, latency). The domain-specific
+counters and gauges defined here are supplementary.
+"""
+
+from __future__ import annotations
+
+import prometheus_client
+
+# ── Article processing ────────────────────────────────────────────────────────
+
+s6_articles_processed_total = prometheus_client.Counter(
+    "s6_articles_processed_total",
+    "Total articles processed by routing tier",
+    ["routing_tier"],
+)
+
+s6_ner_mentions_total = prometheus_client.Counter(
+    "s6_ner_mentions_total",
+    "Total GLiNER entity mentions extracted across all processed articles",
+)
+
+s6_embeddings_created_total = prometheus_client.Counter(
+    "s6_embeddings_created_total",
+    "Total chunk and section embeddings successfully created",
+)
+
+s6_entity_resolved_total = prometheus_client.Counter(
+    "s6_entity_resolved_total",
+    "Total entity mentions resolved, by resolution method",
+    ["method"],  # exact | ticker | fuzzy | ann
+)
+
+s6_claims_extracted_total = prometheus_client.Counter(
+    "s6_claims_extracted_total",
+    "Total claims extracted by deep LLM extraction (Block 10)",
+)
+
+nlp_sectioning_fallback_total = prometheus_client.Counter(
+    "nlp_sectioning_fallback_total",
+    "Times the synthetic (fallback) sectioner was used because source_type was unknown",
+)
+
+# ── Backpressure gauge (polled from BackpressureController) ──────────────────
+
+s6_ollama_queue_depth_current = prometheus_client.Gauge(
+    "s6_ollama_queue_depth_current",
+    "Current number of in-flight Ollama inference requests (backpressure depth)",
+)
+
+
+def record_article_processed(routing_tier: str) -> None:
+    """Increment per-tier article counter."""
+    s6_articles_processed_total.labels(routing_tier=routing_tier).inc()
+
+
+def record_entity_resolved(method: str) -> None:
+    """Increment per-method entity resolution counter."""
+    s6_entity_resolved_total.labels(method=method).inc()

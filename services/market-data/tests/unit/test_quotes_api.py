@@ -150,6 +150,29 @@ def test_get_quote_sets_cache_on_db_hit() -> None:
     mock_cache.set.assert_awaited_once()
 
 
+def test_get_quote_response_null_fields() -> None:
+    """GET /api/v1/quotes/{id} returns null for bid/ask/last/volume when entity fields are None (D-004)."""
+    null_quote = Quote(
+        instrument_id="instr-001",
+        bid=None,
+        ask=None,
+        last=None,
+        volume=None,
+        timestamp=datetime(2024, 3, 15, 14, 30, tzinfo=UTC),
+        updated_at=datetime(2024, 3, 15, 14, 30, tzinfo=UTC),
+    )
+    mock_uow, mock_cache = _make_mocks(quote=null_quote, cache_hit=False)
+    _, client = _make_app(mock_uow, mock_cache)
+
+    resp = client.get("/api/v1/quotes/instr-001")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bid"] is None
+    assert data["ask"] is None
+    assert data["last"] is None
+    assert data["volume"] is None
+
+
 def test_get_quote_cache_key_format() -> None:
     """QuoteCache uses the versioned key format quote:v1:{instrument_id}."""
     from market_data.infrastructure.cache.quote_cache import QuoteCache

@@ -10,6 +10,7 @@ callers only need to supply domain-specific fields.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from common.ids import new_uuid7_str  # type: ignore[import-untyped]
 from common.time import to_iso8601, utc_now  # type: ignore[import-untyped]
@@ -29,15 +30,16 @@ def _utc_iso() -> str:
 class DomainEvent:
     """Base envelope for all market-data domain events.
 
-    Subclasses must provide ``event_type`` and ``schema_version`` defaults
-    and may add domain-specific payload fields.  All fields in subclasses
-    must also carry defaults so that the dataclass inheritance ordering rules
-    are satisfied.
+    ``event_type`` and ``schema_version`` are class-level constants (ClassVar)
+    that subclasses override.  They are not dataclass instance fields so that
+    they cannot vary per-instance and are not included in ``dataclasses.asdict()``.
+    Serialization code that needs them must read them explicitly via ``type(event)``.
     """
 
+    event_type: ClassVar[str] = ""
+    schema_version: ClassVar[int] = 0
+
     event_id: str = field(default_factory=_new_event_id)
-    event_type: str = ""
-    schema_version: int = 0
     occurred_at: str = field(default_factory=_utc_iso)
     correlation_id: str | None = None
     causation_id: str | None = None
@@ -50,13 +52,13 @@ class InstrumentCreated(DomainEvent):
     Published to topic ``market.instrument.created``.
     """
 
+    event_type: ClassVar[str] = "market.instrument.created"
+    schema_version: ClassVar[int] = 1
+
     instrument_id: str = ""
     security_id: str = ""
     symbol: str = ""
     exchange: str = ""
-    # Override envelope defaults
-    event_type: str = "market.instrument.created"
-    schema_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -66,12 +68,12 @@ class InstrumentUpdated(DomainEvent):
     Published to topic ``market.instrument.updated``.
     """
 
+    event_type: ClassVar[str] = "market.instrument.updated"
+    schema_version: ClassVar[int] = 1
+
     instrument_id: str = ""
     symbol: str = ""
     exchange: str = ""
     has_ohlcv: bool = False
     has_quotes: bool = False
     has_fundamentals: bool = False
-    # Override envelope defaults
-    event_type: str = "market.instrument.updated"
-    schema_version: int = 1

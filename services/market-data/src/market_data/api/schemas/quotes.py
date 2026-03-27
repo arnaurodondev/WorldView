@@ -11,10 +11,10 @@ class QuoteResponse(BaseModel):
     """Single quote snapshot response."""
 
     instrument_id: str
-    bid: str  # Decimal as string
-    ask: str
-    last: str
-    volume: int
+    bid: str | None  # Decimal as string; None when not available
+    ask: str | None
+    last: str | None
+    volume: int | None
     timestamp: datetime
     updated_at: datetime
 
