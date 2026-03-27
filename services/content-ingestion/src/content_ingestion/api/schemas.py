@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from datetime import datetime
@@ -10,40 +11,62 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-# ── Source CRUD ──────────────────────────────────────────────────────────────
-
-# Private IP networks for SSRF prevention
-_PRIVATE_NETWORKS = (
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-)
-
-# IPv6 loopback
-_PRIVATE_NETWORKS_V6 = (
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-)
+# ── SSRF Prevention ──────────────────────────────────────────────────────────
 
 
 def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Check if an IP address is in a private/reserved range."""
-    if isinstance(addr, ipaddress.IPv4Address):
-        return any(addr in net for net in _PRIVATE_NETWORKS)
-    return any(addr in net for net in _PRIVATE_NETWORKS_V6)
+    """Check if an IP is private, reserved, loopback, multicast, or link-local.
 
-
-def _check_ip_not_private(hostname: str) -> None:
-    """Resolve hostname and check ALL IPs against private ranges.
-
-    Handles both literal IPs and DNS hostnames. Raises ValueError
-    if any resolved address is private (SSRF prevention via DNS rebinding).
+    Handles IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1) by extracting
+    the IPv4 part before checking. Uses Python builtins for future-proof coverage
+    including CGNAT (100.64.0.0/10), multicast (224.0.0.0/4), reserved (240.0.0.0/4).
     """
-    # Try as literal IP first
+    # Handle IPv4-mapped IPv6 (e.g., ::ffff:127.0.0.1) — extract the IPv4 part
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    return bool(
+        addr.is_private
+        or addr.is_reserved
+        or addr.is_loopback
+        or addr.is_multicast
+        or addr.is_link_local
+        # CGNAT shared space — not classified by Python 3.12 builtins
+        or (isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK)
+    )
+
+
+# CGNAT shared address space — Python 3.12 doesn't classify it in any builtin
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _check_literal_ip_not_private(hostname: str) -> None:
+    """Check literal IP hostname against private ranges (sync, fast).
+
+    Only checks if hostname is a literal IP address. DNS hostnames are
+    checked asynchronously in `check_url_ssrf_async` (BP-022).
+    """
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if _is_private_ip(addr):
+            msg = "URL must not target private IP ranges"
+            raise ValueError(msg)
+    except ValueError as exc:
+        if "private IP" in str(exc):
+            raise
+        # Not a literal IP — DNS check will be done async in route handler
+
+
+async def check_url_ssrf_async(url: str) -> None:
+    """Async SSRF check — resolves DNS hostnames in thread pool with timeout.
+
+    Call from async route handlers BEFORE making HTTP requests.
+    Covers DNS rebinding by resolving and checking ALL addresses (BP-022, BP-023).
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if hostname is None:
+        return
+    # Literal IP — fast sync check
     try:
         addr = ipaddress.ip_address(hostname)
         if _is_private_ip(addr):
@@ -55,9 +78,15 @@ def _check_ip_not_private(hostname: str) -> None:
             raise
         # Not a literal IP — resolve via DNS below
 
-    # DNS resolution — check ALL addresses
+    # DNS resolution in thread pool with timeout (BP-022)
     try:
-        addr_infos = socket.getaddrinfo(hostname, None)
+        addr_infos = await asyncio.wait_for(
+            asyncio.to_thread(socket.getaddrinfo, hostname, None),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        msg = f"DNS resolution timed out for hostname: {hostname}"
+        raise ValueError(msg)  # noqa: B904
     except socket.gaierror:
         msg = f"Could not resolve hostname: {hostname}"
         raise ValueError(msg)  # noqa: B904
@@ -144,7 +173,7 @@ class IngestSubmitRequest(BaseModel):
         if hostname is None:
             return v
 
-        _check_ip_not_private(hostname)
+        _check_literal_ip_not_private(hostname)
         return v
 
 

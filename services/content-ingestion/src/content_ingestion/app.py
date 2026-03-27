@@ -278,8 +278,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     storage = build_object_storage(settings=storage_settings)
     app.state.storage = storage
 
-    # 7. HTTP client (shared across adapters)
-    http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
+    # 7. HTTP client with SSRF-safe transport (DNS rebinding prevention — BP-024)
+    from content_ingestion.infrastructure.http.ssrf_transport import SSRFSafeTransport
+
+    http_client = httpx.AsyncClient(
+        transport=SSRFSafeTransport(),
+        timeout=httpx.Timeout(30.0, connect=5.0),
+    )
     app.state.http_client = http_client
 
     # 8. Outbox dispatcher (supervised background task)

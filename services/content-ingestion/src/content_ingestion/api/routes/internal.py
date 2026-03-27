@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 import common.ids
 import common.time as ct
 from content_ingestion.api.dependencies import DbSessionDep, InternalAuthDep
-from content_ingestion.api.schemas import IngestSubmitRequest, IngestSubmitResponse
+from content_ingestion.api.schemas import IngestSubmitRequest, IngestSubmitResponse, check_url_ssrf_async
 from content_ingestion.application.use_cases.fetch_and_write import build_raw_article_payload
 from content_ingestion.domain.entities import SourceType
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
@@ -39,6 +39,13 @@ async def ingest_submit(
         raise HTTPException(status_code=422, detail="Provide exactly one of 'url' or 'raw_content', not both")
     if not body.url and not body.raw_content:
         raise HTTPException(status_code=422, detail="Provide exactly one of 'url' or 'raw_content'")
+
+    # Async SSRF check — DNS resolution with timeout (BP-022, BP-023)
+    if body.url:
+        try:
+            await check_url_ssrf_async(body.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Determine content
     if body.raw_content:
