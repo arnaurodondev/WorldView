@@ -84,7 +84,7 @@ class MarketDatasetFetched(DomainEvent):
 
     # Canonical metadata
     canonical_schema_version: int = 1
-    row_count: int = 0
+    row_count: int | None = None  # None = "not counted"; 0 = "zero rows fetched" (M-024)
     task_id: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -122,7 +122,7 @@ class MarketDatasetFetched(DomainEvent):
             "canonical_ref_mime_type": self.canonical_ref.mime_type,
             # Metadata (2)
             "canonical_schema_version": self.canonical_schema_version,
-            "row_count": self.row_count if self.row_count else None,
+            "row_count": self.row_count,  # None stays None, 0 stays 0 (M-024)
         }
 
     @classmethod
@@ -158,7 +158,7 @@ class MarketDatasetFetched(DomainEvent):
             bronze_ref=bronze_ref,
             canonical_ref=canonical_ref,
             canonical_schema_version=cast("int", d.get("canonical_schema_version", 1)),
-            row_count=cast("int", d.get("row_count", 0)),
+            row_count=cast("int | None", d.get("row_count")),  # None = not counted
             task_id=str(d.get("task_id", "")),
         )
 

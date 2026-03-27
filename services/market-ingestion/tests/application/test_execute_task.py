@@ -538,6 +538,52 @@ async def test_object_exists_skips_bronze_write_on_retry() -> None:
 
 
 @pytest.mark.unit
+async def test_watermark_uses_created_at_when_range_end_none() -> None:
+    """When task.range_end is None, watermark is advanced by task.created_at (M-029).
+
+    Ensures deterministic ordering: two tasks without range_end produce stable
+    watermark advances via their immutable created_at timestamps, not utc_now()
+    which is racy and non-deterministic.
+    """
+    created_at = datetime(2024, 3, 15, tzinfo=UTC)
+    task = _make_task(range_end=None)
+    task.range_end = None
+    task.created_at = created_at
+
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    wm.advance_bar_ts.assert_called_once_with(created_at)
+
+
+@pytest.mark.unit
+async def test_watermark_no_regression_out_of_order_tasks() -> None:
+    """Earlier-created task with range_end=None uses created_at, not current time.
+
+    Verifies that the fallback timestamp is stable: replaying an older task
+    always uses the same created_at, preventing non-deterministic watermark
+    advances that could differ across retries.
+    """
+    created_at_early = datetime(2024, 1, 10, tzinfo=UTC)
+    task = _make_task(range_end=None)
+    task.range_end = None
+    task.created_at = created_at_early
+
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # The watermark advance is called with the stable created_at, not a moving now()
+    args = wm.advance_bar_ts.call_args[0]
+    assert args[0] == created_at_early
+
+
+@pytest.mark.unit
 async def test_execute_task_only_market_dataset_fetched_in_outbox() -> None:
     """Only MarketDatasetFetched is written to outbox — no internal task events (D-005)."""
     task = _make_task(dataset_type=DatasetType.OHLCV)

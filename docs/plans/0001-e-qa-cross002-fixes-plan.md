@@ -501,11 +501,12 @@ if not row.topic:
 
 ---
 
-### Wave E1-3: MAJOR — Data Consistency + claim_batch Isolation
+### Wave E1-3: MAJOR — Data Consistency + claim_batch Isolation ✅
 
 **Goal**: Fix SELECT-FOR-UPDATE isolation issue in `claim_batch`, fix non-atomic `increment_attempts`, fix Avro `row_count` 0-vs-None, fix watermark `utc_now()` regression risk.
 **Depends on**: Wave E1-2
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-27 · 348 unit tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure + domain
 
 #### Pre-read
@@ -666,10 +667,10 @@ This ensures that two concurrent tasks without `range_end` always produce a dete
 - [ ] 2 new tests pass
 
 #### Validation Gate (Wave E1-3)
-- [ ] `ruff check services/market-ingestion/` clean
-- [ ] `mypy services/market-ingestion/src/` clean
-- [ ] All unit tests pass (≥335 expected)
-- [ ] Avro `row_count` serialization tests pass
+- [x] `ruff check services/market-ingestion/` clean
+- [x] `mypy services/market-ingestion/src/` clean
+- [x] All unit tests pass (348 pass, +7 new tests)
+- [x] Avro `row_count` serialization tests pass
 
 ---
 
