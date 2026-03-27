@@ -40,11 +40,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Async context manager that starts and stops all service infrastructure."""
-    from market_data.config import Settings
     from market_data.infrastructure.db.session import build_read_engine, build_session_factory, build_write_engine
     from market_data.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
-    settings = Settings()
+    settings = app.state.settings
 
     # 1. Logging — always first
     configure_logging(
@@ -54,15 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("market_data.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
-        add_otel_middleware(app)
 
     # 4. DB — write engine + optional read engine
     write_engine = build_write_engine(settings)
@@ -177,13 +170,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    from market_data.config import Settings
+
+    settings = Settings()
+
     app = FastAPI(
         title="market-data",
         version="2025.6.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings
 
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     # Health probes (no auth, no lifespan dependency)
     @app.get("/healthz")

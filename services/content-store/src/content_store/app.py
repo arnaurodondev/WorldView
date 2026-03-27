@@ -77,7 +77,7 @@ async def _poll_metrics(settings: Settings, session_factory: object) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — start consumer, dispatcher, metrics poller."""
-    settings = Settings()
+    settings: Settings = app.state.settings
 
     # 1. Logging — always first
     configure_logging(
@@ -87,23 +87,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("content_store.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4. Database — returns (engine, factory) so we can dispose on shutdown (M-3)
+    # 3. Database — returns (engine, factory) so we can dispose on shutdown
     engine, session_factory = create_session_factory(settings)
 
-    app.state.settings = settings
     app.state.session_factory = session_factory
     app.state.engine = engine
 
@@ -169,13 +162,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    settings = Settings()
+
     app = FastAPI(
         title="content-store",
         version="2025.6.0",
         lifespan=lifespan,
     )
+    app.state.settings = settings
 
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     app.include_router(health_router)
     app.include_router(dlq_router)

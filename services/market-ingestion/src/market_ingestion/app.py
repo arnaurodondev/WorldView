@@ -49,18 +49,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("market_ingestion.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
     log.info("service_started", service=settings.service_name, version=app.version)
     yield
@@ -74,9 +68,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2026.3.0",
         lifespan=lifespan,
     )
-    app.state.settings = settings or Settings()
+    settings = settings or Settings()
+    app.state.settings = settings
 
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     from market_ingestion.api.routes import router
 
