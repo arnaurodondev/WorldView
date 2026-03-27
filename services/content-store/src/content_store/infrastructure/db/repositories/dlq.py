@@ -64,16 +64,17 @@ class DLQRepository:
         if entry is None:
             return None
 
-        # Create a new outbox event from the DLQ entry
+        # Create a new outbox event from the DLQ entry, preserving original metadata (BP-021)
         new_event_id = common.ids.new_uuid7()
+        payload = entry.payload_json or {}
         self._session.add(
             OutboxEventModel(
                 id=new_event_id,
-                aggregate_type="document",
-                aggregate_id=entry.original_event_id,
-                event_type="content.article.stored.v1",
+                aggregate_type=entry.aggregate_type or "document",
+                aggregate_id=entry.aggregate_id or entry.original_event_id,
+                event_type=entry.event_type or payload.get("event_type", "content.article.stored.v1"),
                 topic=entry.topic,
-                payload=entry.payload_json or {},
+                payload=payload,
             )
         )
 

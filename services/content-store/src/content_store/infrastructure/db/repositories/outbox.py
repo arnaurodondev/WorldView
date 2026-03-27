@@ -81,35 +81,46 @@ class OutboxRepository:
             )
         )
 
-    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> bool:
         """Move an outbox record to the dead_letter_queue table and update status.
 
-        Follows S4 pattern: INSERT a DLQ row with the original payload,
-        then UPDATE the outbox status to 'dead_letter'.
+        Uses FOR UPDATE to prevent race with concurrent dispatcher.
+        Stores original aggregate metadata for faithful requeue.
+
+        Returns True if the record was moved, False if not found or already delivered.
         """
-        # 1. Fetch the outbox record
-        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == record_id))
+        # 1. Fetch with FOR UPDATE to prevent race with dispatcher
+        result = await self._session.execute(
+            select(OutboxEventModel).where(OutboxEventModel.id == record_id).with_for_update()
+        )
         record = result.scalar_one_or_none()
 
-        if record is not None:
-            # 2. INSERT a DLQ row with the original payload
-            self._session.add(
-                DeadLetterQueueModel(
-                    dlq_id=common.ids.new_uuid7(),
-                    original_event_id=record.id,
-                    topic=record.topic,
-                    payload_avro=b"",
-                    payload_json=record.payload,
-                    error_detail=error_detail,
-                )
-            )
+        if record is None or record.status not in ("pending", "processing"):
+            return False
 
-        # 3. UPDATE outbox status
+        # 2. INSERT a DLQ row preserving original metadata (BP-021)
+        self._session.add(
+            DeadLetterQueueModel(
+                dlq_id=common.ids.new_uuid7(),
+                original_event_id=record.id,
+                aggregate_type=record.aggregate_type,
+                aggregate_id=record.aggregate_id,
+                event_type=record.event_type,
+                topic=record.topic,
+                payload_avro=None,
+                payload_json=record.payload,
+                error_detail=error_detail,
+            )
+        )
+
+        # 3. UPDATE outbox status with guard to prevent overwriting delivered
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
+            .where(OutboxEventModel.status.in_(["pending", "processing"]))
             .values(status="dead_letter", lease_owner=None, leased_until=None)
         )
+        return True
 
     # ── Service-specific helpers ──────────────────────────────────────────────
 

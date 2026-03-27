@@ -4,7 +4,7 @@ Revision ID: 0001
 Revises:
 Create Date: 2026-03-22
 
-Creates all 7 tables matching the ORM models exactly (guard BP-008, BP-019):
+Creates all 5 tables matching the ORM models exactly (guard BP-008, BP-019):
   - documents
   - minhash_signatures
   - minhash_entity_mentions
@@ -36,7 +36,7 @@ def upgrade() -> None:
             dedup_result     VARCHAR(30) NOT NULL DEFAULT 'unique',
             minio_silver_key TEXT,
             word_count       INT,
-            language         VARCHAR(10) DEFAULT 'en',
+            language         VARCHAR(10) NOT NULL DEFAULT 'en',
             corroborates_doc_id UUID,
             is_backfill      BOOLEAN     NOT NULL DEFAULT FALSE,
             UNIQUE (content_hash)
@@ -111,8 +111,11 @@ def upgrade() -> None:
         CREATE TABLE dead_letter_queue (
             dlq_id            UUID        PRIMARY KEY,
             original_event_id UUID        NOT NULL,
+            aggregate_type    TEXT,
+            aggregate_id      UUID,
+            event_type        TEXT,
             topic             TEXT        NOT NULL,
-            payload_avro      BYTEA       NOT NULL,
+            payload_avro      BYTEA,
             payload_json      JSONB,
             error_detail      TEXT,
             status            TEXT        NOT NULL DEFAULT 'failed',
