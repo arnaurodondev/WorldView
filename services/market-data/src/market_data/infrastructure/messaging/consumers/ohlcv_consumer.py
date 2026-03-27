@@ -138,7 +138,10 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
         # Returns True if newly inserted (new event), False if already processed (duplicate).
         # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
-        event_id = value.get("event_id", "")
+        event_id_raw = value.get("event_id")
+        if not event_id_raw:
+            raise MalformedDataError("Missing or null event_id in message")
+        event_id = str(event_id_raw)
         sha256 = value.get("canonical_ref_sha256") or ""
         is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
         if not is_new:

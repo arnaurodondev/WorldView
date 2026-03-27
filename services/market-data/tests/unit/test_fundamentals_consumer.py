@@ -604,3 +604,49 @@ async def test_fundamentals_period_end_from_datetime_works() -> None:
     await _upsert_metrics_for_record(mock_uow, record)
     # If extract_metrics found rows, upsert_metrics would be called
     # The key assertion is that no exception was raised
+
+
+# ── T-E2-3-01: earnings_trend period_end parsing via process_message ────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_period_end_string_parsed() -> None:
+    """Valid ISO date string in earnings_trend entry → period_end parsed as UTC datetime."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+
+    # earnings_trend payload with explicit "date" ISO string
+    payload = {"earnings_trend": {"0q": {"date": "2024-09-30", "earningsEstimate": 1.5}}}
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=json.dumps(payload).encode())
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.fundamentals.upsert_earnings_trend.assert_awaited_once()
+    record = mock_uow.fundamentals.upsert_earnings_trend.call_args[0][0]
+    assert record.period_end == datetime(2024, 9, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_missing_period_end_uses_fallback() -> None:
+    """Empty/missing date in earnings_trend entry → period_end falls back to ingested_at."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+
+    # earnings_trend entry with no valid date string → triggers fallback
+    payload = {"earnings_trend": {"0q": {"date": "", "earningsEstimate": 0.5}}}
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=json.dumps(payload).encode())
+
+    before = datetime.now(tz=UTC)
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+    after = datetime.now(tz=UTC)
+
+    mock_uow.fundamentals.upsert_earnings_trend.assert_awaited_once()
+    record = mock_uow.fundamentals.upsert_earnings_trend.call_args[0][0]
+    # period_end should be ingested_at (approximately now)
+    assert before <= record.period_end <= after

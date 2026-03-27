@@ -294,3 +294,50 @@ async def test_process_message_raises_runtime_error_when_no_uow() -> None:
 
     with pytest.raises(RuntimeError, match="active unit of work"):
         await consumer.process_message(None, _make_message(), {})
+
+
+# ── T-E2-3-01: missing / null event_id + storage=None error paths ──────────
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_missing_event_id_raises_fatal() -> None:
+    """Missing event_id key → MalformedDataError (FatalError: malformed envelope)."""
+    from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+    mock_uow = AsyncMock()
+    consumer = _make_consumer(mock_uow, AsyncMock())
+
+    msg = _make_message()
+    del msg["event_id"]
+
+    with pytest.raises(MalformedDataError, match="event_id"):
+        await consumer.process_message(None, msg, {})
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_invalid_uuid_event_id() -> None:
+    """Null event_id value (malformed envelope field) → MalformedDataError (FatalError)."""
+    from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+    mock_uow = AsyncMock()
+    consumer = _make_consumer(mock_uow, AsyncMock())
+
+    msg = _make_message()
+    msg["event_id"] = None  # null value — invalid UUID
+
+    with pytest.raises(MalformedDataError, match="event_id"):
+        await consumer.process_message(None, msg, {})
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_minio_unavailable_retryable() -> None:
+    """When object storage is None (not configured), raises StorageUnavailableError (RetryableError)."""
+    from messaging.kafka.consumer.errors import StorageUnavailableError  # type: ignore[import-untyped]
+
+    mock_uow = AsyncMock()
+    # create_if_not_exists returns truthy by default (new event)
+    consumer = _make_consumer(mock_uow, AsyncMock())
+    consumer._object_storage = None  # simulate MinIO not configured
+
+    with pytest.raises(StorageUnavailableError, match="not configured"):
+        await consumer.process_message(None, _make_message(), {})
