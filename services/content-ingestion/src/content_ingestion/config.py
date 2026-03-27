@@ -71,7 +71,8 @@ class Settings(BaseSettings):
     backfill_sources: str = ""
     backfill_batch_delay_seconds: float = 0.5
 
-    # ── Observability ─────────────────────────────────────────────────────────
+    # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────
+    service_name: str = "content-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

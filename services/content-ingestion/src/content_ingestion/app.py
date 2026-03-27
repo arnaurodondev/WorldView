@@ -236,21 +236,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 1. Logging — always first
     configure_logging(
-        service_name="content-ingestion",
+        service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
     )
     log = get_logger("content_ingestion.app")
 
     # 2. Metrics
-    metrics = create_metrics(service_name="content-ingestion")
+    metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
     app.state.metrics = metrics
 
     # 3. Tracing (optional)
     if settings.otlp_endpoint:
         configure_tracing(
-            service_name="content-ingestion",
+            service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
         add_otel_middleware(app)
@@ -332,7 +332,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds)
     )
 
-    log.info("service_started", service="content-ingestion")
+    log.info("service_started", service=settings.service_name)
     yield
 
     # Shutdown
@@ -348,7 +348,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await http_client.aclose()
     await valkey.close()
     await engine.dispose()
-    log.info("service_stopped", service="content-ingestion")
+    log.info("service_stopped", service=settings.service_name)
 
 
 def _register_exception_handlers(app: FastAPI) -> None:

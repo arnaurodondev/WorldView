@@ -9,8 +9,6 @@
 |---------|-------|-----|--------|-----------------|---------|
 | PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | draft | 0/11 | 2026-03-25 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | 2026-03-25 |
-| PLAN-0003 | Observability Standardization: Service Fixes + Monitoring Stack | N/A | in-progress | 2/4 | 2026-03-27 |
-| PLAN-0001-B-R2 | S4+S5 QA Fixes: DDL, DLQ, SSRF, LSH, Contract Tests, Compounding | QA Review | in-progress | 2/4 | 2026-03-28 |
 | PLAN-0001-B-R3 | S4+S5 Architecture: ABCs, BaseKafkaConsumer, MinIO GC, DomainError | QA Review | draft | 0/5 | 2026-03-27 |
 <!-- New plans are appended here by the /plan skill -->
 
@@ -39,6 +37,8 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | 2026-03-26 | 2 |
 | PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | 2026-03-26 | 7 |
+| PLAN-0001-B-R2 | S4+S5 QA Fixes: DDL, DLQ, SSRF, LSH, Contract Tests, Compounding | QA Review | 2026-03-27 | 4 |
+| PLAN-0003 | Observability Standardization: Service Fixes + Monitoring Stack | N/A | 2026-03-27 | 4 |
 
 ## Conventions
 

@@ -56,6 +56,15 @@
 - [ ] Query pagination has upper bound (max limit parameter)
 - [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
 
+## 6b. Schema & Data Pipeline Integrity
+
+- [ ] Migration DDL matches ORM columns exactly — names, types, defaults, nullability (BP-008, BP-019)
+- [ ] `move_to_dead_letter` INSERTs a DLQ row with original payload (not just status update) (BP-020)
+- [ ] Avro contract tests exist for every schema a service produces
+- [ ] `doc_id` in outbox payloads is a per-document UUIDv7 (not source/aggregate ID)
+- [ ] SSRF URL validation resolves DNS hostnames, not just IP literals
+- [ ] LSH/cache writes happen AFTER DB commit, not before (prevents phantom entries on rollback)
+
 ## 7. Architecture Compliance
 
 - [ ] Domain layer has zero infrastructure imports
