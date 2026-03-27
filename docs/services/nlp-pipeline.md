@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8006
 > **Databases**: `nlp_db` (pgvector, owned) + `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: In-progress (🔄 Waves C-1 + C-2 complete; C-3/C-4 pending)
 
 ---
 
@@ -48,6 +48,7 @@ performs read/write operations only.
 | Topic | Consumer Group | Purpose |
 |-------|---------------|---------|
 | `content.article.stored.v1` | `nlp-pipeline-group` | Trigger NLP enrichment (at-least-once; manual offset commit after all DB writes) |
+| `portfolio.watchlist.updated.v1` | `nlp-watchlist-group` | Maintain Valkey SET `nlp:v1:watched_entities` (SADD on item_added, SREM on item_deleted); used for Block 5 watchlist_match signal |
 
 ### Produced
 
@@ -60,16 +61,16 @@ performs read/write operations only.
 
 ## Pipeline Blocks (3–10)
 
-| Block | Name | Key Operation |
-|-------|------|---------------|
-| 3 | **Sectioning** | Split article into logical sections (source-specific rules) |
-| 4 | **GLiNER NER** | Named entity detection per section; 10 entity classes; `urchade/gliner_large-v2.1`; batch size 32 |
-| 5 | **Routing Score** | Additive score from 7 signals (entity density, source tier, novelty, recency, watchlist match, doctype, yield) |
-| 6 | **Suppression** | Discard documents scoring below `ROUTING_THRESHOLD_LIGHT` (0.20); no further processing |
-| 7 | **Embedding** | Generate chunk-level + section-level vectors (`BAAI/bge-large-en-v1.5`, 1024-dim) via Ollama |
-| 8 | **Novelty Gate** | Two-stage: Stage 1 (pre-resolution, MinHash signature); Stage 2 (post-resolution, per-entity window) |
-| 9 | **Entity Resolution** | 4-step cascade: exact alias lookup → Valkey cache → GLiNER re-extraction → ANN entity profile embedding match |
-| 10 | **Deep Extraction** | LLM-based (Qwen2.5-7B-Instruct via Ollama): events, claims, relations → `relation_evidence_raw` |
+| Block | Name | Key Operation | Status |
+|-------|------|---------------|--------|
+| 3 | **Sectioning** | 4 source-specific sectioners: `NewsParagraphSectioner` (double-newline, ≥30 chars), `SECEdgarSectioner` (^Item N header), `FinnhubTranscriptSectioner` (speaker-turn), `SyntheticSectioner` (fallback). Factory dispatches by `source_type`. Always returns ≥1 section. | ✅ Done |
+| 4 | **GLiNER NER** | **11-class** ontology (organization, government_body, regulatory_body, financial_institution, person, financial_instrument, location, commodity, index, currency, **macroeconomic_indicator**); `GLINER_THRESHOLD=0.35` (routing), `GLINER_RESOLUTION_THRESHOLD=0.45` (cascade); NMS (IoU **strictly > 0.5**); OOM retry with reduced batch; **CRITICAL: zero mentions → never suppress**, returns `([], stats)`; updates `document_entity_stats`. | ✅ Done |
+| 5 | **Routing Score** | 7-signal weighted formula (weights must sum to 1.0, enforced by module-level assertion). Signals: `entity_density` (0.30), `source_reliability` (0.20), `novelty` (0.15), `recency` (0.10), `watchlist_match` (0.10), `document_type` (0.10), `extraction_yield` (0.05). Tier boundaries: ≥0.70 DEEP, ≥0.45 MEDIUM, ≥0.20 LIGHT, <0.20 SUPPRESS. Watchlist signal: Valkey SET `nlp:v1:watched_entities`, best-effort (returns 0.0 on unavailability). Watchlist consumer: `portfolio.watchlist.updated.v1` → `nlp-watchlist-group`. | ✅ Done |
+| 6 | **Suppression** | SUPPRESS → `ProcessingPath.HALT` (no downstream); LIGHT → `SECTION_EMBEDDINGS_ONLY` (no NER reprocessing, no extraction); MEDIUM/DEEP → `FULL_PIPELINE`. Uses `final_routing_tier` if set (novelty correction). | ✅ Done |
+| 7 | **Embedding** | Generate chunk-level + section-level vectors (`BAAI/bge-large-en-v1.5`, 1024-dim) via Ollama | ⏳ Pending |
+| 8 | **Novelty Gate** | Two-stage: Stage 1 (pre-resolution, MinHash signature); Stage 2 (post-resolution, per-entity window) | ⏳ Pending |
+| 9 | **Entity Resolution** | 4-step cascade: exact alias lookup → ticker/ISIN match → fuzzy trigram → ANN entity profile embedding match (definition view, cosine < 0.35) | ⏳ Pending |
+| 10 | **Deep Extraction** | LLM-based (Qwen2.5-7B-Instruct via Ollama): events, claims, relations → `relation_evidence_raw`. Medium AND deep tier. | ⏳ Pending |
 
 ---
 
@@ -91,6 +92,7 @@ CREATE TABLE sections (
     section_index  INT         NOT NULL,
     section_type   VARCHAR(50),
     title          TEXT,
+    speaker        TEXT,                              -- populated for transcript source_type only
     char_start     INT         NOT NULL,
     char_end       INT         NOT NULL,
     token_count    INT,
@@ -128,11 +130,34 @@ CREATE TABLE entity_mentions (
     char_end              INT         NOT NULL,
     resolved_entity_id    UUID,                       -- logical FK to intelligence_db.canonical_entities
     resolution_confidence FLOAT,
+    resolution_stage      INT,                        -- which cascade stage resolved this mention (1-4)
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_entity_mentions_doc ON entity_mentions (doc_id, mention_class);
 CREATE INDEX idx_entity_mentions_resolved ON entity_mentions (resolved_entity_id)
     WHERE resolved_entity_id IS NOT NULL;
+
+-- Per-stage audit trail for entity resolution cascade (PRD §6.4.3).
+CREATE TABLE mention_resolutions (
+    resolution_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    mention_id         UUID NOT NULL REFERENCES entity_mentions(mention_id) ON DELETE CASCADE,
+    stage              INT NOT NULL,
+    candidate_entity_id UUID,
+    score              FLOAT NOT NULL,
+    is_winner          BOOLEAN NOT NULL DEFAULT false,
+    metadata           JSONB,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_mention_resolutions_mention ON mention_resolutions (mention_id, stage);
+
+-- Per-document aggregated NER stats (PRD §6.4.3).
+CREATE TABLE document_entity_stats (
+    doc_id                 UUID PRIMARY KEY,
+    distinct_mention_count INT NOT NULL DEFAULT 0,
+    high_conf_mention_count INT NOT NULL DEFAULT 0,
+    type_distribution      JSONB NOT NULL DEFAULT '{}',
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Junction table: which mentions appear in which chunks.
 CREATE TABLE chunk_entity_mentions (
@@ -183,6 +208,7 @@ CREATE TABLE routing_decisions (
     decision_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doc_id              UUID        NOT NULL,
     routing_tier        VARCHAR(20) NOT NULL,
+    final_routing_tier  VARCHAR(20),                  -- set after Block 8 novelty correction
     composite_score     FLOAT       NOT NULL,
     feature_scores_json JSONB       NOT NULL,
     decided_at          TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -251,7 +277,7 @@ Key tables S6 writes to:
 | Model | Task | Dimension | Served Via |
 |-------|------|-----------|------------|
 | `BAAI/bge-large-en-v1.5` | Chunk + section embeddings | 1024 | Ollama |
-| `urchade/gliner_large-v2.1` | Named entity recognition (10 classes) | — | Ollama |
+| `urchade/gliner_large-v2.1` | Named entity recognition (**11 classes**) | — | Ollama |
 | `qwen2.5:7b-instruct` | Deep extraction (events, claims, relations) | — | Ollama |
 
 ---

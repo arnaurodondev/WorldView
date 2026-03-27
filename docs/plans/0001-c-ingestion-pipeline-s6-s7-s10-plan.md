@@ -2,9 +2,9 @@
 id: PLAN-0001-C
 prd: PRD-0001
 title: "Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service — Implementation Plan"
-status: draft
+status: in-progress
 created: 2026-03-25
-updated: 2026-03-25
+updated: 2026-03-27
 plans: 3
 waves: 11
 tasks: 48
@@ -16,7 +16,7 @@ supersedes: "Original draft based on PRD-0014"
 ## Overview
 
 **PRD Reference**: [PRD-0001](../specs/0001-intelligence-pipeline.md) — §6.2.3–6.2.6, §6.3, §6.4.3–6.4.5, §6.5, §6.7 Blocks 3–14, §7–§13
-**Depends on**: PLAN-0001-A (all 3 waves) + PLAN-0012 (S4+S5 complete)
+**Depends on**: PLAN-0001-A (all 3 waves) + PLAN-0012 (S4+S5 complete) + PLAN-0003 Wave A-1 (observability standards)
 **Goal**: Implement the intelligence enrichment arm of the pipeline — S6 consumes canonical articles from S5, enriches via NER/embeddings/entity-resolution/LLM-extraction, emits enriched events; S7 materializes a knowledge graph with confidence-scored relations and 8 background workers; S10 fans out watchlist-triggered alerts via WebSocket — completing the full S4→S5→S6→S7→S10 pipeline.
 **Total Scope**: 3 sub-plans, 11 waves, 48 tasks
 
@@ -52,6 +52,7 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 - `RULES.md` — hard rules
 - `AGENTS.md` — coding standards, hexagonal architecture
 - `docs/MASTER_PLAN.md` — §4.6 (S6 definition), §5.2 (Kafka topics)
+- `docs/STANDARDS.md` — §5 (canonical observability pattern: logging → metrics → tracing init sequence, RequestIdMiddleware, health endpoints, `/metrics`, docker.env vars) — **PLAN-0003 reference**
 - `docs/specs/0001-intelligence-pipeline.md` — §6.2.3, §6.3.2, §6.4.3, §6.5.3, §6.7 Blocks 3–10, §14.2 (light-tier entity enrichment)
 - `services/nlp-pipeline/.claude-context.md`
 - `docs/services/nlp-pipeline.md`
@@ -59,15 +60,17 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 - `libs/messaging/src/messaging/` — BaseKafkaConsumer, outbox
 - `libs/contracts/src/contracts/` — canonical models
 - `services/content-store/src/content_store/` — S5 output format (for consumer contract)
+- `services/content-ingestion/src/content_ingestion/app.py` — gold-standard observability wiring reference
 - `docs/ai-interactions/BUG_PATTERNS.md`
 
 ---
 
-### Wave C-1: S6 Foundation — Config, Domain, Database Infrastructure
+### Wave C-1: S6 Foundation — Config, Domain, Database Infrastructure ✅
 
 **Goal**: Establish S6 foundation: settings, domain models (10-class NER ontology, routing tiers, NLP document lifecycle), database infrastructure for both `nlp_db` (Alembic enabled) and `intelligence_db` (read/write adapter with `ALEMBIC_ENABLED=false` guard).
 **Depends on**: PLAN-0012 completed (S5 emitting `content.article.stored.v1`)
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-27 · 9 domain/infra guard tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -84,12 +87,12 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 - `services/knowledge-graph/src/knowledge_graph/` — intelligence_db adapter reference
 
 #### Validation Gate
-- [ ] `ruff check services/nlp-pipeline/` passes
-- [ ] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit -v` — ≥20 tests pass
-- [ ] Domain layer has zero infrastructure imports
-- [ ] `ALEMBIC_ENABLED=true` raises RuntimeError on intelligence_db session import
-- [ ] `docs/services/nlp-pipeline.md` updated with domain models, DB topology (nlp_db owned, intelligence_db adapter)
+- [x] `ruff check services/nlp-pipeline/` passes
+- [x] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/unit -v` — ≥20 tests pass
+- [x] Domain layer has zero infrastructure imports
+- [x] `ALEMBIC_ENABLED=true` raises RuntimeError on intelligence_db session import
+- [x] `docs/services/nlp-pipeline.md` updated with domain models, DB topology (nlp_db owned, intelligence_db adapter)
 
 #### Regression Guardrails
 - BP-006: Load DATABASE_URL from settings, not alembic.ini
@@ -98,11 +101,12 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 
 ---
 
-### Wave C-2: S6 Blocks 3–6 — Sectioning, NER, Routing, Suppression
+### Wave C-2: S6 Blocks 3–6 — Sectioning, NER, Routing, Suppression ✅
 
 **Goal**: Implement the first processing layer: source-specific document sectioning, GLiNER NER (**11-class** ontology with per-class thresholds), 7-signal routing score (incl. watchlist signal via `portfolio.watchlist.updated.v1` consumer), and suppression/audit gate.
 **Depends on**: Wave C-1
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-27 · 120 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -118,12 +122,12 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 - `libs/ml-clients/src/ml_clients/` — NERClient protocol, NERInput/NEROutput dataclasses
 
 #### Validation Gate
-- [ ] `ruff check services/nlp-pipeline/` passes
-- [ ] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit -v` — all tests pass (≥45 total)
-- [ ] Zero NER mentions test explicitly passes (most critical S6 invariant)
-- [ ] Signal weights sum assertion verified at import time
-- [ ] `docs/services/nlp-pipeline.md` updated with processing blocks 3–6, routing formula, tier boundaries
+- [x] `ruff check services/nlp-pipeline/` passes
+- [x] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/unit -v` — all tests pass (≥45 total)
+- [x] Zero NER mentions test explicitly passes (most critical S6 invariant)
+- [x] Signal weights sum assertion verified at import time
+- [x] `docs/services/nlp-pipeline.md` updated with processing blocks 3–6, routing formula, tier boundaries
 
 #### Regression Guardrails
 - Custom: Zero NER mentions MUST NOT suppress — explicit test required
@@ -181,7 +185,7 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 | T-C-4-01 | Kafka consumer orchestration | impl | `infrastructure/consumer/article_consumer.py` | Consumes `content.article.stored.v1`; orchestrates Blocks 3→4→5→6→7→8→9→10 in sequence; manual offset commit AFTER all DB writes; DLQ on unrecoverable errors; at-least-once semantics; backpressure integration (pause/resume via controller) |
 | T-C-4-02 | Outbox dispatcher (3 output event types) | impl | `infrastructure/outbox/dispatcher.py` | Polls `nlp_db.outbox_events`; publishes `nlp.article.enriched.v1` (full enrichment result), `nlp.signal.detected.v1` (≥0.80 confidence resolved entities), and `claim.extracted` events (routed to intelligence_db claims); uses `OutboxEventValueSerializer` (guard BP-001) |
 | T-C-4-03 | REST API endpoints | impl | `api/routes.py`, `api/schemas.py` | 6 endpoints: GET /signals (paginated), GET /entities (search), POST /vector-search (semantic), GET /entities/{id} (detail), GET /entities/{id}/articles, POST /reprocess/{article_id}; Pydantic request/response models |
-| T-C-4-04 | Health/Ready + Prometheus + DLQ + main.py | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py` | Health: /healthz (200), /readyz (nlp_db + intelligence_db + Kafka + Ollama models loaded, 503 on failure); Prometheus: `s6_articles_processed_total{routing_tier}`, `s6_ner_mentions_total`, `s6_embeddings_created_total`, `s6_entity_resolved_total{method}`, `s6_claims_extracted_total`, `nlp_sectioning_fallback_total`, `s6_ollama_queue_depth_current`; DLQ admin with X-Admin-Token; main.py lifespan starts consumer + dispatcher + backpressure controller |
+| T-C-4-04 | Health/Ready + Prometheus + DLQ + main.py (PLAN-0003 pattern) | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py`, `config.py` | **Follow STANDARDS.md §5 canonical pattern (PLAN-0003)**: (1) `configure_logging()` FIRST in lifespan; (2) `create_metrics()` + `add_prometheus_middleware(app, metrics)` + `app.state.metrics = metrics`; (3) conditional `configure_tracing()` + `add_otel_middleware(app)` if `otlp_endpoint` set; (4) `RequestIdMiddleware` class in `create_app()`; (5) explicit `GET /metrics` endpoint via `prometheus_client.generate_latest()`; (6) `service_name: str = "nlp-pipeline"` in config.py; (7) docker.env must have `NLP_PIPELINE_LOG_LEVEL`, `NLP_PIPELINE_LOG_JSON`, `NLP_PIPELINE_OTLP_ENDPOINT`. **Custom metrics**: `s6_articles_processed_total{routing_tier}`, `s6_ner_mentions_total`, `s6_embeddings_created_total`, `s6_entity_resolved_total{method}`, `s6_claims_extracted_total`, `nlp_sectioning_fallback_total`, `s6_ollama_queue_depth_current` (Gauge, polled). Health: /healthz (200), /readyz (nlp_db + intelligence_db + Kafka + Ollama, 503 on failure); DLQ admin with X-Admin-Token; main.py lifespan starts consumer + dispatcher + backpressure controller |
 | T-C-4-05 | Integration tests | test | `tests/integration/test_full_pipeline.py`, `tests/integration/test_zero_ner.py`, `tests/integration/test_backpressure.py`, `tests/integration/test_idempotency.py` | Full pipeline: stored article → consumer → all 8 blocks → enriched event on Kafka (with mock ML adapters); Zero NER: article with no entities → still processed (not suppressed); Backpressure: verify pause/resume at thresholds; Idempotency: same message twice → no duplicate DB rows |
 | T-C-4-06 | Unit tests for consumer + outbox + API | test | `tests/unit/infrastructure/`, `tests/unit/api/` | ≥15 tests: consumer block orchestration order, outbox event routing (3 types), API endpoint responses, health checks, DLQ auth, metrics increment |
 
@@ -215,11 +219,13 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 - `RULES.md` — hard rules
 - `AGENTS.md` — coding standards
 - `docs/MASTER_PLAN.md` — §4.7 (S7 definition)
+- `docs/STANDARDS.md` — §5 (canonical observability pattern: logging → metrics → tracing init sequence, RequestIdMiddleware, health endpoints, `/metrics`, docker.env vars) — **PLAN-0003 reference**
 - `docs/specs/0001-intelligence-pipeline.md` — §6.2.4, §6.3.2, §6.4.4, §6.5.4, §6.7 Blocks 11–14, §10.1 (confidence formula), §14.2 (light-tier entity enrichment)
 - `services/knowledge-graph/.claude-context.md`
 - `docs/services/knowledge-graph.md`
 - `libs/ml-clients/src/ml_clients/` — EmbeddingClient, ExtractionClient
 - `services/intelligence-migrations/` — DDL owner for intelligence_db
+- `services/content-ingestion/src/content_ingestion/app.py` — gold-standard observability wiring reference
 - `docs/ai-interactions/BUG_PATTERNS.md`
 
 ---
@@ -359,7 +365,7 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 | ID | Task | Type | Target Files | Acceptance Criteria |
 |----|------|------|-------------|---------------------|
 | T-D-4-01 | REST API endpoints | impl | `api/routes.py`, `api/schemas.py` | 3 endpoints: GET /entities/{entity_id}/graph (with `summary_authority()` computed at query time — NOT cached column), GET /relations (paginated, filtered), GET /graph/stats (aggregates); Pydantic response models |
-| T-D-4-02 | Health/Ready + Prometheus + DLQ + main.py | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py` | Health: /healthz (200), /readyz (intelligence_db + Kafka, 503 on failure); Prometheus: `s7_relations_upserted_total`, `s7_evidence_appended_total`, `s7_contradictions_detected_total`, `s7_confidence_recomputed_total`, `s7_summaries_generated_total`, `s7_embeddings_refreshed_total{worker}`; DLQ admin with X-Admin-Token; main.py lifespan starts scheduler (8 workers) + consumer + dispatcher |
+| T-D-4-02 | Health/Ready + Prometheus + DLQ + main.py (PLAN-0003 pattern) | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py`, `config.py` | **Follow STANDARDS.md §5 canonical pattern (PLAN-0003)**: (1) `configure_logging()` FIRST in lifespan; (2) `create_metrics()` + `add_prometheus_middleware(app, metrics)` + `app.state.metrics = metrics`; (3) conditional `configure_tracing()` + `add_otel_middleware(app)` if `otlp_endpoint` set; (4) `RequestIdMiddleware` class in `create_app()`; (5) explicit `GET /metrics` endpoint; (6) `service_name: str = "knowledge-graph"` in config.py; (7) docker.env must have `KNOWLEDGE_GRAPH_LOG_LEVEL`, `KNOWLEDGE_GRAPH_LOG_JSON`, `KNOWLEDGE_GRAPH_OTLP_ENDPOINT`. **Custom metrics**: `s7_relations_upserted_total`, `s7_evidence_appended_total`, `s7_contradictions_detected_total`, `s7_confidence_recomputed_total`, `s7_summaries_generated_total`, `s7_embeddings_refreshed_total{worker}`; Health: /healthz (200), /readyz (intelligence_db + Kafka, 503 on failure); DLQ admin with X-Admin-Token; main.py lifespan starts scheduler (8 workers) + consumer + dispatcher |
 | T-D-4-03 | Integration test fixtures | test | `tests/integration/conftest.py` | intelligence_db fixtures (confirm 8 relation partitions exist), Kafka fixtures, Valkey fixtures; prereq gate: intelligence-migrations must run before tests |
 | T-D-4-04 | Integration tests — graph + confidence + pipeline | test | `tests/integration/test_graph_upsert.py`, `tests/integration/test_contradiction.py`, `tests/integration/test_confidence.py`, `tests/integration/test_valkey_dedup.py`, `tests/integration/test_alembic_guard.py`, `tests/integration/test_partitions.py`, `tests/integration/test_s6_s7_pipeline.py` | Graph upsert idempotency (ON CONFLICT DO UPDATE); contradiction round-trip (opposing claims → link → event); confidence bounded [0,1] + corroboration ≤0.20; Valkey entity refresh dedup (30-min); ALEMBIC_ENABLED=false RuntimeError; partitions exist; S6→S7 continuity: `nlp.article.enriched.v1` → `graph.state.changed.v1` |
 
@@ -390,9 +396,11 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 - `RULES.md` — hard rules
 - `AGENTS.md` — coding standards
 - `docs/MASTER_PLAN.md` — §4.10 (S10 definition)
+- `docs/STANDARDS.md` — §5 (canonical observability pattern: logging → metrics → tracing init sequence, RequestIdMiddleware, health endpoints, `/metrics`, docker.env vars) — **PLAN-0003 reference**
 - `docs/specs/0001-intelligence-pipeline.md` — §6.2.6 (S10 endpoints), §6.2.7 (S1 internal), §6.3.2 (alert.delivered.v1), §6.4.5, §7 (AD-9 dedup, AD-10 backfill)
 - `services/alert/.claude-context.md`
 - `services/portfolio/src/portfolio/api/` — S1 internal endpoints (required dependency)
+- `services/content-ingestion/src/content_ingestion/app.py` — gold-standard observability wiring reference
 - `libs/messaging/src/messaging/` — BaseKafkaConsumer
 - `docs/ai-interactions/BUG_PATTERNS.md`
 
@@ -479,7 +487,7 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 | ID | Task | Type | Target Files | Acceptance Criteria |
 |----|------|------|-------------|---------------------|
 | T-E-3-01 | REST API endpoints | impl | `api/routes.py`, `api/schemas.py` | GET /api/v1/alerts/pending (authenticated, paginated); DELETE /api/v1/alerts/{alert_id}/ack (scoped to user — 404 not 403 on wrong user); WebSocket /api/v1/alerts/stream (from Wave E-2) |
-| T-E-3-02 | Health/Ready + Prometheus + DLQ + main.py | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py` | Health: /healthz (200), /readyz (alert_db + Kafka + Valkey + S1 /health — 4 deps, 503 on any failure); Prometheus: `s10_alerts_fanned_out_total{type}`, `s10_alerts_deduplicated_total`, `s10_alerts_pending_total` (Gauge), `s10_websocket_pushes_total`; DLQ admin with X-Admin-Token; main.py lifespan starts 2 consumers + dispatcher + WebSocket manager |
+| T-E-3-02 | Health/Ready + Prometheus + DLQ + main.py (PLAN-0003 pattern) | impl | `api/health.py`, `api/dlq.py`, `infrastructure/metrics/prometheus.py`, `main.py`, `config.py` | **Follow STANDARDS.md §5 canonical pattern (PLAN-0003)**: (1) `configure_logging()` FIRST in lifespan; (2) `create_metrics()` + `add_prometheus_middleware(app, metrics)` + `app.state.metrics = metrics`; (3) conditional `configure_tracing()` + `add_otel_middleware(app)` if `otlp_endpoint` set; (4) `RequestIdMiddleware` class in `create_app()`; (5) explicit `GET /metrics` endpoint; (6) `service_name: str = "alert"` in config.py; (7) docker.env must have `ALERT_LOG_LEVEL`, `ALERT_LOG_JSON`, `ALERT_OTLP_ENDPOINT`. **Custom metrics**: `s10_alerts_fanned_out_total{type}`, `s10_alerts_deduplicated_total`, `s10_alerts_pending_total` (Gauge), `s10_websocket_pushes_total`; Health: /healthz (200), /readyz (alert_db + Kafka + Valkey + S1 /health — 4 deps, 503 on any failure); DLQ admin with X-Admin-Token; main.py lifespan starts 2 consumers + dispatcher + WebSocket manager |
 | T-E-3-03 | Integration test fixtures | test | `tests/integration/conftest.py` | alert_db fixtures (Alembic), Kafka fixtures, Valkey fixtures, mock S1 (pytest-httpserver) |
 | T-E-3-04 | Integration tests — alerts + dedup + pipeline | test | `tests/integration/test_watchlist_cache.py`, `tests/integration/test_fanout.py`, `tests/integration/test_dedup.py`, `tests/integration/test_websocket.py`, `tests/integration/test_s7_s10_pipeline.py` | Watchlist cache invalidation (item_deleted); fan-out end-to-end (mock S1 returns users → alert written); dedup within 300s window; WebSocket push to online user; **S7→S10 continuity**: `graph.state.changed.v1` → alert in alert_db (Milestone M7 — full pipeline validated) |
 | T-E-3-05 | Unit tests for API + health | test | `tests/unit/api/` | ≥10 tests: pending alerts pagination, ack scoped to user (404 on wrong user), health checks (4 deps), DLQ auth, metrics counters |
@@ -528,9 +536,25 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 | intelligence-migrations | (pre-existing) | intelligence_db DDL — must run before S6/S7 | Before C-1 |
 | alert | `0001_initial_alert_schema.py` | alert_db: alerts, pending_alerts, alert_dedup, outbox, dlq | Wave E-1 |
 
+### Observability (PLAN-0003 Dependency)
+
+All three services (S6, S7, S10) **must** follow the canonical observability pattern defined in `STANDARDS.md §5` (written by PLAN-0003 Wave A-1). Specifically:
+
+- **`pyproject.toml`**: Each service must declare `"observability"` as an explicit dependency
+- **`config.py`**: Must include `service_name`, `log_level`, `log_json`, `otlp_endpoint` fields
+- **`app.py` / `main.py`**: Must follow the canonical init sequence (logging → metrics → tracing) in lifespan, add `RequestIdMiddleware`, expose `GET /metrics`
+- **`configs/docker.env`**: Must include `{PREFIX}_LOG_LEVEL`, `{PREFIX}_LOG_JSON`, `{PREFIX}_OTLP_ENDPOINT`
+- **Custom metrics**: File at `infrastructure/metrics/prometheus.py` with `s{N}_` prefix naming convention
+- **Reference implementation**: `services/content-ingestion/src/content_ingestion/app.py`
+
+Tasks T-C-4-04, T-D-4-02, and T-E-3-02 specify the exact requirements per service.
+
 ### Configuration
 | Service | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
+| S6 | `NLP_PIPELINE_LOG_LEVEL` | `INFO` | Observability: log level (PLAN-0003) |
+| S6 | `NLP_PIPELINE_LOG_JSON` | `true` | Observability: JSON logs (PLAN-0003) |
+| S6 | `NLP_PIPELINE_OTLP_ENDPOINT` | `` | Observability: OTLP trace export (PLAN-0003) |
 | S6 | `NLP_DATABASE_URL` | — | nlp_db connection |
 | S6 | `INTELLIGENCE_DATABASE_URL` | — | intelligence_db connection (read/write) |
 | S6 | `ALEMBIC_ENABLED` | `true` | Alembic for nlp_db only |
@@ -540,6 +564,9 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 | S6 | `EMBEDDING_CHUNK_OVERLAP` | `64` | Chunk overlap tokens |
 | S6 | `AUTO_RESOLVE_THRESHOLD` | `0.85` | Entity resolution auto-resolve |
 | S6 | `PROVISIONAL_THRESHOLD` | `0.60` | Entity resolution provisional |
+| S7 | `KNOWLEDGE_GRAPH_LOG_LEVEL` | `INFO` | Observability: log level (PLAN-0003) |
+| S7 | `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | Observability: JSON logs (PLAN-0003) |
+| S7 | `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | `` | Observability: OTLP trace export (PLAN-0003) |
 | S7 | `INTELLIGENCE_DATABASE_URL` | — | intelligence_db connection |
 | S7 | `ALEMBIC_ENABLED` | `false` | MUST be false — DDL owned by intelligence-migrations |
 | S7 | `RELATION_CANONICALIZATION_THRESHOLD` | `0.35` | Soft-map cosine distance |
@@ -548,6 +575,9 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 | S7 | `WORKER_13C_INTERVAL_MINUTES` | `60` | Summary generation |
 | S7 | `WORKER_13D_INTERVAL_MINUTES` | `60` | Entity profile embedding |
 | S7 | `TEMPORAL_CLAIM_DECAY_ALPHA` | `0.02310` | 30-day half-life |
+| S10 | `ALERT_LOG_LEVEL` | `INFO` | Observability: log level (PLAN-0003) |
+| S10 | `ALERT_LOG_JSON` | `true` | Observability: JSON logs (PLAN-0003) |
+| S10 | `ALERT_OTLP_ENDPOINT` | `` | Observability: OTLP trace export (PLAN-0003) |
 | S10 | `ALERT_DATABASE_URL` | — | alert_db connection |
 | S10 | `S1_BASE_URL` | — | Portfolio service URL |
 | S10 | `S1_INTERNAL_TOKEN` | — | S1 internal auth token |
