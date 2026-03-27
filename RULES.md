@@ -147,6 +147,22 @@ correct response to a test failure is always to fix the underlying issue:
 4. Pre-existing test failures encountered during unrelated work must still be fixed or
    explicitly reported — they are not someone else's problem.
 
+### R20: MUST extend `BaseKafkaConsumer` for all Kafka consumers
+**Why**: `BaseKafkaConsumer` enforces idempotency (`is_duplicate` check), DLQ routing,
+retry/fatal error classification, and observability hooks. Rolling a custom consumer
+loop bypasses all these safety nets and creates inconsistent behaviour across services.
+Every class that consumes from a Kafka topic must extend
+`messaging.kafka.consumer.base.BaseKafkaConsumer` and implement its abstract methods.
+Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
+### R21: Domain exception base class MUST be named `DomainError`
+**Why**: Architecture tests (`test_domain_error_enforcement.py`) assert that every
+mature service defines a `DomainError(Exception)` class in `domain/errors.py` (or
+`domain/exceptions.py`) and that all other exception classes in that module inherit
+from it. A single canonical name enables cross-service tooling and log parsing without
+service-specific knowledge. Services that want a descriptive alias (e.g.
+`MarketDataError`) must define it as a subclass: `class MarketDataError(DomainError):`.
+
 ---
 
 ## Summary Table
@@ -172,3 +188,5 @@ correct response to a test failure is always to fix the underlying issue:
 | R17 | Process | MUST |
 | R18 | Process | MUST |
 | R19 | Testing | MUST NOT |
+| R20 | Architecture | MUST |
+| R21 | Architecture | MUST |

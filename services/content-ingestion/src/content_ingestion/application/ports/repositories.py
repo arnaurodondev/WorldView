@@ -63,3 +63,7 @@ class BronzeStoragePort(Protocol):
         published_at: str | None,
         is_backfill: bool,
     ) -> str: ...
+
+    async def delete_object(self, key: str) -> None:
+        """Delete a bronze object by key (best-effort orphan GC)."""
+        ...

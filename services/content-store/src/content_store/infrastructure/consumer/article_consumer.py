@@ -287,16 +287,29 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
     # ── CR-3: post-commit LSH indexing ────────────────────────────────────────
 
     async def _handle_message(self, msg: Any) -> None:
-        """Override to add LSH indexing AFTER the DB commit (CR-3).
+        """Override to add LSH indexing AFTER the DB commit (CR-3) and GC on failure.
 
         The base class handles: deserialise → is_duplicate → get_unit_of_work
         → process_message → mark_processed → uow.commit.
 
         After that succeeds we index into the Valkey LSH bands best-effort.
+        On commit failure, delete any orphaned silver MinIO object best-effort.
         """
         self._current_summary = None
         self._current_uow = None  # reset so is_duplicate always uses a fresh session
-        await super()._handle_message(msg)  # type: ignore[misc]
+        try:
+            await super()._handle_message(msg)  # type: ignore[misc]
+        except Exception:
+            # GC: if silver write succeeded but DB commit failed, delete orphaned object
+            summary = self._current_summary
+            if summary is not None and summary.minio_silver_key is not None:
+                try:
+                    await self._store.delete(self._app_config.silver_bucket, summary.minio_silver_key)
+                    logger.info("silver_gc_success", silver_key=summary.minio_silver_key)
+                except Exception:
+                    logger.warning("silver_gc_failed", silver_key=summary.minio_silver_key)
+            self._current_summary = None
+            raise
 
         summary = self._current_summary
         if summary is not None and summary.signature is not None and summary.doc_id is not None:

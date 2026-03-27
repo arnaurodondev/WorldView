@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 from sqlalchemy import select
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import SectionModel
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import Section
@@ -49,4 +50,4 @@ class SectionRepository:
         return result.scalar_one_or_none()  # type: ignore[no-any-return]
 
     def _new_id(self) -> UUID:
-        return uuid.uuid4()
+        return common.ids.new_uuid7()

@@ -62,9 +62,20 @@ def _find_pkg_name(src_dir: Path) -> str | None:
 
 
 def _is_scaffolded(pkg_dir: Path) -> bool:
+    """A service is scaffolded if it lacks domain, application, or ports.
+
+    A fully mature service has all three layers:
+    - domain/      — pure domain logic
+    - application/ — use cases and port ABCs
+    - application/ports/ — abstract interfaces (required for hexagonal compliance)
+
+    Services with domain + application but no ports are in-progress and treated
+    as scaffolded until they complete the full hexagonal structure.
+    """
     has_domain = (pkg_dir / "domain").is_dir()
     has_app = (pkg_dir / "application").is_dir()
-    return not (has_domain or has_app)
+    has_ports = (pkg_dir / "application" / "ports").is_dir() if has_app else False
+    return not (has_domain and has_app and has_ports)
 
 
 def discover_services(

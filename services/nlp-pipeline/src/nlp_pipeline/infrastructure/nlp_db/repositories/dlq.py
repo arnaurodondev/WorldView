@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
-from uuid import UUID
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import DeadLetterQueueModel
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -27,7 +28,7 @@ class DLQRepository:
 
         Returns the new dlq_id.
         """
-        dlq_id = uuid.uuid4()
+        dlq_id = common.ids.new_uuid7()
         row = DeadLetterQueueModel(
             dlq_id=dlq_id,
             original_event_id=original_event_id,

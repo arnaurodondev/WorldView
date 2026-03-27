@@ -80,6 +80,11 @@ class MinioBronzeAdapter:
         logger.debug("bronze_object_stored", key=key, byte_size=len(raw_bytes))
         return key
 
+    async def delete_object(self, key: str) -> None:
+        """Delete a bronze object by key (best-effort orphan GC on DB rollback)."""
+        await self._storage.delete(self._bucket, key)
+        logger.debug("bronze_object_deleted", key=key)
+
     async def object_exists(self, source_type: str, url_hash: str) -> bool:
         """Check if a bronze object already exists for this url_hash."""
         key = build_bronze_key(source_type, url_hash)

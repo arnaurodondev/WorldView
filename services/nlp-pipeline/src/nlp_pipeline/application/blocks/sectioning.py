@@ -8,10 +8,13 @@ If no sections are produced, a synthetic fallback section covers the full text.
 from __future__ import annotations
 
 import re
-import uuid
-from uuid import UUID
+from typing import TYPE_CHECKING
 
+import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.domain.models import Section
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 # ── Sectioner implementations ─────────────────────────────────────────────────
 
@@ -38,7 +41,7 @@ class NewsParagraphSectioner:
                 continue
             sections.append(
                 Section(
-                    section_id=uuid.uuid4(),
+                    section_id=common.ids.new_uuid7(),
                     doc_id=doc_id,
                     section_index=idx,
                     char_start=start,
@@ -72,7 +75,7 @@ class SECEdgarSectioner:
                 continue
             sections.append(
                 Section(
-                    section_id=uuid.uuid4(),
+                    section_id=common.ids.new_uuid7(),
                     doc_id=doc_id,
                     section_index=i,
                     char_start=start,
@@ -105,7 +108,7 @@ class FinnhubTranscriptSectioner:
                 continue
             sections.append(
                 Section(
-                    section_id=uuid.uuid4(),
+                    section_id=common.ids.new_uuid7(),
                     doc_id=doc_id,
                     section_index=i,
                     char_start=match.start(),
@@ -131,7 +134,7 @@ class SyntheticSectioner:
             return []
         return [
             Section(
-                section_id=uuid.uuid4(),
+                section_id=common.ids.new_uuid7(),
                 doc_id=doc_id,
                 section_index=0,
                 char_start=0,

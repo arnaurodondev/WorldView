@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-class NLPDomainError(Exception):
-    """Base class for all NLP pipeline domain errors."""
+class DomainError(Exception):
+    """Base class for all NLP pipeline domain errors (R21 canonical name)."""
 
     error_code: str = "NLP_DOMAIN_ERROR"
 
@@ -14,6 +14,10 @@ class NLPDomainError(Exception):
 
     def __str__(self) -> str:
         return f"[{self.error_code}] {self.message}"
+
+
+# Descriptive alias preserved for readability within this service
+NLPDomainError = DomainError
 
 
 # ── Processing errors ─────────────────────────────────────────────────────────

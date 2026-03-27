@@ -12,8 +12,12 @@ from __future__ import annotations
 from messaging import FatalError  # type: ignore[import-untyped]
 
 
-class MarketDataError(Exception):
-    """Base exception for all market-data domain errors."""
+class DomainError(Exception):
+    """Base exception for all market-data domain errors (R21 canonical name)."""
+
+
+class MarketDataError(DomainError):
+    """Descriptive alias preserved for readability within this service."""
 
 
 class InstrumentNotFoundError(MarketDataError):

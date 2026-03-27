@@ -127,6 +127,7 @@ class FetchAndWriteUseCase:
         failed = 0
         errors: list[str] = []
         pending_in_batch = 0
+        pending_minio_keys: list[str] = []  # track keys written since last commit
 
         # 1. Fetch from external API (or use pre-fetched results)
         if prefetched_results is not None:
@@ -162,6 +163,7 @@ class FetchAndWriteUseCase:
                     published_at=ct.to_iso8601(result.published_at) if result.published_at else None,
                     is_backfill=result.is_backfill,
                 )
+                pending_minio_keys.append(minio_key)  # track for GC on rollback
 
                 # 2c. Atomic DB transaction: fetch_log + outbox
                 fetch_log_id = common.ids.new_uuid7()
@@ -202,6 +204,7 @@ class FetchAndWriteUseCase:
                 # Batch commit: flush every batch_size articles
                 if pending_in_batch >= self._batch_size:
                     await self._commit_fn()
+                    pending_minio_keys = []  # committed — no longer orphaned
                     pending_in_batch = 0
 
             except Exception as exc:
@@ -211,6 +214,13 @@ class FetchAndWriteUseCase:
                         await self._rollback_fn()
                     except Exception:
                         logger.debug("rollback_failed_after_article_error", url_hash=result.url_hash)
+                # GC: delete all MinIO objects that were written in this uncommitted batch
+                for _key in pending_minio_keys:
+                    try:
+                        await self._bronze.delete_object(_key)
+                    except Exception:
+                        logger.warning("minio_gc_delete_failed", key=_key)
+                pending_minio_keys = []
                 pending_in_batch = 0  # batch lost on rollback
                 failed += 1
                 errors.append(f"{result.url_hash}: {exc}")
@@ -220,12 +230,19 @@ class FetchAndWriteUseCase:
         if pending_in_batch > 0:
             try:
                 await self._commit_fn()
+                pending_minio_keys = []  # committed — no longer orphaned
             except Exception as exc:
                 if self._rollback_fn:
                     try:
                         await self._rollback_fn()
                     except Exception:
                         logger.debug("rollback_failed_after_final_batch")
+                # GC: delete all MinIO objects in the uncommitted final batch
+                for _key in pending_minio_keys:
+                    try:
+                        await self._bronze.delete_object(_key)
+                    except Exception:
+                        logger.warning("minio_gc_delete_failed", key=_key)
                 failed += pending_in_batch
                 fetched -= pending_in_batch
                 errors.append(f"final_batch: {exc}")

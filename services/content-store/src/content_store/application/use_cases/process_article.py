@@ -69,6 +69,7 @@ class ProcessingSummary:
     suppressed: bool
     signature: list[int] | None = None
     source_type: str | None = None
+    minio_silver_key: str | None = None  # set when silver write succeeded; used for GC on commit failure
 
 
 class ProcessArticleUseCase:
@@ -249,6 +250,7 @@ class ProcessArticleUseCase:
 
         # 8. Return signature data for LSH indexing AFTER DB commit (CR-3)
         #    The consumer is responsible for calling lsh.index() post-commit.
+        #    minio_silver_key is included so the consumer can GC on commit failure.
         return ProcessingSummary(
             article_id=article.doc_id,
             decision=decision,
@@ -256,6 +258,7 @@ class ProcessArticleUseCase:
             suppressed=False,
             signature=signature,
             source_type=article.source_type,
+            minio_silver_key=silver_key,
         )
 
 
