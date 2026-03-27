@@ -44,7 +44,8 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # Observability (STANDARDS.md §5 — mandatory in every service)
+    service_name: str = "api-gateway"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

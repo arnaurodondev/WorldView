@@ -2,9 +2,9 @@
 id: PLAN-0001-B-R2
 prd: PRD-0001
 title: "S4+S5 QA Fixes: DDL Alignment, DLQ, SSRF, LSH Ordering, Contract Tests, Compounding"
-status: in-progress
+status: completed
 created: 2026-03-27
-updated: 2026-03-28
+updated: 2026-03-27
 plans: 1
 waves: 4
 tasks: 19
@@ -383,11 +383,12 @@ Minimum test count: 9
 
 ---
 
-## Wave 3: Contract Tests + Coverage Gaps
+## Wave 3: Contract Tests + Coverage Gaps ✅
 
 **Goal**: Add Avro contract tests for S5, test the consumer process_message, and add a hook/rule ensuring future schema changes include tests.
 **Depends on**: Wave 1, Wave 2
 **Estimated effort**: 30–45 minutes
+**Status**: **DONE** — 2026-03-27 · 208 S5 tests pass · ruff + mypy clean
 
 ### Tasks
 
@@ -454,17 +455,18 @@ Minimum test count: 3
 ---
 
 ### Validation Gate
-- [ ] `ruff check` + `mypy` clean
-- [ ] All existing + new tests pass
-- [ ] ≥11 new tests in this wave
+- [x] `ruff check` + `mypy` clean
+- [x] All existing + new tests pass
+- [x] ≥11 new tests in this wave (14 new tests)
 
 ---
 
-## Wave 4: Compounding — Documentation + Rules + Patterns
+## Wave 4: Compounding — Documentation + Rules + Patterns ✅
 
 **Goal**: Update all compounding documents to prevent recurrence of these issues. This is the most important wave for long-term quality.
 **Depends on**: Wave 1, Wave 2, Wave 3
 **Estimated effort**: 20–30 minutes
+**Status**: **DONE** — 2026-03-27 · docs only, no code changes
 
 ### Tasks
 
@@ -533,9 +535,9 @@ Add pitfalls discovered in QA:
 ---
 
 ### Validation Gate
-- [ ] All documentation files updated
-- [ ] No code changes in this wave (docs only)
-- [ ] Bug patterns have proper ID, symptom, root cause, prevention sections
+- [x] All documentation files updated
+- [x] No code changes in this wave (docs only)
+- [x] Bug patterns have proper ID, symptom, root cause, prevention sections
 
 ---
 
@@ -575,5 +577,5 @@ Each wave is independent and leaves the codebase green. DDL fixes (Wave 1) are b
 |------|--------|-----------|-------------|
 | W1 | done | 6 | 6 |
 | W2 | done | 5 | 5 |
-| W3 | pending | 0 | 3 |
-| W4 | pending | 0 | 4 |
+| W3 | done | 3 | 3 |
+| W4 | done | 4 | 4 |

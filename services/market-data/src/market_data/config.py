@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # Observability (STANDARDS.md §5 — mandatory in every service)
+    service_name: str = "market-data"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

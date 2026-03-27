@@ -1,0 +1,52 @@
+// ── OTLP receiver: services send traces here ──
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// ── Forward traces to Tempo ──
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// ── Docker log discovery ──
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// ── Tail container logs ──
+loki.source.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  targets = discovery.docker.containers.targets
+  forward_to = [loki.write.default.receiver]
+  relabel_rules = loki.relabel.docker.rules
+}
+
+// ── Add service name label from container name ──
+loki.relabel "docker" {
+  forward_to = []
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "service"
+    regex         = "/(.*)"
+  }
+}
+
+// ── Push logs to Loki ──
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

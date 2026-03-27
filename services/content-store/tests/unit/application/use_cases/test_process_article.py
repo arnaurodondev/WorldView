@@ -283,6 +283,107 @@ class TestGuessContentType:
         assert _guess_content_type("unknown") == "html"
 
 
+class TestPublishedAtParsing:
+    """Edge case tests for published_at parsing in execute() (T-R2-3-03)."""
+
+    async def test_invalid_date_results_in_none(self) -> None:
+        """published_at='invalid-date' → doc.published_at is None."""
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None
+
+        store = AsyncMock()
+        store.get_bytes.return_value = (
+            b"<html><body>Apple stock price rose significantly"
+            b" after quarterly earnings report was released today</body></html>"
+        )
+        store.put_bytes.return_value = None
+
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(
+            outcome=DedupOutcome.UNIQUE,
+            stage="stage_c",
+        )
+
+        document_repo = AsyncMock()
+        uc = _make_use_case(
+            dedup_repo=dedup_repo,
+            document_repo=document_repo,
+            object_store=store,
+            lsh_client=lsh_client,
+        )
+        summary = await uc.execute(_make_article(published_at="invalid-date"))
+
+        assert summary.suppressed is False
+        doc_arg = document_repo.create.call_args.args[0]
+        assert doc_arg.published_at is None
+
+    async def test_valid_iso_date_parses_correctly(self) -> None:
+        """published_at='2026-03-27T10:00:00Z' → parses to datetime with UTC tz."""
+        from datetime import UTC, datetime
+
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None
+
+        store = AsyncMock()
+        store.get_bytes.return_value = (
+            b"<html><body>Apple stock price rose significantly"
+            b" after quarterly earnings report was released today</body></html>"
+        )
+        store.put_bytes.return_value = None
+
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(
+            outcome=DedupOutcome.UNIQUE,
+            stage="stage_c",
+        )
+
+        document_repo = AsyncMock()
+        uc = _make_use_case(
+            dedup_repo=dedup_repo,
+            document_repo=document_repo,
+            object_store=store,
+            lsh_client=lsh_client,
+        )
+        summary = await uc.execute(_make_article(published_at="2026-03-27T10:00:00Z"))
+
+        assert summary.suppressed is False
+        doc_arg = document_repo.create.call_args.args[0]
+        assert doc_arg.published_at is not None
+        assert doc_arg.published_at.tzinfo is not None
+        assert doc_arg.published_at == datetime(2026, 3, 27, 10, 0, 0, tzinfo=UTC)
+
+    async def test_none_published_at_results_in_none(self) -> None:
+        """published_at=None → doc.published_at is None."""
+        dedup_repo = AsyncMock()
+        dedup_repo.check_exists.return_value = None
+
+        store = AsyncMock()
+        store.get_bytes.return_value = (
+            b"<html><body>Apple stock price rose significantly"
+            b" after quarterly earnings report was released today</body></html>"
+        )
+        store.put_bytes.return_value = None
+
+        lsh_client = AsyncMock()
+        lsh_client.query.return_value = DeduplicationDecision(
+            outcome=DedupOutcome.UNIQUE,
+            stage="stage_c",
+        )
+
+        document_repo = AsyncMock()
+        uc = _make_use_case(
+            dedup_repo=dedup_repo,
+            document_repo=document_repo,
+            object_store=store,
+            lsh_client=lsh_client,
+        )
+        summary = await uc.execute(_make_article(published_at=None))
+
+        assert summary.suppressed is False
+        doc_arg = document_repo.create.call_args.args[0]
+        assert doc_arg.published_at is None
+
+
 class TestBuildStoredPayload:
     def test_payload_has_required_fields(self) -> None:
         doc = CanonicalDocument(

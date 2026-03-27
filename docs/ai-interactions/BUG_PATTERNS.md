@@ -41,6 +41,8 @@
 | [BP-016](#bp-016) | Advisory lock spanning external I/O | DB connection held during multi-second HTTP fetch — pool exhaustion | Any service holding advisory lock during adapter.fetch() |
 | [BP-017](#bp-017) | Outbox payload fields mismatch Avro schema | `SerializationError` or silent field drops at dispatcher time | Any service writing outbox events that feed an Avro-serialized Kafka topic |
 | [BP-018](#bp-018) | Client constructor mismatch in wiring code | `TypeError: __init__() got an unexpected keyword argument` at runtime | Any service building adapter clients in a factory or lifespan function |
+| [BP-019](#bp-019) | Migration DDL vs ORM column mismatch | `UndefinedColumnError` or `ProgrammingError` at runtime — migration DDL defines different columns than ORM model | Any service where migration DDL is hand-written separately from ORM |
+| [BP-020](#bp-020) | DLQ `move_to_dead_letter` only updates status | Dead-lettered events cannot be inspected or requeued — DLQ table has no row, only outbox status changed | Any service with outbox + DLQ pattern |
 
 ---
 
@@ -1186,6 +1188,113 @@ elif source_type == "newsapi":
 ### Test to add (prevents regression)
 
 HTTP client tests using `httpx.MockTransport` that verify each client can be constructed and called.
+
+---
+
+## BP-019 — Migration DDL vs ORM column mismatch
+
+**Date discovered**: 2026-03-28
+**Services affected**: `content-store`, `content-ingestion` (found during multi-agent QA review)
+**Prompts updated**: `PLAN-0001-B-R2` tasks T-R2-1-01, T-R2-1-02, T-R2-1-05
+
+### Symptom
+
+`UndefinedColumnError` or `ProgrammingError` at runtime when Alembic migration creates a table with different columns than the SQLAlchemy ORM model expects. Integration tests that use `Base.metadata.create_all()` bypass Alembic and won't catch this.
+
+Example: `outbox_events` migration DDL had `event_id`, `partition_key`, `payload_avro BYTEA` columns, but the ORM model had `id`, `aggregate_type`, `payload JSONB`.
+
+### Root cause
+
+Migration DDL was written manually at an early stage of development, then the ORM model evolved. Since no automated check existed, the two diverged silently. Integration tests use `Base.metadata.create_all()` which generates DDL from the ORM — not from Alembic — so they always pass.
+
+### Correct implementation pattern
+
+1. Always generate initial DDL from ORM column inspection, or copy the exact column definitions from the ORM model.
+2. Add DDL-vs-ORM alignment tests that parse migration SQL and compare column names against `Model.__table__.columns`:
+
+```python
+def test_ddl_matches_orm():
+    migration_text = Path("alembic/versions/0001_*.py").read_text()
+    orm_columns = {c.name for c in MyModel.__table__.columns}
+    # Parse CREATE TABLE from migration and extract column names
+    for col in orm_columns:
+        assert col in migration_text, f"ORM column '{col}' missing from migration DDL"
+```
+
+3. Never use `gen_random_uuid()` defaults on UUID PKs — all IDs must be app-generated UUIDv7.
+
+### Test to add (prevents regression)
+
+DDL-vs-ORM alignment tests (see `services/content-store/tests/unit/infrastructure/test_ddl_alignment.py` and `services/content-ingestion/tests/unit/infrastructure/test_ddl_alignment.py`).
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-store/alembic/versions/0001_create_content_store_schema.py` | Rewrote `outbox_events` and `dead_letter_queue` DDL to match ORM |
+| `services/content-ingestion/alembic/versions/0001_initial_s4_schema.py` | Added `payload_json JSONB` to `dead_letter_queue` DDL |
+| `services/content-store/tests/unit/infrastructure/test_ddl_alignment.py` | New — DDL alignment tests for S5 |
+| `services/content-ingestion/tests/unit/infrastructure/test_ddl_alignment.py` | New — DDL alignment tests for S4 |
+
+---
+
+## BP-020 — DLQ `move_to_dead_letter` only updates status without copying payload
+
+**Date discovered**: 2026-03-28
+**Services affected**: `content-store` (found during multi-agent QA review)
+**Prompts updated**: `PLAN-0001-B-R2` tasks T-R2-1-03, T-R2-1-04, T-R2-1-06
+
+### Symptom
+
+Dead-lettered events are invisible to the `/admin/dlq` API and cannot be requeued. The `move_to_dead_letter` method updates the outbox `status` column to `dead_letter` but does not INSERT a row into the `dead_letter_queue` table. Additionally, `requeue()` creates a new outbox event with `payload={}` (empty) instead of the original payload.
+
+### Root cause
+
+1. `move_to_dead_letter` was implemented as a simple status update (one SQL UPDATE) instead of the S4 pattern which also INSERTs a DLQ row with the original payload.
+2. `DeadLetterQueueModel` was missing the `payload_json` column, so even if a DLQ row existed, there was no place to store the payload for requeue.
+3. `requeue()` hardcoded `payload={}` instead of reading `entry.payload_json`.
+
+### Correct implementation pattern
+
+```python
+async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+    # 1. Fetch the outbox record
+    record = await self._get_outbox_record(record_id)
+    if not record:
+        return
+    # 2. INSERT a DLQ row with the original payload
+    dlq = DeadLetterQueueModel(
+        dlq_id=new_uuid7(),
+        original_event_id=record.id,
+        topic=record.topic,
+        payload_json=record.payload,  # preserve original payload
+        error_detail=error_detail,
+    )
+    self._session.add(dlq)
+    # 3. Update outbox status
+    record.status = OutboxStatus.DEAD_LETTER
+```
+
+For `requeue()`:
+```python
+async def requeue(self, dlq_id: UUID) -> None:
+    entry = await self._get(dlq_id)
+    # Use original payload, not empty dict
+    await outbox_repo.append(..., payload=entry.payload_json or {})
+```
+
+### Test to add (prevents regression)
+
+See `services/content-store/tests/unit/infrastructure/test_dlq_repo.py` — tests verify DLQ row creation and non-empty payload on requeue.
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-store/src/content_store/infrastructure/db/repositories/outbox.py` | Fixed `move_to_dead_letter` to INSERT DLQ row |
+| `services/content-store/src/content_store/infrastructure/db/repositories/dlq.py` | Fixed `requeue` to use `entry.payload_json` |
+| `services/content-store/src/content_store/infrastructure/db/models.py` | Added `payload_json` column to `DeadLetterQueueModel` |
+| `services/content-store/tests/unit/infrastructure/test_dlq_repo.py` | New — DLQ copy + requeue tests |
 
 ---
 

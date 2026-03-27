@@ -6,12 +6,35 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+import prometheus_client
+import structlog.contextvars
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from observability.logging import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle."""
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        import common.ids
+
+        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
+        return response
 
 
 @asynccontextmanager
@@ -23,15 +46,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = Settings()
 
-    # 0. Logging — always first (STANDARDS.md §5.1)
+    # 1. Logging — always first
     configure_logging(
-        service_name="market-data",
+        service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
     )
-    logger = get_logger("market_data.app")
+    log = get_logger("market_data.app")
 
-    # 1. DB — write engine + optional read engine
+    # 2. Metrics
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    app.state.metrics = metrics
+
+    # 3. Tracing (optional)
+    if settings.otlp_endpoint:
+        configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
+        add_otel_middleware(app)
+
+    # 4. DB — write engine + optional read engine
     write_engine = build_write_engine(settings)
     read_engine = build_read_engine(settings)
     write_factory = build_session_factory(write_engine)
@@ -40,7 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.read_session_factory = read_factory
     app.state.session_factory = write_factory  # readyz probe compatibility
 
-    # 2. Valkey
+    # 5. Valkey
     from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
 
     valkey_client = create_valkey_client_from_url(settings.valkey_url)
@@ -50,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.quote_cache = QuoteCache(valkey_client)
 
-    # 3. Object storage
+    # 6. Object storage
     object_storage = None
     try:
         from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -66,39 +99,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         object_storage = build_object_storage(storage_settings)
     except Exception:
-        logger.warning("object_storage_init_failed_degrading")
+        log.warning("object_storage_init_failed_degrading")
     app.state.object_storage = object_storage
 
-    # 4. Metrics + Prometheus middleware
-    try:
-        from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
-
-        metrics = create_metrics(service_name="market-data")
-        add_prometheus_middleware(app, metrics)
-    except Exception:
-        logger.warning("metrics_init_failed_degrading")
-        metrics = None
-
-    # 5. Tracing
-    if settings.otlp_endpoint:
-        try:
-            from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
-
-            configure_tracing(service_name="market-data", otlp_endpoint=settings.otlp_endpoint)  # type: ignore[attr-defined]
-            add_otel_middleware(app)
-        except Exception:
-            logger.warning("tracing_init_failed_degrading")
-
-    # 6. UoW factory
+    # 7. UoW factory
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
     def uow_factory() -> SqlAlchemyUnitOfWork:
         return SqlAlchemyUnitOfWork(write_factory, read_factory)
 
-    # 7. Outbox dispatcher
+    # 8. Outbox dispatcher
     dispatcher = create_dispatcher(settings=settings, session_factory=write_factory)
 
-    # 8. Consumers
+    # 9. Consumers
     from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
     from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVConsumer
     from market_data.infrastructure.messaging.consumers.quotes_consumer import QuotesConsumer
@@ -139,7 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     fundamentals_task = asyncio.create_task(fundamentals_consumer.run())
     dispatcher_task = asyncio.create_task(dispatcher.run())
 
-    logger.info("market_data_started")
+    log.info("service_started", service=settings.service_name)
     yield
 
     # Shutdown
@@ -159,7 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if read_engine is not write_engine:
         await read_engine.dispose()
 
-    logger.info("market_data_stopped")
+    log.info("service_stopped", service=settings.service_name)
 
 
 def create_app() -> FastAPI:
@@ -169,6 +182,8 @@ def create_app() -> FastAPI:
         version="2025.6.0",
         lifespan=lifespan,
     )
+
+    app.add_middleware(RequestIdMiddleware)
 
     # Health probes (no auth, no lifespan dependency)
     @app.get("/healthz")
@@ -226,6 +241,11 @@ def create_app() -> FastAPI:
                 detail={"status": "degraded", "checks": checks},
             )
         return {"status": "ok", "checks": checks}
+
+    @app.get("/metrics")
+    async def metrics_endpoint() -> Response:
+        data = prometheus_client.generate_latest()
+        return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 
     # Register API routers
     from market_data.api.routers import fundamental_metrics, fundamentals, instruments, ohlcv, quotes, securities
