@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     dispatcher_poll_interval_seconds: float = 1.0
     dispatcher_max_attempts: int = 5
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # Observability (STANDARDS.md §5 — mandatory in every service)
+    service_name: str = "market-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

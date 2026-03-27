@@ -9,7 +9,8 @@ description = "Market data storage, query, and streaming service"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "common",
-    "uuid6>=2024.1.12",
+    "observability",
+    "uuid6==2024.1.12",
     "fastapi==0.111",
     "uvicorn[standard]==0.29",
     "pydantic==2.5",
@@ -27,9 +28,9 @@ dev = [
     "pytest-httpx==0.30",
     "ruff==0.4",
     "mypy==1.10",
-    "testcontainers[postgres,kafka,minio]>=4.8",
-    "valkey>=6.0",
-    "httpx>=0.27",
+    "testcontainers[postgres,kafka,minio]==4.8",
+    "valkey==6.0",
+    "httpx==0.27",
 ]
 
 [tool.pytest.ini_options]

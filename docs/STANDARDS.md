@@ -572,55 +572,202 @@ except StorageError as exc:
 
 ---
 
-## 5. libs/observability — Logging, Metrics, Tracing, Health
+## 5. libs/observability — Canonical Observability Pattern
 
 **Package**: `observability` · **Path**: `libs/observability/`
 **Full API reference**: `docs/libs/observability.md`
+**Gold-standard reference**: `services/content-ingestion/src/content_ingestion/app.py`
 
-### 5.1 Logging — configure in lifespan, before anything else
+> Every service MUST follow this exact pattern. No exceptions, no try/except wrappers around
+> observability init, no defensive `getattr`. If observability fails to initialize, the service
+> should crash loudly at startup — not silently degrade.
+
+### 5.1 Mandatory config fields
+
+Every service's `config.py` MUST include these four fields:
 
 ```python
-# services/my-service/src/my_service/app.py
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from observability.logging import configure_logging, get_logger
-from my_service.config import Settings
+# services/{service}/src/{service}/config.py
+class Settings(BaseSettings):
+    # ... other fields ...
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-
-    # ① Configure logging FIRST — before any other initialisation
-    configure_logging(
-        service_name="my-service",
-        level=settings.log_level,       # e.g. "INFO"
-        json=settings.log_json,         # True in production, False in dev
-    )
-    logger = get_logger("my_service.app")
-    logger.info("service_starting", version="1.0.0")
-
-    # ② Wire other infrastructure …
-    yield
-
-    logger.info("service_stopped")
-
-
-def create_app() -> FastAPI:
-    return FastAPI(title="My Service", lifespan=lifespan)
+    # ── Observability (STANDARDS.md §5.1 — mandatory in every service) ──
+    service_name: str = "service-name"   # kebab-case, matches Docker service name
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""
 ```
 
-**Getting a logger in any module**:
+### 5.2 Observability init sequence (in `lifespan`, mandatory order)
+
+All observability initialization happens in the `lifespan` context manager, in this exact order.
+Never place observability init in `create_app()` — it must be in `lifespan` so startup failures
+are caught before the app accepts traffic.
+
+```python
+# services/{service}/src/{service}/app.py
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
+from fastapi import FastAPI
+from observability import configure_logging, get_logger          # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing    # type: ignore[import-untyped]
+
+from {service}.config import Settings
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings: Settings = app.state.settings
+
+    # 1. LOGGING — always first, before any other code logs anything
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    log = get_logger("{service}.app")
+
+    # 2. METRICS — create and wire Prometheus middleware
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    app.state.metrics = metrics  # accessible for custom metrics if needed
+
+    # 3. TRACING — conditional on otlp_endpoint (blank = disabled)
+    if settings.otlp_endpoint:
+        configure_tracing(
+            service_name=settings.service_name,
+            otlp_endpoint=settings.otlp_endpoint,
+        )
+        add_otel_middleware(app)
+
+    # 4+ Other infrastructure (DB, Valkey, storage, Kafka, etc.)
+    log.info("service_started", service=settings.service_name)
+    yield
+    log.info("service_stopped", service=settings.service_name)
+```
+
+**Critical rules**:
+- `configure_logging()` is ALWAYS first — before any `get_logger()` call in lifespan
+- `create_metrics()` + `add_prometheus_middleware(app, metrics)` — BOTH args required
+- `configure_tracing()` uses `otlp_endpoint=` parameter (NOT `endpoint=`)
+- Direct `settings.otlp_endpoint` access — NO `getattr` defensive coding
+- NO try/except around observability init — let startup crash on failure
+
+### 5.3 Request-ID middleware (in `create_app()`, mandatory)
+
+Every service MUST propagate `X-Request-ID` through the request lifecycle and bind it to the
+structlog context. Register the middleware in `create_app()`:
+
+```python
+import structlog.contextvars
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request, Response
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle."""
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        import common.ids
+
+        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
+        return response
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    app = FastAPI(title="service-name", lifespan=lifespan)
+    app.state.settings = settings or Settings()
+    app.add_middleware(RequestIdMiddleware)
+    # ... include routers ...
+    return app
+```
+
+**Rules**:
+- Use `BaseHTTPMiddleware` class pattern, NOT inline `@app.middleware("http")` decorator
+- Generate ULID (not UUID) for missing request IDs: `common.ids.new_ulid()`
+- Clear contextvars after response to prevent cross-request leakage
+
+### 5.4 Health endpoints — real checks, not stubs
+
+All services MUST implement three endpoints in a dedicated route file
+(`services/{service}/src/{service}/api/routes/health.py`):
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `GET /healthz` | Liveness probe | Always `{"status": "ok"}` (200) |
+| `GET /readyz` | Readiness probe | Probes DB, Valkey, storage; 503 if degraded |
+| `GET /metrics` | Prometheus scrape | `prometheus_client.generate_latest()` |
+
+```python
+import json
+import prometheus_client
+from fastapi import APIRouter, Request, Response
+from sqlalchemy import text
+from observability import get_logger  # type: ignore[import-untyped]
+
+router = APIRouter()
+_log = get_logger(__name__)  # type: ignore[no-any-return]
+
+@router.get("/healthz")
+async def healthz() -> dict:
+    """Liveness probe — returns 200 if process is running."""
+    return {"status": "ok"}
+
+@router.get("/readyz")
+async def readyz(request: Request) -> Response:
+    """Readiness probe — returns 200 only when all dependencies are reachable."""
+    checks: dict[str, str] = {}
+    ok = True
+
+    # Database check
+    try:
+        async with request.app.state.session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception:
+        _log.warning("readyz_database_check_failed", exc_info=True)
+        checks["database"] = "error"
+        ok = False
+
+    # Add Valkey, MinIO, etc. checks per service
+    status_code = 200 if ok else 503
+    return Response(
+        content=json.dumps({"status": "ok" if ok else "degraded", **checks}),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    data = prometheus_client.generate_latest()
+    return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
+```
+
+### 5.5 Getting a logger in any module
+
 ```python
 # ✅ CORRECT — use observability wrapper
-from observability.logging import get_logger
-logger = get_logger(__name__)
+from observability import get_logger  # type: ignore[import-untyped]
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ❌ FORBIDDEN — bypasses centralized configuration
 import structlog
-logger = structlog.get_logger(__name__)   # wrong — use observability.logging
+logger = structlog.get_logger(__name__)   # wrong — use observability
 
 import logging
-logger = logging.getLogger(__name__)      # wrong — use observability.logging
+logger = logging.getLogger(__name__)      # wrong — use observability
 ```
 
 **Structured log fields**:
@@ -629,130 +776,40 @@ logger = logging.getLogger(__name__)      # wrong — use observability.logging
 - Never interpolate variables into the message string: `logger.info(f"fetched {n} articles")` →
   `logger.info("articles_fetched", count=n)`
 
-### 5.2 Metrics — create and register in lifespan
+### 5.6 Custom metrics (optional, per-service)
 
-```python
-# ✅ CORRECT
-from observability.metrics import create_metrics, add_prometheus_middleware
+Custom metrics live in `services/{service}/src/{service}/infrastructure/metrics/prometheus.py`.
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-    configure_logging(...)
+**Naming convention**:
+- Counter: `{s_code}_{subsystem}_{action}_total` → `s4_fetcher_articles_fetched_total`
+- Histogram: `{s_code}_{subsystem}_{thing}_duration_seconds` → `s5_dedup_duration_seconds`
+- Gauge: `{s_code}_{subsystem}_{thing}` → `s4_outbox_pending_events`
+- Labels: lowercase `snake_case` keys: `source_type`, `status`, `error_class`
 
-    metrics = create_metrics(service_name="my-service")
-    add_prometheus_middleware(app, metrics)
+**Gauge polling**: background task in lifespan, 30s default interval (see S4 `_metrics_poller`).
 
-    # Expose /metrics endpoint automatically via middleware
-    yield
+### 5.7 Docker env vars (mandatory in every `configs/docker.env`)
+
+```env
+{PREFIX}_LOG_LEVEL=INFO
+{PREFIX}_LOG_JSON=true
+{PREFIX}_OTLP_ENDPOINT=
 ```
 
-**Custom metrics naming**:
-- Counter: `{service}_{subsystem}_{action}_total` → `s4_fetcher_articles_fetched_total`
-- Histogram: `{service}_{subsystem}_{thing}_duration_seconds` → `s6_nlp_block_duration_seconds`
-- Gauge: `{service}_{subsystem}_{thing}` → `s4_outbox_pending_events`
-- Labels: use lowercase `snake_case` keys: `source_type`, `status`, `error_class`
+Where `{PREFIX}` matches the service's `env_prefix` (e.g., `CONTENT_INGESTION_`, `PORTFOLIO_`).
 
-### 5.3 Tracing (OpenTelemetry)
+### 5.8 pyproject.toml (mandatory dependency)
 
-```python
-from observability.tracing import configure_tracing, add_otel_middleware
+Every service MUST declare `observability` as an explicit dependency:
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-    configure_logging(...)
-    metrics = create_metrics(...)
-    add_prometheus_middleware(app, metrics)
-
-    if settings.otlp_endpoint:
-        configure_tracing(
-            service_name="my-service",
-            otlp_endpoint=settings.otlp_endpoint,
-        )
-        add_otel_middleware(app)
-
-    yield
+```toml
+dependencies = [
+    # ... other deps ...
+    "observability",
+]
 ```
 
-### 5.4 Health endpoints — real checks, not stubs
-
-All services **must** implement `/healthz` (liveness) and `/readyz` (readiness) with **actual
-dependency checks**. Stub implementations that always return 200 are forbidden in non-stub
-services.
-
-```python
-# services/my-service/src/my_service/api/routes/health.py
-from fastapi import APIRouter, Response
-from sqlalchemy.ext.asyncio import AsyncSession
-from messaging.valkey import ValkeyClient
-
-router = APIRouter()
-
-@router.get("/healthz")
-async def healthz() -> dict:
-    """Liveness probe — returns 200 if process is running."""
-    return {"status": "ok"}
-
-@router.get("/readyz")
-async def readyz(
-    session: AsyncSession = Depends(get_db_session),
-    valkey: ValkeyClient = Depends(get_valkey_client),
-) -> Response:
-    """Readiness probe — returns 200 only when all dependencies are reachable."""
-    checks: dict[str, str] = {}
-    ok = True
-
-    # Database check
-    try:
-        await session.execute(text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
-        ok = False
-
-    # Valkey check
-    try:
-        await valkey.ping()
-        checks["valkey"] = "ok"
-    except Exception as exc:
-        checks["valkey"] = f"error: {exc}"
-        ok = False
-
-    # Kafka check (producer/consumer liveness)
-    checks["kafka"] = "ok"  # replaced with real check per service
-
-    status = 200 if ok else 503
-    return Response(content=json.dumps({"status": "ok" if ok else "degraded", **checks}),
-                    status_code=status, media_type="application/json")
-```
-
-### 5.5 Request ID middleware
-
-Every service **must** propagate `X-Request-ID` through the request lifecycle and bind it to the
-structlog context:
-
-```python
-# services/my-service/src/my_service/app.py
-import structlog.contextvars
-from common.ids import new_ulid
-from starlette.middleware.base import BaseHTTPMiddleware
-from observability.logging import get_logger
-
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        request_id = request.headers.get("X-Request-ID") or new_ulid()
-        structlog.contextvars.bind_contextvars(request_id=request_id)
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        structlog.contextvars.clear_contextvars()
-        return response
-
-def create_app() -> FastAPI:
-    app = FastAPI(lifespan=lifespan)
-    app.add_middleware(RequestIdMiddleware)
-    return app
-```
+Direct `prometheus-client` or `structlog` imports are only needed if custom metrics use them directly.
 
 ---
 
