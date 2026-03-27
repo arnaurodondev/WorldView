@@ -25,6 +25,7 @@ def _to_domain(row: ProviderBudgetModel) -> ProviderBudget:
         burst_capacity=float(row.max_tokens),
         refill_rate=row.refill_rate_per_second,
         tokens=row.current_tokens,
+        last_refill_at=row.last_refill_at,
         updated_at=row.updated_at,
     )
 
@@ -71,6 +72,7 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
             .where(ProviderBudgetModel.provider == budget.provider.value)
             .values(
                 current_tokens=budget.tokens,
+                last_refill_at=budget.last_refill_at,
                 updated_at=now,
             )
         )

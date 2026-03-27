@@ -66,10 +66,13 @@ class ScheduleDueTasksUseCase:
                 await self._uow.commit()
                 return result
 
-            # Phase 2: Build candidate tasks for each policy
+            # Phase 2: Build candidate tasks for each policy.
+            # Track which policies triggered backfill so we only flip the flag
+            # after we confirm those tasks survived budget/cap filtering.
             candidate_tasks: list[IngestionTask] = []
+            backfill_policies: list[PollingPolicy] = []
             for policy in policies:
-                tasks = await self._build_tasks_for_policy(policy, now)
+                tasks = await self._build_tasks_for_policy(policy, now, backfill_policies)
                 candidate_tasks.extend(tasks)
 
             # Phase 3: Apply budgets and cap
@@ -84,6 +87,18 @@ class ScheduleDueTasksUseCase:
             if final_tasks:
                 inserted = await self._uow.tasks.add_many(final_tasks)
                 result.tasks_enqueued = inserted
+
+            # Only flip backfill_enabled=False for policies whose backfill tasks
+            # were actually enqueued (i.e. survived budget/cap filtering).
+            for bp in backfill_policies:
+                # Re-derive the task IDs for this policy to check overlap.
+                # Any task whose provider matches means the policy got at least one slot.
+                policy_tasks_enqueued = any(
+                    str(t.provider) == str(bp.provider) and t.symbol == bp.symbol for t in final_tasks
+                )
+                if policy_tasks_enqueued:
+                    bp.backfill_enabled = False
+                    await self._uow.policies.save(bp)
 
             await self._uow.commit()
 
@@ -101,8 +116,14 @@ class ScheduleDueTasksUseCase:
         self,
         policy: PollingPolicy,
         now: datetime,
+        backfill_policies: list[PollingPolicy],
     ) -> list[IngestionTask]:
-        """Evaluate a single policy and return candidate tasks."""
+        """Evaluate a single policy and return candidate tasks.
+
+        Policies that generate backfill tasks are appended to *backfill_policies*
+        so the caller can flip backfill_enabled=False only after the tasks are
+        confirmed enqueued (i.e. survived budget and cap filtering).
+        """
         tasks: list[IngestionTask] = []
 
         # Determine the set of symbols to schedule
@@ -122,10 +143,14 @@ class ScheduleDueTasksUseCase:
                 timeframe=policy.timeframe,
             )
 
-            if policy.backfill_days is not None and policy.backfill_start_date is not None:
-                # Backfill mode — generate chunked tasks for historical range
+            if policy.backfill_enabled and policy.backfill_start_date is not None:
+                # One-shot backfill mode: enqueue historical chunks.
+                # Do NOT flip backfill_enabled here — wait until we know
+                # the tasks survived budget/cap filtering (done by the caller).
                 backfill_tasks = self._build_backfill_tasks(policy, symbol, now)
-                tasks.extend(backfill_tasks)
+                if backfill_tasks:
+                    tasks.extend(backfill_tasks)
+                    backfill_policies.append(policy)
             else:
                 # Incremental mode — schedule if due and no active task exists
                 if policy.is_due(watermark.current_bar_ts):
@@ -253,6 +278,11 @@ class ScheduleDueTasksUseCase:
 
             provider = Provider(provider_str)
             budget = await self._uow.budgets.get_or_create(provider)
+
+            # Replenish tokens based on elapsed time since last refill.
+            elapsed = (now - budget.last_refill_at).total_seconds()
+            if elapsed > 0:
+                budget.refill(elapsed)
 
             for task in ptasks:
                 if budget.try_consume(1.0):

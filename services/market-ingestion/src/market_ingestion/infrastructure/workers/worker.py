@@ -86,6 +86,8 @@ class WorkerProcess:
         self._lease_seconds = int(cast("Any", lease_seconds_value))
         self._idle_sleep = float(idle_sleep_value)
         self._stop_event = asyncio.Event()
+        concurrency = int(getattr(settings, "worker_concurrency", 4))
+        self._semaphore = asyncio.Semaphore(concurrency)
         self._write_factory, self._read_factory = _build_factories(settings)
 
         # Build shared infrastructure (one instance per worker process)
@@ -110,7 +112,7 @@ class WorkerProcess:
             if not claimed:
                 await asyncio.sleep(self._idle_sleep)
                 continue
-            await asyncio.gather(*[self._execute_task(task) for task in claimed])
+            await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
 
         logger.info("worker_stopped", worker_id=self._worker_id)
 
@@ -130,6 +132,11 @@ class WorkerProcess:
             logger.error("worker_claim_error", error=str(exc), worker_id=self._worker_id)
             await asyncio.sleep(self._idle_sleep)
             return []
+
+    async def _execute_with_semaphore(self, task: IngestionTask) -> None:
+        """Acquire the concurrency semaphore then execute the task."""
+        async with self._semaphore:
+            await self._execute_task(task)
 
     async def _execute_task(self, task: IngestionTask) -> None:
         """Execute a single claimed task through the pipeline."""
