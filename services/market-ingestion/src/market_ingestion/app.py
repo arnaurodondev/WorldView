@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -18,8 +19,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
 
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Propagate X-Request-ID through the request lifecycle."""
+    """Propagate X-Request-ID through the request lifecycle.
+
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
 
     async def dispatch(
         self,
@@ -28,7 +36,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         import common.ids
 
-        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = str(request_id)

@@ -54,6 +54,23 @@ async def test_request_id_preserved_when_present(client) -> None:
     assert response.headers["x-request-id"] == custom_id
 
 
+async def test_request_id_rejects_invalid_header(client) -> None:
+    """Invalid X-Request-ID (special chars, too long) should be replaced with generated ULID."""
+    # Newline injection attempt
+    response = await client.get("/healthz", headers={"X-Request-ID": "abc\ndef"})
+    assert response.headers["x-request-id"] != "abc\ndef"
+    assert len(response.headers["x-request-id"]) > 0
+
+    # Excessively long value (>64 chars)
+    long_id = "a" * 100
+    response = await client.get("/healthz", headers={"X-Request-ID": long_id})
+    assert response.headers["x-request-id"] != long_id
+
+    # Special characters
+    response = await client.get("/healthz", headers={"X-Request-ID": "<script>alert(1)</script>"})
+    assert response.headers["x-request-id"] != "<script>alert(1)</script>"
+
+
 async def test_metrics_endpoint_returns_prometheus(client) -> None:
     """GET /metrics should return prometheus text format."""
     response = await client.get("/metrics")

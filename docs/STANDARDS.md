@@ -675,12 +675,19 @@ Every service MUST propagate `X-Request-ID` through the request lifecycle and bi
 structlog context. Register the middleware in `create_app()`:
 
 ```python
+import re
 import structlog.contextvars
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request, Response
 
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Propagate X-Request-ID through the request lifecycle."""
+    """Propagate X-Request-ID through the request lifecycle.
+
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
 
     async def dispatch(
         self,
@@ -689,7 +696,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         import common.ids
 
-        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = str(request_id)
@@ -707,7 +715,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 **Rules**:
 - Use `BaseHTTPMiddleware` class pattern, NOT inline `@app.middleware("http")` decorator
-- Generate ULID (not UUID) for missing request IDs: `common.ids.new_ulid()`
+- **Validate** incoming `X-Request-ID`: only `[a-zA-Z0-9-]`, max 64 chars — prevents log injection and header manipulation
+- Generate ULID (not UUID) for missing or invalid request IDs: `common.ids.new_ulid()`
 - Clear contextvars after response to prevent cross-request leakage
 
 ### 5.4 Health endpoints — real checks, not stubs
