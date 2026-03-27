@@ -28,7 +28,7 @@ From the description, classify the issue:
 Read extensively to build your mental model:
 1. `docs/MASTER_PLAN.md` — system architecture
 2. `RULES.md` — constraints and invariants
-3. `docs/ai-interactions/BUG_PATTERNS.md` — known patterns (could this be a known class?)
+3. `docs/BUG_PATTERNS.md` — known patterns (could this be a known class?)
 4. Service docs for all potentially-affected services
 5. `services/<service>/.claude-context.md` for affected services
 6. Relevant Avro schemas in `infra/kafka/schemas/`
@@ -224,13 +224,23 @@ These compound over time, making future investigations faster and more targeted.
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **If root cause found**: `/fix-bug` — apply the minimal fix with regression test
+- **If architectural issue**: `/refactor` — safely restructure the problematic code
+- **If the issue is a missing feature**: `/prd` — capture requirements before implementing
+- **If fix is ready**: `/review` — structured review before committing
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

@@ -22,7 +22,7 @@ Own the quality, evaluation, and evolution of NLP, embeddings, entity extraction
 - `docs/services/knowledge-graph.md`
 - `libs/ml-clients/**` — canonical protocols, dataclasses, and adapters
 - `libs/contracts/**` — NLP-related canonical models
-- `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` — §5 Blocks 4/7/8/10, §13 (model migration), §18 (evaluation)
+- `docs/specs/0014-PRD-v1-final.md` — §5 Blocks 4/7/8/10, §13 (model migration), §18 (evaluation)
 
 ## Responsibilities
 - define model use cases and measurable evaluation criteria

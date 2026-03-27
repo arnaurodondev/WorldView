@@ -45,7 +45,7 @@ class BackfillUseCase:
         start_date: datetime,
         end_date: datetime,
         timeframe: str,
-        chunk_days: int = 30,
+        chunk_days: int = 90,
         exchange: str | None = None,
     ) -> BackfillResult:
         """Create one task per date-range chunk.

@@ -49,7 +49,7 @@ Plan D: <Service Y>  ────────────┘
 - `docs/MASTER_PLAN.md` (relevant sections)
 - `RULES.md`
 - `infra/kafka/schemas/` (existing schemas)
-- `docs/ai-interactions/BUG_PATTERNS.md`
+- `docs/BUG_PATTERNS.md`
 
 ---
 
@@ -124,7 +124,7 @@ Plan D: <Service Y>  ────────────┘
 - `docs/services/<service>.md`
 - `services/<service>/.claude-context.md`
 - `services/<service>/src/<service>/domain/`
-- `docs/ai-interactions/BUG_PATTERNS.md`
+- `docs/BUG_PATTERNS.md`
 
 ---
 

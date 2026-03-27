@@ -65,8 +65,7 @@ worldview/
 │   ├── architecture/        # Diagrams, ADRs
 │   ├── services/            # Per-service deep docs
 │   ├── libs/                # Per-library docs
-│   ├── workflows/           # Dev, CI, testing, release
-│   └── migration/           # Legacy repo reuse guide
+│   └── workflows/           # Dev, CI, testing, release
 ├── libs/                    # Shared libraries
 │   ├── common/              # Time, IDs, type aliases
 │   ├── contracts/           # Canonical data models
@@ -127,7 +126,6 @@ worldview/
 | [Local dev guide](docs/workflows/local-dev.md) | Setup & daily workflow |
 | [Testing strategy](docs/workflows/testing-strategy.md) | Test pyramid & conventions |
 | [CI/CD pipeline](docs/workflows/ci-cd.md) | GitHub Actions workflow |
-| [Migration guide](docs/migration/REUSE_FROM_ORIGINAL_THESIS.md) | Legacy repo reuse mapping |
 
 ---
 

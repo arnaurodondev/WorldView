@@ -1,6 +1,6 @@
 # Worldview Documentation Index
 
-> Single entry point for all project documentation. Updated 2026-03-25.
+> Single entry point for all project documentation. Updated 2026-03-27.
 
 ---
 
@@ -15,7 +15,7 @@ Read in this order:
 ### Need deeper understanding?
 - System architecture → [MASTER_PLAN.md](MASTER_PLAN.md)
 - Engineering standards → [STANDARDS.md](STANDARDS.md)
-- Known bug patterns → [ai-interactions/BUG_PATTERNS.md](ai-interactions/BUG_PATTERNS.md)
+- Known bug patterns → [BUG_PATTERNS.md](BUG_PATTERNS.md)
 - Service details → [services/](#services-s1s10)
 
 ### Planning new work?
@@ -80,7 +80,7 @@ Read in this order:
 | Guide | Purpose |
 |-------|---------|
 | [Local Development](workflows/local-dev.md) | Bootstrap, Docker profiles, port map, troubleshooting |
-| [Testing Strategy](workflows/testing-strategy.md) | Test pyramid, markers, coverage targets, infrastructure |
+| [Testing Strategy](testing/testing-strategy.md) | Test pyramid, markers, coverage targets, infrastructure |
 | [CI/CD Pipeline](workflows/ci-cd.md) | GitHub Actions, fast path, gated jobs |
 | [Release Process](workflows/release-process.md) | Versioning, changelog, pre-release checklist |
 | [Testing Guide](testing/TESTING_GUIDE.md) | Quick reference for running tests |
@@ -96,6 +96,8 @@ Read in this order:
 |---------|---------|
 | Market Data (S3) | [market-data-operations.md](runbooks/market-data-operations.md) |
 | Market Ingestion (S2) | [market-ingestion-operations.md](runbooks/market-ingestion-operations.md) |
+| General | [debugging-guide.md](runbooks/debugging-guide.md) |
+| General | [hotfix-procedures.md](runbooks/hotfix-procedures.md) |
 
 ---
 
@@ -107,6 +109,9 @@ Read in this order:
 | [AGENTS.md](../AGENTS.md) | Coding standards, architecture patterns, shared libraries |
 | [RULES.md](../RULES.md) | 18 hard rules (MUST/NEVER) |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution workflow for humans and AI |
+| [PRODUCT_CONTEXT.md](PRODUCT_CONTEXT.md) | Product vision, target users, journeys, constraints |
+| [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | P0-P3 production readiness checklist |
+| [SECURITY_ISSUES.md](SECURITY_ISSUES.md) | Known security issues (SEC-001 through SEC-011) |
 
 ---
 
@@ -114,19 +119,9 @@ Read in this order:
 
 | Resource | Purpose |
 |----------|---------|
-| [AI Interactions README](ai-interactions/README.md) | Workflow overview, active vs archived artifacts |
-| [BUG_PATTERNS.md](ai-interactions/BUG_PATTERNS.md) | Living knowledge base of 13+ failure patterns |
-| [Orchestrator Runbook](ai-interactions/ORCHESTRATOR_RUNBOOK.md) | 1 orchestrator + N workers execution model |
-| [Workflow Map](ai-interactions/WORKFLOW_MAP.md) | Decision tree: bug fix, feature, refactor |
-| [Eval Framework](ai-interactions/evals/EVAL_FRAMEWORK.md) | Session tracking, quality metrics, improvement loop |
-| [PRD-0014 (Active)](ai-interactions/agent-responses/0014-PRD-v1-final.md) | Authoritative PRD for unstructured data pipeline |
-
-### Active Implementation Waves
-| Series | Scope | Waves |
-|--------|-------|-------|
-| 0011 | Foundation fixes (blocking prerequisites) | 5 waves |
-| 0012 | S4 + S5 (Content Ingestion + Content Store) | 7 waves |
-| 0013 | S6 + S7 + S10 (NLP + Knowledge Graph + Alerts) | 13 waves |
+| [BUG_PATTERNS.md](BUG_PATTERNS.md) | Living knowledge base of 13+ failure patterns |
+| [Eval Framework](../.claude/evals/EVAL_FRAMEWORK.md) | Session tracking, quality metrics, improvement loop |
+| [PRD-0014 (Active)](specs/0014-PRD-v1-final.md) | Authoritative PRD for unstructured data pipeline |
 
 ---
 
@@ -140,15 +135,18 @@ Read in this order:
 
 ---
 
+## Audits
+
+| Report | Scope |
+|--------|-------|
+| [Cross-Service QA Report](audits/2026-03-27-cross-service-qa-report.md) | Initial 3-service QA pass (16 findings) |
+| [Deep Cross-Service QA Report](audits/2026-03-27-deep-cross-service-qa-report.md) | Comprehensive multi-agent QA (87 findings) |
+| [Spec-Driven Design Audit](audits/spec-driven-design-20260324/audit_report.md) | Contract/schema parity audit with playbooks |
+
+---
+
 ## Reference
 
 | Resource | Purpose |
 |----------|---------|
-| [EODHD Endpoints Reference](ai-interactions/references/eodhd-endpoints-reference.md) | 72 EODHD API endpoints with params and response shapes |
-| [Legacy Repo Reuse](migration/REUSE_FROM_ORIGINAL_THESIS.md) | Maps old thesis repo to worldview architecture |
-
----
-
-## Archive
-
-Historical artifacts (completed waves, old audits, test runs) are in [archive/](archive/). See [archive/README.md](archive/README.md) for contents.
+| [EODHD Endpoints Reference](references/eodhd-endpoints-reference.md) | 72 EODHD API endpoints with params and response shapes |

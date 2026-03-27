@@ -116,7 +116,7 @@ def compute_shingles(text: str) -> set[str]:
 
     # Char trigrams from the original lowercased text (not the tokenized form)
     lower_text = text.lower()
-    char_trigrams = {f"c:{lower_text[i:i + 3]}" for i in range(len(lower_text) - 2)}
+    char_trigrams = {f"c:{lower_text[i : i + 3]}" for i in range(len(lower_text) - 2)}
 
     return word_bigrams | char_trigrams
 

@@ -5,7 +5,7 @@ Historical patterns, known bugs, and domain knowledge used during code review.
 ## Primary Reference
 
 The canonical bug pattern catalog is at:
-**`docs/ai-interactions/BUG_PATTERNS.md`**
+**`docs/BUG_PATTERNS.md`**
 
 This file contains all known bug patterns (BP-001 through BP-XXX) with:
 - Category, severity, symptoms

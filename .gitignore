@@ -41,9 +41,6 @@ htmlcov/
 docs/testing/test-runs/*
 .tmp
 
-# Archives
-docs/archive/*
-
 # OS
 .DS_Store
 Thumbs.db

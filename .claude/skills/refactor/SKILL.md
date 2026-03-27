@@ -138,7 +138,7 @@ Perform a targeted review focusing on refactoring-specific risks:
 ### 5.3 Compounding Updates
 Check if this refactoring reveals improvements for:
 - `.claude/review/` checklists (new pattern to check for?)
-- `docs/ai-interactions/BUG_PATTERNS.md` (new pattern that prevents bugs?)
+- `docs/BUG_PATTERNS.md` (new pattern that prevents bugs?)
 - `docs/STANDARDS.md` (new standard to enforce?)
 - `.claude/skills/` definitions (workflow improvement?)
 
@@ -166,13 +166,22 @@ If any baseline test fails after refactoring:
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **Primary next step**: `/review` — verify the refactor is behavior-preserving
+- **If tests changed significantly**: `/test-feature` — ensure coverage remains comprehensive
+- **If ready for full validation**: `/qa` — full multi-agent QA pass
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

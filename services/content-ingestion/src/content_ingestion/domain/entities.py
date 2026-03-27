@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 
 import common.ids
 import common.time
-from contracts.enums import ContentSourceType as SourceType  # noqa: TCH001 — runtime re-export
+from contracts.enums import (
+    ContentSourceType as SourceType,  # type: ignore[import-untyped]  # noqa: TCH001 — runtime re-export
+)
 
 
 @dataclass
