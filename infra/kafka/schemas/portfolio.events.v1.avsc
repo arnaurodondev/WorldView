@@ -1,15 +1,211 @@
-{
-  "type": "record",
-  "name": "PortfolioEventV1",
-  "namespace": "com.worldview.portfolio",
-  "fields": [
-    {"name": "event_id", "type": "string"},
-    {"name": "event_type", "type": "string"},
-    {"name": "schema_version", "type": "int", "default": 1},
-    {"name": "occurred_at", "type": "string"},
-    {"name": "aggregate_id", "type": "string"},
-    {"name": "tenant_id", "type": "string"},
-    {"name": "payload", "type": "string", "doc": "JSON-encoded event payload"},
-    {"name": "correlation_id", "type": ["null", "string"], "default": null}
-  ]
-}
+[
+  {
+    "type": "record",
+    "name": "TenantCreated",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a new tenant is created. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "tenant.created"},
+      {"name": "aggregate_type", "type": "string", "default": "tenant"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "tenant_name", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "UserCreated",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a new user is created. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "user.created"},
+      {"name": "aggregate_type", "type": "string", "default": "user"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "user_id", "type": "string", "default": ""},
+      {"name": "email", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "PortfolioCreated",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a portfolio is created. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "portfolio.created"},
+      {"name": "aggregate_type", "type": "string", "default": "portfolio"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "portfolio_id", "type": "string", "default": ""},
+      {"name": "owner_id", "type": "string", "default": ""},
+      {"name": "name", "type": "string", "default": ""},
+      {"name": "currency", "type": "string", "default": "USD"}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "PortfolioRenamed",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a portfolio is renamed. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "portfolio.renamed"},
+      {"name": "aggregate_type", "type": "string", "default": "portfolio"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "portfolio_id", "type": "string", "default": ""},
+      {"name": "old_name", "type": "string", "default": ""},
+      {"name": "new_name", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "PortfolioArchived",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a portfolio is archived. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "portfolio.archived"},
+      {"name": "aggregate_type", "type": "string", "default": "portfolio"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "portfolio_id", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "TransactionRecorded",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a transaction is recorded. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "transaction.recorded"},
+      {"name": "aggregate_type", "type": "string", "default": "transaction"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "transaction_id", "type": "string", "default": ""},
+      {"name": "portfolio_id", "type": "string", "default": ""},
+      {"name": "instrument_id", "type": "string", "default": ""},
+      {"name": "transaction_type", "type": "string", "default": ""},
+      {"name": "direction", "type": "string", "default": ""},
+      {"name": "quantity", "type": "string", "default": "0"},
+      {"name": "price", "type": "string", "default": "0"},
+      {"name": "fees", "type": "string", "default": "0"},
+      {"name": "currency", "type": "string", "default": "USD"},
+      {"name": "executed_at", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "HoldingChanged",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a holding is updated. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "holding.changed"},
+      {"name": "aggregate_type", "type": "string", "default": "holding"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "holding_id", "type": "string", "default": ""},
+      {"name": "portfolio_id", "type": "string", "default": ""},
+      {"name": "instrument_id", "type": "string", "default": ""},
+      {"name": "quantity", "type": "string", "default": "0"},
+      {"name": "average_cost", "type": "string", "default": "0"},
+      {"name": "currency", "type": "string", "default": "USD"}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "InstrumentRefCreated",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when an instrument reference is synced. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "instrument_ref.created"},
+      {"name": "aggregate_type", "type": "string", "default": "instrument"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "instrument_id", "type": "string", "default": ""},
+      {"name": "symbol", "type": "string", "default": ""},
+      {"name": "exchange", "type": "string", "default": ""},
+      {"name": "name", "type": ["null", "string"], "default": null},
+      {"name": "asset_class", "type": ["null", "string"], "default": null},
+      {"name": "currency", "type": ["null", "string"], "default": null},
+      {"name": "entity_id", "type": ["null", "string"], "default": null}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "WatchlistCreated",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a watchlist is created. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "watchlist.created"},
+      {"name": "aggregate_type", "type": "string", "default": "watchlist"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "watchlist_id", "type": "string", "default": ""},
+      {"name": "user_id", "type": "string", "default": ""},
+      {"name": "name", "type": "string", "default": ""}
+    ]
+  },
+  {
+    "type": "record",
+    "name": "WatchlistDeleted",
+    "namespace": "com.worldview.portfolio.events",
+    "doc": "Emitted when a watchlist is deleted. Topic: portfolio.events.v1",
+    "fields": [
+      {"name": "event_id", "type": "string"},
+      {"name": "event_type", "type": "string", "default": "watchlist.deleted"},
+      {"name": "aggregate_type", "type": "string", "default": "watchlist"},
+      {"name": "aggregate_id", "type": "string"},
+      {"name": "tenant_id", "type": "string"},
+      {"name": "occurred_at", "type": "string"},
+      {"name": "schema_version", "type": "int", "default": 1},
+      {"name": "correlation_id", "type": ["null", "string"], "default": null},
+      {"name": "causation_id", "type": ["null", "string"], "default": null},
+      {"name": "watchlist_id", "type": "string", "default": ""},
+      {"name": "user_id", "type": "string", "default": ""}
+    ]
+  }
+]

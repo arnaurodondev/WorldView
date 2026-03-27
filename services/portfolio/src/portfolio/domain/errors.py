@@ -156,6 +156,10 @@ class IdempotencyKeyConflictError(DomainError):
     error_code = "IDEMPOTENCY_KEY_CONFLICT"
 
 
+class IdempotencyKeyInvalidError(ValidationError):
+    error_code = "IDEMPOTENCY_KEY_INVALID"
+
+
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 
 

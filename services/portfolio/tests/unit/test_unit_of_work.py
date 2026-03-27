@@ -91,3 +91,33 @@ async def test_repos_accessible_inside_context(mock_session_factory: MagicMock) 
         assert uow.holdings is not None
         assert uow.outbox is not None
         assert uow.idempotency is not None
+
+
+@pytest.mark.asyncio
+async def test_uow_session_closed_even_if_rollback_fails(
+    mock_session_factory: MagicMock, mock_session: AsyncMock
+) -> None:
+    """Session close runs in finally even if rollback throws (M-007)."""
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    mock_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+
+    with pytest.raises(ValueError, match="original"):
+        async with SqlAlchemyUnitOfWork(mock_session_factory):
+            raise ValueError("original")
+
+    mock_session.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_uow_original_exception_preserved_on_rollback_failure(
+    mock_session_factory: MagicMock, mock_session: AsyncMock
+) -> None:
+    """Original exception is preserved when rollback also fails (M-007)."""
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    mock_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+
+    with pytest.raises(ValueError, match="original"):
+        async with SqlAlchemyUnitOfWork(mock_session_factory):
+            raise ValueError("original")
