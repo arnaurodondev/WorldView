@@ -134,9 +134,19 @@ class WorkerProcess:
             return []
 
     async def _execute_with_semaphore(self, task: IngestionTask) -> None:
-        """Acquire the concurrency semaphore then execute the task."""
-        async with self._semaphore:
-            await self._execute_task(task)
+        """Acquire the concurrency semaphore then execute the task.
+
+        A 60-second timeout guards against indefinite blocking when all
+        semaphore permits are held (M-033).  A timeout logs a warning and
+        allows the worker loop to continue with other tasks rather than
+        deadlocking the entire batch.
+        """
+        try:
+            async with asyncio.timeout(60.0):
+                async with self._semaphore:
+                    await self._execute_task(task)
+        except TimeoutError:
+            logger.warning("worker.semaphore_timeout", task_id=str(task.id), worker_id=self._worker_id)
 
     async def _execute_task(self, task: IngestionTask) -> None:
         """Execute a single claimed task through the pipeline."""

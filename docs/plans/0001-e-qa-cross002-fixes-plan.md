@@ -6,6 +6,7 @@ status: in-progress
 created: 2026-03-27
 updated: 2026-03-27
 plans: 4
+<!-- Wave E1-4 completed 2026-03-27 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -674,11 +675,12 @@ This ensures that two concurrent tasks without `range_end` always produce a dete
 
 ---
 
-### Wave E1-4: Tests — Yahoo Provider + ExecuteTask State-Consistency
+### Wave E1-4: Tests — Yahoo Provider + ExecuteTask State-Consistency ✅
 
 **Goal**: Add comprehensive unit tests for Yahoo provider adapter and ExecuteTask state-consistency error paths. Add semaphore acquisition timeout.
 **Depends on**: Wave E1-3
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-27 · 365 unit tests pass (+17 new) · ruff + mypy clean
 **Architecture layer**: tests
 
 #### Pre-read
@@ -715,9 +717,9 @@ This ensures that two concurrent tasks without `range_end` always produce a dete
 Minimum: 10 tests using `unittest.mock.patch` for HTTP calls (no real network).
 
 **Acceptance criteria**:
-- [ ] `tests/infrastructure/test_yahoo.py` created with ≥10 tests
-- [ ] All tests marked `@pytest.mark.unit`
-- [ ] All tests pass without network access
+- [x] `tests/infrastructure/test_yahoo.py` created with ≥10 tests
+- [x] All tests marked `@pytest.mark.unit`
+- [x] All tests pass without network access
 
 ---
 
@@ -738,9 +740,9 @@ Minimum: 10 tests using `unittest.mock.patch` for HTTP calls (no real network).
 | `test_execute_task_idempotent_on_replay` | Replaying same task returns existing result without re-fetching | unit |
 
 **Acceptance criteria**:
-- [ ] 4 new tests added to `test_execute_task.py`
-- [ ] All marked `@pytest.mark.unit`
-- [ ] All pass
+- [x] 4 new tests added to `test_execute_task.py`
+- [x] All marked `@pytest.mark.unit`
+- [x] All pass
 
 ---
 
@@ -772,14 +774,14 @@ async def _execute_with_semaphore(self, task: IngestionTask) -> None:
 | `test_worker_continues_other_tasks_after_timeout` | One task timeout does not block other tasks | unit |
 
 **Acceptance criteria**:
-- [ ] 60-second timeout on semaphore acquisition
-- [ ] Timeout logs `worker.semaphore_timeout` warning
-- [ ] 2 new tests pass
+- [x] 60-second timeout on semaphore acquisition
+- [x] Timeout logs `worker.semaphore_timeout` warning
+- [x] 2 new tests pass
 
 #### Validation Gate (Wave E1-4)
-- [ ] `ruff check services/market-ingestion/` clean
-- [ ] `mypy services/market-ingestion/src/` clean
-- [ ] All unit tests pass (≥350 expected)
+- [x] `ruff check services/market-ingestion/` clean
+- [x] `mypy services/market-ingestion/src/` clean
+- [x] All unit tests pass (365 pass, +17 new tests)
 
 ---
 

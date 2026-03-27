@@ -601,3 +601,104 @@ async def test_execute_task_only_market_dataset_fetched_in_outbox() -> None:
 
     assert len(events) == 1
     assert isinstance(events[0], MarketDatasetFetched)
+
+
+# ---------------------------------------------------------------------------
+# T-E1-4-02: State-consistency error path tests (M-020)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_not_mutated_on_outbox_failure() -> None:
+    """If outbox.add() fails, watermark.save() is never called — mutation not persisted.
+
+    The watermark advance happens in memory inside the UoW block, but because
+    the exception from outbox.add() propagates before watermarks.save() is
+    reached, the mutation never reaches the DB.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uow.outbox.add = AsyncMock(side_effect=RuntimeError("outbox failure"))
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(RuntimeError, match="outbox failure"):
+        await uc.execute(task)
+
+    # In-memory advance did occur (the call was made)
+    wm.advance_bar_ts.assert_called_once()
+    # DB persistence was never reached
+    uow.watermarks.save.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_task_status_reverts_on_commit_failure() -> None:
+    """If uow.commit() raises, task.succeed() was called in memory but DB not updated.
+
+    The commit failure means the DB transaction is rolled back, so the task
+    status stays at its pre-succeed state in the database even though the
+    in-memory domain object was mutated.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uow.commit = AsyncMock(side_effect=RuntimeError("db commit failed"))
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(RuntimeError, match="db commit failed"):
+        await uc.execute(task)
+
+    # task.succeed() was called in memory before commit
+    task.succeed.assert_called_once()
+    # tasks.save() was also invoked (it was the commit that failed)
+    uow.tasks.save.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
+    """If the bronze object already exists, put() is not called for bronze (D-008).
+
+    Simulates a retry where the worker crashed after uploading bronze but before
+    committing the DB transaction.  On the next run, exists() returns True and
+    the upload is skipped, making the pipeline idempotent.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    store = _make_store()
+    store.exists = AsyncMock(return_value=True)
+    uc, _, _, store, _ = _make_use_case(store=store)
+
+    await uc.execute(task)
+
+    # Bronze put skipped; only canonical put was called
+    assert store.put.await_count == 1
+    # Pipeline still completes
+    task.succeed.assert_called_once()
+    # exists() was queried for the bronze key
+    store.exists.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_execute_task_idempotent_on_replay() -> None:
+    """Replaying a task with bronze already in object store completes without re-uploading.
+
+    Full idempotency check: exists()=True skips bronze upload, canonical is
+    re-computed and stored, watermark is advanced, and the task succeeds.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    store = _make_store()
+    store.exists = AsyncMock(return_value=True)
+    uc, uow, _registry, store, _ = _make_use_case(uow=uow, store=store)
+
+    await uc.execute(task)
+
+    # Bronze skipped, canonical stored
+    assert store.put.await_count == 1
+    # Watermark still advanced
+    wm.advance_bar_ts.assert_called_once()
+    # Outbox event still emitted (data changed)
+    uow.outbox.add.assert_awaited_once()
+    # Task succeeds
+    task.succeed.assert_called_once()
