@@ -15,7 +15,7 @@ from content_store.domain.enums import DedupOutcome
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from content_store.infrastructure.db.repositories.dedup import DedupHashRepository
+    from content_store.application.ports.repositories import DedupHashRepositoryPort
 
 
 def compute_raw_hash(raw_bytes: bytes) -> str:
@@ -32,7 +32,7 @@ def compute_raw_hash(raw_bytes: bytes) -> str:
 
 async def check_stage_a(
     raw_bytes: bytes,
-    dedup_repo: DedupHashRepository,
+    dedup_repo: DedupHashRepositoryPort,
 ) -> tuple[str, DeduplicationDecision | None]:
     """Run Stage A dedup: exact raw hash check.
 

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 import common.time  # type: ignore[import-untyped]
+from content_store.application.ports.storage import SilverStoragePort
 
 if TYPE_CHECKING:
     from content_store.domain.entities import CanonicalDocument
@@ -81,3 +82,18 @@ async def put_canonical(
         byte_size=len(data),
     )
     return key
+
+
+class SilverStorageAdapter(SilverStoragePort):
+    """Infrastructure adapter — wraps ``put_canonical`` behind ``SilverStoragePort``.
+
+    Accepts a generic ObjectStorage and bucket name at construction time so the
+    application layer never sees MinIO-specific configuration.
+    """
+
+    def __init__(self, store: ObjectStorage, silver_bucket: str) -> None:
+        self._store = store
+        self._silver_bucket = silver_bucket
+
+    async def put_canonical(self, doc: CanonicalDocument, cleaned_text: str) -> str:
+        return await put_canonical(self._store, self._silver_bucket, doc, cleaned_text)

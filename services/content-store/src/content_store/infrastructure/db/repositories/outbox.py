@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from content_store.application.ports.repositories import OutboxPort
 from content_store.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class OutboxRepository:
+class OutboxRepository(OutboxPort):
     """PostgreSQL implementation of OutboxRepositoryProtocol.
 
     Uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so concurrent dispatcher

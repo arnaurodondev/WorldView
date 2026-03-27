@@ -17,7 +17,7 @@ from content_store.domain.enums import DedupOutcome
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from content_store.infrastructure.db.repositories.dedup import DedupHashRepository
+    from content_store.application.ports.repositories import DedupHashRepositoryPort
 
 # UTM and tracking parameters to strip from URLs
 _TRACKING_PARAMS = frozenset(
@@ -91,7 +91,7 @@ def compute_normalized_hash(normalized_url: str, cleaned_text: str) -> str:
 async def check_stage_b(
     url: str,
     cleaned_text: str,
-    dedup_repo: DedupHashRepository,
+    dedup_repo: DedupHashRepositoryPort,
 ) -> tuple[str, DeduplicationDecision | None]:
     """Run Stage B dedup: normalized hash check.
 

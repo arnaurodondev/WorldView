@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from content_store.application.ports.lsh import LSHClientPort
 from content_store.domain.entities import (
     CorroborationPolicy,
     DeduplicationDecision,
@@ -116,7 +117,7 @@ def compute_exact_jaccard(sig_a: list[int], sig_b: list[int]) -> float:
     return matches / len(sig_a)
 
 
-class ValkeyLSHClient:
+class ValkeyLSHClient(LSHClientPort):
     """Valkey-backed LSH index for near-duplicate detection.
 
     Uses sorted sets with Unix timestamp scores for time-windowed lookups.

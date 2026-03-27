@@ -55,15 +55,16 @@ class TestLSHOrderingUseCase:
             stage="stage_c",
         )
 
+        silver_storage = AsyncMock()
+        silver_storage.put_canonical.return_value = "content-store/canonical/test/body.json"
         uc = ProcessArticleUseCase(
-            session=AsyncMock(),
             document_repo=AsyncMock(),
             dedup_repo=dedup_repo,
             minhash_repo=AsyncMock(),
             outbox_repo=AsyncMock(),
             object_store=store,
             bronze_bucket="worldview-bronze",
-            silver_bucket="worldview-silver",
+            silver_storage=silver_storage,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article())
@@ -79,7 +80,11 @@ class TestLSHOrderingUseCase:
 
 class TestLSHOrderingConsumer:
     async def test_consumer_calls_lsh_after_commit(self) -> None:
-        """ArticleConsumer must call lsh.index() AFTER session.commit()."""
+        """ArticleConsumer must call lsh.index() AFTER session.commit() (CR-3).
+
+        We drive the test via _handle_message (the full pipeline) rather than
+        process_message directly, so we exercise the real commit→lsh ordering.
+        """
         from contextlib import asynccontextmanager
         from unittest.mock import MagicMock
 
@@ -87,9 +92,12 @@ class TestLSHOrderingConsumer:
 
         # Build a mock config
         config = MagicMock(spec=ArticleConsumerConfig)
+        config.bootstrap_servers = "localhost:9092"
+        config.group_id = "content-store-consumer"
+        config.input_topic = "content.article.raw.v1"
+        config.output_topic = "content.article.stored.v1"
         config.bronze_bucket = "worldview-bronze"
         config.silver_bucket = "worldview-silver"
-        config.output_topic = "content.article.stored.v1"
         config.num_perm = 128
 
         # Build session with proper async context manager
@@ -136,22 +144,41 @@ class TestLSHOrderingConsumer:
             source_type="eodhd",
         )
 
-        # Patch the use case execute to return our mock summary
-        with pytest.MonkeyPatch.context() as mp:
-            mock_execute = AsyncMock(return_value=mock_summary)
-            mp.setattr(
-                "content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase.execute",
-                mock_execute,
-            )
+        import json
 
-            value = {
+        raw_value = json.dumps(
+            {
                 "event_id": "evt-001",
                 "doc_id": "doc-001",
                 "source_type": "eodhd",
                 "minio_bronze_key": "key",
                 "content_hash": "hash",
             }
-            await consumer.process_message(value)
+        ).encode()
+
+        # Build a mock Kafka message
+        mock_msg = MagicMock()
+        mock_msg.topic.return_value = "content.article.raw.v1"
+        mock_msg.value.return_value = raw_value
+        mock_msg.key.return_value = None
+        mock_msg.headers.return_value = []
+
+        # Patch use case execute + is_duplicate + mark_processed
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase.execute",
+                AsyncMock(return_value=mock_summary),
+            )
+            mp.setattr(
+                "content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository.is_duplicate",
+                AsyncMock(return_value=False),
+            )
+            mp.setattr(
+                "content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository.mark_processed",
+                AsyncMock(return_value=None),
+            )
+
+            await consumer._handle_message(mock_msg)
 
         # Verify ordering: commit BEFORE lsh_index
         assert call_order == ["commit", "lsh_index"], f"Expected commit before lsh_index, got {call_order}"

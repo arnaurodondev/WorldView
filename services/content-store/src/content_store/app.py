@@ -150,21 +150,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.dispatcher = ContentStoreOutboxDispatcher(settings, session_factory)
 
     # 9. Background tasks
-    tasks: list[asyncio.Task[None]] = []
+    consumer_task = asyncio.create_task(consumer.run())
+    dispatcher_task = asyncio.create_task(app.state.dispatcher.run())
 
     async def _run_metrics() -> None:
         await _poll_metrics(settings, session_factory)
 
-    tasks.append(asyncio.create_task(_run_metrics()))
+    metrics_task = asyncio.create_task(_run_metrics())
 
     log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
 
-    # Shutdown
-    for task in tasks:
-        task.cancel()
+    # Graceful shutdown
     consumer.stop()
+    app.state.dispatcher.stop()
+
+    import contextlib
+
+    for task in (consumer_task, dispatcher_task, metrics_task):
+        task.cancel()
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+
     await engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 

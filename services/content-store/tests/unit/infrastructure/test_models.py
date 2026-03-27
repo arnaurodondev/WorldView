@@ -12,6 +12,7 @@ from content_store.infrastructure.db.models import (
     MinHashEntityMentionModel,
     MinHashSignatureModel,
     OutboxEventModel,
+    ProcessedEventModel,
 )
 from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.unit
 
 
 class TestTableNames:
-    def test_all_seven_tables_registered(self) -> None:
+    def test_all_eight_tables_registered(self) -> None:
         expected = {
             "documents",
             "dedup_hashes",
@@ -29,6 +30,7 @@ class TestTableNames:
             "minhash_entity_mentions",
             "outbox_events",
             "dead_letter_queue",
+            "processed_events",
         }
         actual = set(Base.metadata.tables.keys())
         assert expected == actual
@@ -124,3 +126,18 @@ class TestDeadLetterQueueModel:
         mapper = inspect(DeadLetterQueueModel)
         pk_cols = [c.name for c in mapper.primary_key]
         assert pk_cols == ["dlq_id"]
+
+
+class TestProcessedEventModel:
+    def test_primary_key(self) -> None:
+        mapper = inspect(ProcessedEventModel)
+        pk_cols = [c.name for c in mapper.primary_key]
+        assert pk_cols == ["event_id"]
+
+    def test_processed_at_not_nullable(self) -> None:
+        col = ProcessedEventModel.__table__.c.processed_at
+        assert col.nullable is False
+
+    def test_processed_at_has_server_default(self) -> None:
+        col = ProcessedEventModel.__table__.c.processed_at
+        assert col.server_default is not None

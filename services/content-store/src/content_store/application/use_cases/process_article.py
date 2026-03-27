@@ -4,6 +4,7 @@ Pipeline: fetch raw from bronze → clean → Stage A → Stage B → MinHash �
 LSH query → (if not suppressed) silver write + atomic DB transaction → LSH index.
 
 NEVER publishes to Kafka directly — uses transactional outbox only.
+Dependencies are injected via port ABCs — no infrastructure imports at runtime.
 """
 
 from __future__ import annotations
@@ -26,19 +27,19 @@ from content_store.domain.entities import (
     MinHashSignature,
 )
 from content_store.domain.enums import DedupOutcome, DocumentStatus
-from content_store.infrastructure.storage.minio_silver import put_canonical
 
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from content_store.infrastructure.db.repositories.dedup import DedupHashRepository
-    from content_store.infrastructure.db.repositories.document import DocumentRepository
-    from content_store.infrastructure.db.repositories.minhash import MinHashRepository
-    from content_store.infrastructure.db.repositories.outbox import OutboxRepository
-    from content_store.infrastructure.valkey.lsh_client import ValkeyLSHClient
-    from storage.interface import ObjectStorage
+    from content_store.application.ports.lsh import LSHClientPort
+    from content_store.application.ports.repositories import (
+        DedupHashRepositoryPort,
+        DocumentRepositoryPort,
+        MinHashRepositoryPort,
+        OutboxPort,
+    )
+    from content_store.application.ports.storage import SilverStoragePort
+    from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -73,32 +74,31 @@ class ProcessingSummary:
 class ProcessArticleUseCase:
     """Orchestrates the full S5 article processing pipeline.
 
-    Dependencies are injected — no direct infrastructure construction.
+    Dependencies are injected via port ABCs — no direct infrastructure construction.
+    The consumer is responsible for transaction management (commit/rollback).
     """
 
     def __init__(
         self,
         *,
-        session: AsyncSession,
-        document_repo: DocumentRepository,
-        dedup_repo: DedupHashRepository,
-        minhash_repo: MinHashRepository,
-        outbox_repo: OutboxRepository,
+        document_repo: DocumentRepositoryPort,
+        dedup_repo: DedupHashRepositoryPort,
+        minhash_repo: MinHashRepositoryPort,
+        outbox_repo: OutboxPort,
         object_store: ObjectStorage,
         bronze_bucket: str,
-        silver_bucket: str,
-        lsh_client: ValkeyLSHClient,
+        silver_storage: SilverStoragePort,
+        lsh_client: LSHClientPort,
         output_topic: str = "content.article.stored.v1",
         num_perm: int = 128,
     ) -> None:
-        self._session = session
         self._document_repo = document_repo
         self._dedup_repo = dedup_repo
         self._minhash_repo = minhash_repo
         self._outbox_repo = outbox_repo
         self._store = object_store
         self._bronze_bucket = bronze_bucket
-        self._silver_bucket = silver_bucket
+        self._silver_storage = silver_storage
         self._lsh = lsh_client
         self._output_topic = output_topic
         self._num_perm = num_perm
@@ -113,8 +113,8 @@ class ProcessArticleUseCase:
         4. Stage B: normalized hash check
         5. Compute MinHash signature
         6. Stage C: Valkey LSH near-duplicate query
-        7. If not suppressed: write to silver + atomic DB insert + outbox
-        8. Index signature in LSH
+        7. If not suppressed: write to silver + DB insert + outbox
+        8. Return summary (caller is responsible for LSH index post-commit)
 
         Args:
             article: Deserialized raw article event.
@@ -214,11 +214,12 @@ class ProcessArticleUseCase:
             corroborates_doc_id=decision.matched_doc_id if decision.outcome == DedupOutcome.CORROBORATING else None,
         )
 
-        # Write to MinIO silver
-        silver_key = await put_canonical(self._store, self._silver_bucket, doc, cleaned_text)
+        # Write to MinIO silver via injected port
+        silver_key = await self._silver_storage.put_canonical(doc, cleaned_text)
         doc.minio_silver_key = silver_key
 
-        # Atomic DB transaction: document + dedup hashes + minhash + outbox
+        # DB writes: document + dedup hashes + minhash + outbox
+        # (transaction managed by the calling consumer)
         await self._document_repo.create(doc)
         await self._dedup_repo.insert_pair(doc_id, raw_hash, normalized_hash)
 
@@ -237,9 +238,6 @@ class ProcessArticleUseCase:
             topic=self._output_topic,
             payload=_build_stored_payload(doc, article),
         )
-
-        # Flush within the same session transaction
-        await self._session.flush()
 
         log.info(
             "article_stored",
