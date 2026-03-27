@@ -277,7 +277,11 @@ class ScheduleDueTasksUseCase:
             from market_ingestion.domain.enums import Provider
 
             provider = Provider(provider_str)
-            budget = await self._uow.budgets.get_or_create(provider)
+            # SELECT FOR UPDATE prevents concurrent scheduler workers from over-consuming
+            # the token bucket (BP-036). Falls back to get_or_create if no row exists.
+            budget = await self._uow.budgets.get_for_update(provider)
+            if budget is None:
+                budget = await self._uow.budgets.get_or_create(provider)
 
             # Replenish tokens based on elapsed time since last refill.
             elapsed = (now - budget.last_refill_at).total_seconds()

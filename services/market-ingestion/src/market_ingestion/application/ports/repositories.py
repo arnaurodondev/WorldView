@@ -141,6 +141,23 @@ class WatermarkRepository(ABC):
         """Get existing watermark or create a new default one."""
 
     @abstractmethod
+    async def get_for_update(
+        self,
+        *,
+        provider: str,
+        dataset_type: str,
+        symbol: str,
+        exchange: str | None = None,
+        timeframe: str | None = None,
+        variant: str | None = None,
+    ) -> Watermark | None:
+        """Get watermark with a row-level lock (SELECT FOR UPDATE).
+
+        Returns None if the row does not exist. Must be called inside an open
+        DB transaction to prevent concurrent workers racing on the same watermark.
+        """
+
+    @abstractmethod
     async def save(self, watermark: Watermark) -> None:
         """Persist changes to an existing watermark."""
 
@@ -192,6 +209,14 @@ class ProviderBudgetRepository(ABC):
     @abstractmethod
     async def get(self, provider: Provider) -> ProviderBudget | None:
         """Get the budget for a provider."""
+
+    @abstractmethod
+    async def get_for_update(self, provider: Provider) -> ProviderBudget | None:
+        """Load budget with a row-level lock (SELECT FOR UPDATE).
+
+        Must be called inside an open DB transaction to prevent concurrent workers
+        from over-consuming the token bucket (BP-036).
+        """
 
     @abstractmethod
     async def get_or_create(self, provider: Provider) -> ProviderBudget:
