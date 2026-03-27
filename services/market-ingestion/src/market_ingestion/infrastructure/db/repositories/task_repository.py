@@ -183,7 +183,12 @@ class SqlaTaskRepository(TaskRepository):
         limit: int,
         lease_seconds: int,
     ) -> list[IngestionTask]:
-        """Atomically claim PENDING/RETRY tasks using FOR UPDATE SKIP LOCKED."""
+        """Atomically claim PENDING/RETRY tasks using a CTE + UPDATE … RETURNING.
+
+        A single SQL statement selects candidates (FOR UPDATE SKIP LOCKED) and
+        updates them in one round-trip, closing the race window that existed when
+        SELECT and UPDATE were two separate statements (M-006).
+        """
         now = datetime.now(UTC)
         lease_until = now + timedelta(seconds=lease_seconds)
 
@@ -192,8 +197,8 @@ class SqlaTaskRepository(TaskRepository):
             IngestionTaskStatus.RETRY.value,
         )
 
-        # Select claimable rows with skip-locked
-        subq = (
+        # CTE locks candidate rows; UPDATE operates on the locked set atomically.
+        cte = (
             select(IngestionTaskModel.id)
             .where(
                 IngestionTaskModel.status.in_(claimable_statuses),
@@ -202,16 +207,11 @@ class SqlaTaskRepository(TaskRepository):
             .order_by(IngestionTaskModel.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
+            .cte("candidates")
         )
-        result = await self._w.execute(subq)
-        ids = [row[0] for row in result.fetchall()]
-        if not ids:
-            return []
-
-        # Update claimed rows
         stmt = (
             update(IngestionTaskModel)
-            .where(IngestionTaskModel.id.in_(ids))
+            .where(IngestionTaskModel.id.in_(select(cte.c.id)))
             .values(
                 status=IngestionTaskStatus.RUNNING.value,
                 locked_by=worker_id,

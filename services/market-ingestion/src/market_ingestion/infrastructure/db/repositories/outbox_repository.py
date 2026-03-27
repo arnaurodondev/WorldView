@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
 from market_ingestion.application.ports.repositories import OutboxRecord, OutboxRepository
@@ -165,33 +165,26 @@ class SqlaOutboxRepository(OutboxRepository):
         max_attempts: int,
         backoff_seconds: int,
     ) -> bool:
-        # Load the current attempt count
-        stmt = select(OutboxEventModel).where(OutboxEventModel.id == str(outbox_id))
-        row = (await self._w.execute(stmt)).scalar_one_or_none()
-        if row is None:
-            return False
+        # Single atomic UPDATE: increment attempt and decide status/next_at in SQL.
+        # Avoids the read-modify-write race (M-011) where two workers could both read
+        # the same attempt count and both decide to retry instead of dead-lettering.
+        new_attempt = OutboxEventModel.attempt + 1
+        exceeded = new_attempt >= max_attempts
+        next_at = now + timedelta(seconds=backoff_seconds)
 
-        new_attempt = row.attempt + 1
-        if new_attempt >= max_attempts:
-            new_status = "dead"
-            next_at = None
-        else:
-            new_status = "retry"
-            next_at = now + timedelta(seconds=backoff_seconds)
-
-        up = (
+        stmt = (
             update(OutboxEventModel)
             .where(OutboxEventModel.id == str(outbox_id))
             .values(
-                status=new_status,
                 attempt=new_attempt,
+                status=case((exceeded, "dead"), else_="retry"),
                 last_error=error,
                 locked_by=None,
                 locked_until=None,
-                next_attempt_at=next_at,
+                next_attempt_at=case((exceeded, None), else_=next_at),
             )
         )
-        result = await self._w.execute(up)
+        result = await self._w.execute(stmt)
         return int(cast("Any", result).rowcount) > 0
 
     # ── Dispatcher-protocol-compatible helpers ─────────────────────────────────

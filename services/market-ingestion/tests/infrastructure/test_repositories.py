@@ -222,6 +222,37 @@ async def test_task_repo_has_active_task_uses_is_null_for_nullable_tuple_fields(
 
 
 # ---------------------------------------------------------------------------
+# T-E1-3-01: claim_batch CTE atomicity (M-006)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_claim_batch_atomic_cte_no_race_window() -> None:
+    """claim_batch uses a single CTE+UPDATE statement, not SELECT-then-UPDATE.
+
+    The CTE selects candidates (FOR UPDATE SKIP LOCKED) and the UPDATE operates on
+    the locked set in one SQL round-trip, closing the race window (M-006).
+    """
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=mock_result)
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    result = await repo.claim_batch(worker_id="w1", limit=5, lease_seconds=60)
+
+    # Only ONE execute call — the CTE+UPDATE is a single statement
+    assert session.execute.await_count == 1
+    assert result == []
+
+    # The statement must be an UPDATE (not a SELECT)
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
+    assert "UPDATE" in sql.upper()
+    assert "candidates" in sql  # CTE name present
+
+
+# ---------------------------------------------------------------------------
 # T-E1-1-02: result_ref + completed_at round-trip tests
 # ---------------------------------------------------------------------------
 

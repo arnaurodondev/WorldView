@@ -154,7 +154,10 @@ class ExecuteTaskUseCase:
                 # Advance watermark when this task is newer than current state.
                 # Older/equal task windows can arrive due to retries or overlap; treat
                 # them as idempotent stale updates instead of failing the task.
-                new_ts = task.range_end if task.range_end is not None else utc_now()
+                # Use task.created_at (not utc_now()) when range_end is absent: two
+                # concurrent tasks without range_end always produce a deterministic
+                # ordering via their stable creation timestamps (M-029).
+                new_ts = task.range_end if task.range_end is not None else task.created_at
                 if watermark.current_bar_ts is None or new_ts > watermark.current_bar_ts:
                     watermark.advance_bar_ts(new_ts)
                 else:
