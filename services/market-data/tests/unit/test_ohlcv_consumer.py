@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from market_data.domain.entities import Instrument, OHLCVBar
@@ -110,6 +110,7 @@ async def test_ohlcv_consumer_creates_instrument_on_first_seen() -> None:
     """Consumer creates a new Instrument when symbol/exchange is not found."""
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
+    mock_uow.collect_event = MagicMock()  # sync method — must not be AsyncMock
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
     mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()

@@ -48,6 +48,22 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
+    async def find_by_external_ref(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        external_ref: str,
+    ) -> Transaction | None:
+        result = await self._session.execute(
+            select(TransactionModel).where(
+                TransactionModel.portfolio_id == portfolio_id,
+                TransactionModel.tenant_id == tenant_id,
+                TransactionModel.external_ref == external_ref,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
     async def list_by_portfolio(
         self,
         portfolio_id: UUID,

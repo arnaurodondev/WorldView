@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import InstrumentRepository
@@ -168,13 +168,14 @@ class PgInstrumentRepository(InstrumentRepository):
     async def update_flags(self, id: str, flags: InstrumentFlags) -> None:  # noqa: A002
         from sqlalchemy import update
 
+        # Use atomic OR-merge so concurrent consumers never clear each other's flags.
         await self._session.execute(
             update(InstrumentModel)
             .where(InstrumentModel.id == id)
             .values(
-                has_ohlcv=flags.has_ohlcv,
-                has_quotes=flags.has_quotes,
-                has_fundamentals=flags.has_fundamentals,
+                has_ohlcv=case((flags.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),
+                has_quotes=case((flags.has_quotes, True), else_=InstrumentModel.has_quotes),
+                has_fundamentals=case((flags.has_fundamentals, True), else_=InstrumentModel.has_fundamentals),
             )
         )
 

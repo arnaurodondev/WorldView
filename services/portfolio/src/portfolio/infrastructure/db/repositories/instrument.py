@@ -55,7 +55,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         result = await self._session.execute(select(InstrumentModel).limit(limit).offset(offset))
         return [self._to_entity(r) for r in result.scalars()], total
 
-    async def upsert(self, instrument: InstrumentRef) -> None:
+    async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
         stmt = (
             pg_insert(InstrumentModel)
             .values(
@@ -80,5 +80,8 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                     "synced_at": instrument.synced_at,
                 },
             )
+            .returning(InstrumentModel)
         )
-        await self._session.execute(stmt)
+        result = await self._session.execute(stmt)
+        row = result.scalar_one()
+        return self._to_entity(row)

@@ -6,7 +6,7 @@ import json
 from typing import Any, cast
 from uuid import UUID
 
-from common.ids import new_uuid  # type: ignore[import-untyped]
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -49,14 +49,14 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         raw_entity_id = value.get("entity_id")
         entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
         instrument = InstrumentRef(
-            id=new_uuid(),
+            id=new_uuid7(),
             symbol=value.get("symbol", ""),
             exchange=value.get("exchange", ""),
             name=value.get("name"),
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),
             entity_id=entity_id,
-            source_event_id=UUID(value["event_id"]) if "event_id" in value else new_uuid(),
+            source_event_id=UUID(value["event_id"]) if "event_id" in value else new_uuid7(),
             synced_at=utc_now(),
         )
         async with await self.get_unit_of_work() as uow:

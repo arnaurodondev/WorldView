@@ -90,7 +90,7 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
     async def mark_processed(self, event_id: str) -> None:
         assert self._current_uow is not None
         await self._current_uow.ingestion_events.create(
-            event_id, event_type=_TOPIC, content_sha256=self._current_content_sha256
+            event_id, event_type=_DATASET_TYPE, content_sha256=self._current_content_sha256
         )
         self._current_content_sha256 = None
 

@@ -50,6 +50,12 @@
 | [BP-025](#bp-025) | Blocking DNS in async context | `socket.getaddrinfo()` called on event loop — freezes entire async service under slow/failing DNS | Any service doing SSRF validation or DNS lookups in async handlers |
 | [BP-026](#bp-026) | SSRF missing IPv4-mapped IPv6 | `::ffff:127.0.0.1` bypasses manual IP blocklist — private IPv4 addresses reachable via IPv4-mapped IPv6 notation | Any service with URL/SSRF validation |
 | [BP-027](#bp-027) | DNS rebinding TOCTOU | DNS resolves to public IP at validation time, rebinds to private IP at connection time — validation passes but SSRF succeeds | Any service fetching user-supplied URLs |
+| [BP-028](#bp-028) | AsyncMock used for sync method — unawaited coroutine warning | `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited` — test passes but has contract mismatch | Any test using `mock_uow = AsyncMock()` where the UoW has sync methods (e.g., `collect_event`) |
+| [BP-029](#bp-029) | Content-hash dedup event_type mismatch | Dedup check always misses — `exists_by_content_hash(sha256, _DATASET_TYPE)` never finds rows stored with `event_type=_TOPIC` | Any Kafka consumer using content-hash dedup in market-data |
+| [BP-030](#bp-030) | Token-bucket domain entity missing `last_refill_at` | Tokens consumed but never replenished — bucket drains under sustained load until restart | Any service with a token-bucket rate limiter that persists `last_refill_at` in DB |
+| [BP-031](#bp-031) | Backfill flag flipped before budget/cap check | Backfill enters incremental mode even if zero tasks were actually enqueued (all blocked by budget/cap) | Any scheduler with a one-shot backfill mode that modifies policy state during candidate task construction |
+| [BP-032](#bp-032) | Repository `upsert()` missing `.returning()` | Caller cannot determine the stable DB identity of the upserted row — local entity ID is transient, differs from DB on conflict | Any repository with `ON CONFLICT DO UPDATE` that must return the persisted entity |
+| [BP-033](#bp-033) | Concurrent flag updates use read-modify-write | One consumer's `has_quotes=True` update overwrites another's `has_ohlcv=True` — flags silently cleared | Any repo that updates a flags struct with a plain `UPDATE SET ... WHERE id=` under concurrent consumers |
 
 ---
 
@@ -1705,4 +1711,133 @@ Copy this block when adding a new pattern:
 | File | Change |
 |------|--------|
 | `path/to/file.py` | What was changed |
+```
+
+---
+
+## BP-028 — AsyncMock used for sync method generates unawaited coroutine warnings
+
+**Date discovered**: 2026-03-27
+**Service affected**: `market-data` (ohlcv, quotes, fundamentals consumers)
+
+### Symptom
+
+Tests pass but emit `RuntimeWarning: coroutine 'AsyncMockMixin._execute_mock_call' was never awaited` for calls like `uow.collect_event(...)`. The call is sync in production but the test's `AsyncMock()` wraps every attribute as an async mock.
+
+### Root cause
+
+`mock_uow = AsyncMock()` makes ALL attributes `AsyncMock` instances by default. When production code calls a **sync** method (`collect_event`) without `await`, the `AsyncMock` runs but the resulting coroutine is never consumed — generating the warning.
+
+### Fix
+
+Explicitly override sync methods after creating the `AsyncMock`:
+```python
+mock_uow = AsyncMock()
+mock_uow.collect_event = MagicMock()  # sync — must not be AsyncMock
+```
+
+### Prevention
+
+After `mock_uow = AsyncMock()`, check the real UoW for sync methods and override them with `MagicMock()`.
+
+---
+
+## BP-029 — Content-hash dedup event_type key mismatch — dedup never fires
+
+**Date discovered**: 2026-03-27
+**Service affected**: `market-data` (ohlcv, quotes, fundamentals consumers)
+
+### Symptom
+
+Content-hash dedup never fires — identical canonical objects are re-downloaded and re-materialized on every tick.
+
+### Root cause
+
+`mark_processed()` stored `event_type=_TOPIC` (e.g., `"market.dataset.fetched"`) while `exists_by_content_hash()` queried with `event_type=_DATASET_TYPE` (e.g., `"ohlcv"`). The lookup always missed.
+
+### Fix
+
+Use the same value (`_DATASET_TYPE`) in both `mark_processed()` and `exists_by_content_hash()`.
+
+---
+
+## BP-030 — Token-bucket `last_refill_at` not wired — tokens never replenished
+
+**Date discovered**: 2026-03-27
+**Service affected**: `market-ingestion` (ProviderBudget / ScheduleDueTasksUseCase)
+
+### Symptom
+
+Provider budget drains to 0 tokens under sustained load and never recovers until service restart.
+
+### Root cause
+
+`ProviderBudget` entity had no `last_refill_at` field. `_to_domain()` ignored the DB `last_refill_at` column. `refill()` was never called in `_apply_budgets()`.
+
+### Fix
+
+1. Add `last_refill_at: datetime` to `ProviderBudget` (default `utc_now()`).
+2. `refill()` sets `self.last_refill_at`.
+3. `_to_domain()` maps `row.last_refill_at`.
+4. `save()` persists `last_refill_at`.
+5. `_apply_budgets()` calls `budget.refill(elapsed)` before consuming.
+
+---
+
+## BP-031 — Backfill flag flipped before budget/cap filtering
+
+**Date discovered**: 2026-03-27
+**Service affected**: `market-ingestion` (ScheduleDueTasksUseCase)
+
+### Symptom
+
+Backfill enters incremental mode even when budget was exhausted and zero backfill tasks were actually enqueued.
+
+### Root cause
+
+`_build_tasks_for_policy()` set `policy.backfill_enabled = False` during Phase 2 (candidate construction), before Phase 3 applied the budget/cap filter.
+
+### Fix
+
+Collect backfill policies in a list during Phase 2. After Phase 3 produces `final_tasks`, only flip `backfill_enabled=False` for policies with at least one task in `final_tasks`.
+
+---
+
+## BP-032 — `upsert()` missing `.returning()` — transient entity ID
+
+**Date discovered**: 2026-03-27
+**Service affected**: `portfolio` (InstrumentRepository)
+
+### Symptom
+
+After upsert, caller's in-memory entity ID is a transient UUID that may not match the DB row (on conflict, the DB keeps the original row ID).
+
+### Root cause
+
+`pg_insert(...).on_conflict_do_update(...)` executed without `.returning(InstrumentModel)`. Repo returned `None`.
+
+### Fix
+
+Add `.returning(InstrumentModel)`, fetch `scalar_one()`, and return the mapped entity.
+
+---
+
+## BP-033 — Concurrent flag updates — read-modify-write race clears flags
+
+**Date discovered**: 2026-03-27
+**Service affected**: `market-data` (InstrumentRepository.update_flags)
+
+### Symptom
+
+Under concurrent consumers, a consumer setting `has_quotes=True` overwrites another consumer's concurrent `has_ohlcv=True` update.
+
+### Root cause
+
+`UPDATE instruments SET has_ohlcv=:v, has_quotes=:v, has_fundamentals=:v WHERE id=:id` overwrites all columns from a pre-read snapshot.
+
+### Fix
+
+Use atomic OR-merge so only `True` values propagate — flags can never be cleared by concurrent writers:
+```python
+has_ohlcv=case((flags.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),
 ```

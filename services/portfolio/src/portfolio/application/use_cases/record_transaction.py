@@ -67,11 +67,12 @@ class RecordTransactionUseCase:
                 idem_uuid = _UUID(cmd.idempotency_key)
                 already_done = await uow.idempotency.exists(idem_uuid)
                 if already_done:
-                    # Look up existing transaction by external_ref as proxy
-                    txns, _ = await uow.transactions.list_by_portfolio(cmd.portfolio_id, cmd.tenant_id, limit=10000)
-                    for t in txns:
-                        if t.external_ref == cmd.idempotency_key:
-                            return RecordTransactionResult(transaction=t)
+                    # Look up the prior transaction directly by external_ref.
+                    existing = await uow.transactions.find_by_external_ref(
+                        cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
+                    )
+                    if existing is not None:
+                        return RecordTransactionResult(transaction=existing)
             except (ValueError, AttributeError):
                 pass
 
