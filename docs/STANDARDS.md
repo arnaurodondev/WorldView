@@ -598,11 +598,11 @@ class Settings(BaseSettings):
     otlp_endpoint: str = ""
 ```
 
-### 5.2 Observability init sequence (in `lifespan`, mandatory order)
+### 5.2 Observability init — split between `create_app()` and `lifespan`
 
-All observability initialization happens in the `lifespan` context manager, in this exact order.
-Never place observability init in `create_app()` — it must be in `lifespan` so startup failures
-are caught before the app accepts traffic.
+Starlette forbids `app.add_middleware()` after the application has started. Therefore:
+- **Middleware registration** (`add_prometheus_middleware`, `add_otel_middleware`, `RequestIdMiddleware`) → `create_app()`
+- **Configuration** (`configure_logging`, `configure_tracing`) → `lifespan()` (runs at startup, before traffic)
 
 ```python
 # services/{service}/src/{service}/app.py
@@ -631,31 +631,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("{service}.app")
 
-    # 2. METRICS — create and wire Prometheus middleware
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics  # accessible for custom metrics if needed
-
-    # 3. TRACING — conditional on otlp_endpoint (blank = disabled)
+    # 2. TRACING config — conditional on otlp_endpoint (middleware already in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4+ Other infrastructure (DB, Valkey, storage, Kafka, etc.)
+    # 3+ Other infrastructure (DB, Valkey, storage, Kafka, etc.)
     log.info("service_started", service=settings.service_name)
     yield
     log.info("service_stopped", service=settings.service_name)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+    app = FastAPI(title="service-name", lifespan=lifespan)
+    app.state.settings = settings
+
+    # Middleware — MUST be registered in create_app, before app starts
+    app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
+
+    # ... include routers ...
+    return app
 ```
 
 **Critical rules**:
-- `configure_logging()` is ALWAYS first — before any `get_logger()` call in lifespan
-- `create_metrics()` + `add_prometheus_middleware(app, metrics)` — BOTH args required
-- `configure_tracing()` uses `otlp_endpoint=` parameter (NOT `endpoint=`)
+- `configure_logging()` is ALWAYS first in lifespan — before any `get_logger()` call
+- `create_metrics()` + `add_prometheus_middleware(app, metrics)` — in `create_app()`, BOTH args required
+- `add_otel_middleware(app)` — always registered in `create_app()` (safe even without tracing config)
+- `configure_tracing()` uses `otlp_endpoint=` parameter (NOT `endpoint=`) — in `lifespan()`
 - Direct `settings.otlp_endpoint` access — NO `getattr` defensive coding
 - NO try/except around observability init — let startup crash on failure
+- Starlette constraint: NEVER call `app.add_middleware()` inside `lifespan()` — it will raise `RuntimeError`
 
 ### 5.3 Request-ID middleware (in `create_app()`, mandatory)
 

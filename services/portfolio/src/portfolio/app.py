@@ -57,15 +57,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
-        add_otel_middleware(app)
 
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
 
@@ -137,8 +131,12 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     # Exception handlers
     app.add_exception_handler(DomainError, domain_error_handler)  # type: ignore[arg-type]

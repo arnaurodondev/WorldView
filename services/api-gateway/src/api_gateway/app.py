@@ -56,20 +56,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger = get_logger("api_gateway.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4. Downstream service clients
+    # 3. Downstream service clients
     timeout = httpx.Timeout(30.0, connect=5.0)
     clients = ServiceClients(
         portfolio=httpx.AsyncClient(base_url=settings.portfolio_url, timeout=timeout),
@@ -117,8 +111,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware (order: last added = outermost)
+    # Middleware — must be registered before app starts (Starlette requirement)
+    # Order: last added = outermost
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
     add_cors(app, settings.cors_origins)
     app.add_middleware(
         AuthMiddleware,

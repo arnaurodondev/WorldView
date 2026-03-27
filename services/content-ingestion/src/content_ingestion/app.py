@@ -242,20 +242,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("content_ingestion.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name=settings.service_name)
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4. Database — returns (engine, session_factory) so we can dispose engine on shutdown
+    # 3. Database — returns (engine, session_factory) so we can dispose engine on shutdown
     engine, session_factory = create_session_factory(settings)
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -392,8 +386,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2025.6.0",
         lifespan=lifespan,
     )
-    app.state.settings = settings or Settings()
+    settings = settings or Settings()
+    app.state.settings = settings
+
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     # Domain exception handlers
     _register_exception_handlers(app)
