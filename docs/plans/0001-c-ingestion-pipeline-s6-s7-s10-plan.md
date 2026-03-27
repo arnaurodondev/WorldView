@@ -6,6 +6,7 @@ status: in-progress
 created: 2026-03-25
 updated: 2026-03-27
 plans: 3
+
 waves: 11
 tasks: 48
 supersedes: "Original draft based on PRD-0014"
@@ -135,11 +136,12 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 
 ---
 
-### Wave C-3: S6 Blocks 7–10 — Embeddings, Novelty, Entity Resolution, Deep Extraction
+### Wave C-3: S6 Blocks 7–10 — Embeddings, Novelty, Entity Resolution, Deep Extraction ✅
 
 **Goal**: Implement the second processing layer: sentence-aware chunked embeddings, novelty gate (MinHash + per-entity embedding similarity), 4-stage entity resolution cascade, and LLM deep extraction (Qwen2.5-7B for DEEP-tier only).
 **Depends on**: Wave C-2
 **Estimated effort**: 75–90 minutes
+**Status**: **DONE** — 2026-03-27 · 184 unit tests pass (64 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -157,13 +159,13 @@ S6 is the NLP enrichment service. It consumes `content.article.stored.v1` from S
 - `services/content-store/src/content_store/` — novelty scores / Valkey LSH (for Block 8)
 
 #### Validation Gate
-- [ ] `ruff check services/nlp-pipeline/` passes
-- [ ] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit -v` — all tests pass (≥75 total)
-- [ ] Entity resolution: unresolved mentions never discarded (explicit test)
-- [ ] Deep extraction: non-DEEP tier returns [] (explicit test)
-- [ ] Claims written to nlp_db outbox, NOT directly to intelligence_db
-- [ ] `docs/services/nlp-pipeline.md` updated with blocks 7–10, entity resolution cascade, backpressure mechanism
+- [x] `ruff check services/nlp-pipeline/` passes
+- [x] `mypy services/nlp-pipeline/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/unit -v` — 184 tests pass (≥75 ✅)
+- [x] Entity resolution: unresolved mentions never discarded (explicit test)
+- [x] Deep extraction: non-FULL_PIPELINE tier returns [] (explicit test for both LIGHT and HALT)
+- [x] Claims written to nlp_db outbox, NOT directly to intelligence_db
+- [x] `docs/services/nlp-pipeline.md` updated with blocks 7–10, entity resolution cascade, backpressure mechanism
 
 #### Regression Guardrails
 - Custom: Unresolved entity mentions MUST be preserved (never discarded)

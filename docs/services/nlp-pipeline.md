@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8006
 > **Databases**: `nlp_db` (pgvector, owned) + `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: In-progress (🔄 Waves C-1 + C-2 complete; C-3/C-4 pending)
+> **Status**: In-progress (🔄 Waves C-1 + C-2 + C-3 complete; C-4 pending)
 
 ---
 
@@ -67,10 +67,10 @@ performs read/write operations only.
 | 4 | **GLiNER NER** | **11-class** ontology (organization, government_body, regulatory_body, financial_institution, person, financial_instrument, location, commodity, index, currency, **macroeconomic_indicator**); `GLINER_THRESHOLD=0.35` (routing), `GLINER_RESOLUTION_THRESHOLD=0.45` (cascade); NMS (IoU **strictly > 0.5**); OOM retry with reduced batch; **CRITICAL: zero mentions → never suppress**, returns `([], stats)`; updates `document_entity_stats`. | ✅ Done |
 | 5 | **Routing Score** | 7-signal weighted formula (weights must sum to 1.0, enforced by module-level assertion). Signals: `entity_density` (0.30), `source_reliability` (0.20), `novelty` (0.15), `recency` (0.10), `watchlist_match` (0.10), `document_type` (0.10), `extraction_yield` (0.05). Tier boundaries: ≥0.70 DEEP, ≥0.45 MEDIUM, ≥0.20 LIGHT, <0.20 SUPPRESS. Watchlist signal: Valkey SET `nlp:v1:watched_entities`, best-effort (returns 0.0 on unavailability). Watchlist consumer: `portfolio.watchlist.updated.v1` → `nlp-watchlist-group`. | ✅ Done |
 | 6 | **Suppression** | SUPPRESS → `ProcessingPath.HALT` (no downstream); LIGHT → `SECTION_EMBEDDINGS_ONLY` (no NER reprocessing, no extraction); MEDIUM/DEEP → `FULL_PIPELINE`. Uses `final_routing_tier` if set (novelty correction). | ✅ Done |
-| 7 | **Embedding** | Generate chunk-level + section-level vectors (`BAAI/bge-large-en-v1.5`, 1024-dim) via Ollama | ⏳ Pending |
-| 8 | **Novelty Gate** | Two-stage: Stage 1 (pre-resolution, MinHash signature); Stage 2 (post-resolution, per-entity window) | ⏳ Pending |
-| 9 | **Entity Resolution** | 4-step cascade: exact alias lookup → ticker/ISIN match → fuzzy trigram → ANN entity profile embedding match (definition view, cosine < 0.35) | ⏳ Pending |
-| 10 | **Deep Extraction** | LLM-based (Qwen2.5-7B-Instruct via Ollama): events, claims, relations → `relation_evidence_raw`. Medium AND deep tier. | ⏳ Pending |
+| 7 | **Embedding** | Sentence-aware 512-token chunks with 64-token overlap (never split mid-sentence). Section embeddings for ALL tiers; chunk embeddings for MEDIUM/DEEP only. Failed → `EmbeddingPendingEntry` (never raises). BGE 1024-dim via `EmbeddingClient`. | ✅ Done |
+| 8 | **Novelty Gate** | Stage 1: MinHash/Valkey LSH (`s5:minhash:article:<doc_id>`, threshold 0.80) — downgrades DEEP→LIGHT on near-duplicate. Stage 2: per-entity embedding similarity (cosine threshold 0.90 on `narrative` view) — if ALL entities near-dup → downgrade. Both stages best-effort (Valkey fail → novel). novelty_score = 1.0 − minhash_sim. | ✅ Done |
+| 9 | **Entity Resolution** | 4-stage cascade: (1) exact alias match (conf 1.0); (2) ticker/ISIN (conf 0.95); (3) fuzzy trigram `similarity > 0.75` (conf = sim×0.90); (4) ANN HNSW `definition` view (dist < 0.35, margin > 0.10, conf = (1−dist)×0.80). AUTO_RESOLVE ≥ 0.72; PROVISIONAL ≥ 0.45 → `provisional_entity_queue`; UNRESOLVED → **NEVER discarded**. `mention_resolutions` audit trail per stage. | ✅ Done |
+| 10 | **Deep Extraction** | Qwen2.5-7B-Instruct via `ExtractionClient`. **MEDIUM AND DEEP** tier (not LIGHT). ≤24k tokens → single window; >24k → 6k-token windows with 500-token overlap. Evidence date = `coalesce(published_at, extracted_at)` — NEVER `now()`. Claims → nlp_db outbox (never direct intelligence_db). Signals ≥ 0.80 confidence → `nlp.signal.detected.v1`. | ✅ Done |
 
 ---
 
