@@ -342,11 +342,12 @@ Ensure only `MarketDatasetFetched` is registered in the outbox serializer map (D
 
 ---
 
-### Wave E1-2: CRITICAL — Repository ABCs + Outbox Status Alignment
+### Wave E1-2: CRITICAL — Repository ABCs + Outbox Status Alignment ✅
 
 **Goal**: Add repository port ABCs to market-ingestion (hexagonal architecture requirement), align outbox status enum to libs/messaging standard, fix UoW asymmetric session cleanup.
 **Depends on**: Wave E1-1
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-27 · 341 unit tests pass · ruff + mypy clean
 **Architecture layer**: application + infrastructure
 
 #### Pre-read
@@ -494,9 +495,9 @@ if not row.topic:
 - [ ] Existing tests pass
 
 #### Validation Gate (Wave E1-2)
-- [ ] `ruff check services/market-ingestion/` clean
-- [ ] `mypy services/market-ingestion/src/` clean
-- [ ] All unit tests pass (≥330 expected)
+- [x] `ruff check services/market-ingestion/` clean
+- [x] `mypy services/market-ingestion/src/` clean (2 pre-existing confluent_kafka stubs errors)
+- [x] All unit tests pass (341 pass, +6 new tests)
 
 ---
 

@@ -10,11 +10,15 @@ from market_ingestion.infrastructure.db.repositories.outbox_repository import Sq
 from market_ingestion.infrastructure.db.repositories.policy_repository import SqlaPollingPolicyRepository
 from market_ingestion.infrastructure.db.repositories.task_repository import SqlaTaskRepository
 from market_ingestion.infrastructure.db.repositories.watermark_repository import SqlaWatermarkRepository
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class SqlaUnitOfWork(UnitOfWork):
@@ -105,9 +109,21 @@ class SqlaUnitOfWork(UnitOfWork):
         exc: BaseException | None,
         tb: object | None,
     ) -> None:
-        if exc is not None:
-            await self.rollback()
-        await self._close_sessions()
+        # BP-037: _close_sessions() MUST run in finally — even if rollback/commit raises.
+        # Original exception is preserved: the cleanup error is only logged, not re-raised.
+        try:
+            if exc is not None:
+                await self.rollback()
+            else:
+                await self.commit()
+        except Exception as cleanup_err:
+            logger.error(
+                "uow_cleanup_error",
+                error=str(cleanup_err),
+                original=repr(exc),
+            )
+        finally:
+            await self._close_sessions()
 
     async def _close_sessions(self) -> None:
         if self._write_session is not None:

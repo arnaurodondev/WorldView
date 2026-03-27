@@ -451,6 +451,86 @@ async def test_uow_mark_outbox_events_added():
 
 
 # ---------------------------------------------------------------------------
+# T-E1-2-03: UoW __aexit__ session cleanup (BP-037)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_uow_close_sessions_always_called_on_rollback_failure() -> None:
+    """_close_sessions() runs even if rollback() raises — BP-037."""
+    write_factory = MagicMock()
+    write_session = AsyncMock()
+    write_session.__aenter__ = AsyncMock(return_value=write_session)
+    write_session.__aexit__ = AsyncMock(return_value=None)
+    # rollback raises — _close_sessions must still run
+    write_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+    write_factory.return_value = write_session
+
+    uow = SqlaUnitOfWork(write_factory)
+    # Enter, then exit with an exception to trigger rollback path
+    try:
+        async with uow:
+            raise ValueError("business error")
+    except ValueError:
+        pass
+
+    # __aexit__ calls _write_session.__aexit__ (which is _close_sessions)
+    write_session.__aexit__.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_uow_original_exception_logged_on_rollback_failure() -> None:
+    """When rollback() raises, the original exc info is preserved in the log."""
+    from unittest.mock import patch
+
+    write_factory = MagicMock()
+    write_session = AsyncMock()
+    write_session.__aenter__ = AsyncMock(return_value=write_session)
+    write_session.__aexit__ = AsyncMock(return_value=None)
+    write_session.rollback = AsyncMock(side_effect=RuntimeError("db gone"))
+    write_factory.return_value = write_session
+
+    with patch("market_ingestion.infrastructure.db.unit_of_work.logger") as mock_logger:
+        try:
+            uow = SqlaUnitOfWork(write_factory)
+            async with uow:
+                raise ValueError("original error")
+        except ValueError:
+            pass
+
+        # logger.error should be called with the original exc in repr
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args
+        assert "original" in call_kwargs.kwargs or len(call_kwargs.args) > 0
+        logged_original = call_kwargs.kwargs.get("original", "")
+        assert "original error" in logged_original or "ValueError" in logged_original
+
+
+# ---------------------------------------------------------------------------
+# T-E1-2-04: Outbox _get_topic guard (BP-039)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_outbox_get_topic_raises_on_unknown_event_type() -> None:
+    """_get_topic() raises ValueError for unregistered event types — BP-039."""
+    from market_ingestion.infrastructure.db.repositories.outbox_repository import _get_topic
+
+    with pytest.raises(ValueError, match="Unknown event_type"):
+        _get_topic("completely.unknown.event")
+
+
+@pytest.mark.unit
+def test_outbox_get_topic_returns_correct_topic_for_known_event() -> None:
+    """_get_topic() resolves the correct topic for market.dataset.fetched."""
+    from market_ingestion.infrastructure.db.repositories.outbox_repository import _get_topic
+
+    topic = _get_topic("market.dataset.fetched")
+    assert topic  # non-empty string
+    assert "market" in topic  # either the canonical name or messaging lib value
+
+
+# ---------------------------------------------------------------------------
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------
 

@@ -20,11 +20,22 @@ if TYPE_CHECKING:
 
     from market_ingestion.domain.events import DomainEvent
 
+# Outbox status state machine (T-E1-2-02):
+#   pending → in_flight (claimed for dispatch)
+#   in_flight → published (successfully published to Kafka)
+#   in_flight → retry (dispatch failed, retries remaining)
+#   in_flight → dead (dispatch failed, max attempts exceeded)
+#   retry → in_flight (re-claimed on next dispatch cycle)
+
 _TOPIC_FOR_EVENT: dict[str, str] = {}  # populated lazily
 
 
 def _get_topic(event_type: str) -> str:
-    """Resolve the Kafka topic for a given event_type."""
+    """Resolve the Kafka topic for a given event_type.
+
+    Raises ValueError for unknown event types (BP-039) — no silent fallback
+    to event_type as topic, which would silently publish to the wrong topic.
+    """
     if not _TOPIC_FOR_EVENT:
         try:
             from messaging.topics import MARKET_DATASET_FETCHED  # type: ignore[import-untyped]
@@ -32,7 +43,13 @@ def _get_topic(event_type: str) -> str:
             _TOPIC_FOR_EVENT["market.dataset.fetched"] = MARKET_DATASET_FETCHED
         except ImportError:
             _TOPIC_FOR_EVENT["market.dataset.fetched"] = "market.dataset.fetched"
-    return _TOPIC_FOR_EVENT.get(event_type, event_type)
+    topic = _TOPIC_FOR_EVENT.get(event_type)
+    if topic is None:
+        raise ValueError(
+            f"Unknown event_type '{event_type}' — cannot resolve Kafka topic. "
+            "Register the topic in _TOPIC_FOR_EVENT before adding this event to the outbox."
+        )
+    return topic
 
 
 def _row_to_record(row: OutboxEventModel) -> OutboxRecord:
