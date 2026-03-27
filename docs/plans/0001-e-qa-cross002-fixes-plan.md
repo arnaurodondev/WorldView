@@ -4,10 +4,11 @@ prd: QA Review (QA-CROSS-002)
 title: "S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency"
 status: in-progress
 created: 2026-03-27
-updated: 2026-03-27
+updated: 2026-03-28
 plans: 4
 <!-- Wave E1-4 completed 2026-03-27 -->
 <!-- Waves E2-1 + E2-2 completed 2026-03-27 -->
+<!-- Wave E2-3 completed 2026-03-28 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -1155,12 +1156,13 @@ Update docs to reflect the rename.
 
 ---
 
-### Wave E2-3: Tests — consumer coverage + API edge cases
+### Wave E2-3: Tests — consumer coverage + API edge cases ✅
 
 **Goal**: Expand test coverage for consumers (malformed events, error paths) and instrument API (pagination, error responses).
 **Depends on**: Wave E2-2
 **Estimated effort**: 30–45 minutes
 **Architecture layer**: tests
+**Status**: **DONE** — 2026-03-28 · 281 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -1185,11 +1187,11 @@ Update docs to reflect the rename.
 | `test_fundamentals_consumer_missing_period_end_uses_fallback` | None period_end → uses ingested_at | unit |
 
 **Acceptance criteria**:
-- [ ] 6 new tests across 3 consumer test files
-- [ ] All marked `@pytest.mark.unit`
+- [x] 6 new tests across 3 consumer test files (5 added this wave + 1 from E2-1)
+- [x] All marked `@pytest.mark.unit`
 
 #### Validation Gate (Wave E2-3)
-- [ ] All unit tests pass (≥278 expected)
+- [x] All unit tests pass (≥278 expected) — 281 passing
 
 ---
 
