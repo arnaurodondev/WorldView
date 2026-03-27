@@ -14,6 +14,7 @@ Error classification:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC
 from typing import TYPE_CHECKING, Any, cast
 
@@ -29,6 +30,7 @@ from market_ingestion.domain.errors import (
     TaskLeaseLost,
 )
 from market_ingestion.domain.events import MarketDatasetFetched
+from market_ingestion.domain.value_objects import ObjectRef
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -40,7 +42,6 @@ if TYPE_CHECKING:
     )
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
-    from market_ingestion.domain.value_objects import ObjectRef
     from market_ingestion.infrastructure.adapters.providers import ProviderRegistry
 
 logger = get_logger(__name__)
@@ -124,6 +125,7 @@ class ExecuteTaskUseCase:
 
         try:
             async with self._uow:
+                # Ensure watermark row exists (upsert on first task execution)
                 watermark = await self._uow.watermarks.get_or_create(
                     provider=str(task.provider),
                     dataset_type=str(task.dataset_type),
@@ -132,6 +134,18 @@ class ExecuteTaskUseCase:
                     timeframe=task.timeframe,
                     variant=task.variant,
                 )
+                # Re-read with SELECT FOR UPDATE to lock the row against concurrent
+                # workers advancing the same watermark simultaneously.
+                locked = await self._uow.watermarks.get_for_update(
+                    provider=str(task.provider),
+                    dataset_type=str(task.dataset_type),
+                    symbol=task.symbol,
+                    exchange=task.exchange,
+                    timeframe=task.timeframe,
+                    variant=task.variant,
+                )
+                if locked is not None:
+                    watermark = locked
 
                 # SHA-256 dedup: check BEFORE advancing so has_changed compares
                 # new_sha256 against the previously-stored hash, not itself.
@@ -277,6 +291,17 @@ class ExecuteTaskUseCase:
         fetch_result: ProviderFetchResult,
     ) -> ObjectRef:
         key = f"market-ingestion/raw/{task.provider}/{task.dataset_type}/{task.symbol}/{task.id}"
+        # D-008: On retry, the object may already exist — skip the upload and
+        # reconstruct the ObjectRef using a locally-computed SHA-256.
+        if await self._store.exists(self._bronze_bucket, key):
+            sha256 = hashlib.sha256(fetch_result.raw_data).hexdigest()
+            return ObjectRef(
+                bucket=self._bronze_bucket,
+                key=key,
+                sha256=sha256,
+                byte_length=len(fetch_result.raw_data),
+                mime_type=fetch_result.content_type,
+            )
         return await self._store.put(
             self._bronze_bucket,
             key,

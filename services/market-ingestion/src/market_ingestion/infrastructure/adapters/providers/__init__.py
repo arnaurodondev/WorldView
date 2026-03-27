@@ -12,12 +12,12 @@ def build_provider_registry(settings: object | None = None) -> ProviderRegistry:
 
     Concrete adapters are imported lazily to avoid circular imports and to
     allow test code to skip real HTTP clients.
+
+    NOTE: Polygon and AlphaVantage are intentionally NOT registered (D-006).
+    Their stub adapters raise confusing errors; they will be re-added when
+    real implementations are complete.
     """
-    from market_ingestion.infrastructure.adapters.providers.alpha_vantage import (
-        AlphaVantageProviderAdapter,
-    )
     from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
-    from market_ingestion.infrastructure.adapters.providers.polygon import PolygonProviderAdapter
     from market_ingestion.infrastructure.adapters.providers.yahoo import YahooFinanceProviderAdapter
 
     registry = ProviderRegistry()
@@ -28,9 +28,7 @@ def build_provider_registry(settings: object | None = None) -> ProviderRegistry:
 
     client = httpx.AsyncClient()
     registry.register(EODHDProviderAdapter(api_key=api_key, client=client))
-    registry.register(PolygonProviderAdapter())
     registry.register(YahooFinanceProviderAdapter())
-    registry.register(AlphaVantageProviderAdapter())
     return registry
 
 

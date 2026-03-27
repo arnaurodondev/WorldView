@@ -42,6 +42,12 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
         row = (await self._r.execute(stmt)).scalar_one_or_none()
         return _to_domain(row) if row else None
 
+    async def get_for_update(self, provider: Provider) -> ProviderBudget | None:
+        """Load budget row with a row-level lock. Must be called inside an open transaction."""
+        stmt = select(ProviderBudgetModel).where(ProviderBudgetModel.provider == provider.value).with_for_update()
+        row = (await self._w.execute(stmt)).scalar_one_or_none()
+        return _to_domain(row) if row else None
+
     async def get_or_create(self, provider: Provider) -> ProviderBudget:
         defaults = ProviderBudget.for_eodhd() if provider == Provider.EODHD else ProviderBudget(provider=provider)
         now = utc_now()

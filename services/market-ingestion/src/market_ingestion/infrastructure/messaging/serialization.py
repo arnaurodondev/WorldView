@@ -68,6 +68,9 @@ def build_market_ingestion_serializers(
         ``{event_type: AvroSerializer}`` mapping for all market-ingestion events.
     """
     schema = _schema_str()
+    # D-005: Only MarketDatasetFetched is published to the outbox (cross-service event).
+    # IngestionTaskCompleted and IngestionTaskScheduled are internal state transitions —
+    # they are NOT written to the outbox and have no Avro schema.
     return {
         MarketDatasetFetched.EVENT_TYPE: serializer_for_schema(schema, registry_client),
     }

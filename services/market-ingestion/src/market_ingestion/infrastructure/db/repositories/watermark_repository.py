@@ -127,6 +127,33 @@ class SqlaWatermarkRepository(WatermarkRepository):
             updated_at=now,
         )
 
+    async def get_for_update(
+        self,
+        *,
+        provider: str,
+        dataset_type: str,
+        symbol: str,
+        exchange: str | None = None,
+        timeframe: str | None = None,
+        variant: str | None = None,
+    ) -> Watermark | None:
+        """Load watermark row with a row-level lock. Must be called inside an open transaction."""
+        stmt = (
+            select(WatermarkModel)
+            .where(
+                WatermarkModel.provider == provider,
+                WatermarkModel.dataset_type == dataset_type,
+                WatermarkModel.dataset_variant == variant,
+                WatermarkModel.symbol == symbol,
+                WatermarkModel.exchange == exchange,
+                WatermarkModel.timeframe == timeframe,
+            )
+            .limit(1)
+            .with_for_update()
+        )
+        row = (await self._w.execute(stmt)).scalar_one_or_none()
+        return _to_domain(row) if row else None
+
     async def save(self, watermark: Watermark) -> None:
         from sqlalchemy import update
 

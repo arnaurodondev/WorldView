@@ -93,6 +93,7 @@ def _make_uow(watermark: MagicMock | None = None) -> MagicMock:
     wm = watermark or _make_watermark()
     uow.watermarks = MagicMock()
     uow.watermarks.get_or_create = AsyncMock(return_value=wm)
+    uow.watermarks.get_for_update = AsyncMock(return_value=wm)
     uow.watermarks.save = AsyncMock()
 
     uow.outbox = MagicMock()
@@ -478,3 +479,79 @@ async def test_fundamentals_report_date_preserved_when_present() -> None:
     call_args = serializer.serialize_fundamentals.call_args
     enriched_data = call_args[0][0]
     assert enriched_data["report_date"] == raw_date
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-04: Atomicity tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_get_for_update_called_in_step5() -> None:
+    """Step 5 calls get_for_update() to lock watermark against concurrent workers."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # Both get_or_create (ensure row) and get_for_update (lock row) must be called
+    uow.watermarks.get_or_create.assert_awaited_once()
+    uow.watermarks.get_for_update.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_persist_retry_clears_lease_atomically() -> None:
+    """After retry(), lease_owner/expires are cleared and committed atomically."""
+    task = _make_task()
+    exc = ProviderRateLimited("rate limit")
+    uc, uow, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
+
+    with pytest.raises(ProviderRateLimited):
+        await uc.execute(task)
+
+    task.retry.assert_called_once_with(exc)
+    # save() and commit() must both have been called (atomic pair)
+    uow.tasks.save.assert_awaited()
+    uow.commit.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_object_exists_skips_bronze_write_on_retry() -> None:
+    """If bronze object already exists, put() is skipped and ref is reconstructed."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    store = _make_store()
+    # Simulate object already exists in MinIO
+    store.exists = AsyncMock(return_value=True)
+
+    uc, _, _, store, _ = _make_use_case(store=store)
+    await uc.execute(task)
+
+    # put() called only once (for canonical) — bronze upload skipped
+    assert store.put.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-06: Outbox contains only MarketDatasetFetched (D-005)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_execute_task_only_market_dataset_fetched_in_outbox() -> None:
+    """Only MarketDatasetFetched is written to outbox — no internal task events (D-005)."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # outbox.add called exactly once, with the MarketDatasetFetched event
+    uow.outbox.add.assert_awaited_once()
+    call_kwargs = uow.outbox.add.call_args.kwargs
+    events = call_kwargs["events"]
+    from market_ingestion.domain.events import MarketDatasetFetched
+
+    assert len(events) == 1
+    assert isinstance(events[0], MarketDatasetFetched)

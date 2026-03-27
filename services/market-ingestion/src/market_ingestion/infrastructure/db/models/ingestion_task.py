@@ -55,6 +55,13 @@ class IngestionTaskModel(Base):
     # Backfill marker
     is_backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Result reference (populated on SUCCEEDED; NULL for PENDING/RUNNING/RETRY/FAILED)
+    result_ref_bucket: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_ref_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_ref_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_ref_mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Audit
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

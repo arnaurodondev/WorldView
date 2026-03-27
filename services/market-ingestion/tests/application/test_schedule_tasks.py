@@ -34,6 +34,7 @@ def _make_policy(
     is_enabled: bool = True,
     symbol: str | None = "AAPL",
     dataset_type: DatasetType = DatasetType.OHLCV,
+    backfill_enabled: bool = False,
     backfill_days: int | None = None,
     backfill_start_date=None,
     last_run_at: datetime | None = None,
@@ -45,6 +46,7 @@ def _make_policy(
         timeframe="1d",
         base_interval_seconds=3600.0,
         is_enabled=is_enabled,
+        backfill_enabled=backfill_enabled,
         backfill_days=backfill_days,
         backfill_start_date=backfill_start_date,
     )
@@ -73,6 +75,7 @@ def _make_uow(
 
     policies_repo = MagicMock()
     policies_repo.list_enabled = AsyncMock(return_value=policies or [])
+    policies_repo.save = AsyncMock()
     uow.policies = policies_repo
 
     watermarks_repo = MagicMock()
@@ -82,6 +85,7 @@ def _make_uow(
 
     budgets_repo = MagicMock()
     bgt = budget or _make_budget()
+    budgets_repo.get_for_update = AsyncMock(return_value=bgt)
     budgets_repo.get_or_create = AsyncMock(return_value=bgt)
     budgets_repo.save = AsyncMock()
     uow.budgets = budgets_repo
@@ -212,6 +216,7 @@ async def test_backfill_policy_creates_multiple_chunks() -> None:
     start_date = (now - timedelta(days=90)).date()
     policy = _make_policy(
         symbol="AAPL",
+        backfill_enabled=True,
         backfill_days=30,
         backfill_start_date=start_date,
     )
@@ -221,6 +226,26 @@ async def test_backfill_policy_creates_multiple_chunks() -> None:
 
     args = uow.tasks.add_many.call_args[0][0]
     assert len(args) >= 3  # ~90 days / 30 = 3-4 chunks (fractional day at end)
+
+
+@pytest.mark.unit
+async def test_backfill_policy_is_disabled_after_initial_enqueue() -> None:
+    """Backfill policies are converted to incremental mode after first scheduling pass."""
+    now = datetime.now(UTC)
+    start_date = (now - timedelta(days=30)).date()
+    policy = _make_policy(
+        symbol="AAPL",
+        backfill_enabled=True,
+        backfill_days=30,
+        backfill_start_date=start_date,
+    )
+    uow = _make_uow(policies=[policy], add_many_return=1)
+    uc = ScheduleDueTasksUseCase(uow)
+
+    await uc.execute()
+
+    assert policy.backfill_enabled is False
+    uow.policies.save.assert_awaited_once_with(policy)
 
 
 @pytest.mark.unit
@@ -249,3 +274,40 @@ async def test_quotes_policy_creates_quote_task() -> None:
 
     args = uow.tasks.add_many.call_args[0][0]
     assert args[0].dataset_type == DatasetType.QUOTES
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-03: Token bucket SELECT FOR UPDATE tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_get_for_update_called_inside_transaction() -> None:
+    """_apply_budgets() calls get_for_update() (not get()) inside the transaction."""
+    policy = _make_policy(symbol="AAPL")
+    wm = _make_watermark(current_bar_ts=None)
+    uow = _make_uow(policies=[policy], watermark=wm, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    # get_for_update must have been called (budget locking)
+    uow.budgets.get_for_update.assert_awaited_once()
+    # get_or_create should NOT be called when get_for_update returns a budget
+    uow.budgets.get_or_create.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_try_consume_with_lock_falls_back_to_get_or_create_if_none() -> None:
+    """When get_for_update returns None, get_or_create is called as fallback."""
+    policy = _make_policy(symbol="AAPL")
+    wm = _make_watermark(current_bar_ts=None)
+    uow = _make_uow(policies=[policy], watermark=wm, add_many_return=1)
+    # Simulate no row in DB yet — get_for_update returns None
+    uow.budgets.get_for_update = AsyncMock(return_value=None)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    uow.budgets.get_for_update.assert_awaited_once()
+    uow.budgets.get_or_create.assert_awaited_once()
