@@ -60,6 +60,9 @@
 
 - [ ] Migration DDL matches ORM columns exactly — names, types, defaults, nullability (BP-008, BP-019)
 - [ ] `move_to_dead_letter` INSERTs a DLQ row with original payload (not just status update) (BP-020)
+- [ ] DLQ `requeue()` preserves original `aggregate_id`, `aggregate_type`, `event_type` from stored DLQ columns — never hardcode or use outbox PK as `aggregate_id` (BP-024)
+- [ ] DNS resolution in async context uses `asyncio.to_thread(socket.getaddrinfo, ...)` with explicit timeout — never blocking `socket.getaddrinfo` directly on event loop (BP-025)
+- [ ] SSRF IP check uses `addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_multicast` — covers IPv4-mapped IPv6 (`::ffff:`) after extracting `addr.ipv4_mapped` (BP-026)
 - [ ] Avro contract tests exist for every schema a service produces
 - [ ] `doc_id` in outbox payloads is a per-document UUIDv7 (not source/aggregate ID)
 - [ ] SSRF URL validation resolves DNS hostnames, not just IP literals

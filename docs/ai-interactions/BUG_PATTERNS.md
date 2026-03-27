@@ -43,6 +43,13 @@
 | [BP-018](#bp-018) | Client constructor mismatch in wiring code | `TypeError: __init__() got an unexpected keyword argument` at runtime | Any service building adapter clients in a factory or lifespan function |
 | [BP-019](#bp-019) | Migration DDL vs ORM column mismatch | `UndefinedColumnError` or `ProgrammingError` at runtime — migration DDL defines different columns than ORM model | Any service where migration DDL is hand-written separately from ORM |
 | [BP-020](#bp-020) | DLQ `move_to_dead_letter` only updates status | Dead-lettered events cannot be inspected or requeued — DLQ table has no row, only outbox status changed | Any service with outbox + DLQ pattern |
+| [BP-021](#bp-021) | SQLAlchemy ORM `metadata` column name collision | `Cannot override class variable (previously declared on base class "DeclarativeBase") with instance variable` — mypy error, and incorrect table binding | Any ORM model with a column named `metadata` |
+| [BP-022](#bp-022) | NMS IoU boundary ambiguity | Overlapping spans with IoU exactly = threshold are NOT suppressed — must be **strictly greater** | Any NER/span deduplication implementation using IoU-based NMS |
+| [BP-023](#bp-023) | pre-commit ruff-format stash conflict loop | Commit fails in loop: ruff-format reformats a staged file, stash restore conflicts, hook rolls back, commit never succeeds | Any service where the service venv's ruff version differs from the pre-commit hook's ruff version |
+| [BP-024](#bp-024) | DLQ requeue corrupts aggregate_id | DLQ `requeue()` creates outbox event with outbox PK as `aggregate_id` instead of the original doc UUID — silent data corruption, downstream consumers get wrong entity references | Any service with outbox + DLQ pattern |
+| [BP-025](#bp-025) | Blocking DNS in async context | `socket.getaddrinfo()` called on event loop — freezes entire async service under slow/failing DNS | Any service doing SSRF validation or DNS lookups in async handlers |
+| [BP-026](#bp-026) | SSRF missing IPv4-mapped IPv6 | `::ffff:127.0.0.1` bypasses manual IP blocklist — private IPv4 addresses reachable via IPv4-mapped IPv6 notation | Any service with URL/SSRF validation |
+| [BP-027](#bp-027) | DNS rebinding TOCTOU | DNS resolves to public IP at validation time, rebinds to private IP at connection time — validation passes but SSRF succeeds | Any service fetching user-supplied URLs |
 
 ---
 
@@ -1295,6 +1302,374 @@ See `services/content-store/tests/unit/infrastructure/test_dlq_repo.py` — test
 | `services/content-store/src/content_store/infrastructure/db/repositories/dlq.py` | Fixed `requeue` to use `entry.payload_json` |
 | `services/content-store/src/content_store/infrastructure/db/models.py` | Added `payload_json` column to `DeadLetterQueueModel` |
 | `services/content-store/tests/unit/infrastructure/test_dlq_repo.py` | New — DLQ copy + requeue tests |
+
+---
+
+## BP-021 — SQLAlchemy ORM `metadata` column name collision
+
+**Date discovered**: 2026-03-27
+**Service affected**: `nlp-pipeline` (found during mypy check of nlp_db ORM models)
+**Prompts updated**: N/A
+
+### Symptom
+
+```
+error: Cannot override class variable (previously declared on base class "DeclarativeBase") with instance variable  [misc]
+error: Incompatible types in assignment (expression has type "Mapped[dict[str, Any] | None]", base class "DeclarativeBase" defined the type as "MetaData")  [assignment]
+```
+
+### Root cause
+
+`DeclarativeBase` (SQLAlchemy 2.x) defines a class-level `metadata: MetaData` attribute. Any ORM model that names a column `metadata` will shadow it, causing a mypy type conflict and potentially incorrect ORM behavior.
+
+### Correct implementation pattern
+
+Rename the Python attribute, preserving the DB column name via an explicit column name argument:
+
+```python
+# WRONG
+metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+# CORRECT — rename attribute, keep DB column as "metadata"
+resolution_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+    "metadata", JSONB, nullable=True
+)
+```
+
+Update all repositories that set this field to use the new attribute name.
+
+### Test to add (prevents regression)
+
+```python
+def test_mention_resolution_model_has_no_metadata_attr_collision():
+    from nlp_pipeline.infrastructure.nlp_db.models import MentionResolutionModel
+    # Python attr is resolution_metadata, not metadata
+    assert hasattr(MentionResolutionModel, "resolution_metadata")
+    assert not hasattr(MentionResolutionModel.__table__.columns, "resolution_metadata")
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/models.py` | Renamed `metadata` → `resolution_metadata` with explicit column name `"metadata"` |
+| `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/mention_resolution.py` | Updated `metadata=` to `resolution_metadata=` |
+
+---
+
+## BP-022 — NMS IoU boundary: strictly-greater vs greater-or-equal
+
+**Date discovered**: 2026-03-27
+**Service affected**: `nlp-pipeline` Block 4 NER (test failures during Wave C-2)
+**Prompts updated**: N/A
+
+### Symptom
+
+NMS unit test `test_keeps_higher_confidence_when_overlapping` passes when IoU < threshold but fails when IoU = threshold (0.5 exactly). Spans that should be suppressed are kept, or vice versa.
+
+### Root cause
+
+The PRD says "IoU > 0.5" — strictly greater than. If the implementation uses `>=`, spans with IoU = 0.5 are incorrectly suppressed. Test fixtures using exact boundary values (e.g., spans (0,10) and (0,5) → IoU = 0.5 exactly) will fail because 0.5 is NOT > 0.5.
+
+### Correct implementation pattern
+
+```python
+NMS_IOU_THRESHOLD = 0.5
+
+def _nms(mentions):
+    ...
+    if _iou(a.char_start, a.char_end, b.char_start, b.char_end) > NMS_IOU_THRESHOLD:
+        # suppress b (strictly greater than threshold)
+```
+
+Test fixtures must use spans with IoU **strictly greater than** 0.5, e.g., (0,10) and (1,9) → IoU = 8/10 = 0.8.
+
+### Test to add (prevents regression)
+
+```python
+def test_nms_boundary_iou_exactly_half_not_suppressed():
+    # spans (0,10) and (0,5): intersection=5, union=10, IoU=0.5 — NOT suppressed
+    m1 = EntityMention(..., char_start=0, char_end=10, confidence=0.9, ...)
+    m2 = EntityMention(..., char_start=0, char_end=5, confidence=0.7, ...)
+    result = _nms([m1, m2])
+    assert len(result) == 2  # neither suppressed at boundary
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/nlp-pipeline/tests/unit/application/blocks/test_ner.py` | Updated test fixtures to use spans with IoU > 0.5 (not exactly 0.5) |
+
+---
+
+## BP-023 — pre-commit ruff-format stash conflict loop
+
+**Date discovered**: 2026-03-27
+**Service affected**: `nlp-pipeline` (pre-commit hook during Wave C-2 commit)
+**Prompts updated**: N/A
+
+### Symptom
+
+`git commit` enters an infinite failure loop:
+```
+ruff-format...Failed — 1 file reformatted
+Stashed changes conflicted with hook auto-fixes... Rolling back fixes
+```
+
+The same file is reformatted every attempt; the commit never succeeds.
+
+### Root cause
+
+Two conditions must both be true to trigger this:
+1. A staged file has a **different version in the working tree** (`AM` or `MM` git status)
+2. The pre-commit hook's ruff version formats the file differently than the local venv's ruff
+
+The hook stashes the working tree, formats the staged content, then tries to restore the stash. The stash's working tree version conflicts with the formatted index version, causing rollback.
+
+### Correct implementation pattern
+
+Before committing, ensure ALL staged Python files have `A ` or `M ` status (no working tree delta):
+
+```bash
+# Find partially-staged Python files
+git diff --name-only | grep "\.py$"
+
+# For each file listed, check if it's also staged
+git status --short <file>  # AM or MM = problem
+
+# Fix: restore working tree from index (use hook's formatted version)
+git checkout -- <file>
+
+# OR: format file with system ruff (pre-commit hook version) and re-stage
+uvx ruff format <file>
+git add <file>
+```
+
+**Always use `uvx ruff format` (system/pre-commit ruff), not the service venv's ruff**, since the venv may be pinned to an older version.
+
+### Test to add (prevents regression)
+
+N/A — this is a workflow issue, not a code bug. Add to commit checklist: verify no `AM`/`MM` Python files before committing.
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py` | Reformatted assert statement to match pre-commit hook's ruff version |
+
+---
+
+## BP-024 — DLQ requeue corrupts aggregate_id
+
+**Date discovered**: 2026-03-27
+**Service affected**: `content-store` (found during PLAN-0001-B-R4 QA review)
+**Prompts updated**: `docs/plans/0001-b-r4-qa-review-fixes-plan.md` W1
+
+### Symptom
+
+Downstream consumers receive `content.article.stored.v1` events where `aggregate_id` is the outbox primary key UUID instead of the canonical document UUID. Lookups by document ID silently fail — no error, wrong entity referenced.
+
+### Root cause
+
+`DLQRepository.requeue()` created the new outbox event using `entry.original_event_id` (the outbox PK) as `aggregate_id` instead of the actual document UUID stored in `entry.aggregate_id`. Similarly, `event_type` was hardcoded instead of read from the DLQ row.
+
+### Correct implementation pattern
+
+```python
+# WRONG — uses outbox PK as aggregate_id
+self._session.add(OutboxEventModel(
+    aggregate_id=entry.original_event_id,  # ← outbox PK, not doc UUID!
+    event_type="content.article.stored.v1",  # ← hardcoded
+    ...
+))
+
+# CORRECT — use stored metadata with fallback for pre-existing rows
+self._session.add(OutboxEventModel(
+    aggregate_id=entry.aggregate_id or entry.original_event_id,
+    aggregate_type=entry.aggregate_type or "document",
+    event_type=entry.event_type or entry.payload_json.get("event_type", "content.article.stored.v1"),
+    ...
+))
+```
+
+Also: `move_to_dead_letter` must store `aggregate_type`, `aggregate_id`, and `event_type` from the source outbox record into the DLQ row when creating it.
+
+### Test to add (prevents regression)
+
+```python
+async def test_requeue_uses_stored_aggregate_id():
+    entry = make_dlq_entry()
+    entry.aggregate_id = UUID("doc-uuid-here")
+    entry.original_event_id = UUID("outbox-pk-here")
+    ...
+    outbox_model = session.add.call_args.args[0]
+    assert outbox_model.aggregate_id == entry.aggregate_id  # doc UUID, not outbox PK
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-store/src/content_store/infrastructure/db/repositories/dlq.py` | Use `entry.aggregate_id` with fallback |
+| `services/content-store/src/content_store/infrastructure/db/repositories/outbox.py` | Store metadata fields in DLQ row |
+| `services/content-store/alembic/versions/0001_create_content_store_schema.py` | Add `aggregate_type`, `aggregate_id`, `event_type` columns to `dead_letter_queue` |
+
+---
+
+## BP-025 — Blocking DNS resolution in async context
+
+**Date discovered**: 2026-03-27
+**Service affected**: `content-ingestion` (found during PLAN-0001-B-R4 QA review)
+
+### Symptom
+
+Under slow or failing DNS, the entire FastAPI service freezes. Requests time out across all endpoints because a single blocked `socket.getaddrinfo()` call holds the event loop.
+
+### Root cause
+
+`socket.getaddrinfo()` is a blocking synchronous call. When called directly inside a Pydantic `field_validator` (which runs synchronously during request validation in an async handler), it blocks the asyncio event loop for the duration of the DNS lookup.
+
+### Correct implementation pattern
+
+```python
+# WRONG — blocks the event loop
+@field_validator("url")
+def validate_url(cls, v: str) -> str:
+    addrs = socket.getaddrinfo(hostname, None)  # blocks!
+    ...
+
+# CORRECT — move DNS to async handler with timeout
+async def check_url_ssrf_async(url: str) -> None:
+    try:
+        addr_infos = await asyncio.wait_for(
+            asyncio.to_thread(socket.getaddrinfo, hostname, None),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        raise ValueError(f"DNS timeout for {hostname}")
+```
+
+The Pydantic validator should only check scheme (http/https) and reject literal private IPs. DNS resolution moves to the async route handler.
+
+### Test to add (prevents regression)
+
+```python
+async def test_async_dns_timeout():
+    with patch("socket.getaddrinfo", side_effect=lambda *a, **kw: time.sleep(10)):
+        with pytest.raises(ValueError, match="Could not resolve"):
+            await check_url_ssrf_async("http://slow.example.com/article")
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-ingestion/src/content_ingestion/api/schemas.py` | Removed DNS from validator; added `check_url_ssrf_async` |
+| `services/content-ingestion/src/content_ingestion/api/routes/internal.py` | Call `check_url_ssrf_async` in handler |
+
+---
+
+## BP-026 — SSRF missing IPv4-mapped IPv6 bypass
+
+**Date discovered**: 2026-03-27
+**Service affected**: `content-ingestion` (found during PLAN-0001-B-R4 QA review)
+
+### Symptom
+
+A URL like `http://[::ffff:127.0.0.1]/internal` passes SSRF validation even though it routes to localhost. Manual IP range checks for `127.0.0.0/8` don't cover the IPv4-mapped IPv6 form.
+
+### Root cause
+
+Manual `_PRIVATE_NETWORKS` lists check `127.0.0.0/8`, `10.0.0.0/8`, etc. These only apply to `IPv4Address` objects. An `IPv6Address` like `::ffff:127.0.0.1` is technically in the `::ffff:0:0/96` range and has `ipv4_mapped = IPv4Address('127.0.0.1')`, but won't match any IPv4 range check unless you first extract the mapped address.
+
+### Correct implementation pattern
+
+```python
+# WRONG — misses IPv4-mapped IPv6
+def _is_private_ip(addr):
+    return any(addr in network for network in _PRIVATE_NETWORKS)
+
+# CORRECT — use Python builtins + handle IPv4-mapped IPv6
+def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped  # unwrap ::ffff:x.x.x.x → IPv4
+    return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_multicast or addr.is_link_local
+```
+
+Python's built-in `is_private`, `is_reserved`, `is_loopback` properties cover all RFC-defined ranges including CGNAT (100.64.0.0/10), multicast, and future additions.
+
+### Test to add (prevents regression)
+
+```python
+@pytest.mark.parametrize("url", [
+    "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:10.0.0.1]/",
+    "http://100.64.0.1/",  # CGNAT
+    "http://224.0.0.1/",   # multicast
+])
+def test_rejects_private_ip_variants(url):
+    with pytest.raises(ValueError):
+        IngestRequest(url=url, ...)
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-ingestion/src/content_ingestion/api/schemas.py` | Replaced manual network lists with `is_private` builtins + IPv4-mapped unwrap |
+
+---
+
+## BP-027 — DNS rebinding TOCTOU in SSRF validation
+
+**Date discovered**: 2026-03-27
+**Service affected**: `content-ingestion` (found during PLAN-0001-B-R4 QA review)
+
+### Symptom
+
+URL passes SSRF validation (DNS resolves to public IP), but by the time the HTTP client connects, DNS has been rebounded to a private IP. The request reaches an internal service despite validation passing.
+
+### Root cause
+
+DNS validation and HTTP connection are two separate operations with a time gap. An attacker controls a DNS server that returns a public IP on the first query (validation) and a private IP on the second query (connection). This is a classic TOCTOU (Time Of Check, Time Of Use) race.
+
+### Correct implementation pattern
+
+```python
+class SSRFSafeTransport(httpx.AsyncBaseTransport):
+    """Validates resolved IPs at connection time, not just at validation time."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        hostname = request.url.host
+        if hostname:
+            addr_infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
+            for _family, _type, _proto, _canonname, sockaddr in addr_infos:
+                addr = ipaddress.ip_address(sockaddr[0])
+                if _is_private_ip(addr):
+                    raise httpx.ConnectError(f"SSRF blocked: {hostname} → {addr}")
+        return await self._inner.handle_async_request(request)
+```
+
+Wire this transport when constructing `httpx.AsyncClient` in the app lifespan.
+
+### Test to add (prevents regression)
+
+```python
+async def test_transport_blocks_dns_rebinding():
+    transport = SSRFSafeTransport()
+    request = httpx.Request("GET", "http://rebind.example.com/")
+    with patch("socket.getaddrinfo", return_value=[(..., ..., ..., "", ("127.0.0.1", 0))]):
+        with pytest.raises(httpx.ConnectError, match="SSRF blocked"):
+            await transport.handle_async_request(request)
+```
+
+### Files changed in fix
+
+| File | Change |
+|------|--------|
+| `services/content-ingestion/src/content_ingestion/infrastructure/http/ssrf_transport.py` | New — `SSRFSafeTransport` implementation |
+| `services/content-ingestion/src/content_ingestion/app.py` | Wire `SSRFSafeTransport` into `httpx.AsyncClient` |
 
 ---
 

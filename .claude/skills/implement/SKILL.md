@@ -148,6 +148,8 @@ When modifying **Avro schemas, database schemas, API contracts, or shared librar
 
 This prevents the failure pattern where a schema change passes local validation but breaks CI because downstream alignment tests were not in scope.
 
+5. **DDL alignment coverage rule** → When adding or fixing DDL alignment tests for one table in a service, audit ALL tables in that service and add missing tests. A partial coverage gap defeats the purpose of the guard. Run `grep "class Test.*DDLAlignment" tests/` to see current coverage.
+
 ---
 
 ## Step 3 — Test Design & Writing
@@ -209,6 +211,14 @@ python -m pytest tests/architecture -v
 ```
 
 **If any check fails**: Fix immediately and re-run. Do NOT proceed to Step 5 with failures. Maximum 2 fix attempts per issue before escalating to the user.
+
+### 4.2 Blocking I/O Check (Async Services)
+
+When the changed service is async (FastAPI), scan all Pydantic validators for blocking I/O:
+```bash
+grep -n "socket\.\|requests\.\|open(" services/<service>/src/**/*schemas*.py services/<service>/src/**/*validators*.py
+```
+Any `socket.getaddrinfo`, `requests.get`, or `open()` call inside a `@field_validator` / `@model_validator` is a **blocking I/O violation** (HR-019). Move the I/O to the async route handler using `asyncio.to_thread`.
 
 ### 4.1 Test Failure Policy (R19 — Non-Negotiable)
 

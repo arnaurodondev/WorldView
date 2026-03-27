@@ -176,6 +176,27 @@ class TestProcessMessage:
         assert sessions[0] is not sessions[1]
 
     @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
+    async def test_commit_failure_rolls_back_and_raises(self, mock_uc_cls: MagicMock) -> None:
+        """DB commit failure → session.rollback called, exception re-raised (F-104)."""
+        consumer, mock_session = _make_consumer()
+
+        mock_uc = AsyncMock()
+        mock_uc.execute.return_value = ProcessingSummary(
+            article_id="doc-001",
+            decision=DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c"),
+            doc_id=None,
+            suppressed=True,
+        )
+        mock_uc_cls.return_value = mock_uc
+
+        mock_session.commit.side_effect = RuntimeError("DB connection lost")
+
+        with pytest.raises(RuntimeError, match="DB connection lost"):
+            await consumer.process_message(_SAMPLE_MESSAGE)
+
+        mock_session.rollback.assert_called_once()
+
+    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
     async def test_lsh_index_failure_is_best_effort(self, mock_uc_cls: MagicMock) -> None:
         """LSH index failure should not raise — best-effort only."""
         lsh_client = AsyncMock()

@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 from content_store.infrastructure.db.models import (
     DeadLetterQueueModel,
+    DedupHashModel,
     DocumentModel,
+    DuplicateClusterModel,
+    MinHashEntityMentionModel,
+    MinHashSignatureModel,
     OutboxEventModel,
 )
 from sqlalchemy import inspect as sa_inspect
@@ -52,9 +56,9 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         upper = line.upper()
         if any(upper.startswith(kw) for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK")):
             continue
-        # First word is the column name
+        # First word is the column name (constraint lines already skipped above)
         parts = line.split()
-        if parts and not parts[0].upper().startswith(("PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "CHECK")):
+        if parts:
             columns.add(parts[0].strip('"'))
     return columns
 
@@ -104,6 +108,58 @@ class TestDeadLetterQueueDDLAlignment:
         migration_text = _read_all_migrations()
         ddl_cols = _extract_ddl_columns(migration_text, "dead_letter_queue")
         orm_cols = _get_orm_columns(DeadLetterQueueModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
+class TestDedupHashesDDLAlignment:
+    def test_dedup_hashes_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "dedup_hashes")
+        orm_cols = _get_orm_columns(DedupHashModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
+class TestDuplicateClustersDDLAlignment:
+    def test_duplicate_clusters_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "duplicate_clusters")
+        orm_cols = _get_orm_columns(DuplicateClusterModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
+class TestMinHashSignaturesDDLAlignment:
+    def test_minhash_signatures_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "minhash_signatures")
+        orm_cols = _get_orm_columns(MinHashSignatureModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
+class TestMinHashEntityMentionsDDLAlignment:
+    def test_minhash_entity_mentions_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "minhash_entity_mentions")
+        orm_cols = _get_orm_columns(MinHashEntityMentionModel)
 
         missing_in_ddl = orm_cols - ddl_cols
         extra_in_ddl = ddl_cols - orm_cols

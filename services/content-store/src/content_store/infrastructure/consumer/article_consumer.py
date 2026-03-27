@@ -19,6 +19,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.metrics.prometheus import s5_lsh_index_failures_total
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -124,7 +125,8 @@ class ArticleConsumer:
                             summary.source_type or article.source_type,
                         )
                     except Exception:
-                        log.warning("lsh_index_failed", doc_id=str(summary.doc_id))
+                        s5_lsh_index_failures_total.inc()
+                        log.error("lsh_index_failed", doc_id=str(summary.doc_id))
 
                 log.info(
                     "article_processed",

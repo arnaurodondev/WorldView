@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from content_ingestion.infrastructure.db.models import (
     DeadLetterQueueModel,
+    FetchLogModel,
     OutboxEventModel,
     SourceAdapterStateModel,
     SourceModel,
@@ -50,8 +51,9 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         upper = line.upper()
         if any(upper.startswith(kw) for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK")):
             continue
+        # First word is the column name (constraint lines already skipped above)
         parts = line.split()
-        if parts and not parts[0].upper().startswith(("PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN", "CHECK")):
+        if parts:
             columns.add(parts[0].strip('"'))
     return columns
 
@@ -114,6 +116,19 @@ class TestSourceAdapterStateDDLAlignment:
         migration_text = _read_all_migrations()
         ddl_cols = _extract_ddl_columns(migration_text, "source_adapter_state")
         orm_cols = _get_orm_columns(SourceAdapterStateModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
+class TestArticleFetchLogDDLAlignment:
+    def test_article_fetch_log_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "article_fetch_log")
+        orm_cols = _get_orm_columns(FetchLogModel)
 
         missing_in_ddl = orm_cols - ddl_cols
         extra_in_ddl = ddl_cols - orm_cols

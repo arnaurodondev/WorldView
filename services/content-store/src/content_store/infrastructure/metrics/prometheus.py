@@ -38,6 +38,11 @@ s5_minhash_lsh_candidates_total = Counter(
     "Total LSH candidate lookups performed",
 )
 
+s5_lsh_index_failures_total = Counter(
+    "s5_lsh_index_failures_total",
+    "Total LSH post-commit index failures (Valkey errors)",
+)
+
 # ── Histograms ───────────────────────────────────────────────────────────────
 
 s5_dedup_duration_seconds = Histogram(
