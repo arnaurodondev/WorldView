@@ -253,6 +253,22 @@ class IngestionEventRepository(ABC):
     ) -> None:
         """Record the event as processed, storing its canonical content hash."""
 
+    @abstractmethod
+    async def create_if_not_exists(
+        self,
+        event_id: str,
+        event_type: str | None = None,
+        content_sha256: str | None = None,
+    ) -> bool:
+        """Atomically insert the event if it does not already exist.
+
+        Returns ``True`` if the row was newly created, ``False`` if the event
+        was already recorded (duplicate).  This replaces the separate
+        ``is_duplicate()`` + ``create()`` pattern with a single atomic
+        INSERT … ON CONFLICT DO NOTHING … RETURNING operation, eliminating
+        the check-before-insert race condition (BP-035).
+        """
+
 
 class FailedTaskRepository(ABC):
     """Retry queue for consumer processing failures."""

@@ -1,6 +1,6 @@
 # Worldview -- Master Plan
 
-> **Version**: 2.0 | **Date**: 2026-03-25
+> **Version**: 2.2 | **Date**: 2026-03-27
 > **Status**: Active | **Owner**: Arnau Rodon
 > **Single source of truth** for the entire platform architecture.
 
@@ -114,9 +114,9 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S1 | **Portfolio** | 8001 | `portfolio_db` | ✅ Mature | Tenant/user mgmt, portfolio CRUD, transactions, holdings, watchlists, alert prefs |
 | S2 | **Market Ingestion** | 8002 | `ingestion_db` | ✅ Mature | EODHD polling, raw/canonical MinIO storage, backfill orchestration |
 | S3 | **Market Data** | 8003 | `market_data_db` (TimescaleDB) | ✅ Mature | Materialize OHLCV/quotes/fundamentals; 30 query API routes |
-| S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | 🔄 In-progress | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
-| S5 | **Content Store** | 8005 | `content_store_db` | 🔄 In-progress | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
-| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | 🔄 In-progress | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
+| S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | ✅ Mature | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
+| S5 | **Content Store** | 8005 | `content_store_db` | ✅ Mature | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
+| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
 | S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
 | S8 | **RAG / Chat** | 8008 | None (stateless) | ⏳ Planned | Hybrid retrieval, LLM completion, streaming SSE, citations |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
@@ -354,7 +354,7 @@ Pre-commit (ruff+mypy+unit tests), post-edit (ruff+targeted tests), schema guard
 
 ### Evaluation
 
-Session outcomes in `docs/ai-interactions/evals/sessions/`. Monthly review compounds improvements into `BUG_PATTERNS.md`, checklists, skills, hooks. Framework: `docs/ai-interactions/evals/EVAL_FRAMEWORK.md`.
+Session outcomes in `.claude/evals/sessions/`. Monthly review compounds improvements into `docs/BUG_PATTERNS.md`, checklists, skills, hooks. Framework: `.claude/evals/EVAL_FRAMEWORK.md`.
 
 ---
 
@@ -430,14 +430,14 @@ S1, S2, S3 are **mature** with full hexagonal architecture, comprehensive tests,
 
 ### Phase 2: Unstructured Intelligence Pipeline 🔄
 
-Active PRD: `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md`. S4-S7, S9, S10, intelligence-migrations are scaffolded and compliant; implementation in progress.
+Active PRD: `docs/specs/0014-PRD-v1-final.md`. S4 and S5 are complete (PLAN-0001-B, 2026-03-27). S6 is complete (PLAN-0001-C C-1..C-4, 2026-03-27). S7, S9, S10, intelligence-migrations remain in progress.
 
 | Milestone | Status |
 |-----------|--------|
-| Pre-implementation repo fixes (Avro schemas, event renames, DB config) | 🔄 |
-| S4 Content Ingestion (adapters, scheduler, outbox, MinIO) | 🔄 |
-| S5 Content Store (consumer, dedup, MinIO silver) | 🔄 |
-| S6 NLP Pipeline (8 blocks: sectioning through LLM extraction) | 🔄 |
+| Pre-implementation repo fixes (Avro schemas, event renames, DB config) | ✅ |
+| S4 Content Ingestion (adapters, scheduler, outbox, MinIO) | ✅ |
+| S5 Content Store (consumer, dedup, MinIO silver) | ✅ |
+| S6 NLP Pipeline (8 blocks: sectioning through LLM extraction) | ✅ |
 | S7 Knowledge Graph (materialization, confidence, contradiction) | 🔄 |
 | intelligence-migrations (DDL, seeds, partitions) | 🔄 |
 | S10 Alert Service (consumers, WebSocket, dedup) | 🔄 |
@@ -456,9 +456,9 @@ Active PRD: `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md`. S4-S7, 
 
 | Fix | Action | Status |
 |-----|--------|--------|
-| Rename `watchlist.item_removed` --> `watchlist.item_deleted` | Event type in schemas + S1 code | 🔄 |
-| Create missing Avro schemas | 5 schemas for schema-init boot | 🔄 |
-| Fix knowledge-graph DB config | `DATABASE_URL` default `kg_db` --> `intelligence_db` | 🔄 |
+| Rename `watchlist.item_removed` --> `watchlist.item_deleted` | Event type in schemas + S1 code | ✅ |
+| Create missing Avro schemas | 5 schemas for schema-init boot | ✅ |
+| Fix knowledge-graph DB config | `DATABASE_URL` default `kg_db` --> `intelligence_db` | ✅ |
 
 ---
 

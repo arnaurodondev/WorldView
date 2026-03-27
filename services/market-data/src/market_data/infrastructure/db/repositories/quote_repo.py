@@ -27,10 +27,10 @@ class PgQuoteRepository(QuoteRepository):
     def _to_domain(row: QuoteModel) -> Quote:
         return Quote(
             instrument_id=row.instrument_id,
-            bid=Decimal(str(row.bid)) if row.bid is not None else Decimal("0"),
-            ask=Decimal(str(row.ask)) if row.ask is not None else Decimal("0"),
-            last=Decimal(str(row.last)) if row.last is not None else Decimal("0"),
-            volume=int(row.volume) if row.volume is not None else 0,
+            bid=Decimal(str(row.bid)) if row.bid is not None else None,
+            ask=Decimal(str(row.ask)) if row.ask is not None else None,
+            last=Decimal(str(row.last)) if row.last is not None else None,
+            volume=int(row.volume) if row.volume is not None else None,
             timestamp=row.timestamp or row.updated_at or datetime.now(tz=UTC),
             updated_at=row.updated_at or datetime.now(tz=UTC),
         )

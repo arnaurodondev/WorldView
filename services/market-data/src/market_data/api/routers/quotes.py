@@ -24,9 +24,9 @@ _CACHE_TTL = 5  # seconds
 def _to_quote_response(quote: Quote) -> QuoteResponse:
     return QuoteResponse(
         instrument_id=quote.instrument_id,
-        bid=str(quote.bid),
-        ask=str(quote.ask),
-        last=str(quote.last),
+        bid=str(quote.bid) if quote.bid is not None else None,
+        ask=str(quote.ask) if quote.ask is not None else None,
+        last=str(quote.last) if quote.last is not None else None,
         volume=quote.volume,
         timestamp=quote.timestamp,
         updated_at=quote.updated_at,

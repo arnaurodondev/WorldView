@@ -202,3 +202,95 @@ async def test_ohlcv_consumer_parse_failure_raises_fatal() -> None:
     consumer = _make_consumer(mock_uow, mock_storage)
     with pytest.raises(MalformedDataError):
         await consumer.process_message(None, _make_message(), {})
+
+
+# ── T-E2-1-01/02: atomic dedup via create_if_not_exists ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_content_hash_dedup_marks_processed() -> None:
+    """Unchanged content hash → event_id still recorded despite early return.
+
+    With the create_if_not_exists pattern, the event_id is atomically inserted
+    BEFORE the content-hash check, so even the skip-unchanged path leaves a
+    dedup record (BP-034).
+    """
+    mock_uow = AsyncMock()
+    # create_if_not_exists returns True → this is a new event_id
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # _make_consumer overwrites exists_by_content_hash → set it to True after
+    mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=True)
+    msg = _make_message()
+    msg["canonical_ref_sha256"] = "abc123"
+
+    await consumer.process_message(None, msg, {})
+
+    # create_if_not_exists must be called (event_id recorded atomically)
+    mock_uow.ingestion_events.create_if_not_exists.assert_awaited_once()
+    # Storage should NOT be accessed (content-hash dedup skips download)
+    mock_storage.get_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_replay_after_content_hash_skip_is_deduped() -> None:
+    """Second delivery after hash-dedup skip is correctly deduplicated.
+
+    First delivery: event_id inserted by create_if_not_exists, content-hash
+    matches → return early.  Second delivery: create_if_not_exists returns
+    False → consumer skips without processing.
+    """
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    # Second delivery: event_id already in DB → create_if_not_exists returns False
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=False)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    msg = _make_message()
+    msg["canonical_ref_sha256"] = "abc123"
+
+    await consumer.process_message(None, msg, {})
+
+    # Duplicate: no storage access, no upsert
+    mock_storage.get_bytes.assert_not_called()
+    mock_uow.ohlcv.bulk_upsert_with_priority.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_skips_processing_on_duplicate_insert() -> None:
+    """Second delivery (duplicate event_id) → early return, no data written."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=False)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_storage.get_bytes.assert_not_called()
+    mock_uow.ohlcv.bulk_upsert_with_priority.assert_not_called()
+
+
+# ── T-E2-1-04: RuntimeError instead of assert ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_is_noop() -> None:
+    """mark_processed is a no-op after T-E2-1-02 (event recorded in process_message)."""
+    consumer = _make_consumer(AsyncMock(), AsyncMock())
+    # Should not raise regardless of UoW state
+    await consumer.mark_processed("evt-001")
+
+
+@pytest.mark.asyncio
+async def test_process_message_raises_runtime_error_when_no_uow() -> None:
+    """process_message raises RuntimeError if _current_uow is None."""
+    consumer = OHLCVConsumer(uow_factory=lambda: AsyncMock(), object_storage=None)
+    consumer._current_uow = None
+
+    with pytest.raises(RuntimeError, match="active unit of work"):
+        await consumer.process_message(None, _make_message(), {})

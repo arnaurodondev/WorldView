@@ -129,3 +129,59 @@ class TestIngestionEventExists:
         compiled = stmt.compile(dialect=postgresql.dialect())
         sql = str(compiled).lower()
         assert "exists" in sql
+
+
+# ── T-E2-1-02: atomic create_if_not_exists ────────────────────────────────────
+
+
+class TestCreateIfNotExists:
+    """Verify create_if_not_exists INSERT…ON CONFLICT DO NOTHING…RETURNING."""
+
+    async def test_create_if_not_exists_returns_true_on_first_insert(self):
+        """New event_id → True (row was inserted and RETURNING returns a value)."""
+        session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = 1  # row was inserted
+        session.execute.return_value = mock_result
+
+        repo = PgIngestionEventRepository(session)
+        result = await repo.create_if_not_exists("new-event-id")
+
+        assert result is True
+        session.execute.assert_called_once()
+
+    async def test_create_if_not_exists_returns_false_on_duplicate(self):
+        """Duplicate event_id → False (ON CONFLICT DO NOTHING → RETURNING returns nothing)."""
+        session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None  # conflict → no row returned
+        session.execute.return_value = mock_result
+
+        repo = PgIngestionEventRepository(session)
+        result = await repo.create_if_not_exists("duplicate-event-id")
+
+        assert result is False
+        session.execute.assert_called_once()
+
+
+# ── T-E2-2-01: LIKE metacharacter escape in instrument search ──────────────────
+
+
+class TestInstrumentLikeEscape:
+    """Verify that LIKE metacharacters are escaped before building ILIKE patterns."""
+
+    def test_escape_like_percent(self):
+        """'%' in query is escaped to '\\%'."""
+        assert PgInstrumentRepository._escape_like("50%") == "50\\%"
+
+    def test_escape_like_underscore(self):
+        """'_' in query is escaped to '\\_'."""
+        assert PgInstrumentRepository._escape_like("A_B") == "A\\_B"
+
+    def test_escape_like_backslash(self):
+        """Existing backslash is doubled before other escaping."""
+        assert PgInstrumentRepository._escape_like("A\\B") == "A\\\\B"
+
+    def test_escape_like_normal_query_unchanged(self):
+        """Normal alphanumeric query is not altered."""
+        assert PgInstrumentRepository._escape_like("AAPL") == "AAPL"

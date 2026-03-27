@@ -73,8 +73,15 @@ def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_to_avro_dict(event: Any) -> dict[str, Any]:
-    """Convert a domain event dataclass to a sanitized dict for Avro encoding."""
+    """Convert a domain event dataclass to a sanitized dict for Avro encoding.
+
+    ``event_type`` and ``schema_version`` are ``ClassVar`` fields that are
+    excluded from ``dataclasses.asdict()``.  They are added back explicitly
+    so the Avro schema fields are populated correctly.
+    """
     raw = dataclasses.asdict(event)
+    raw["event_type"] = type(event).event_type
+    raw["schema_version"] = type(event).schema_version
     return _sanitize_payload(raw)
 
 

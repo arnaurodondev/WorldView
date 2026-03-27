@@ -6,16 +6,14 @@ These models MUST stay in sync with alembic/versions/0001_create_nlp_schema.py (
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 
 class Base(DeclarativeBase):

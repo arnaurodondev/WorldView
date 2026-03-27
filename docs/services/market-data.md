@@ -60,9 +60,9 @@ or articles, perform NLP processing, manage portfolios.
 > `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by
 > `/fundamentals/{security_id}`.
 >
-> **Fundamentals path param**: The path parameter is historically named `security_id` in
-> the router code but represents the **instrument UUID** (primary key of the `instruments`
-> table), not the `securities.id`. Fundamentals are stored per instrument, not per security.
+> **Fundamentals path param**: The path parameter is named `instrument_id` and represents
+> the **instrument UUID** (primary key of the `instruments` table), not `securities.id`.
+> Fundamentals are stored per instrument, not per security.
 >
 > `/metrics` is exposed by the `observability.metrics.add_prometheus_middleware` middleware,
 > not a registered router endpoint.
@@ -291,12 +291,14 @@ TimescaleDB chunk exclusion and the DB connection pool handle read performance.
 | `FundamentalsConsumer` | `market-data-fundamentals` | `market.dataset.fetched` | `dataset_type == "FUNDAMENTALS"` |
 
 All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
-1. Implement idempotency via `ingestion_events` table (`is_duplicate` / `mark_processed`).
+1. Implement idempotency via `ingestion_events` table — atomic `create_if_not_exists()` (INSERT … ON CONFLICT DO NOTHING … RETURNING) records the event_id before any processing begins (BP-035). Content-hash dedup skips download when the canonical object is unchanged but still records the event_id.
 2. Fetch the canonical object from MinIO using `canonical_ref_bucket` + `canonical_ref_key`.
 3. Parse records using inline `json.loads()` + `CanonicalXxxBar.from_dict()`.
 4. Upsert records using the UoW's repository (with provider-priority logic for OHLCV).
 5. Upsert the instrument record and update `has_ohlcv / has_quotes / has_fundamentals` flag.
 6. Emit `InstrumentCreated` or `InstrumentUpdated` domain events to the outbox.
+
+**Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
 The UoW is accessed via `self._current_uow` which is set by the base class before
 calling `process_message(event_dict)`.

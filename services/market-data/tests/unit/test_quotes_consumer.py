@@ -174,3 +174,75 @@ async def test_quotes_consumer_parse_failure_raises_fatal() -> None:
     consumer = _make_consumer(mock_uow, mock_storage)
     with pytest.raises(MalformedDataError):
         await consumer.process_message(None, _make_message(), {})
+
+
+# ── T-E2-1-01/02: atomic dedup + T-E2-1-03: nullable Quote fields ──────────
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_content_hash_dedup_marks_processed() -> None:
+    """Unchanged content hash → event_id still recorded despite early return (BP-034)."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # _make_consumer overwrites exists_by_content_hash → set it to True after
+    mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=True)
+    msg = _make_message()
+    msg["canonical_ref_sha256"] = "deadbeef"
+
+    await consumer.process_message(None, msg, {})
+
+    mock_uow.ingestion_events.create_if_not_exists.assert_awaited_once()
+    mock_storage.get_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_skips_processing_on_duplicate_insert() -> None:
+    """Duplicate event_id → early return, no data written."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=False)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_storage.get_bytes.assert_not_called()
+    mock_uow.quotes.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_null_bid_ask_handled() -> None:
+    """NULL bid/ask in canonical payload → None in Quote entity (D-004)."""
+
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+
+    # Canonical quote with null bid/ask/last
+    null_quote_json = json.dumps(
+        {
+            "symbol": "MSFT",
+            "exchange": "US",
+            "bid": None,
+            "ask": None,
+            "last": None,
+            "volume": None,
+            "timestamp": "2024-01-15T14:30:00",
+            "source": "polygon",
+        }
+    ).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=null_quote_json)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    quote: Quote = mock_uow.quotes.upsert.call_args[0][0]
+    assert quote.bid is None
+    assert quote.ask is None
+    assert quote.last is None
+    assert quote.volume is None

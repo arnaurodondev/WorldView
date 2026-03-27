@@ -7,6 +7,7 @@ created: 2026-03-27
 updated: 2026-03-27
 plans: 4
 <!-- Wave E1-4 completed 2026-03-27 -->
+<!-- Waves E2-1 + E2-2 completed 2026-03-27 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -787,11 +788,12 @@ async def _execute_with_semaphore(self, task: IngestionTask) -> None:
 
 ## Sub-Plan E-2: Market-Data (S3) Fixes
 
-### Wave E2-1: BLOCKING + CRITICAL — mark_processed, dedup race, Quote NULL, assert, ON CONFLICT
+### Wave E2-1: BLOCKING + CRITICAL — mark_processed, dedup race, Quote NULL, assert, ON CONFLICT ✅
 
 **Goal**: Fix all BLOCKING and CRITICAL issues in market-data: content-hash dedup missing mark_processed, dedup check-then-insert race, Quote NULL→zero mapping, assert for production errors, idempotency ON CONFLICT.
 **Depends on**: none
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-03-27 · 271 tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure + domain
 
 #### Pre-read
@@ -1018,9 +1020,9 @@ If `create()` is fully replaced by `create_if_not_exists()`, remove it or mark a
 - [ ] Replay safety verified by test in T-E2-1-02
 
 #### Validation Gate (Wave E2-1)
-- [ ] `ruff check services/market-data/` clean
-- [ ] `mypy services/market-data/src/` clean
-- [ ] `python -m pytest services/market-data/tests -m unit -v` — all pass (≥260 expected + 13 new)
+- [x] `ruff check services/market-data/` clean
+- [x] `mypy services/market-data/src/` clean
+- [x] `python -m pytest services/market-data/tests -m unit -v` — all pass (≥260 expected + 13 new)
 
 #### Regression Guardrails
 - BP-034: All 3 consumers must call `mark_processed` before any early return
@@ -1029,11 +1031,12 @@ If `create()` is fully replaced by `create_if_not_exists()`, remove it or mark a
 
 ---
 
-### Wave E2-2: Architecture + LIKE escape
+### Wave E2-2: Architecture + LIKE escape ✅
 
 **Goal**: Fix LIKE pattern injection in instrument search, replace `event_type` instance defaults with ClassVar, rename `security_id` → `instrument_id` in fundamentals endpoints.
 **Depends on**: Wave E2-1
 **Estimated effort**: 30–45 minutes
+**Status**: **DONE** — 2026-03-27 · 271 tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure + API
 
 #### Tasks
@@ -1145,10 +1148,10 @@ Update docs to reflect the rename.
 - [ ] No broken references
 
 #### Validation Gate (Wave E2-2)
-- [ ] `ruff check services/market-data/` clean
-- [ ] `mypy services/market-data/src/` clean
-- [ ] All unit tests pass (≥270 expected)
-- [ ] Docs updated for fundamentals endpoints
+- [x] `ruff check services/market-data/` clean
+- [x] `mypy services/market-data/src/` clean
+- [x] All unit tests pass (≥270 expected)
+- [x] Docs updated for fundamentals endpoints
 
 ---
 

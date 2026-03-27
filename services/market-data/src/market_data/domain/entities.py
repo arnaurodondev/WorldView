@@ -112,13 +112,17 @@ class Quote:
 
     One row per instrument (last-write-wins, not time-series).  The full
     price history is stored in ``OHLCVBar``.
+
+    Price fields use ``Decimal | None`` to preserve data fidelity:
+    ``None`` means "no data available", while ``Decimal("0")`` means
+    "zero trading activity" (D-004).
     """
 
     instrument_id: str = ""
-    bid: Decimal = Decimal("0")
-    ask: Decimal = Decimal("0")
-    last: Decimal = Decimal("0")
-    volume: int = 0
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+    volume: int | None = None
     timestamp: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 
