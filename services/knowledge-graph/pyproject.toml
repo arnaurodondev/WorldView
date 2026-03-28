@@ -22,6 +22,7 @@ dependencies = [
     "structlog>=24.0",
     "messaging",
     "apscheduler[asyncio]>=3.10,<4",
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,8 @@ dev = [
     "pytest-httpx==0.30",
     "ruff==0.4",
     "mypy==1.10",
+    "testcontainers[postgres]>=4.0",
+    "prometheus-client>=0.20",
 ]
 
 [tool.hatch.build.targets.wheel]

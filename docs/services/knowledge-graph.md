@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Wave D-2 complete — hot path Blocks 11–12 + APScheduler/Kafka co-topology implemented
+> **Status**: Wave D-4 complete — REST API + health/metrics/DLQ + integration tests · Service feature-complete
 
 ---
 
@@ -24,14 +24,27 @@ and performs read/write operations only.
 
 ## API Surface
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (intelligence_db) | — |
-| GET | `/metrics` | Prometheus | — |
-| GET | `/api/v1/entities/{id}/graph` | KG neighborhood (query: depth, limit) | medium |
-| GET | `/api/v1/relations` | Query relations (entity_id, relation_type, active_only) | medium |
-| GET | `/api/v1/graph/stats` | Graph statistics (node/edge counts, confidence distribution) | slow |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/healthz` | — | Liveness — always 200 |
+| GET | `/readyz` | — | Readiness — SELECT 1 on intelligence_db; 503 if degraded |
+| GET | `/metrics` | — | Prometheus text format |
+| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200) |
+| GET | `/api/v1/relations` | — | Paginated filtered relation list; query params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
+| GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |
+| GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
+| GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
+| POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |
+
+### `summary_authority` Field
+
+All relation responses include `summary_authority` computed at query time (NOT a cached column):
+
+```
+summary_authority = confidence * log1p(evidence_count)
+```
+
+Returns `0.0` when confidence is `null` (stale/unknown).
 
 ---
 
@@ -167,6 +180,12 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
 | `MARKET_DATA_BASE_URL` | `http://market-data:8003` | REST endpoint for fundamentals + OHLCV data (13D-3 worker) |
 | `GEMINI_API_KEY` | — | Gemini Flash Lite fallback for embedding/extraction |
+| `KNOWLEDGE_GRAPH_LOG_LEVEL` | `INFO` | Log verbosity |
+| `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | JSON structured log output |
+| `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | — | OTel OTLP gRPC endpoint (optional) |
+| `KNOWLEDGE_GRAPH_ADMIN_TOKEN` | — | X-Admin-Token for DLQ admin endpoints (empty = auth disabled) |
+| `DISPATCHER_POLL_INTERVAL_S` | `5.0` | Outbox dispatcher poll cadence |
+| `DISPATCHER_BATCH_SIZE` | `100` | Outbox events per poll cycle |
 
 ---
 
