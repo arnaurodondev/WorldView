@@ -10,6 +10,7 @@ plans: 4
 <!-- Waves E2-1 + E2-2 completed 2026-03-27 -->
 <!-- Wave E2-3 completed 2026-03-28 -->
 <!-- Waves E3-1 + E3-2 completed 2026-03-28 -->
+<!-- Waves E3-3 + E3-4 completed 2026-03-28 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -1571,12 +1572,13 @@ This ensures mapper failures (serialization errors) surface before any DB write,
 
 ---
 
-### Wave E3-3: MAJOR Security + Input Validation
+### Wave E3-3: MAJOR Security + Input Validation ✅
 
 **Goal**: Add Field constraints to API request schemas, fix internal token default, fix cache invalidation ordering, fix watchlist uniqueness TOCTOU.
 **Depends on**: Wave E3-2
 **Estimated effort**: 45–60 minutes
 **Architecture layer**: API + application
+**Status**: **DONE** — 2026-03-28 · 289 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -1726,18 +1728,19 @@ async def get_uow(...) -> AsyncIterator[UnitOfWork]:
 - [ ] Existing tests still pass
 
 #### Validation Gate (Wave E3-3)
-- [ ] `ruff check services/portfolio/` clean
-- [ ] `mypy services/portfolio/src/` clean
-- [ ] All unit tests pass
+- [x] `ruff check services/portfolio/` clean
+- [x] `mypy services/portfolio/src/` clean
+- [x] All unit tests pass
 
 ---
 
-### Wave E3-4: Tests + Architecture Cleanup
+### Wave E3-4: Tests + Architecture Cleanup ✅
 
 **Goal**: Add missing test coverage for portfolio (instrument consumer, transactions, holdings), fix InstrumentConsumer UUID idempotency, standardize event envelope to strings.
 **Depends on**: Wave E3-3
 **Estimated effort**: 45–60 minutes
 **Architecture layer**: tests + domain
+**Status**: **DONE** — 2026-03-28 · 289 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -1847,10 +1850,10 @@ Update any code that treats `event_id` as a UUID object to use `UUID(event.event
 - [ ] 2 new tests pass
 
 #### Validation Gate (Wave E3-4)
-- [ ] `ruff check services/portfolio/` clean
-- [ ] `mypy services/portfolio/src/` clean
-- [ ] All unit tests pass
-- [ ] Integration tests pass (or skipped with reason)
+- [x] `ruff check services/portfolio/` clean
+- [x] `mypy services/portfolio/src/` clean
+- [x] All unit tests pass
+- [ ] Integration tests pass (or skipped with reason — require running containers)
 
 ---
 

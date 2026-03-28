@@ -9,7 +9,6 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from portfolio.application.ports.cache import WatchlistCachePort
 from portfolio.application.ports.unit_of_work import UnitOfWork
-from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -17,6 +16,9 @@ if TYPE_CHECKING:
 
 async def get_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
     """Yield a SqlAlchemyUnitOfWork bound to the app's session factory."""
+    # Lazy import avoids loading the infrastructure layer at module import time (M-012).
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
     session_factory = request.app.state.session_factory
     async with SqlAlchemyUnitOfWork(session_factory) as uow:
         yield uow

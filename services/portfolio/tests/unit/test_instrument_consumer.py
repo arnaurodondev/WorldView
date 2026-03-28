@@ -296,3 +296,102 @@ async def test_get_pending_retries_returns_empty_list() -> None:
     consumer = InstrumentEventConsumer(config=_make_config(), session_factory=MagicMock())
 
     assert await consumer.get_pending_retries() == []
+
+
+# ── M-017/M-018: stable instrument ID + malformed-event coverage ──────────────
+
+
+@pytest.mark.asyncio
+async def test_process_message_entity_id_used_as_stable_instrument_id() -> None:
+    """When entity_id is present, instrument.id equals entity_id (stable across replays)."""
+    from uuid import UUID
+
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    entity_id = str(uuid4())
+    value = {
+        "event_id": str(uuid4()),
+        "symbol": "AAPL",
+        "exchange": "NASDAQ",
+        "entity_id": entity_id,
+    }
+
+    await consumer.process_message(key=None, value=value, headers={})
+
+    assert len(fake_uow._instruments_repo.upserted) == 1
+    instrument = fake_uow._instruments_repo.upserted[0]
+    assert instrument.id == UUID(entity_id), "instrument.id must equal entity_id for stable idempotency"
+
+
+@pytest.mark.asyncio
+async def test_process_message_no_entity_id_generates_new_uuid() -> None:
+    """When entity_id is absent, instrument.id is auto-generated (not None)."""
+    from uuid import UUID
+
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    value = {"event_id": str(uuid4()), "symbol": "MSFT", "exchange": "NASDAQ"}
+
+    await consumer.process_message(key=None, value=value, headers={})
+
+    instrument = fake_uow._instruments_repo.upserted[0]
+    assert instrument.id is not None
+    assert isinstance(instrument.id, UUID)
+    assert instrument.entity_id is None
+
+
+@pytest.mark.asyncio
+async def test_process_message_malformed_entity_id_falls_back_to_new_uuid() -> None:
+    """Malformed entity_id (non-UUID string) falls back gracefully to a generated UUID."""
+    from uuid import UUID
+
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    value = {
+        "event_id": str(uuid4()),
+        "symbol": "TSLA",
+        "exchange": "NASDAQ",
+        "entity_id": "not-a-valid-uuid",
+    }
+
+    # Should not raise; malformed entity_id is ignored
+    await consumer.process_message(key=None, value=value, headers={})
+
+    instrument = fake_uow._instruments_repo.upserted[0]
+    assert isinstance(instrument.id, UUID)
+    assert instrument.entity_id is None
+
+
+@pytest.mark.asyncio
+async def test_process_message_missing_symbol_defaults_to_empty_string() -> None:
+    """Missing symbol in message defaults to empty string (not an error)."""
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    value = {"event_id": str(uuid4()), "exchange": "NYSE"}
+
+    await consumer.process_message(key=None, value=value, headers={})
+
+    instrument = fake_uow._instruments_repo.upserted[0]
+    assert instrument.symbol == ""
+    assert instrument.exchange == "NYSE"
+
+
+@pytest.mark.asyncio
+async def test_process_message_all_optional_fields_none() -> None:
+    """Message with no optional fields produces InstrumentRef with None optional attributes."""
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    value = {"event_id": str(uuid4()), "symbol": "IBM", "exchange": "NYSE"}
+
+    await consumer.process_message(key=None, value=value, headers={})
+
+    instrument = fake_uow._instruments_repo.upserted[0]
+    assert instrument.name is None
+    assert instrument.currency is None
+    assert instrument.asset_class is None
+    assert instrument.entity_id is None

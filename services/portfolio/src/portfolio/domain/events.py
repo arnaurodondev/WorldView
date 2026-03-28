@@ -10,7 +10,6 @@ from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from datetime import datetime
     from uuid import UUID
 
 
@@ -24,6 +23,10 @@ class DomainEvent(ABC):
 
     Instance fields: ``tenant_id`` (required), plus defaults for the rest.
     ``schema_version`` defaults to 1 and can be overridden per subclass.
+
+    Envelope fields use plain strings for Avro portability (D-009):
+    - ``event_id`` — UUIDv7 hex string
+    - ``occurred_at`` — ISO-8601 UTC timestamp with Z suffix
     """
 
     EVENT_TYPE: ClassVar[str]
@@ -31,8 +34,8 @@ class DomainEvent(ABC):
 
     tenant_id: UUID
     schema_version: int = 1
-    event_id: UUID = field(default_factory=new_uuid)
-    occurred_at: datetime = field(default_factory=utc_now)
+    event_id: str = field(default_factory=lambda: str(new_uuid()))
+    occurred_at: str = field(default_factory=lambda: utc_now().isoformat().replace("+00:00", "Z"))
     correlation_id: str | None = None
     causation_id: str | None = None
 

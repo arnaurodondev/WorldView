@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Generic, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, field_serializer, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator
 
 T = TypeVar("T")
 
@@ -33,7 +33,10 @@ def _validate_currency(v: str) -> str:
 
 
 class TenantCreateRequest(BaseModel):
-    name: str
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+    )
 
 
 class TenantResponse(BaseModel):
@@ -45,7 +48,7 @@ class TenantResponse(BaseModel):
 
 class UserCreateRequest(BaseModel):
     tenant_id: UUID
-    email: str
+    email: EmailStr = Field(max_length=254)  # RFC 5321 max
 
 
 class UserResponse(BaseModel):
@@ -57,7 +60,10 @@ class UserResponse(BaseModel):
 
 
 class PortfolioCreateRequest(BaseModel):
-    name: str
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+    )
     owner_user_id: UUID
     currency: str = "USD"
 
@@ -78,7 +84,10 @@ class PortfolioResponse(BaseModel):
 
 
 class PortfolioRenameRequest(BaseModel):
-    name: str
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+    )
 
 
 class RecordTransactionRequest(BaseModel):
@@ -183,7 +192,10 @@ class ErrorResponse(BaseModel):
 
 
 class WatchlistCreateRequest(BaseModel):
-    name: str
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+    )
 
 
 class WatchlistResponse(BaseModel):
