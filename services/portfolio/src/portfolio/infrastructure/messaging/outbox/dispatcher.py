@@ -14,6 +14,7 @@ from messaging.kafka.schema_registry import (  # type: ignore[import-untyped]
     SchemaRegistryConfig,
     build_schema_registry_client,
 )
+from observability.logging import get_logger  # type: ignore[import-untyped]
 from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.infrastructure.messaging.serialization import build_outbox_event_serializers, headers_for_event
 
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from portfolio.config import Settings
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class OutboxDispatcher(BaseOutboxDispatcher):
@@ -40,7 +43,7 @@ class OutboxDispatcher(BaseOutboxDispatcher):
 
     def _build_producer(self) -> Any:
         registry_config = SchemaRegistryConfig(
-            url=self._settings.kafka_schema_registry_url,
+            url=self._settings.schema_registry_url,
             basic_auth_user_info=self._settings.kafka_schema_registry_basic_auth,
         )
         registry_client = build_schema_registry_client(registry_config)
@@ -64,6 +67,35 @@ class OutboxDispatcher(BaseOutboxDispatcher):
         from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork  # type: ignore[import-untyped]
 
         return SqlAlchemyUnitOfWork(self._session_factory)
+
+    async def _dispatch_batch(self) -> list[Any]:
+        """Override base to emit reclaim warnings for records being retried.
+
+        Lease duration is ≥30 s (default 30 s) — typical Kafka publish <5 s;
+        6x safety margin prevents concurrent dispatchers from re-claiming a
+        stalled record. See B-006 (dispatcher lease duration) for rationale.
+        """
+        async with await self.get_unit_of_work() as uow:
+            records = await uow.outbox.fetch_pending(
+                worker_id=self._config.worker_id,
+                lease_seconds=self._config.lease_seconds,
+                batch_size=self._config.batch_size,
+            )
+            for record in records:
+                if record.attempts > 0:
+                    logger.warning(
+                        "outbox.record_reclaimed",
+                        record_id=str(record.id),
+                        attempts=record.attempts,
+                    )
+            results = []
+            for record in records:
+                result = await self._dispatch_record(record, uow)
+                results.append(result)
+                if not result.success:
+                    await self.on_delivery_failure(result)
+            await uow.commit()
+            return results
 
 
 def create_dispatcher(

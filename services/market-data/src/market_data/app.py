@@ -181,7 +181,7 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     from market_data.config import Settings
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
 
     app = FastAPI(
         title="market-data",

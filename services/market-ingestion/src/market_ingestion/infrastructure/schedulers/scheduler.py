@@ -86,7 +86,7 @@ class SchedulerProcess:
 
 async def _run_scheduler() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     scheduler = SchedulerProcess(settings=settings)
 
     loop = asyncio.get_running_loop()

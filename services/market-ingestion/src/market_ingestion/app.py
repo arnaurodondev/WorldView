@@ -77,7 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2026.3.0",
         lifespan=lifespan,
     )
-    settings = settings or Settings()
+    settings = settings or Settings()  # type: ignore[call-arg]
     app.state.settings = settings
 
     # Middleware — must be registered before app starts (Starlette requirement)

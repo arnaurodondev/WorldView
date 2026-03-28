@@ -33,7 +33,7 @@ def build_object_storage(settings: StorageSettings | None = None) -> ObjectStora
         store = build_object_storage()
         await store.put_bytes("worldview", "market-data/ohlcv/AAPL/v1.parquet", data)
     """
-    resolved = settings or StorageSettings()
+    resolved = settings or StorageSettings()  # type: ignore[call-arg]
     logger.debug(
         "build_object_storage",
         endpoint=resolved.endpoint_url,

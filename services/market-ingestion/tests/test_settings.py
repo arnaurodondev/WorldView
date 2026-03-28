@@ -10,16 +10,24 @@ pytestmark = pytest.mark.unit
 
 
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
-    """Settings loads with sane defaults (no env vars required)."""
+    """Settings loads with sane defaults (storage credentials must be provided)."""
     # Remove any MARKET_INGESTION_* process env vars so we test pure field defaults,
     # not whatever dev.local.env injected via `make test-all`.
     for key in list(os.environ):
         if key.startswith("MARKET_INGESTION_"):
             monkeypatch.delenv(key, raising=False)
+    # storage_access_key / storage_secret_key have no defaults (C-001 security
+    # hardening) — provide explicit values so Settings() can be instantiated.
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_SECRET_KEY", "test-secret")
+
+    import warnings
 
     from market_ingestion.config import Settings
 
-    s = Settings()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # suppress EODHD demo-key warning in this test
+        s = Settings()
     assert s.port == 8002
     assert s.host == Settings.model_fields["host"].default
     assert s.debug is False
@@ -35,6 +43,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.worker_concurrency == 4
     assert s.dispatcher_batch_size == 50
     assert s.dispatcher_poll_interval_seconds == 1.0
+    assert s.dispatcher_lease_seconds == 60
     assert s.dispatcher_max_attempts == 5
     assert s.otlp_endpoint == ""
     assert s.log_level == "INFO"
