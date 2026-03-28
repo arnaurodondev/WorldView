@@ -231,6 +231,96 @@ async def test_ingest_status_returns_200(client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Input validation — TriggerRequest (M-SEC-018)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trigger_empty_symbol_rejected(client):
+    """Empty string symbol must be rejected with 422."""
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/ingest/trigger",
+        json={"provider": "eodhd", "symbols": [""], "dataset_type": "ohlcv"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_trigger_too_long_symbol_rejected(client):
+    """Symbol exceeding 20 characters must be rejected with 422."""
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/ingest/trigger",
+        json={"provider": "eodhd", "symbols": ["A" * 21], "dataset_type": "ohlcv"},
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Input validation — BackfillRequest (M-SEC-019)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_chunk_days_zero_rejected(client):
+    """chunk_days=0 must be rejected with 422."""
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/ingest/backfill",
+        json={
+            "provider": "eodhd",
+            "symbol": "AAPL",
+            "start_date": "2024-01-01",
+            "end_date": "2024-03-01",
+            "chunk_days": 0,
+        },
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_backfill_10_year_range_accepted(app_with_overrides):
+    """Exactly 3650 days (≤ 10*365) must be accepted by schema validation.
+    2013-03-01 → 2023-02-27 = 3650 days (avoids the 3652-day trap from leap years).
+    chunk_days=365 keeps chunk count ≤ 100 (MAX_CHUNKS limit in BackfillUseCase).
+    """
+    app, mock_uow = app_with_overrides
+    mock_uow.tasks.add_many = AsyncMock(return_value=1)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/backfill",
+            json={
+                "provider": "eodhd",
+                "symbol": "AAPL",
+                "start_date": "2013-03-01",
+                "end_date": "2023-02-27",  # exactly 3650 days
+                "chunk_days": 365,  # 3650/365 = 10 chunks, well under MAX_CHUNKS=100
+            },
+        )
+    assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_backfill_exceeds_10_year_rejected(client):
+    """Date range exceeding 3650 days must be rejected with 422.
+    2013-03-01 → 2023-02-28 = 3651 days > 3650.
+    """
+    ac, _ = client
+    resp = await ac.post(
+        "/api/v1/ingest/backfill",
+        json={
+            "provider": "eodhd",
+            "symbol": "AAPL",
+            "start_date": "2013-03-01",
+            "end_date": "2023-02-28",  # 3651 days
+        },
+    )
+    assert resp.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_policies_returns_200(app_with_overrides):
     app, mock_uow = app_with_overrides

@@ -2,7 +2,7 @@
 id: PLAN-0001-E
 prd: QA Review (QA-CROSS-002)
 title: "S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency"
-status: in-progress
+status: completed
 created: 2026-03-27
 updated: 2026-03-28
 plans: 4
@@ -12,6 +12,8 @@ plans: 4
 <!-- Waves E3-1 + E3-2 completed 2026-03-28 -->
 <!-- Waves E3-3 + E3-4 completed 2026-03-28 -->
 <!-- Wave E4-1 completed 2026-03-28 -->
+<!-- Wave E4-2 completed 2026-03-28 -->
+<!-- Wave E4-3 completed 2026-03-28 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -1977,11 +1979,12 @@ for row in claimed_rows:
 
 ---
 
-### Wave E4-2: Documentation + Context Files
+### Wave E4-2: Documentation + Context Files ✅
 
 **Goal**: Fix portfolio docs port, update .claude-context.md files for all 3 services, update MASTER_PLAN if needed.
 **Depends on**: Wave E4-1
 **Estimated effort**: 30 minutes
+**Status**: **DONE** — 2026-03-28 · docs only · ruff + mypy N/A
 **Architecture layer**: docs
 
 #### Tasks
@@ -2046,16 +2049,17 @@ Update TRACKING.md status for PLAN-0001-E from `draft` to `in-progress` when fir
 - [ ] TRACKING.md reflects current plan status
 
 #### Validation Gate (Wave E4-2)
-- [ ] No broken links in docs
-- [ ] `.claude-context.md` format matches portfolio's structure
+- [x] No broken links in docs
+- [x] `.claude-context.md` format matches portfolio's structure
 
 ---
 
-### Wave E4-3: Input Validation — Market-Ingestion + Market-Data
+### Wave E4-3: Input Validation — Market-Ingestion + Market-Data ✅
 
 **Goal**: Add missing input validation to market-ingestion API schemas (symbol length, date range) and market-data instrument search.
 **Depends on**: Wave E4-2
 **Estimated effort**: 30–45 minutes
+**Status**: **DONE** — 2026-03-28 · 370 unit tests pass · ruff + mypy (schemas.py) clean
 **Architecture layer**: API
 
 #### Tasks
@@ -2116,9 +2120,9 @@ class BackfillRequest(BaseModel):
 - [ ] 5 new tests pass
 
 #### Validation Gate (Wave E4-3)
-- [ ] `ruff check services/market-ingestion/` clean
-- [ ] `mypy services/market-ingestion/src/` clean
-- [ ] All unit tests pass
+- [x] `ruff check services/market-ingestion/` clean
+- [x] `mypy services/market-ingestion/src/` clean
+- [x] All unit tests pass
 
 ---
 
