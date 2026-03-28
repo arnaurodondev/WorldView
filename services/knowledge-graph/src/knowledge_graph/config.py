@@ -82,3 +82,6 @@ class Settings(BaseSettings):
     # Outbox dispatcher
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50
+
+    # Admin token for DLQ endpoints (empty = no auth configured)
+    admin_token: str = ""

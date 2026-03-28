@@ -246,3 +246,166 @@ WHERE relation_id = :relation_id
                 "computed_at": computed_at,
             },
         )
+
+    # ── API query methods ─────────────────────────────────────────────────────
+
+    async def list_for_entity(
+        self,
+        entity_id: UUID,
+        *,
+        min_confidence: float = 0.0,
+        semantic_mode: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, object]]:
+        """Fetch relations where entity is the subject or object (API: neighbourhood).
+
+        Uses a fully parameterised query — no f-strings, no dynamic SQL construction.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at
+FROM relations r
+WHERE (r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id)
+  AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
+  AND (:semantic_mode IS NULL OR r.semantic_mode = :semantic_mode)
+ORDER BY r.latest_evidence_at DESC
+LIMIT :limit
+"""),
+            {
+                "entity_id": str(entity_id),
+                "min_confidence": min_confidence,
+                "semantic_mode": semantic_mode,
+                "limit": limit,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "subject_entity_id": UUID(str(r[1])),
+                "object_entity_id": UUID(str(r[2])),
+                "canonical_type": r[3],
+                "semantic_mode": r[4],
+                "decay_class": r[5],
+                "confidence": float(r[6]) if r[6] is not None else None,
+                "confidence_stale": bool(r[7]),
+                "evidence_count": int(r[8]),
+                "first_evidence_at": r[9],
+                "latest_evidence_at": r[10],
+            }
+            for r in rows
+        ]
+
+    async def list_filtered(
+        self,
+        *,
+        subject_entity_id: UUID | None = None,
+        object_entity_id: UUID | None = None,
+        canonical_type: str | None = None,
+        semantic_mode: str | None = None,
+        min_confidence: float | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Paginated, filtered relation list (API: GET /relations).
+
+        All user-supplied values are bound via named parameters;
+        IS NULL checks replace dynamic WHERE clause construction.
+        """
+        params: dict[str, object] = {
+            "limit": limit,
+            "offset": offset,
+            "subject_entity_id": str(subject_entity_id) if subject_entity_id else None,
+            "object_entity_id": str(object_entity_id) if object_entity_id else None,
+            "canonical_type": canonical_type,
+            "semantic_mode": semantic_mode,
+            "min_confidence": min_confidence,
+        }
+
+        # All user-supplied values are bound via named parameters.
+        # The WHERE conditions use IS NULL checks — no f-strings or dynamic SQL.
+        data_result = await self._session.execute(
+            text("""
+SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
+       r.canonical_type, r.semantic_mode, r.decay_class,
+       r.confidence, r.confidence_stale,
+       r.evidence_count, r.first_evidence_at, r.latest_evidence_at
+FROM relations r
+WHERE (:subject_entity_id IS NULL OR r.subject_entity_id = :subject_entity_id)
+  AND (:object_entity_id  IS NULL OR r.object_entity_id  = :object_entity_id)
+  AND (:canonical_type    IS NULL OR r.canonical_type    = :canonical_type)
+  AND (:semantic_mode     IS NULL OR r.semantic_mode     = :semantic_mode)
+  AND (:min_confidence    IS NULL OR r.confidence IS NULL OR r.confidence >= :min_confidence)
+ORDER BY r.latest_evidence_at DESC
+LIMIT :limit OFFSET :offset
+"""),
+            params,
+        )
+        rows = data_result.fetchall()
+
+        count_result = await self._session.execute(
+            text("""
+SELECT COUNT(*)
+FROM relations r
+WHERE (:subject_entity_id IS NULL OR r.subject_entity_id = :subject_entity_id)
+  AND (:object_entity_id  IS NULL OR r.object_entity_id  = :object_entity_id)
+  AND (:canonical_type    IS NULL OR r.canonical_type    = :canonical_type)
+  AND (:semantic_mode     IS NULL OR r.semantic_mode     = :semantic_mode)
+  AND (:min_confidence    IS NULL OR r.confidence IS NULL OR r.confidence >= :min_confidence)
+"""),
+            params,
+        )
+        total = int(count_result.scalar() or 0)
+
+        return (
+            [
+                {
+                    "relation_id": UUID(str(r[0])),
+                    "subject_entity_id": UUID(str(r[1])),
+                    "object_entity_id": UUID(str(r[2])),
+                    "canonical_type": r[3],
+                    "semantic_mode": r[4],
+                    "decay_class": r[5],
+                    "confidence": float(r[6]) if r[6] is not None else None,
+                    "confidence_stale": bool(r[7]),
+                    "evidence_count": int(r[8]),
+                    "first_evidence_at": r[9],
+                    "latest_evidence_at": r[10],
+                }
+                for r in rows
+            ],
+            total,
+        )
+
+    async def get_stats(self) -> dict[str, object]:
+        """Return aggregate graph statistics (API: GET /graph/stats)."""
+        result = await self._session.execute(
+            text("""
+SELECT
+    (SELECT COUNT(*) FROM canonical_entities)            AS entity_count,
+    (SELECT COUNT(*) FROM relations)                     AS relation_count,
+    (SELECT COUNT(*) FROM relation_evidence_raw)         AS evidence_count,
+    (SELECT COUNT(*) FROM relations WHERE confidence_stale = true)
+                                                         AS stale_confidence_count,
+    (SELECT COUNT(*) FROM relation_contradiction_links WHERE invalidated_at IS NULL)
+                                                         AS contradiction_link_count
+""")
+        )
+        row = result.fetchone()
+
+        mode_result = await self._session.execute(
+            text("SELECT semantic_mode, COUNT(*) FROM relations GROUP BY semantic_mode")
+        )
+        relations_by_mode: dict[str, int] = {r[0]: int(r[1]) for r in mode_result.fetchall()}
+
+        return {
+            "entity_count": int(row[0]) if row else 0,
+            "relation_count": int(row[1]) if row else 0,
+            "evidence_count": int(row[2]) if row else 0,
+            "stale_confidence_count": int(row[3]) if row else 0,
+            "contradiction_link_count": int(row[4]) if row else 0,
+            "relations_by_semantic_mode": relations_by_mode,
+        }
