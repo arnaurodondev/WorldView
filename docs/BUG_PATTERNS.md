@@ -2190,3 +2190,436 @@ PostgreSQL evaluates `:param IS NULL` first. When the parameter is `None` (bound
 
 - For very large tables with many optional filters, this can prevent index use on some filters even when non-null. Profile with `EXPLAIN ANALYZE` if performance is critical.
 - Not applicable when the number of filters is dynamic (e.g., variable-length IN clauses) — those still need query building.
+
+---
+
+## BP-045 — Non-atomic consumer dedup: `is_duplicate` + `process_message` + `mark_processed` in separate transactions
+
+**Category**: Idempotency / Concurrency
+**Services affected**: portfolio `InstrumentEventConsumer` (fixed 2026-03-28), any `BaseKafkaConsumer` subclass using 3-method dedup pattern
+**First seen**: PLAN-0001-E QA-003
+
+### Symptom
+
+Two concurrent consumer instances process the same event. Both call `is_duplicate(event_id)` → both get `False`. Both proceed through `process_message()`. Both call `mark_processed(event_id)`. The event is processed twice.
+
+### Root cause
+
+The classic 3-method dedup pattern opens **three separate DB transactions**:
+
+```python
+# WRONG — 3 separate transactions, race window between each
+async def is_duplicate(self, event_id):
+    async with await self.get_unit_of_work() as uow:
+        return await uow.idempotency.exists(uid)  # Transaction 1
+
+async def process_message(self, ...):
+    async with await self.get_unit_of_work() as uow:
+        await uow.instruments.upsert(instrument)  # Transaction 2
+
+async def mark_processed(self, event_id):
+    async with await self.get_unit_of_work() as uow:
+        await uow.idempotency.record(uid)  # Transaction 3
+```
+
+Between Transaction 1 returning `False` and Transaction 3 completing, another consumer instance can also pass the `is_duplicate` check.
+
+### Fix
+
+Apply BP-035: atomic `INSERT … ON CONFLICT DO NOTHING RETURNING` inside the **same transaction** as the business logic. `is_duplicate()` always returns `False`; `mark_processed()` is a no-op.
+
+```python
+# CORRECT — BP-035 pattern, single transaction
+async def is_duplicate(self, event_id: str) -> bool:
+    return False  # dedup handled atomically in process_message
+
+async def mark_processed(self, event_id: str) -> None:
+    pass  # dedup record inserted atomically in process_message
+
+async def process_message(self, key, value, headers):
+    async with await self.get_unit_of_work() as uow:
+        # Atomic dedup: both INSERT and business logic in one transaction
+        is_new = await uow.idempotency.create_if_not_exists(event_uid)
+        if not is_new:
+            return  # duplicate — skip
+        await uow.instruments.upsert(instrument)
+```
+
+The `create_if_not_exists` implementation:
+
+```python
+async def create_if_not_exists(self, event_id: UUID) -> bool:
+    stmt = (
+        insert(IdempotencyModel)
+        .values(event_id=event_id, processed_at=datetime.now(tz=UTC))
+        .on_conflict_do_nothing()
+        .returning(IdempotencyModel.event_id)
+    )
+    result = await self._session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+```
+
+### See also
+
+BP-035 (Watermark dedup), BP-040 (idempotency INSERT missing ON CONFLICT)
+
+---
+
+## BP-046 — Cache invalidation before `uow.commit()` creates stale-read-into-cache race
+
+**Category**: Cache consistency / M-005 violation
+**Services affected**: market-data `QuotesConsumer` (fixed 2026-03-28), any consumer that invalidates Valkey inside `process_message()`
+**First seen**: PLAN-0001-E QA-004
+
+### Symptom
+
+After a cache invalidation a client reads the data, gets the DB's current (old) value, and caches it. Then the transaction commits the new value. The cache now holds the OLD value until TTL expiry. Stale data is served from cache.
+
+### Root cause
+
+```python
+# WRONG — cache invalidation before commit
+async def process_message(self, key, value, headers):
+    await uow.quotes.upsert(quote)           # DB write (not yet committed)
+    await self._quote_cache.invalidate(id)   # Cache invalidated NOW
+    # ... base class calls uow.commit() later
+```
+
+After invalidation but before commit:
+1. Client reads `GET /quotes/{id}` → cache miss → hits DB → gets **old value** (write not committed)
+2. Client's response is cached in Valkey
+3. `uow.commit()` persists the new value
+4. Valkey now serves the **stale cached old value** until TTL
+
+### Fix
+
+Use `uow.schedule_post_commit(coro)` — a post-commit hook that drains after `write_session.commit()`:
+
+```python
+# CORRECT — cache invalidation after commit (M-005)
+async def process_message(self, key, value, headers):
+    await uow.quotes.upsert(quote)
+    # Schedule cache invalidation to run AFTER the transaction commits
+    if self._quote_cache is not None:
+        uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
+```
+
+The `schedule_post_commit` implementation in `SqlAlchemyUnitOfWork.commit()`:
+
+```python
+async def commit(self) -> None:
+    await self._write_session.commit()           # DB write durable
+    # ... outbox notifier ...
+    hooks = self._post_commit_hooks[:]
+    self._post_commit_hooks.clear()
+    for hook in hooks:
+        await hook                               # Cache invalidated after durability
+```
+
+### Test pattern
+
+Test must verify the hook is **scheduled** (not yet awaited), then manually drain:
+
+```python
+captured_hooks = []
+mock_uow.schedule_post_commit = MagicMock(side_effect=captured_hooks.append)
+await consumer.process_message(...)
+mock_cache.invalidate.assert_not_awaited()   # Not yet
+await captured_hooks[0]                       # Simulate commit drain
+mock_cache.invalidate.assert_awaited_once_with(instrument_id)
+```
+
+---
+
+## BP-047 — `readyz` health endpoint leaks DB credentials via raw exception string
+
+**Category**: Security / Information disclosure
+**Services affected**: All FastAPI services with `/readyz` endpoint
+**First seen**: PLAN-0001-E QA-010
+
+### Symptom
+
+`GET /readyz` returns `HTTP 503` with body:
+```json
+{"db": "error: password authentication failed for user 'postgres'@db:5432/portfolio_db"}
+```
+Or worse, if the connection string contains a password:
+```json
+{"db": "error: (asyncpg.InvalidPasswordError) password authentication failed for user 'postgres' at postgresql+asyncpg://postgres:s3cr3t@db:5432/..."}
+```
+
+### Root cause
+
+```python
+# WRONG — raw exception message in HTTP response body
+except Exception as exc:
+    checks["db"] = f"error: {exc}"  # leaks DSN, password, host info
+```
+
+### Fix
+
+Return opaque string in HTTP body; log full details internally:
+
+```python
+# CORRECT — opaque error in response, full details in logs only
+except Exception as exc:
+    log.error("readyz_db_check_failed",
+              error_type=type(exc).__name__, error=str(exc))
+    checks["db"] = "error"   # client sees only "error", not the exception
+```
+
+Also: `log` must be the service-level logger, not a locally-undefined name. If `log` is defined inside a lifespan function, it won't be accessible in a route handler defined in `create_app()`. Use `get_logger("service.app")` directly inside the handler.
+
+---
+
+## BP-048 — D-008 skip-if-exists guard applied to first storage step only; subsequent steps re-upload on retry
+
+**Category**: Idempotency / Object storage
+**Services affected**: market-ingestion `ExecuteTaskUseCase` (fixed 2026-03-28)
+**First seen**: PLAN-0001-E QA-011
+
+### Symptom
+
+On retry after a crash between canonical write and watermark commit:
+- Bronze object already exists → skip-if-exists fires, bronze upload is skipped ✓
+- Canonical object already exists → NO guard → canonical is re-uploaded (possibly with different bytes if data changed) ✗
+
+### Root cause
+
+The D-008 guard was applied to `_store_bronze` but not to `_store_canonical`:
+
+```python
+async def _store_bronze(self, task, raw_bytes):
+    key = build_bronze_key(task)
+    if await self._store.exists(bucket, key):  # D-008 ✓
+        sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        return ObjectRef(bucket=bucket, key=key, sha256=sha256, ...)
+    return await self._store.put(bucket, key, raw_bytes, ...)
+
+async def _store_canonical(self, task, canonical_bytes):
+    key = build_canonical_key(task)
+    # MISSING: no exists() check here ✗
+    return await self._store.put(bucket, key, canonical_bytes, ...)
+```
+
+### Fix
+
+Apply D-008 to **every** storage step, not just the first:
+
+```python
+async def _store_canonical(self, task, canonical_bytes):
+    key = build_canonical_key(task)
+    if await self._store.exists(self._canonical_bucket, key):  # D-008 ✓
+        sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+        return ObjectRef(bucket=self._canonical_bucket, key=key,
+                         sha256=sha256, byte_length=len(canonical_bytes), ...)
+    return await self._store.put(self._canonical_bucket, key, canonical_bytes, ...)
+```
+
+### Test pattern: watch out for `return_value=True` when multiple `exists()` calls occur
+
+```python
+# WRONG — returns True for ALL exists() calls; canonical also skipped
+store.exists = AsyncMock(return_value=True)
+
+# CORRECT — bronze exists (skip), canonical doesn't yet (allow put)
+store.exists = AsyncMock(side_effect=[True, False])
+# assertion must also change: assert_awaited_once() → assert await_count == 2
+```
+
+---
+
+## BP-049 — `get_or_create` reads back via read session after INSERT on write session (read-your-own-write failure)
+
+**Category**: DB session management / Read/write splitting
+**Services affected**: market-ingestion `BudgetRepository`, `WatermarkRepository` (fixed 2026-03-28)
+**First seen**: PLAN-0001-E QA-007, QA-008
+
+### Symptom
+
+`get_or_create()` inserts a row on the write session, then calls `self.get()` which uses the read session `self._r` — a potentially separate replica connection. The replica may not see the uncommitted or just-committed write (replication lag or different connection), so `get()` returns `None`. The caller then falls back to a transient domain object with a new auto-generated ID, breaking idempotency: subsequent `UPDATE WHERE id = new_id` matches 0 rows silently.
+
+### Root cause
+
+```python
+# WRONG — reads back from the wrong session after INSERT
+async def get_or_create(self, key) -> DomainObject:
+    stmt = insert(Model).values(...).on_conflict_do_nothing()
+    await self._w.execute(stmt)
+    row = await self.get(key)  # self.get() uses self._r (read session) ← WRONG
+    if row:
+        return row
+    return DomainObject(id=new_uuid7(), ...)  # fresh ID = broken idempotency
+```
+
+### Fix
+
+Read back from the write session after INSERT to guarantee read-your-own-write:
+
+```python
+# CORRECT — read back from write session
+async def get_or_create(self, key) -> DomainObject:
+    stmt = insert(Model).values(...).on_conflict_do_nothing()
+    await self._w.execute(stmt)
+    select_stmt = select(Model).where(Model.key == key)
+    row = (await self._w.execute(select_stmt)).scalar_one_or_none()
+    if row:
+        return _to_domain(row)
+    return DomainObject(id=new_uuid7(), ...)  # only reached on genuine insert failure
+```
+
+---
+
+## BP-050 — `asyncio.Event.set()` called from librdkafka delivery callback without `call_soon_threadsafe`
+
+**Category**: Thread safety / async
+**Services affected**: market-ingestion `OutboxDispatcher` (fixed 2026-03-28), any service using confluent-kafka delivery callbacks with asyncio synchronization primitives
+**First seen**: PLAN-0001-E QA-028
+
+### Symptom
+
+Intermittent deadlocks, missed delivery signals, or rare `RuntimeError: no running event loop` in high-throughput scenarios. Under normal load the issue is latent and only manifests under contention.
+
+### Root cause
+
+```python
+# WRONG — asyncio.Event mutated from a non-asyncio thread
+def _cb(err, _msg):
+    nonlocal delivery_error
+    if err:
+        delivery_error = RuntimeError(str(err))
+    delivery_event.set()   # ← called from librdkafka C thread, not asyncio thread
+
+loop = asyncio.get_event_loop()  # captured AFTER _cb definition — too late
+producer.produce(..., callback=_cb)
+await asyncio.wait_for(asyncio.shield(asyncio.get_event_loop().run_until_complete(...)), ...)
+```
+
+librdkafka delivery callbacks run on the librdkafka internal thread pool, which is not the asyncio event loop thread. Calling `asyncio.Event.set()` from a non-asyncio thread is not thread-safe.
+
+### Fix
+
+Capture `loop` **before** defining the callback, then use `loop.call_soon_threadsafe`:
+
+```python
+# CORRECT — thread-safe event signaling from delivery callback
+loop = asyncio.get_event_loop()    # captured before _cb is defined
+
+def _cb(err: Any, _msg: Any) -> None:
+    nonlocal delivery_error
+    if err is not None:
+        delivery_error = RuntimeError(str(err))
+    loop.call_soon_threadsafe(delivery_event.set)   # ← thread-safe
+
+producer.produce(..., callback=_cb)
+```
+
+---
+
+## BP-051 — Avro record name contains dots or version suffix — invalid Java identifier
+
+**Category**: Avro schema / Schema Registry
+**Services affected**: market-data Avro schemas (fixed 2026-03-28); any service that uses dots in Avro `"name"` field
+**First seen**: PLAN-0001-E QA-015
+
+### Symptom
+
+Schema Registry registration fails:
+```
+SchemaRegistryException: Invalid schema: name "instrument.created.v1" is not a valid Avro name
+```
+Or: two services register schemas for the same logical event type under different subjects because one uses `"name": "instrument.created"` and another uses `"name": "InstrumentCreated"` — they are different subjects.
+
+### Root cause
+
+Avro record names must be valid Java identifiers: start with a letter or `_`, contain only letters, digits, and `_`. Dots are **namespace separators** in Avro fullnames (format: `namespace.Name`), not valid within the `"name"` field itself.
+
+```json
+// WRONG — dots in "name" field, version suffix
+{ "type": "record", "name": "instrument.created.v1", "namespace": "com.worldview" }
+
+// WRONG — dots in "name", no namespace
+{ "type": "record", "name": "instrument.created" }
+```
+
+### Fix
+
+Use PascalCase for the `"name"` field; version and path belong in the `"namespace"`:
+
+```json
+// CORRECT
+{ "type": "record", "name": "InstrumentCreated", "namespace": "com.worldview.market_data.events" }
+```
+
+---
+
+## BP-052 — Inconsistent Avro namespace creates divergent Schema Registry subjects
+
+**Category**: Avro schema / Schema Registry
+**Services affected**: portfolio watchlist Avro schemas (fixed 2026-03-28)
+**First seen**: PLAN-0001-E QA-014
+
+### Symptom
+
+Two schemas for the same service use different namespaces (`"portfolio.events"` vs `"com.worldview.portfolio.events"`). The Schema Registry registers them under different subjects. One service registers `portfolio.events.WatchlistCreated-value`; the consumer expects `com.worldview.portfolio.events.WatchlistCreated-value`. Deserialization fails at runtime.
+
+### Root cause
+
+No enforced namespace convention. Different developers use different namespace styles.
+
+```json
+// WRONG — short namespace
+{ "type": "record", "name": "WatchlistCreated", "namespace": "portfolio.events" }
+
+// WRONG — inconsistent with other schemas in same service
+{ "type": "record", "name": "WatchlistCreated", "namespace": "events" }
+```
+
+### Fix
+
+Enforce **canonical namespace** across all schemas: `com.worldview.<service_name>.events`
+
+```json
+// CORRECT — canonical namespace
+{ "type": "record", "name": "WatchlistCreated", "namespace": "com.worldview.portfolio.events" }
+```
+
+All schemas in a service **must** use the same namespace. Add a CI check to enforce this.
+
+---
+
+## BP-053 — `schema_version: ClassVar[int] = 0` footgun — subclasses emit version-0 events silently
+
+**Category**: Event schema versioning
+**Services affected**: market-data domain events (fixed 2026-03-28)
+**First seen**: PLAN-0001-E QA-026
+
+### Symptom
+
+A consumer parses an event with `schema_version=0` and either crashes (unexpected version) or silently uses the wrong schema. Debugging is hard because the producer code appears correct — the subclass simply forgot to override `SCHEMA_VERSION`.
+
+### Root cause
+
+```python
+# WRONG — base class default is 0 ("unset")
+class DomainEvent:
+    SCHEMA_VERSION: ClassVar[int] = 0
+
+class QuoteUpdated(DomainEvent):
+    # forgot to override SCHEMA_VERSION
+    pass  # emits schema_version=0 silently
+```
+
+Version 0 is meaningless as a valid schema version. A default of 0 is indistinguishable from "forgot to set this".
+
+### Fix
+
+Set base class default to `1` (the minimum valid production version):
+
+```python
+# CORRECT — default 1 means "unversioned but valid"
+class DomainEvent:
+    SCHEMA_VERSION: ClassVar[int] = 1
+```
+
+Subclasses that intentionally use a higher version override it explicitly. Version 0 should never appear in production events and can be used as a signal for misconfiguration.
