@@ -306,11 +306,12 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 
 ---
 
-### Wave D-3: S7 Workers 13A–H + Outbox Dispatcher
+### Wave D-3: S7 Workers 13A–H + Outbox Dispatcher ✅
 
 **Goal**: Implement all 8 APScheduler async workers (confidence recomputation, contradiction batch, summary generation, entity profile embedding, relation summary embedding, evidence embedding, monthly/yearly partition creation) and the outbox dispatcher for 3 output topics. Block 14 design memo (shadow migration — deferred).
 **Depends on**: Wave D-2
 **Estimated effort**: 90–120 minutes
+**Status**: **DONE** — 2026-03-28 · 170 unit tests pass (39 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -338,16 +339,16 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 - `libs/messaging/src/messaging/valkey/` — Valkey client for entity dedup lock
 
 #### Validation Gate
-- [ ] `ruff check services/knowledge-graph/` passes
-- [ ] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/knowledge-graph/tests/unit -v` — all tests pass (≥70 total)
-- [ ] All workers registered in KnowledgeGraphScheduler
-- [ ] Instrument consumer creates canonical_entity + 3 entity_embedding_state rows
-- [ ] LLM alias collision validation works (reject alias belonging to different entity)
-- [ ] Fallback chain: Ollama failure → Gemini invoked → llm_usage_log row written
-- [ ] `build_fundamentals_narrative()` is deterministic (same input → same output)
-- [ ] Definition embedding: unchanged description → SHA-256 match → skip re-embed
-- [ ] `docs/services/knowledge-graph.md` updated with multi-view embedding architecture, worker table, S3 REST dependency
+- [x] `ruff check services/knowledge-graph/` passes
+- [x] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/knowledge-graph/tests/unit -v` — 170 tests pass (≥70 total ✓)
+- [x] All workers registered in KnowledgeGraphScheduler
+- [x] Instrument consumer creates canonical_entity + 3 entity_embedding_state rows
+- [x] LLM alias collision validation works (reject alias belonging to different entity)
+- [x] Fallback chain: Ollama failure → Gemini invoked → llm_usage_log row written
+- [x] `build_fundamentals_narrative()` is deterministic (same input → same output)
+- [x] Definition embedding: unchanged description → SHA-256 match → skip re-embed
+- [x] `docs/services/knowledge-graph.md` updated with multi-view embedding architecture, worker table, S3 REST dependency
 
 #### Regression Guardrails
 - Custom: Confidence formula bounded [0, 1] — tested with extreme inputs

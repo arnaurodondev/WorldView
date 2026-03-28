@@ -156,6 +156,57 @@ ORDER BY rcl.detected_at DESC
             for r in rows
         ]
 
+    async def fetch_claims_for_batch_scan(
+        self,
+        limit: int = 500,
+        window_days: int = _CONTRADICTION_WINDOW_DAYS,
+    ) -> list[dict[str, object]]:
+        """Fetch unexamined non-neutral claims for the batch contradiction scan (Worker 13B).
+
+        Returns claims ordered by created_at DESC so newest are examined first.
+        Uses ``idx_claims_contradiction_detection`` index via WHERE predicate.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT DISTINCT ON (subject_entity_id, claim_type)
+    claim_id, subject_entity_id, claim_type, polarity, extraction_confidence
+FROM claims
+WHERE subject_entity_id IS NOT NULL
+  AND polarity != 'neutral'
+  AND created_at >= now() - make_interval(days => :window_days)
+ORDER BY subject_entity_id, claim_type, created_at DESC
+LIMIT :limit
+"""),
+            {"window_days": window_days, "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "claim_id": UUID(str(r[0])),
+                "subject_entity_id": UUID(str(r[1])),
+                "claim_type": r[2],
+                "polarity": r[3],
+                "extraction_confidence": float(r[4]),
+            }
+            for r in rows
+        ]
+
+    async def link_exists(
+        self,
+        relation_evidence_id: UUID,
+        claim_id: UUID,
+    ) -> bool:
+        """Check whether a contradiction link already exists (skip re-detection)."""
+        result = await self._session.execute(
+            text("""
+SELECT 1 FROM relation_contradiction_links
+WHERE relation_evidence_id = :ev_id AND claim_id = :claim_id
+LIMIT 1
+"""),
+            {"ev_id": str(relation_evidence_id), "claim_id": str(claim_id)},
+        )
+        return result.fetchone() is not None
+
 
 def _opposite_polarity(polarity: str) -> str | None:
     """Return the opposite non-neutral polarity, or None for neutral."""

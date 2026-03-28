@@ -50,3 +50,34 @@ WHERE entity_id = :entity_id
             {"entity_id": str(entity_id)},
         )
         return result.fetchone() is not None
+
+    async def create(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        *,
+        isin: str | None = None,
+        ticker: str | None = None,
+        exchange: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> UUID:
+        """Insert a new canonical entity, returning the generated entity_id."""
+        import json
+
+        result = await self._session.execute(
+            text("""
+INSERT INTO canonical_entities (canonical_name, entity_type, isin, ticker, exchange, metadata)
+VALUES (:canonical_name, :entity_type, :isin, :ticker, :exchange, :metadata)
+RETURNING entity_id
+"""),
+            {
+                "canonical_name": canonical_name,
+                "entity_type": entity_type,
+                "isin": isin,
+                "ticker": ticker,
+                "exchange": exchange,
+                "metadata": json.dumps(metadata) if metadata else None,
+            },
+        )
+        row = result.fetchone()
+        return UUID(str(row[0]))  # type: ignore[index]

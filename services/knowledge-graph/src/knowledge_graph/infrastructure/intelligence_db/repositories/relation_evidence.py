@@ -164,6 +164,46 @@ FOR UPDATE SKIP LOCKED
             for r in rows
         ]
 
+    async def get_all_raw_for_triple(
+        self,
+        subject_entity_id: UUID,
+        object_entity_id: UUID,
+        canonical_type: str,
+        limit: int = 500,
+    ) -> list[dict[str, object]]:
+        """Fetch all (processed + unprocessed) raw evidence rows for a relation triple."""
+        result = await self._session.execute(
+            text("""
+SELECT raw_id, extraction_confidence, source_trust_weight,
+       evidence_date, is_backfill, source_document_id
+FROM relation_evidence_raw
+WHERE subject_entity_id = :subject
+  AND object_entity_id  = :object
+  AND canonical_type    = :ctype
+  AND entity_provisional = false
+ORDER BY evidence_date DESC
+LIMIT :limit
+"""),
+            {
+                "subject": str(subject_entity_id),
+                "object": str(object_entity_id),
+                "ctype": canonical_type,
+                "limit": limit,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "raw_id": UUID(str(r[0])),
+                "extraction_confidence": float(r[1]),
+                "source_trust_weight": float(r[2]),
+                "evidence_date": r[3],
+                "is_backfill": bool(r[4]),
+                "source_document_id": UUID(str(r[5])),
+            }
+            for r in rows
+        ]
+
     async def mark_processed(self, raw_ids: list[UUID], processed_at: datetime) -> None:
         """Mark a batch of raw evidence rows as processed."""
         if not raw_ids:
