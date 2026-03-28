@@ -413,11 +413,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 
 ---
 
-### Wave E-1: S10 Foundation — Service Setup, Domain, DB, S1 Client
+### Wave E-1: S10 Foundation — Service Setup, Domain, DB, S1 Client ✅
 
 **Goal**: Create the S10 service directory from scratch, establish domain models (AlertType, Alert, PendingAlert), database infrastructure with Alembic (S10 OWNS alert_db), S1 client with watchlist cache, and deployment gate documentation with contract tests.
 **Depends on**: Wave D-4 (S7 integration test `test_s6_s7_pipeline` must pass) + S1 internal endpoints exist
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-03-28 · 43 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -434,12 +435,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 - `services/content-ingestion/` — reference service structure
 
 #### Validation Gate
-- [ ] `ruff check services/alert/` passes
-- [ ] `mypy services/alert/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/alert/tests -v` — ≥15 unit tests + 3 contract tests pass
-- [ ] `alembic upgrade head` succeeds on alert_db
-- [ ] S1 client graceful degradation: 503 → empty list (tested)
-- [ ] `docs/services/alert-service.md` created with domain models, S1 dependency, deployment gate
+- [x] `ruff check services/alert/` passes
+- [x] `mypy services/alert/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/alert/tests -v` — 43 tests pass (40 unit + 3 contract)
+- [x] `alembic upgrade head` succeeds on alert_db (migration pre-existing)
+- [x] S1 client graceful degradation: 503 → empty list (tested)
+- [x] `docs/services/alert-service.md` created with domain models, S1 dependency, deployment gate
 
 #### Regression Guardrails
 - BP-006: Load DATABASE_URL from settings
