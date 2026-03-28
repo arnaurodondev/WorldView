@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     worker_embedding_refresh_interval_s: int = 10800  # 3 h
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
 
+    # Market data service (used by Worker 13D-3)
+    market_data_base_url: str = "http://market-data:8003"
+
     # Outbox dispatcher
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50

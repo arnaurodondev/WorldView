@@ -100,3 +100,18 @@ RETURNING summary_id
         )
         row = result.fetchone()
         return UUID(str(row[0]))  # type: ignore[index]
+
+    async def update_embedding(
+        self,
+        summary_id: UUID,
+        embedding: list[float],
+    ) -> None:
+        """Persist a computed embedding for an existing summary row (Worker 13F)."""
+        await self._session.execute(
+            text("""
+UPDATE relation_summaries
+SET summary_embedding = :embedding
+WHERE summary_id = :summary_id
+"""),
+            {"summary_id": str(summary_id), "embedding": embedding},
+        )

@@ -64,15 +64,68 @@ and performs read/write operations only.
 | 13 | **Derived-Semantics Workers** | Async (APScheduler) | Aggregation worker, confidence recomputation per decay_class, contradiction detection (subject-based), relation summary generation (Ollama), embedding refresh |
 | 14 | **Shadow Migration Worker** | Async (scheduled) | Sync active `RELATION_STATE` relations to Apache AGE graph for Cypher query experiments; not on critical path |
 
-### Block 13 — Async Worker Cadences
+### Block 13 — Async Worker Cadences (Wave D-3)
 
-| Worker | Interval | Batch Size | Notes |
-|--------|----------|------------|-------|
-| Aggregation (`relation_evidence_raw` → `relations`) | 300s | 500 rows | Upserts aggregate relation confidence |
-| Confidence recomputation | per `decay_class` schedule | — | Decays confidence based on evidence age |
-| Contradiction detection | 30s | 100 claims | Subject-based; emits `intelligence.contradiction.v1` |
-| Relation summary generation | 3600s | — | Generates narrative summaries via Ollama; embeds summaries |
-| Embedding refresh | On `entity.dirtied.v1` | — | Refreshes `entity_profile_embeddings` in `nlp_db` |
+| ID | Worker | Interval | Batch | Notes |
+|----|--------|----------|-------|-------|
+| 13A | `ConfidenceWorker` | 15 min | 8 partitions | Processes unprocessed `relation_evidence_raw` grouped by `partition_key`; 4-step confidence formula; marks processed |
+| 13B | `ContradictionBatchWorker` | 30 min | 100 claims | Subject-based scan via `DISTINCT ON`; inserts `contradictions` rows idempotently (ON CONFLICT DO NOTHING) |
+| 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence_hash change detection (skip LLM if unchanged); LLM extraction via FallbackChainClient |
+| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'` |
+| 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
+| 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
+| 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | LLM extraction for provisional entities; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
+| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL` |
+| 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS + prune >24 months |
+| 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent CREATE IF NOT EXISTS for yearly partitions |
+
+### Multi-View Embedding Architecture (`entity_embedding_state`)
+
+Each entity has exactly **3 rows** in `entity_embedding_state` (one per `view_type`):
+
+| `view_type` | Source Text | Refresh Cadence | Worker |
+|-------------|-------------|-----------------|--------|
+| `definition` | Company description / canonical text | 90-day + event-triggered | 13D-1 + consumer 13D-4/5 |
+| `narrative` | Deterministic template (claims + contradictions) | 7-day | 13D-2 |
+| `fundamentals_ohlcv` | Financial metrics narrative via `build_fundamentals_narrative()` | 30-day | 13D-3 |
+
+Key invariants:
+- SHA-256 change detection on all views: unchanged text never triggers re-embed
+- `entity_embedding_state.source_hash` stores hex digest for comparison
+- LLM alias collision check: `EntityAliasRepository.find_by_normalized_and_type()` — reject alias if it maps to a different entity
+
+### Consumers (Wave D-3)
+
+| ID | Consumer | Group | Topic | Action |
+|----|----------|-------|-------|--------|
+| 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed |
+| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed |
+
+### LLM Fallback Chain (`infrastructure/llm/fallback_chain.py`)
+
+`FallbackChainClient` provides embedding + extraction with automatic fallback:
+1. **Ollama** — 3 retries (30s / 60s / 120s delays)
+2. **Gemini Flash Lite** — 2 retries on Ollama failure
+3. **NULL** — both exhausted; logged to `llm_usage_log` with `success=False`
+
+All calls (including Ollama $0 calls) logged to `llm_usage_log` with provider, model, tokens, cost, latency.
+
+### Outbox Dispatcher (`infrastructure/outbox/dispatcher.py`)
+
+Polls `intelligence_db.outbox_events FOR UPDATE SKIP LOCKED`. Allowed topics:
+- `graph.state.changed.v1`
+- `intelligence.contradiction.v1`
+- `relation.type.proposed.v1`
+
+`entity.dirtied.v1` must NOT appear in outbox (direct produce only — compacted topic). If found: WARNING logged + mark_dispatched (not re-deliverable). Unknown topic: `mark_failed`.
+
+### External REST Dependency (Wave D-3)
+
+`FundamentalsRefreshWorker` calls `market-data` service REST:
+```
+GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
+```
+`MARKET_DATA_BASE_URL` defaults to `http://market-data:8003`. S3/HTTP failure = skip entity (retry next 30-day cycle).
 
 ---
 
@@ -112,6 +165,8 @@ and performs read/write operations only.
 | `RELATION_CANONICALIZATION_THRESHOLD` | `0.35` | Max cosine distance for ANN soft-mapping |
 | `ALEMBIC_ENABLED` | `false` | Must remain false (intelligence_db DDL is external) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
+| `MARKET_DATA_BASE_URL` | `http://market-data:8003` | REST endpoint for fundamentals + OHLCV data (13D-3 worker) |
+| `GEMINI_API_KEY` | — | Gemini Flash Lite fallback for embedding/extraction |
 
 ---
 

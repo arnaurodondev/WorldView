@@ -131,6 +131,99 @@ WHERE subject_entity_id = :subject
             "latest_evidence_at": row[10],
         }
 
+    async def fetch_stale_confidence(
+        self,
+        partition_key: int,
+        limit: int = 200,
+    ) -> list[dict[str, object]]:
+        """Fetch relations with stale confidence for a hash partition (Worker 13A).
+
+        Uses the HASH partition on ``relations`` (8 partitions keyed by
+        ``abs(hashtext(subject::text || ctype || object::text)) % 8``).
+        Returns rows FOR UPDATE SKIP LOCKED.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT relation_id, semantic_mode, decay_class, decay_alpha, base_confidence
+FROM relations
+WHERE confidence_stale = true
+  AND abs(hashtext(subject_entity_id::text || canonical_type || object_entity_id::text)) % 8 = :partition_key
+ORDER BY latest_evidence_at DESC
+LIMIT :limit
+FOR UPDATE SKIP LOCKED
+"""),
+            {"partition_key": partition_key, "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "semantic_mode": r[1],
+                "decay_class": r[2],
+                "decay_alpha": float(r[3]),
+                "base_confidence": float(r[4]),
+            }
+            for r in rows
+        ]
+
+    async def fetch_stale_summary(self, limit: int = 50) -> list[dict[str, object]]:
+        """Fetch relations needing a fresh LLM summary (Worker 13C)."""
+        result = await self._session.execute(
+            text("""
+SELECT relation_id, semantic_mode, decay_class, decay_alpha, confidence
+FROM relations
+WHERE summary_stale = true
+  AND confidence IS NOT NULL
+ORDER BY confidence DESC, latest_evidence_at DESC
+LIMIT :limit
+FOR UPDATE SKIP LOCKED
+"""),
+            {"limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "semantic_mode": r[1],
+                "decay_class": r[2],
+                "decay_alpha": float(r[3]),
+                "confidence": float(r[4]) if r[4] is not None else None,
+            }
+            for r in rows
+        ]
+
+    async def mark_summary_updated(self, relation_id: UUID) -> None:
+        """Clear ``summary_stale`` after a new summary has been generated."""
+        await self._session.execute(
+            text("UPDATE relations SET summary_stale = false WHERE relation_id = :relation_id"),
+            {"relation_id": str(relation_id)},
+        )
+
+    async def fetch_stale_summary_embeddings(self, limit: int = 100) -> list[dict[str, object]]:
+        """Fetch relation summaries whose embeddings have not been computed (Worker 13F)."""
+        result = await self._session.execute(
+            text("""
+SELECT rs.summary_id, rs.relation_id, rs.summary_text, rs.model_id
+FROM relation_summaries rs
+WHERE rs.is_current       = true
+  AND rs.summary_text     IS NOT NULL
+  AND rs.summary_embedding IS NULL
+ORDER BY rs.generated_at
+LIMIT :limit
+"""),
+            {"limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "summary_id": UUID(str(r[0])),
+                "relation_id": UUID(str(r[1])),
+                "summary_text": r[2],
+                "model_id": r[3],
+            }
+            for r in rows
+        ]
+
     async def mark_confidence_updated(
         self,
         relation_id: UUID,
