@@ -65,6 +65,7 @@
 | [BP-040](#bp-040) | Idempotency `INSERT` missing `ON CONFLICT DO NOTHING` | Duplicate event replay raises `IntegrityError` instead of being silently ignored — consumer crashes | Any service with a dedicated idempotency/processed-events table using plain INSERT |
 | [BP-041](#bp-041) | ruff `TCH003`→`TC003` noqa code rename breaks pre-commit | Pre-commit ruff v0.4.0 reports `TCH003`; newer local ruff auto-converts `# noqa: TCH003` → `# noqa: TC003`; hook then re-flags the violation → infinite loop | All SQLAlchemy ORM models with `Mapped[datetime]` imports |
 | [BP-042](#bp-042) | `FailureInfo[None]` has no `value`/`key`/`headers` fields | `AttributeError: 'FailureInfo' object has no attribute 'value'` — only `event_id`, `topic`, `partition`, `offset`, `attempt`, `last_error`, `record` exist | Any `dead_letter` / `process_message_from_failure` implementation on `BaseKafkaConsumer[None]` |
+| [BP-043](#bp-043) | Pydantic V2 `Field(strip_whitespace=True)` is deprecated | `PydanticDeprecatedSince20` warning — `strip_whitespace` is not a valid V2 `Field` kwarg; use `StringConstraints(strip_whitespace=True)` via `Annotated` instead | API request schemas using `Field(...)` |
 
 ---
 
@@ -2096,4 +2097,37 @@ def dead_letter(self, failure: FailureInfo[None]) -> None:
 async def process_message_from_failure(self, failure: FailureInfo[None]) -> None:
     # Original payload is not recoverable for TFailure=None consumers
     logger.warning("cannot_reprocess_failure", event_id=failure.event_id)
+```
+
+## BP-043 — Pydantic V2 `Field(strip_whitespace=True)` deprecated
+
+**Affects**: API request schemas using `Field(strip_whitespace=True)` — `TenantCreateRequest`, `PortfolioCreateRequest`, etc.
+
+### Symptom
+
+```
+PydanticDeprecatedSince20: Using extra keyword arguments on `Field` is deprecated and will be removed.
+Use `json_schema_extra` instead. (Extra keys: 'strip_whitespace')
+```
+
+### Root cause
+
+Pydantic V2 removed non-standard kwargs from `Field()`. `strip_whitespace` was a Pydantic V1 feature. In V2, string constraints (including `strip_whitespace`, `min_length`, `max_length`) must be applied via `StringConstraints` in an `Annotated` type.
+
+### Fix
+
+```python
+from typing import Annotated
+from pydantic import StringConstraints
+
+TrimmedStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+
+class TenantCreateRequest(BaseModel):
+    name: TrimmedStr
+```
+
+Or drop `strip_whitespace` and rely on `min_length`/`max_length` in `Field(...)` only (the length constraints are the primary security fix):
+
+```python
+name: str = Field(min_length=1, max_length=255)
 ```
