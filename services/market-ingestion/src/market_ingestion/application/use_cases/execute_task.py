@@ -369,6 +369,17 @@ class ExecuteTaskUseCase:
         canonical_bytes: bytes,
     ) -> ObjectRef:
         key = f"market-ingestion/canonical/{task.provider}/{task.dataset_type}/{task.symbol}/{task.id}.jsonl"
+        # D-008: On retry, the object may already exist — skip the upload and
+        # reconstruct the ObjectRef using a locally-computed SHA-256.
+        if await self._store.exists(self._canonical_bucket, key):
+            sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+            return ObjectRef(
+                bucket=self._canonical_bucket,
+                key=key,
+                sha256=sha256,
+                byte_length=len(canonical_bytes),
+                mime_type="application/x-ndjson",
+            )
         return await self._store.put(
             self._canonical_bucket,
             key,

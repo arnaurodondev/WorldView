@@ -207,6 +207,7 @@ def create_app() -> FastAPI:
         from fastapi import HTTPException
         from sqlalchemy import text
 
+        _log = get_logger("market_data.app")
         checks: dict[str, str] = {}
         all_ok = True
 
@@ -217,18 +218,20 @@ def create_app() -> FastAPI:
                 await session.execute(text("SELECT 1"))
             checks["db"] = "ok"
         except Exception as exc:
-            checks["db"] = f"error: {exc}"
+            _log.error("readyz_db_check_failed", error_type=type(exc).__name__, error=str(exc))
+            checks["db"] = "error"
             all_ok = False
 
         # Valkey check
         try:
             valkey = app.state.valkey_client
             ok = await valkey.ping()
-            checks["valkey"] = "ok" if ok else "error: ping failed"
+            checks["valkey"] = "ok" if ok else "error"
             if not ok:
                 all_ok = False
         except Exception as exc:
-            checks["valkey"] = f"error: {exc}"
+            _log.error("readyz_valkey_check_failed", error_type=type(exc).__name__, error=str(exc))
+            checks["valkey"] = "error"
             all_ok = False
 
         # Storage check
@@ -242,7 +245,8 @@ def create_app() -> FastAPI:
             else:
                 checks["storage"] = "not_configured"
         except Exception as exc:
-            checks["storage"] = f"error: {exc}"
+            _log.error("readyz_storage_check_failed", error_type=type(exc).__name__, error=str(exc))
+            checks["storage"] = "error"
             all_ok = False
 
         checks["kafka"] = "ok"  # consumers managed as background tasks

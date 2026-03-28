@@ -1,7 +1,7 @@
 {
   "type": "record",
-  "name": "watchlist.created",
-  "namespace": "portfolio.events",
+  "name": "WatchlistCreated",
+  "namespace": "com.worldview.portfolio.events",
   "doc": "Emitted when a watchlist is created.",
   "fields": [
     {"name": "event_id", "type": "string"},

@@ -66,9 +66,12 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
             .on_conflict_do_nothing(index_elements=["provider"])
         )
         await self._w.execute(stmt)
-        existing = await self.get(provider)
-        if existing:
-            return existing
+        # Read back from write session to guarantee read-your-own-write semantics
+        # (avoids replication lag when _r is a separate read replica).
+        select_stmt = select(ProviderBudgetModel).where(ProviderBudgetModel.provider == provider.value)
+        row = (await self._w.execute(select_stmt)).scalar_one_or_none()
+        if row:
+            return _to_domain(row)
         return defaults
 
     async def save(self, budget: ProviderBudget) -> None:

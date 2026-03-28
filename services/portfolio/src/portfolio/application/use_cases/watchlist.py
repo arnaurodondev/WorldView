@@ -227,7 +227,10 @@ class AddWatchlistMemberUseCase:
         # Commit before cache invalidation so stale cache entries are only evicted
         # after the DB write is durable (M-005: cache invalidation ordering).
         await uow.commit()
-        await cache.invalidate_entity(cmd.entity_id)
+        try:
+            await cache.invalidate_entity(cmd.entity_id)
+        except Exception as cache_exc:
+            logger.warning("watchlist_cache_invalidation_failed", entity_id=str(cmd.entity_id), error=str(cache_exc))
         logger.info("watchlist_member_added", watchlist_id=str(cmd.watchlist_id), entity_id=str(cmd.entity_id))
         return member
 
@@ -275,5 +278,8 @@ class RemoveWatchlistMemberUseCase:
         # Commit before cache invalidation so stale cache entries are only evicted
         # after the DB write is durable (M-005: cache invalidation ordering).
         await uow.commit()
-        await cache.invalidate_entity(cmd.entity_id)
+        try:
+            await cache.invalidate_entity(cmd.entity_id)
+        except Exception as cache_exc:
+            logger.warning("watchlist_cache_invalidation_failed", entity_id=str(cmd.entity_id), error=str(cache_exc))
         logger.info("watchlist_member_removed", watchlist_id=str(cmd.watchlist_id), entity_id=str(cmd.entity_id))

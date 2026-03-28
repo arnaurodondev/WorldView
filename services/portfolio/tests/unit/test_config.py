@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+
+import pytest
+
+pytestmark = pytest.mark.unit
 
 from portfolio.config import Settings
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

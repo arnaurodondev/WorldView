@@ -42,7 +42,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0003 | Observability Standardization: Service Fixes + Monitoring Stack | N/A | 2026-03-27 | 4 | 2026-03-27 |
 | QA-CROSS-001 | Cross-Service QA: market-ingestion, market-data, portfolio (16 findings fixed) | N/A | 2026-03-27 | — | 2026-03-27 |
 | QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
-| PLAN-0001-E | S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency | QA Review (QA-CROSS-002) | 2026-03-28 | 14 | — |
+| PLAN-0001-E | S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency | QA Review (QA-CROSS-002) | 2026-03-28 | 14 | 2026-03-28 |
 | PLAN-0004 | Observability Dashboards, Alerts & Recording Rules — Auto-Provisioned | N/A | 2026-03-27 | 5 | — |
 | QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
 

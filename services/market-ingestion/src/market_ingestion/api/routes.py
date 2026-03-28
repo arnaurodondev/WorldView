@@ -80,8 +80,8 @@ async def readyz(
         await uow.tasks.count_by_status()
         checks["db"] = "ok"
     except Exception as exc:
-        logger.error("readyz_db_check_failed", error=str(exc))
-        checks["db"] = f"error: {exc}"
+        logger.error("readyz_db_check_failed", error_type=type(exc).__name__, error=str(exc))
+        checks["db"] = "error"
         all_ok = False
 
     # Storage check — verify the ingestion bucket is reachable
@@ -89,8 +89,8 @@ async def readyz(
         await object_store.exists(settings.storage_bucket, "__healthcheck__")
         checks["storage"] = "ok"
     except Exception as exc:
-        logger.error("readyz_storage_check_failed", error=str(exc))
-        checks["storage"] = f"error: {exc}"
+        logger.error("readyz_storage_check_failed", error_type=type(exc).__name__, error=str(exc))
+        checks["storage"] = "error"
         all_ok = False
 
     status_str = "ok" if all_ok else "degraded"

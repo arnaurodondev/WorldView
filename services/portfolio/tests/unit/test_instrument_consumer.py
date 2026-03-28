@@ -19,6 +19,8 @@ from portfolio.application.ports.repositories import (
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
 
+pytestmark = pytest.mark.unit
+
 
 class FakeInstrumentRepository(InstrumentRepository):
     def __init__(self) -> None:

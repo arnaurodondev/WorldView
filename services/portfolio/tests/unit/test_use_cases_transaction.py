@@ -46,6 +46,8 @@ from portfolio.domain.errors import (
     InsufficientHoldingsError,
 )
 
+pytestmark = pytest.mark.unit
+
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 

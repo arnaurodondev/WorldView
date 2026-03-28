@@ -35,6 +35,8 @@ from portfolio.domain.errors import (
     ValidationError,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── DomainError base ──────────────────────────────────────────────────────────
 
 

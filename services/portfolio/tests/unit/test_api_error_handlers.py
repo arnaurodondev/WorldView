@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from portfolio.api.error_mapping import domain_error_to_status
 from portfolio.domain.errors import (
     AuthorizationError,
