@@ -2131,3 +2131,62 @@ Or drop `strip_whitespace` and rely on `min_length`/`max_length` in `Field(...)`
 ```python
 name: str = Field(min_length=1, max_length=255)
 ```
+
+## BP-044 — f-string dynamic SQL for nullable filters triggers ruff S608
+
+**Category**: SQL / Linting
+**Services affected**: Any async service with optional filter params in repository queries
+**First seen**: knowledge-graph S7 Wave D-4 (relation repository list_for_entity / list_filtered)
+
+### Symptom
+
+Repository method builds a dynamic WHERE clause using f-strings or string concatenation to handle optional filter parameters:
+
+```python
+# WRONG — triggers S608 (f-string in SQL) and is hard to audit
+mode_filter = "AND r.semantic_mode = :semantic_mode" if semantic_mode else ""
+query = text(f"SELECT ... FROM relations r WHERE ... {mode_filter}")
+```
+
+This approach:
+1. Fires `S608: Possible SQL injection via string-based query construction` (even though it's not actually injectable here, ruff can't tell)
+2. Requires `# noqa: S608` on every call site
+3. Is structurally harder to audit for actual injection risks
+
+### Root Cause
+
+Using f-strings or `%` formatting in `text()` queries makes the SQL dynamic, even when the dynamic part is a safe literal (a clause name, not user data).
+
+### Fix
+
+Use PostgreSQL's `IS NULL OR column = :param` pattern to keep the SQL fully static while supporting optional filters:
+
+```python
+# CORRECT — fully static SQL, no f-strings, no S608
+query = text("""
+    SELECT ...
+    FROM relations r
+    WHERE (:semantic_mode IS NULL OR r.semantic_mode = :semantic_mode)
+      AND (:min_confidence IS NULL OR r.confidence >= :min_confidence)
+    ...
+""")
+result = await session.execute(query, {
+    "semantic_mode": semantic_mode,          # None → clause passes for all rows
+    "min_confidence": min_confidence,        # None → clause passes for all rows
+})
+```
+
+### Why this works
+
+PostgreSQL evaluates `:param IS NULL` first. When the parameter is `None` (bound as SQL NULL), the entire `IS NULL OR ...` disjunction short-circuits to `TRUE`, effectively removing the filter. When non-null, the actual column comparison is evaluated.
+
+### Benefits
+
+- Zero dynamic SQL → no S608, no `# noqa` suppressions
+- Single static query → easier to read, audit, and plan/cache
+- Works for all nullable parameters: strings, UUIDs, floats, datetimes
+
+### Caution
+
+- For very large tables with many optional filters, this can prevent index use on some filters even when non-null. Profile with `EXPLAIN ANALYZE` if performance is critical.
+- Not applicable when the number of filters is dynamic (e.g., variable-length IN clauses) — those still need query building.
