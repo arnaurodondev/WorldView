@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,3 +65,14 @@ class Settings(BaseSettings):
     log_json: bool = True
     log_format: str = "json"
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_missing_internal_token(self) -> Settings:
+        """Warn at startup if internal_service_token is unset (plan T-E3-3-02)."""
+        if not self.internal_service_token:
+            warnings.warn(
+                "PORTFOLIO_INTERNAL_SERVICE_TOKEN is not set — all internal API endpoints "
+                "will return 401. Set this env var before deploying to production.",
+                stacklevel=2,
+            )
+        return self

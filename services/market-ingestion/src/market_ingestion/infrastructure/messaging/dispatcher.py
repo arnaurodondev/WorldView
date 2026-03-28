@@ -126,7 +126,7 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
             )
             results: list[DeliveryResult] = []
             for record in records:
-                if record.attempt > 0:
+                if record.attempt > 1:
                     # B-006: re-claim warning — record survived a previous lease expiry or failure
                     logger.warning("outbox.record_reclaimed", record_id=str(record.id), attempts=record.attempt)
                 payload_dict = json.loads(record.payload) if isinstance(record.payload, bytes) else record.payload
@@ -152,17 +152,19 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
         """Attempt to publish a single record; update outbox state on outcome."""
         delivery_error: BaseException | None = None
         delivery_event = asyncio.Event()
+        loop = asyncio.get_event_loop()
 
         def _cb(err: Any, _msg: Any) -> None:
             nonlocal delivery_error
             if err is not None:
                 delivery_error = RuntimeError(str(err))
-            delivery_event.set()
+            # Use call_soon_threadsafe: librdkafka invokes this from a background
+            # thread, so we must schedule the asyncio.Event.set() onto the event loop.
+            loop.call_soon_threadsafe(delivery_event.set)
 
         try:
             producer = self.get_producer()
             value = OutboxKafkaValue(event_type=record.event_type, payload=record.payload)
-            loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
                 lambda: producer.produce(

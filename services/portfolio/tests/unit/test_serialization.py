@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from portfolio.application.messaging.outbox_mapper import outbox_record_to_kafka_value
 from portfolio.infrastructure.messaging.serialization import headers_for_event
 

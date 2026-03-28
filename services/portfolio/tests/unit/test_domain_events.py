@@ -5,6 +5,10 @@ from __future__ import annotations
 import dataclasses
 import uuid
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from portfolio.domain.events import (
     DomainEvent,
     HoldingChanged,
@@ -220,6 +224,8 @@ class TestDataclassCharacteristics:
         e2 = TenantCreated(tenant_id=uuid.uuid4())
         assert e1.event_id != e2.event_id
         assert isinstance(e1.event_id, str)
+        # Verify UUID version is 7 (time-ordered) per D-009
+        assert uuid.UUID(e1.event_id).version == 7
 
     def test_occurred_at_is_set(self) -> None:
         # D-009: occurred_at is a string (ISO-8601 with Z suffix) for Avro portability.

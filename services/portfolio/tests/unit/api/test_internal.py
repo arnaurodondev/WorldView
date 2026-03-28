@@ -146,7 +146,7 @@ async def test_by_entity_empty() -> None:
 async def test_by_entities_batch() -> None:
     """POST /internal/v1/watchlists/by-entities returns correct map."""
     uow = FakeUnitOfWork()
-    _, user_id, watchlist_id, entity_id = _seed_watchlist_data(uow)
+    _, user_id, _watchlist_id, entity_id = _seed_watchlist_data(uow)
     unknown_id = uuid4()
     app = _make_app(uow)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Generic, TypeVar
+from typing import Annotated, Generic, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_serializer, field_validator
 
 T = TypeVar("T")
 
@@ -33,10 +33,7 @@ def _validate_currency(v: str) -> str:
 
 
 class TenantCreateRequest(BaseModel):
-    name: str = Field(
-        min_length=1,
-        max_length=255,
-    )
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 class TenantResponse(BaseModel):
@@ -60,10 +57,7 @@ class UserResponse(BaseModel):
 
 
 class PortfolioCreateRequest(BaseModel):
-    name: str = Field(
-        min_length=1,
-        max_length=255,
-    )
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
     owner_user_id: UUID
     currency: str = "USD"
 
@@ -84,10 +78,7 @@ class PortfolioResponse(BaseModel):
 
 
 class PortfolioRenameRequest(BaseModel):
-    name: str = Field(
-        min_length=1,
-        max_length=255,
-    )
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
 
 
 class RecordTransactionRequest(BaseModel):

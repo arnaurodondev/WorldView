@@ -17,6 +17,8 @@ from portfolio.domain.enums import (
 )
 from portfolio.domain.errors import InsufficientHoldingsError, PortfolioArchivedError
 
+pytestmark = pytest.mark.unit
+
 # ── Tenant ────────────────────────────────────────────────────────────────────
 
 

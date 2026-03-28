@@ -37,7 +37,7 @@ class DomainEvent:
     """
 
     event_type: ClassVar[str] = ""
-    schema_version: ClassVar[int] = 0
+    schema_version: ClassVar[int] = 1
 
     event_id: str = field(default_factory=_new_event_id)
     occurred_at: str = field(default_factory=_utc_iso)

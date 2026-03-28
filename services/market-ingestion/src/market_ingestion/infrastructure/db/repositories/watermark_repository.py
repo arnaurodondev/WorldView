@@ -104,17 +104,19 @@ class SqlaWatermarkRepository(WatermarkRepository):
             )
         )
         await self._w.execute(stmt)
-        # SELECT the row (may have been inserted by us or already existed)
-        existing = await self.get(
-            provider=provider,
-            dataset_type=dataset_type,
-            symbol=symbol,
-            exchange=exchange,
-            timeframe=timeframe,
-            variant=variant,
+        # Read back from write session to guarantee read-your-own-write semantics
+        # (avoids replication lag or session isolation when _r is a separate connection).
+        select_stmt = select(WatermarkModel).where(
+            WatermarkModel.provider == provider,
+            WatermarkModel.dataset_type == dataset_type,
+            WatermarkModel.dataset_variant == variant,
+            WatermarkModel.symbol == symbol,
+            WatermarkModel.exchange == exchange,
+            WatermarkModel.timeframe == timeframe,
         )
-        if existing:
-            return existing
+        row = (await self._w.execute(select_stmt)).scalar_one_or_none()
+        if row:
+            return _to_domain(row)
         # Fallback: build a transient domain object using the ID we generated
         return Watermark(
             id=new_id,

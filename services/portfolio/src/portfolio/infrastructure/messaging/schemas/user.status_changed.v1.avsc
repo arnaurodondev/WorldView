@@ -1,19 +1,20 @@
 {
   "type": "record",
-  "name": "WatchlistDeleted",
+  "name": "UserStatusChanged",
   "namespace": "com.worldview.portfolio.events",
-  "doc": "Emitted when a watchlist is deleted.",
+  "doc": "Emitted when a user's status changes.",
   "fields": [
     {"name": "event_id", "type": "string"},
-    {"name": "event_type", "type": "string", "default": "watchlist.deleted"},
-    {"name": "aggregate_type", "type": "string", "default": "watchlist"},
+    {"name": "event_type", "type": "string", "default": "user.status_changed"},
+    {"name": "aggregate_type", "type": "string", "default": "user"},
     {"name": "aggregate_id", "type": "string"},
     {"name": "tenant_id", "type": "string"},
     {"name": "occurred_at", "type": "string"},
     {"name": "schema_version", "type": "int", "default": 1},
     {"name": "correlation_id", "type": ["null", "string"], "default": null},
     {"name": "causation_id", "type": ["null", "string"], "default": null},
-    {"name": "watchlist_id", "type": "string", "default": ""},
-    {"name": "user_id", "type": "string", "default": ""}
+    {"name": "user_id", "type": "string", "default": ""},
+    {"name": "old_status", "type": "string", "default": ""},
+    {"name": "new_status", "type": "string", "default": ""}
   ]
 }

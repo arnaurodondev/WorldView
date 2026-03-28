@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
-from common.ids import new_uuid  # type: ignore[import-untyped]
+from common.ids import new_uuid, new_uuid7_str  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class DomainEvent(ABC):
 
     tenant_id: UUID
     schema_version: int = 1
-    event_id: str = field(default_factory=lambda: str(new_uuid()))
+    event_id: str = field(default_factory=new_uuid7_str)
     occurred_at: str = field(default_factory=lambda: utc_now().isoformat().replace("+00:00", "Z"))
     correlation_id: str | None = None
     causation_id: str | None = None

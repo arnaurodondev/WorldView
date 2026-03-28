@@ -9,9 +9,9 @@ _SCHEMA_DIR = Path(__file__).parent / "schemas"
 
 _AVSC_MAP: dict[str, str] = {
     "tenant.created": "tenant.created.v1.avsc",
-    "tenant.status_changed": "tenant.created.v1.avsc",
+    "tenant.status_changed": "tenant.status_changed.v1.avsc",
     "user.created": "user.created.v1.avsc",
-    "user.status_changed": "user.created.v1.avsc",
+    "user.status_changed": "user.status_changed.v1.avsc",
     "portfolio.created": "portfolio.created.v1.avsc",
     "portfolio.renamed": "portfolio.renamed.v1.avsc",
     "portfolio.archived": "portfolio.archived.v1.avsc",

@@ -1,6 +1,6 @@
 {
   "type": "record",
-  "name": "instrument.updated.v1",
+  "name": "InstrumentUpdated",
   "namespace": "market_data.events",
   "doc": "Emitted when an existing instrument's capability flags change.",
   "fields": [

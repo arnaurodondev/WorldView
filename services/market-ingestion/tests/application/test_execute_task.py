@@ -522,8 +522,8 @@ async def test_object_exists_skips_bronze_write_on_retry() -> None:
     """If bronze object already exists, put() is skipped and ref is reconstructed."""
     task = _make_task(dataset_type=DatasetType.OHLCV)
     store = _make_store()
-    # Simulate object already exists in MinIO
-    store.exists = AsyncMock(return_value=True)
+    # Simulate bronze exists but canonical not yet (crash after bronze write, before canonical)
+    store.exists = AsyncMock(side_effect=[True, False])
 
     uc, _, _, store, _ = _make_use_case(store=store)
     await uc.execute(task)
@@ -665,7 +665,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     """
     task = _make_task(dataset_type=DatasetType.OHLCV)
     store = _make_store()
-    store.exists = AsyncMock(return_value=True)
+    # bronze exists (skip put), canonical does not yet (allow put)
+    store.exists = AsyncMock(side_effect=[True, False])
     uc, _, _, store, _ = _make_use_case(store=store)
 
     await uc.execute(task)
@@ -674,8 +675,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     assert store.put.await_count == 1
     # Pipeline still completes
     task.succeed.assert_called_once()
-    # exists() was queried for the bronze key
-    store.exists.assert_awaited_once()
+    # exists() was queried for both bronze and canonical keys
+    assert store.exists.await_count == 2
 
 
 @pytest.mark.unit
@@ -689,7 +690,8 @@ async def test_execute_task_idempotent_on_replay() -> None:
     wm = _make_watermark(changed=True)
     uow = _make_uow(watermark=wm)
     store = _make_store()
-    store.exists = AsyncMock(return_value=True)
+    # bronze exists (skip put), canonical does not yet (allow put)
+    store.exists = AsyncMock(side_effect=[True, False])
     uc, uow, _registry, store, _ = _make_use_case(uow=uow, store=store)
 
     await uc.execute(task)
