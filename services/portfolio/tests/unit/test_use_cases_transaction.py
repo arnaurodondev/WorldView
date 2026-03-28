@@ -470,3 +470,45 @@ async def test_record_transaction_no_idempotency_key_proceeds(uow, cmd) -> None:
     result = await uc.execute(cmd, uow)
     assert result.transaction is not None
     assert len(uow._transactions.saved) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotency_uses_atomic_dedup_not_check_then_record(uow, cmd) -> None:
+    """BP-035 regression: create_if_not_exists (atomic) must be used, not exists()+record().
+
+    Guards against regression to the TOCTOU-prone two-step check-then-record pattern
+    where two concurrent requests can both pass exists() before either calls record().
+    """
+    idem_key = str(uuid4())
+    cmd_with_key = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+
+    exists_calls: list = []
+    record_calls: list = []
+    create_calls: list = []
+
+    original_exists = uow._idempotency.exists
+    original_record = uow._idempotency.record
+    original_create = uow._idempotency.create_if_not_exists
+
+    async def spy_exists(event_id):
+        exists_calls.append(event_id)
+        return await original_exists(event_id)
+
+    async def spy_record(event_id, processed_at=None):
+        record_calls.append(event_id)
+        return await original_record(event_id, processed_at)
+
+    async def spy_create(event_id):
+        create_calls.append(event_id)
+        return await original_create(event_id)
+
+    uow._idempotency.exists = spy_exists
+    uow._idempotency.record = spy_record
+    uow._idempotency.create_if_not_exists = spy_create
+
+    uc = RecordTransactionUseCase()
+    await uc.execute(cmd_with_key, uow)
+
+    assert len(create_calls) == 1, "create_if_not_exists must be called exactly once"
+    assert len(exists_calls) == 0, "exists() must not be called — use create_if_not_exists (BP-035)"
+    assert len(record_calls) == 0, "record() must not be called — use create_if_not_exists (BP-035)"
