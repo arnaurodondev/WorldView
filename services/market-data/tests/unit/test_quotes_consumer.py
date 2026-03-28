@@ -124,11 +124,20 @@ async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
 
 @pytest.mark.asyncio
 async def test_quotes_consumer_invalidates_cache_after_upsert() -> None:
-    """After DB upsert, the consumer invalidates the Valkey cache entry."""
+    """After DB upsert, the consumer schedules cache invalidation via schedule_post_commit (M-005).
+
+    The invalidation must be scheduled — not awaited inline — so it only runs
+    after the transaction commits (preventing stale-read-into-cache races).
+    """
+    from unittest.mock import MagicMock
+
     instrument = _make_instrument()
+    captured_hooks: list = []
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
     mock_uow.quotes.upsert = AsyncMock(return_value=None)
+    # schedule_post_commit is sync — capture the coroutine for manual drain
+    mock_uow.schedule_post_commit = MagicMock(side_effect=captured_hooks.append)
 
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
@@ -139,6 +148,12 @@ async def test_quotes_consumer_invalidates_cache_after_upsert() -> None:
     consumer = _make_consumer(mock_uow, mock_storage, quote_cache=mock_cache)
     await consumer.process_message(None, _make_message(), {})
 
+    # Hook was scheduled but NOT yet awaited (it runs after commit)
+    assert len(captured_hooks) == 1
+    mock_cache.invalidate.assert_not_awaited()
+
+    # Simulate commit draining the hook
+    await captured_hooks[0]
     mock_cache.invalidate.assert_awaited_once_with("instr-789")
 
 

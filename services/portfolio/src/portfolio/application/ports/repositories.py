@@ -169,6 +169,11 @@ class IdempotencyRepository(ABC):
     @abstractmethod
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None: ...
 
+    @abstractmethod
+    async def create_if_not_exists(self, event_id: UUID) -> bool:
+        """Atomically insert event_id; return True if newly inserted, False if duplicate."""
+        ...
+
 
 class WatchlistRepository(ABC):
     @abstractmethod

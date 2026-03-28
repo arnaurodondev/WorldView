@@ -30,3 +30,18 @@ class SqlAlchemyIdempotencyRepository(IdempotencyRepository):
             processed_at = datetime.now(tz=UTC)
         stmt = insert(IdempotencyModel).values(event_id=event_id, processed_at=processed_at).on_conflict_do_nothing()
         await self._session.execute(stmt)
+
+    async def create_if_not_exists(self, event_id: UUID) -> bool:
+        """Atomically insert event_id using ON CONFLICT DO NOTHING RETURNING.
+
+        Returns True if newly inserted (new event), False if duplicate.
+        """
+        processed_at = datetime.now(tz=UTC)
+        stmt = (
+            insert(IdempotencyModel)
+            .values(event_id=event_id, processed_at=processed_at)
+            .on_conflict_do_nothing()
+            .returning(IdempotencyModel.event_id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None

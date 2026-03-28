@@ -30,7 +30,7 @@ from market_data.infrastructure.db.repositories.quote_repo import PgQuoteReposit
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -72,6 +72,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._write_session: AsyncSession | None = None
         self._read_session: AsyncSession | None = None
         self._events: list[DomainEvent] = []
+        self._post_commit_hooks: list[Coroutine[Any, Any, None]] = []
 
         # Lazily initialised repository instances
         self._securities: PgSecurityRepository | None = None
@@ -102,17 +103,27 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     # ── transaction ────────────────────────────────────────────────────────────
 
     async def commit(self) -> None:
-        """Commit the write session then notify the outbox dispatcher."""
+        """Commit the write session, notify the outbox dispatcher, then run post-commit hooks."""
         if self._write_session:
             await self._write_session.commit()
         events = list(self._events)
         self._events.clear()
         if events and self._outbox_notifier is not None:
             await self._outbox_notifier(events)
+        hooks = self._post_commit_hooks[:]
+        self._post_commit_hooks.clear()
+        for hook in hooks:
+            await hook
 
     async def rollback(self) -> None:
         if self._write_session:
             await self._write_session.rollback()
+
+    # ── post-commit hooks ────────────────────────────────────────────────────
+
+    def schedule_post_commit(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Schedule a coroutine to run after the next successful commit (M-005)."""
+        self._post_commit_hooks.append(coro)
 
     # ── event accumulation ────────────────────────────────────────────────────
 
