@@ -168,6 +168,12 @@ class FakeIdempotencyRepo(IdempotencyRepository):
     async def record(self, event_id, processed_at=None):
         self._seen.add(event_id)
 
+    async def create_if_not_exists(self, event_id) -> bool:
+        if event_id in self._seen:
+            return False
+        self._seen.add(event_id)
+        return True
+
 
 class FakeUoW(UnitOfWork):
     def __init__(

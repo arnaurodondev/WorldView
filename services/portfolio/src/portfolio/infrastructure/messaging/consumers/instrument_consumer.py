@@ -45,7 +45,12 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         value: dict[str, Any],
         headers: dict[str, str],
     ) -> None:
-        """Upsert an InstrumentRef from the deserialized Kafka message value."""
+        """Upsert an InstrumentRef from the deserialized Kafka message value.
+
+        Dedup is handled atomically via INSERT … ON CONFLICT DO NOTHING RETURNING
+        inside the same transaction as the upsert (BP-035). is_duplicate() always
+        returns False; mark_processed() is a no-op.
+        """
         raw_entity_id = value.get("entity_id")
         try:
             entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
@@ -57,6 +62,12 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         # so replaying the same event always produces the same InstrumentRef.id (M-017).
         instrument_id = entity_id if entity_id is not None else new_uuid7()
 
+        raw_event_id = value.get("event_id", "")
+        try:
+            event_uid = UUID(raw_event_id) if raw_event_id else None
+        except ValueError:
+            event_uid = None
+
         instrument = InstrumentRef(
             id=instrument_id,
             symbol=value.get("symbol", ""),
@@ -65,10 +76,20 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),
             entity_id=entity_id,
-            source_event_id=UUID(value["event_id"]) if "event_id" in value else new_uuid7(),
+            source_event_id=event_uid if event_uid is not None else new_uuid7(),
             synced_at=utc_now(),
         )
         async with await self.get_unit_of_work() as uow:
+            # Atomic dedup: INSERT idempotency record and upsert instrument in the
+            # same transaction. If event_uid is already recorded, skip silently.
+            if event_uid is not None:
+                is_new = await uow.idempotency.create_if_not_exists(event_uid)  # type: ignore[attr-defined]
+                if not is_new:
+                    logger.debug(  # type: ignore[no-any-return]
+                        "instrument_consumer_duplicate_event",
+                        event_id=str(event_uid)[:8],
+                    )
+                    return
             await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
 
         logger.info(  # type: ignore[no-any-return]
@@ -87,22 +108,11 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     # ── Idempotency ───────────────────────────────────────────────────────────
 
     async def is_duplicate(self, event_id: str) -> bool:
-        """Return True if event_id has already been processed."""
-        try:
-            uid = UUID(event_id)
-        except ValueError:
-            return False
-        async with await self.get_unit_of_work() as uow:
-            return await uow.idempotency.exists(uid)  # type: ignore[attr-defined,no-any-return]
+        """Always return False — dedup is handled atomically in process_message (BP-035)."""
+        return False
 
     async def mark_processed(self, event_id: str) -> None:
-        """Record event_id as successfully processed."""
-        try:
-            uid = UUID(event_id)
-        except ValueError:
-            return
-        async with await self.get_unit_of_work() as uow:
-            await uow.idempotency.record(uid)  # type: ignore[attr-defined]
+        """No-op — dedup record was already inserted atomically in process_message (BP-035)."""
 
     # ── Failure tracking (no-op — failures are logged only) ──────────────────
 

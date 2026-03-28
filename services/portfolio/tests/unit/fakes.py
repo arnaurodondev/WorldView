@@ -215,6 +215,12 @@ class FakeIdempotencyRepository(IdempotencyRepository):
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None:
         self._seen.add(event_id)
 
+    async def create_if_not_exists(self, event_id: UUID) -> bool:
+        if event_id in self._seen:
+            return False
+        self._seen.add(event_id)
+        return True
+
 
 class FakeWatchlistRepository(WatchlistRepository):
     """In-memory watchlist store."""

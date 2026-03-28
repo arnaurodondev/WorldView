@@ -223,9 +223,11 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         # Upsert into DB
         await uow.quotes.upsert(quote)
 
-        # Invalidate Valkey cache after DB write
+        # Schedule cache invalidation to run AFTER the transaction commits (M-005).
+        # Invalidating before commit risks a read between invalidation and commit
+        # caching stale data into Valkey until TTL expiry.
         if self._quote_cache is not None:
-            await self._quote_cache.invalidate(instrument.id)
+            uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
 
         logger.info(
             "quotes_consumer.materialized",

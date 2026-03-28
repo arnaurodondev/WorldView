@@ -42,16 +42,19 @@ class FakeInstrumentRepository(InstrumentRepository):
 class FakeIdempotencyRepository(IdempotencyRepository):
     def __init__(self) -> None:
         self.recorded: set = set()
-        self._duplicate = False
-
-    def set_duplicate(self, v: bool) -> None:
-        self._duplicate = v
 
     async def exists(self, event_id) -> bool:
-        return self._duplicate
+        return event_id in self.recorded
 
     async def record(self, event_id, processed_at=None) -> None:
         self.recorded.add(event_id)
+
+    async def create_if_not_exists(self, event_id) -> bool:
+        """Atomically insert; return True if new, False if duplicate (BP-035)."""
+        if event_id in self.recorded:
+            return False
+        self.recorded.add(event_id)
+        return True
 
 
 class FakeUoW(UnitOfWork):
@@ -187,65 +190,45 @@ async def test_process_message_missing_event_id_uses_new_uuid() -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_duplicate_returns_true_when_event_seen() -> None:
-    """is_duplicate returns True when the idempotency repo reports a duplicate."""
+async def test_is_duplicate_always_returns_false() -> None:
+    """is_duplicate always returns False — dedup is handled atomically in process_message (BP-035)."""
     fake_uow = FakeUoW()
-    fake_uow._idempotency_repo.set_duplicate(True)
     consumer = _make_consumer_with_fake_uow(fake_uow)
 
+    # Even for a previously-seen event_id, is_duplicate returns False
     event_id = str(uuid4())
-    result = await consumer.is_duplicate(event_id)
-
-    assert result is True
-
-
-@pytest.mark.asyncio
-async def test_is_duplicate_returns_false_for_new_event() -> None:
-    """is_duplicate returns False for a not-yet-processed event."""
-    fake_uow = FakeUoW()
-    consumer = _make_consumer_with_fake_uow(fake_uow)
-
-    event_id = str(uuid4())
-    result = await consumer.is_duplicate(event_id)
-
-    assert result is False
+    assert await consumer.is_duplicate(event_id) is False
+    assert await consumer.is_duplicate("not-a-uuid") is False
 
 
 @pytest.mark.asyncio
-async def test_is_duplicate_returns_false_for_invalid_uuid() -> None:
-    """is_duplicate returns False when event_id is not a valid UUID."""
-    fake_uow = FakeUoW()
-    consumer = _make_consumer_with_fake_uow(fake_uow)
-
-    result = await consumer.is_duplicate("not-a-uuid")
-
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_mark_processed_records_event_id() -> None:
-    """mark_processed passes the parsed UUID to the idempotency repository."""
-    from uuid import UUID
-
+async def test_mark_processed_is_noop() -> None:
+    """mark_processed is a no-op — dedup record inserted atomically in process_message (BP-035)."""
     fake_uow = FakeUoW()
     consumer = _make_consumer_with_fake_uow(fake_uow)
 
     event_id = str(uuid4())
     await consumer.mark_processed(event_id)
+    await consumer.mark_processed("not-a-uuid")
 
-    assert UUID(event_id) in fake_uow._idempotency_repo.recorded
+    # No records should be in the idempotency store (no separate write)
+    assert len(fake_uow._idempotency_repo.recorded) == 0
 
 
 @pytest.mark.asyncio
-async def test_mark_processed_ignores_invalid_uuid() -> None:
-    """mark_processed silently ignores invalid event_id strings."""
+async def test_process_message_dedup_prevents_double_upsert() -> None:
+    """Replaying the same event_id does not upsert the instrument a second time (BP-035)."""
     fake_uow = FakeUoW()
     consumer = _make_consumer_with_fake_uow(fake_uow)
 
-    # Should not raise
-    await consumer.mark_processed("not-a-uuid")
+    event_id = str(uuid4())
+    value = {"event_id": event_id, "symbol": "AAPL", "exchange": "NASDAQ"}
 
-    assert len(fake_uow._idempotency_repo.recorded) == 0
+    await consumer.process_message(key=None, value=value, headers={})
+    await consumer.process_message(key=None, value=value, headers={})
+
+    # Second call is a duplicate — only one upsert should have happened
+    assert len(fake_uow._instruments_repo.upserted) == 1
 
 
 def test_deserialize_value_parses_json() -> None:
