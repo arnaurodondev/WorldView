@@ -200,3 +200,51 @@ def is_private(addr):
 ```
 **Risk**: IPv4-mapped IPv6 addresses (e.g., `::ffff:127.0.0.1`) bypass manual IPv4 range lists because the list entries are `IPv4Network` objects but `addr` is `IPv6Address`.
 **Fix**: Use `addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_multicast`, and unwrap IPv4-mapped IPv6 first: `if isinstance(addr, IPv6Address) and addr.ipv4_mapped: addr = addr.ipv4_mapped`.
+
+---
+
+## ORANGE — Added from PLAN-0001-E QA Review (2026-03-28)
+
+### HR-021: Non-atomic Consumer Dedup (Separate UoW per Phase)
+```python
+async def is_duplicate(self, event_id):
+    async with await self.get_unit_of_work() as uow:
+        return await uow.idempotency.exists(uid)   # transaction 1
+
+async def process_message(self, ...):
+    async with await self.get_unit_of_work() as uow:
+        await uow.things.upsert(...)               # transaction 2
+
+async def mark_processed(self, event_id):
+    async with await self.get_unit_of_work() as uow:
+        await uow.idempotency.record(uid)          # transaction 3
+```
+**Risk**: Concurrent consumers both pass `is_duplicate` → double-process the same event (BP-045).
+**Fix**: Apply BP-035 — single transaction with atomic `INSERT … ON CONFLICT DO NOTHING RETURNING` inside `process_message`. Set `is_duplicate()` → `return False`; `mark_processed()` → no-op.
+
+### HR-022: Cache Invalidation Before `uow.commit()` (M-005 Violation)
+```python
+async def process_message(self, ...):
+    await uow.quotes.upsert(quote)          # DB write (uncommitted)
+    await self._cache.invalidate(id)        # ← called before commit
+    # base class commits uow later
+```
+**Risk**: A client read between invalidation and commit caches the OLD stale DB value (BP-046). After commit, cache serves stale data until TTL expiry.
+**Fix**: Use `uow.schedule_post_commit(cache.invalidate(id))`. The hook drains after `write_session.commit()`.
+
+### HR-023: `readyz` Endpoint Returning Raw Exception String
+```python
+except Exception as exc:
+    checks["db"] = f"error: {exc}"   # leaks DSN, password, host info
+```
+**Risk**: Clients (or proxies that log 503 bodies) receive internal connection strings including database host, port, user, and potentially password (BP-047).
+**Fix**: `checks["db"] = "error"` — opaque string in HTTP; log full details via structured logger internally only.
+
+### HR-024: `asyncio.Event.set()` in librdkafka Delivery Callback Without `call_soon_threadsafe`
+```python
+def _cb(err, _msg):
+    delivery_event.set()   # asyncio primitive mutated from C thread
+loop = asyncio.get_event_loop()  # too late — after _cb definition
+```
+**Risk**: librdkafka delivery callbacks run on a C thread, not the asyncio event loop thread. Direct `event.set()` is not thread-safe (BP-050). Rare deadlocks under contention.
+**Fix**: Capture `loop` before defining `_cb`; use `loop.call_soon_threadsafe(delivery_event.set)` inside the callback.

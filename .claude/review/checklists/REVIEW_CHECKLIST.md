@@ -37,6 +37,8 @@
 - [ ] Idempotency key checked before side effects
 - [ ] Database operations use upsert or check-before-insert
 - [ ] Outbox payload includes all required Avro envelope fields (event_id, event_type, schema_version, occurred_at)
+- [ ] **Atomic dedup**: `is_duplicate` + `process_message` + `mark_processed` are NOT in separate transactions — use BP-035/BP-045 `INSERT…ON CONFLICT DO NOTHING RETURNING` inside the same UoW as business logic; `is_duplicate()` → `return False`; `mark_processed()` → no-op (HR-021)
+- [ ] **All storage steps have skip-if-exists (D-008)**: if `_store_bronze` has an `exists()` guard, `_store_canonical` and any other storage steps must have the same guard — partial guards break retry idempotency (BP-048)
 
 ## 5. Data Integrity
 
@@ -53,7 +55,7 @@
 - [ ] No hardcoded secrets, tokens, or API keys
 - [ ] No PII or secrets in log output
 - [ ] Multi-tenant isolation: all queries filter by tenant_id
-- [ ] Error messages don't leak internal details to clients
+- [ ] Error messages don't leak internal details to clients — **`/readyz` and `/healthz` endpoints return opaque `"error"` strings in HTTP body, never raw exception messages** (BP-047, HR-023)
 - [ ] Token comparisons use `hmac.compare_digest()` (not `==`)
 - [ ] Query pagination has upper bound (max limit parameter)
 - [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
@@ -69,6 +71,12 @@
 - [ ] `doc_id` in outbox payloads is a per-document UUIDv7 (not source/aggregate ID)
 - [ ] SSRF URL validation resolves DNS hostnames, not just IP literals
 - [ ] LSH/cache writes happen AFTER DB commit, not before (prevents phantom entries on rollback)
+- [ ] **Cache invalidation uses `schedule_post_commit(cache.invalidate(id))`**, never `await cache.invalidate(id)` inside `process_message()` — invalidating before commit enables stale-read-into-cache races (BP-046, HR-022, M-005)
+- [ ] **Avro record names are valid Java identifiers (PascalCase)** — no dots, no version suffixes in `"name"` field; dots belong in `"namespace"` only (BP-051)
+- [ ] **Avro namespace uses canonical format `com.worldview.<service>.events`** — all schemas in a service share the same namespace; inconsistent namespaces create divergent Schema Registry subjects (BP-052)
+- [ ] **`schema_version` base class default is `1`, not `0`** — default 0 means subclasses that forget to override emit version-0 events silently (BP-053)
+- [ ] **`asyncio.Event.set()` in confluent-kafka delivery callbacks uses `loop.call_soon_threadsafe(event.set)`** — direct `event.set()` from librdkafka C thread is not thread-safe (BP-050, HR-024)
+- [ ] **Repositories with read/write session splitting: `get_or_create` reads back via write session after INSERT** — never call `self.get()` (read session) immediately after INSERT on write session (BP-049)
 
 ## 7. Architecture Compliance
 
