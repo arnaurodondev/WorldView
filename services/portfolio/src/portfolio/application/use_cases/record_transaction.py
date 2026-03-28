@@ -70,8 +70,10 @@ class RecordTransactionUseCase:
                 raise IdempotencyKeyInvalidError(
                     f"idempotency_key must be a valid UUID: {exc}",
                 ) from exc
-            already_done = await uow.idempotency.exists(idem_uuid)
-            if already_done:
+            # BP-035: atomic dedup — single INSERT ON CONFLICT DO NOTHING RETURNING eliminates
+            # the TOCTOU race that exists between separate exists() and record() calls.
+            is_new = await uow.idempotency.create_if_not_exists(idem_uuid)
+            if not is_new:
                 existing = await uow.transactions.find_by_external_ref(
                     cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
                 )
@@ -203,10 +205,6 @@ class RecordTransactionUseCase:
                 lease_expires=None,
             )
         )
-
-        # Record idempotency
-        if idem_uuid is not None:
-            await uow.idempotency.record(idem_uuid)
 
         log = logger.bind(
             tenant_id=str(cmd.tenant_id),

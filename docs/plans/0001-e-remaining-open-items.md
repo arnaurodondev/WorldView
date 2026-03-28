@@ -2,7 +2,7 @@
 id: PLAN-0001-E-R1
 prd: QA-CROSS-002
 title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency Decisions"
-status: draft
+status: in-progress
 created: 2026-03-28
 updated: 2026-03-28
 plans: 1
@@ -34,10 +34,11 @@ tasks: 18
 
 ---
 
-## Wave 1: QA-012 — `record_transaction` TOCTOU Idempotency Race (portfolio)
+## Wave 1: QA-012 — `record_transaction` TOCTOU Idempotency Race (portfolio) ✅
 
 **Priority**: HIGH — correctness bug, financial data
 **Decision required**: None — BP-035 is the canonical fix
+**Status**: **DONE** — 2026-03-28 · 280 unit tests pass · ruff + mypy clean
 
 ### Context
 
@@ -76,10 +77,10 @@ The `IdempotencyRepository.create_if_not_exists(key)` method is already implemen
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T01 | Add `create_if_not_exists` to `IdempotencyRepository` ABC for UUID-based keys (already done for UUID) — add overload accepting `str` (idempotency_key) | `application/ports/repositories.py` | Extend port |
-| T02 | Implement `create_if_not_exists(str)` in `SqlAlchemyIdempotencyRepository` | `infrastructure/db/repositories/idempotency.py` | Implement |
-| T03 | Update `RecordTransactionUseCase` to use atomic dedup | `application/use_cases/record_transaction.py` | Fix |
-| T04 | Update `test_use_cases_transaction.py` to test atomic dedup behavior | `tests/unit/test_use_cases_transaction.py` | Test |
+| T01 | ✅ Add `create_if_not_exists` to `IdempotencyRepository` ABC — already present (UUID form); str overload not needed since UUID is validated before call | `application/ports/repositories.py` | Extend port |
+| T02 | ✅ Implement `create_if_not_exists` in `SqlAlchemyIdempotencyRepository` — already implemented with RETURNING clause | `infrastructure/db/repositories/idempotency.py` | Implement |
+| T03 | ✅ Update `RecordTransactionUseCase` to use atomic dedup | `application/use_cases/record_transaction.py` | Fix |
+| T04 | ✅ Add BP-035 regression test: spy verifies `exists()`/`record()` are never called | `tests/unit/test_use_cases_transaction.py` | Test |
 
 ---
 
