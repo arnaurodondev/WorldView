@@ -256,7 +256,7 @@ sequenceDiagram
 ```bash
 cd services/market-ingestion
 cp configs/dev.local.env.example .env
-make run       # API on port 8001
+make run       # API on port 8002
 make test
 make lint
 make migrate

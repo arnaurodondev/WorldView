@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -15,30 +15,31 @@ from pydantic import BaseModel, field_validator
 class TriggerRequest(BaseModel):
     """Request body for POST /api/v1/ingest/trigger."""
 
-    provider: str
-    symbols: list[str]
-    dataset_type: str
-    timeframe: str = "1d"
-    exchange: str | None = None
+    provider: str = Field(..., min_length=1, max_length=50)
+    symbols: list[str] = Field(..., min_length=1, max_length=1000)
+    dataset_type: str = Field(..., min_length=1, max_length=50)
+    timeframe: str = Field("1d", min_length=1, max_length=10)
+    exchange: str | None = Field(None, max_length=20)
 
     @field_validator("symbols")
     @classmethod
-    def symbols_not_empty(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("symbols must not be empty")
+    def validate_symbols(cls, v: list[str]) -> list[str]:
+        for s in v:
+            if not (1 <= len(s) <= 20):
+                raise ValueError(f"Symbol {s!r} must be 1-20 characters")
         return v
 
 
 class BackfillRequest(BaseModel):
     """Request body for POST /api/v1/ingest/backfill."""
 
-    provider: str
-    symbol: str
+    provider: str = Field(..., min_length=1, max_length=50)
+    symbol: str = Field(..., min_length=1, max_length=20)
     start_date: date
     end_date: date
-    timeframe: str = "1d"
-    chunk_days: int = 30
-    exchange: str | None = None
+    timeframe: str = Field("1d", min_length=1, max_length=10)
+    chunk_days: int = Field(30, ge=1, le=365)
+    exchange: str | None = Field(None, max_length=20)
 
     @field_validator("end_date")
     @classmethod
@@ -46,6 +47,8 @@ class BackfillRequest(BaseModel):
         start = info.data.get("start_date")
         if start and v <= start:
             raise ValueError("end_date must be after start_date")
+        if start and (v - start).days > 10 * 365:
+            raise ValueError("Date range must not exceed 10 years")
         return v
 
 
