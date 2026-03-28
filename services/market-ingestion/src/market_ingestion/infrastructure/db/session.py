@@ -25,7 +25,7 @@ def _build_factories(
     settings: Settings | None = None,
 ) -> tuple[async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
     """Build write + read session factories from *settings*."""
-    cfg = settings or Settings()
+    cfg = settings or Settings()  # type: ignore[call-arg]
 
     write_engine = create_async_engine(
         cfg.database_url,

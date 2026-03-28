@@ -126,6 +126,9 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
             )
             results: list[DeliveryResult] = []
             for record in records:
+                if record.attempt > 0:
+                    # B-006: re-claim warning — record survived a previous lease expiry or failure
+                    logger.warning("outbox.record_reclaimed", record_id=str(record.id), attempts=record.attempt)
                 payload_dict = json.loads(record.payload) if isinstance(record.payload, bytes) else record.payload
                 dispatchable = _DispatchableOutboxRecord(
                     record_id=str(record.id),
@@ -230,10 +233,12 @@ def build_market_ingestion_dispatcher(
         Ready-to-use dispatcher (call ``.run()`` in an asyncio task).
     """
     if config is None:
+        # Lease >=30 s — typical Kafka publish <5 s; 6x safety margin prevents
+        # concurrent dispatchers from re-claiming a stalled record. See B-006.
         config = DispatcherConfig(
-            poll_interval_seconds=getattr(settings, "dispatcher_poll_interval_seconds", 10.0),
-            lease_seconds=getattr(settings, "dispatcher_lease_seconds", 60),
-            max_attempts=getattr(settings, "dispatcher_max_attempts", 5),
+            poll_interval_seconds=settings.dispatcher_poll_interval_seconds,
+            lease_seconds=settings.dispatcher_lease_seconds,
+            max_attempts=settings.dispatcher_max_attempts,
         )
     return MarketIngestionOutboxDispatcher(
         write_factory=write_factory,

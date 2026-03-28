@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_schema_registry_url: str = "http://localhost:8081"
+    schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_auto_register_schemas: bool = True
 
@@ -47,8 +47,8 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set PORTFOLIO_STORAGE_ACCESS_KEY env var
+    storage_secret_key: str  # Required — set PORTFOLIO_STORAGE_SECRET_KEY env var
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"

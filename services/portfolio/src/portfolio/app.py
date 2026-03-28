@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     app = FastAPI(
         title="portfolio",
         version="2025.6.0",

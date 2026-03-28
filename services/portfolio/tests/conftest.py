@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
+
+# Required fields with no defaults (security hardening C-001) — must be set
+# before Settings() is instantiated in create_app() or any test fixture.
+os.environ.setdefault("PORTFOLIO_STORAGE_ACCESS_KEY", "minioadmin-test")
+os.environ.setdefault("PORTFOLIO_STORAGE_SECRET_KEY", "minioadmin-test")
 from httpx import ASGITransport, AsyncClient
 from portfolio.app import create_app
 

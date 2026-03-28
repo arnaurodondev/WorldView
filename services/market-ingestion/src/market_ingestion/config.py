@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import warnings
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,8 +33,8 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set MARKET_INGESTION_STORAGE_ACCESS_KEY env var
+    storage_secret_key: str  # Required — set MARKET_INGESTION_STORAGE_SECRET_KEY env var
     storage_bucket: str = "market-ingestion"
     bronze_bucket: str = "market-bronze"
     canonical_bucket: str = "market-canonical"
@@ -58,6 +61,9 @@ class Settings(BaseSettings):
     # Dispatcher
     dispatcher_batch_size: int = 50
     dispatcher_poll_interval_seconds: float = 1.0
+    # Lease >=30 s — typical Kafka publish <5 s; 6x safety margin prevents
+    # concurrent dispatchers from re-claiming a stalled record.
+    dispatcher_lease_seconds: int = 60
     dispatcher_max_attempts: int = 5
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
@@ -65,3 +71,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_demo_eodhd_key(self) -> Settings:
+        if self.eodhd_api_key == "demo":
+            warnings.warn(
+                "EODHD API key is 'demo' — limited to demo endpoints only. "
+                "Set MARKET_INGESTION_EODHD_API_KEY for production use.",
+                stacklevel=2,
+            )
+        return self

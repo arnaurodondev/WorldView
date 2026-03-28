@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Singleton Settings instance (cached across requests)."""
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
 
 
 async def get_uow(

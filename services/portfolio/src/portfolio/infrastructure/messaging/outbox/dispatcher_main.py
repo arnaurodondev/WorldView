@@ -20,7 +20,7 @@ async def main() -> None:
     from portfolio.infrastructure.db.session import create_session_factory
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name=settings.service_name,
         level=settings.log_level,

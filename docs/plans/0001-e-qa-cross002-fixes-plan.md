@@ -11,6 +11,7 @@ plans: 4
 <!-- Wave E2-3 completed 2026-03-28 -->
 <!-- Waves E3-1 + E3-2 completed 2026-03-28 -->
 <!-- Waves E3-3 + E3-4 completed 2026-03-28 -->
+<!-- Wave E4-1 completed 2026-03-28 -->
 waves: 14
 tasks: 62
 supersedes: QA-CROSS-002
@@ -1859,11 +1860,12 @@ Update any code that treats `event_id` as a UUID object to use `UUID(event.event
 
 ## Sub-Plan E-4: Cross-Cutting Fixes
 
-### Wave E4-1: Security Config Hardening
+### Wave E4-1: Security Config Hardening ✅
 
 **Goal**: Remove hardcoded MinIO credentials from all services and shared storage lib, fix EODHD "demo" key default, fix DB connection string credential exposure, standardize config naming.
 **Depends on**: none
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-03-28 · 79 storage lib tests + 303 portfolio tests + 411 market-ingestion tests + 281 market-data tests pass · ruff clean
 **Architecture layer**: config
 
 #### Pre-read
@@ -1969,9 +1971,9 @@ for row in claimed_rows:
 - [ ] Comment documents the lease duration rationale
 
 #### Validation Gate (Wave E4-1)
-- [ ] `ruff check libs/ services/` clean
-- [ ] `mypy libs/storage/src/ services/*/src/` clean on changed files
-- [ ] `configs/dev.local.env.example` updated with all required env vars
+- [x] `ruff check libs/ services/` clean
+- [x] `mypy libs/storage/src/ services/*/src/` clean on changed files
+- [x] `configs/dev.local.env.example` updated with all required env vars
 
 ---
 

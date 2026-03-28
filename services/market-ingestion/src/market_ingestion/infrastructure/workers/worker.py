@@ -204,7 +204,7 @@ class WorkerProcess:
 
 async def _run_worker() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     worker = WorkerProcess(settings=settings)
 
     loop = asyncio.get_running_loop()
