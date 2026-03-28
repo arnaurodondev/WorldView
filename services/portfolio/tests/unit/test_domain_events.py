@@ -215,15 +215,17 @@ class TestDataclassCharacteristics:
         assert event.tenant_name == "Modified"
 
     def test_event_id_is_auto_generated(self) -> None:
+        # D-009: event_id is a UUIDv7 hex string for Avro portability.
         e1 = TenantCreated(tenant_id=uuid.uuid4())
         e2 = TenantCreated(tenant_id=uuid.uuid4())
         assert e1.event_id != e2.event_id
+        assert isinstance(e1.event_id, str)
 
     def test_occurred_at_is_set(self) -> None:
-        import datetime
-
+        # D-009: occurred_at is a string (ISO-8601 with Z suffix) for Avro portability.
         event = TenantCreated(tenant_id=uuid.uuid4())
-        assert isinstance(event.occurred_at, datetime.datetime)
+        assert isinstance(event.occurred_at, str)
+        assert event.occurred_at.endswith("Z")
 
 
 # ── InstrumentRefCreated specific fields ──────────────────────────────────────

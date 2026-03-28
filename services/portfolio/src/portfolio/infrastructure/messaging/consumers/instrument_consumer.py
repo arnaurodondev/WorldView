@@ -47,9 +47,18 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     ) -> None:
         """Upsert an InstrumentRef from the deserialized Kafka message value."""
         raw_entity_id = value.get("entity_id")
-        entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
+        try:
+            entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
+        except ValueError:
+            logger.warning("instrument_consumer_invalid_entity_id", raw=raw_entity_id)  # type: ignore[no-any-return]
+            entity_id = None
+
+        # Use entity_id as the stable portfolio-internal instrument ID when available
+        # so replaying the same event always produces the same InstrumentRef.id (M-017).
+        instrument_id = entity_id if entity_id is not None else new_uuid7()
+
         instrument = InstrumentRef(
-            id=new_uuid7(),
+            id=instrument_id,
             symbol=value.get("symbol", ""),
             exchange=value.get("exchange", ""),
             name=value.get("name"),

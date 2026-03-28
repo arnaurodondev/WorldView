@@ -70,6 +70,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
 
+    if not settings.internal_service_token:
+        logger.warning(  # type: ignore[no-any-return]
+            "portfolio_internal_token_not_configured",
+            detail="PORTFOLIO_INTERNAL_SERVICE_TOKEN is empty; all internal endpoints will return 401",
+        )
+
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
 
     # 4. Create DB session factory
