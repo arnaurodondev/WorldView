@@ -1,27 +1,69 @@
+"""Service configuration via environment variables."""
+
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Configuration for the Alert service (S10).
+
+    All fields are read from environment variables prefixed with ``ALERT_``.
+    Exception: ``INTERNAL_SERVICE_TOKEN`` is shared across services (no prefix).
+    """
+
     model_config = SettingsConfigDict(
         env_prefix="ALERT_",
         env_file=".env",
-        env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
-    s1_portfolio_base_url: str = "http://localhost:8001"
-    internal_service_token: str = ""
-    watchlist_cache_ttl_seconds: int = 300
-    alert_dedup_window_seconds: int = 3600
-    pending_alert_ttl_days: int = 7
+    # ── Server ─────────────────────────────────────────────────────────────
+    host: str = "0.0.0.0"
+    port: int = 8010
+
+    # ── Database ───────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alert_db"
+
+    # ── Kafka ──────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
-    schema_registry_url: str = "http://localhost:8081"
+    kafka_schema_registry_url: str = "http://localhost:8081"
+    kafka_consumer_group: str = "alert-service-group"
+    kafka_watchlist_consumer_group: str = "alert-service-watchlist-group"
+
+    # Consumed topics
+    kafka_topic_signal: str = "nlp.signal.detected.v1"
+    kafka_topic_graph_state: str = "graph.state.changed.v1"
+    kafka_topic_contradiction: str = "intelligence.contradiction.v1"
+    kafka_topic_watchlist: str = "portfolio.watchlist.updated.v1"
+
+    # Produced topics
+    kafka_topic_alert_delivered: str = "alert.delivered.v1"
+    kafka_dlq_topic: str = "alert.dead-letter.v1"
+
+    # ── Valkey ─────────────────────────────────────────────────────────────
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # ── S1 Portfolio dependency ────────────────────────────────────────────
+    s1_portfolio_base_url: str = "http://localhost:8001"
+    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
+
+    # ── Domain ─────────────────────────────────────────────────────────────
+    alert_dedup_window_seconds: int = 300
+    watchlist_cache_ttl_seconds: int = 300
+    pending_alert_ttl_days: int = 7
+
+    # ── Security ───────────────────────────────────────────────────────────
+    admin_token: str = ""
+
+    # ── Outbox dispatcher ──────────────────────────────────────────────────
+    dispatcher_poll_interval_s: float = 1.0
+    dispatcher_batch_size: int = 50
+
+    # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
+    service_name: str = "alert"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

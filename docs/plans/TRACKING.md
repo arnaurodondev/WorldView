@@ -7,7 +7,7 @@
 
 | Plan ID | Title | PRD | Status | Waves Done/Total | QA | Updated |
 |---------|-------|-----|--------|-----------------|-----|---------|
-| PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | in-progress | 8/11 | — | 2026-03-28 |
+| PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | in-progress | 9/11 | — | 2026-03-28 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
 <!-- New plans are appended here by the /plan skill -->
 
@@ -44,6 +44,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
 | PLAN-0001-E | S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency | QA Review (QA-CROSS-002) | 2026-03-28 | 14 | — |
 | PLAN-0004 | Observability Dashboards, Alerts & Recording Rules — Auto-Provisioned | N/A | 2026-03-27 | 5 | — |
+| QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
 
 ## Conventions
 
