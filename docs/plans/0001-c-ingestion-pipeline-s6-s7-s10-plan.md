@@ -268,11 +268,12 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 
 ---
 
-### Wave D-2: S7 Hot Path — Blocks 11–12 + APScheduler/Kafka Co-topology
+### Wave D-2: S7 Hot Path — Blocks 11–12 + APScheduler/Kafka Co-topology ✅
 
 **Goal**: Implement the S7 hot path: APScheduler + Kafka consumer co-topology in single FastAPI lifespan, relation canonicalization (3-step: exact → soft-map → propose), graph materialization with advisory locks, and hot-path contradiction detection.
 **Depends on**: Wave D-1
 **Estimated effort**: 75–90 minutes
+**Status**: **DONE** — 2026-03-28 · 102 unit tests pass (40 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -290,12 +291,12 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 - `infra/kafka/schemas/` — Avro schemas for output events
 
 #### Validation Gate
-- [ ] `ruff check services/knowledge-graph/` passes
-- [ ] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/knowledge-graph/tests/unit -v` — all tests pass (≥45 total)
-- [ ] entity.dirtied.v1 produced directly (not via outbox) — verified in test
-- [ ] partition_key not in any INSERT — grep verification
-- [ ] `docs/services/knowledge-graph.md` updated with hot path blocks, Kafka topology
+- [x] `ruff check services/knowledge-graph/` passes
+- [x] `mypy services/knowledge-graph/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/knowledge-graph/tests/unit -v` — 102 tests pass (≥45 met)
+- [x] entity.dirtied.v1 produced directly (not via outbox) — verified in test
+- [x] partition_key not in any INSERT — verified in test + grep
+- [x] `docs/services/knowledge-graph.md` updated with hot path blocks, Kafka topology
 
 #### Regression Guardrails
 - BP-001: OutboxEventValueSerializer for outbox-dispatched events

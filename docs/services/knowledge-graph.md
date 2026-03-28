@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Wave D-1 complete — domain, confidence formula, intelligence_db adapter implemented
+> **Status**: Wave D-2 complete — hot path Blocks 11–12 + APScheduler/Kafka co-topology implemented
 
 ---
 
@@ -42,6 +42,7 @@ and performs read/write operations only.
 | Topic | Consumer Group | Purpose |
 |-------|---------------|---------|
 | `nlp.article.enriched.v1` | `kg-service-group` | Ingest extracted entities/relations (at-least-once; commit after DB write) |
+| `entity.canonical.created.v1` | `kg-entity-group` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
 
 ### Produced
 
@@ -50,7 +51,7 @@ and performs read/write operations only.
 | `graph.state.changed.v1` | `GraphStateChangedV1` | `primary_entity_id` | Outbox in `intelligence_db` |
 | `intelligence.contradiction.v1` | `ContradictionDetectedV1` | `subject_entity_id` | Outbox in `intelligence_db` |
 | `relation.type.proposed.v1` | `RelationTypeProposedV1` | `proposed_type` | Outbox in `intelligence_db` |
-| `entity.dirtied.v1` | `EntityDirtiedV1` | `entity_id` | Outbox in `intelligence_db` (triggers embedding refresh in S6) |
+| `entity.dirtied.v1` | `EntityDirtiedV1` | `entity_id` | **Direct produce** (compacted topic — bypasses outbox; triggers embedding refresh in S6) |
 
 ---
 
@@ -111,6 +112,52 @@ and performs read/write operations only.
 | `RELATION_CANONICALIZATION_THRESHOLD` | `0.35` | Max cosine distance for ANN soft-mapping |
 | `ALEMBIC_ENABLED` | `false` | Must remain false (intelligence_db DDL is external) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
+
+---
+
+## Hot Path Implementation (Wave D-2)
+
+### Co-Topology Architecture
+
+`KnowledgeGraphScheduler` (`infrastructure/scheduler/scheduler.py`) starts in the FastAPI lifespan:
+- **`AsyncIOScheduler`** (APScheduler) with 8 job slots running in the same asyncio event loop
+- **`EnrichedArticleConsumer`** task (`asyncio.create_task`) for `nlp.article.enriched.v1`
+- Graceful SIGTERM: `scheduler.shutdown(wait=False)` → cancel consumer task with `contextlib.suppress(CancelledError)`
+
+### Block 11: Canonicalization (`application/blocks/canonicalization.py`)
+
+3-step pipeline per PRD §6.7:
+1. **Exact match** → `registry_repo.find_exact(raw_type)` → returns full registry row
+2. **ANN soft-map** → `embedding_client.embed(raw_type)` → `registry_repo.find_by_embedding(embedding, distance_threshold=0.35)` (cosine)
+3. **Propose** → emit `relation.type.proposed.v1` via outbox as JSON bytes; return `canonical_type=None` WITHOUT raising
+
+`EmbeddingClientProtocol` is duck-typed locally (no ml-clients runtime dependency — Python version boundary).
+
+### Block 12a: Graph Materialization (`application/blocks/graph_write.py`)
+
+Per enriched message:
+1. Advisory lock + upsert `relations` (subject/type/object natural key) — skipped when `canonical_type=None`
+2. INSERT `relation_evidence_raw` — **`partition_key` is STORED; never in INSERT**
+3. INSERT `events` + `event_entities` (ON CONFLICT DO NOTHING)
+4. INSERT `claims` (ON CONFLICT DO NOTHING)
+5. Produce `entity.dirtied.v1` **directly** (compacted topic, key=entity_id bytes)
+6. Emit `graph.state.changed.v1` via outbox
+
+Rows with `entity_provisional=true` are staged but skipped by aggregation worker until resolved.
+
+### Block 12b: Contradiction Detection (`application/blocks/contradiction.py`)
+
+- Query `claims` with **opposite** polarity on same `(subject_entity_id, claim_type)` within 90-day window
+- Both claims must be non-neutral (`positive` ↔ `negative`)
+- strength = `min(new_confidence, opposing_confidence)`
+- Writes `relation_contradiction_links` + emits `intelligence.contradiction.v1` via outbox
+
+### Consumers (Wave D-2)
+
+| File | Consumer Class | Group | Handles |
+|------|---------------|-------|---------|
+| `infrastructure/consumer/enriched_consumer.py` | `EnrichedArticleConsumer` | `kg-service-group` | Block 11→12a→12b pipeline; Valkey dedup (24h TTL); `_NoOpUoW` (manages own session) |
+| `infrastructure/consumer/entity_consumer.py` | `EntityCreatedConsumer` | `kg-entity-group` | UPDATE `relation_evidence_raw SET entity_provisional=false` for resolved provisional entities |
 
 ---
 
