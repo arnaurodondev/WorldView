@@ -96,14 +96,12 @@ class SECEdgarAdapter(SourceAdapter):
                 continue
 
             cik = str(source_data.get("cik", ""))
-            filing_url = (
-                f"https://www.sec.gov/Archives/edgar/data/" f"{cik}/{accession_no.replace('-', '')}/{file_name}"
-            )
+            filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no.replace('-', '')}/{file_name}"
 
             try:
                 raw_bytes = await self._retry_request(
-                    lambda _an=accession_no, _fn=file_name, _cik=cik: (
-                        self._client.fetch_filing_document(cik=_cik, accession_no=_an, filename=_fn)
+                    lambda _an=accession_no, _fn=file_name, _cik=cik: self._client.fetch_filing_document(
+                        cik=_cik, accession_no=_an, filename=_fn
                     ),
                     retry_config=self._retry_config,
                     context=f"sec_edgar:doc:{accession_no}",

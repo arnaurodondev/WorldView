@@ -224,6 +224,37 @@ All adapters inherit from `SourceAdapter` (ABC) at `infrastructure/adapters/base
 | `CONTENT_INGESTION_ADMIN_TOKEN` | - | X-Admin-Token auth |
 | `CONTENT_INGESTION_BACKFILL_ENABLED` | `false` | Historical backfill on startup |
 
+### Nested Provider Settings (PLAN-0005)
+
+Operational parameters live in 5 nested `BaseModel` sub-models on `Settings`, injected via
+`env_nested_delimiter="__"`. These are **not** secrets — map them to a `ConfigMap` in Kubernetes.
+API keys remain as flat fields mapped from `Secret` manifests.
+
+| ENV var | Default | Description |
+|---------|---------|-------------|
+| `CONTENT_INGESTION_EODHD__BASE_URL` | `https://eodhd.com/api/news` | EODHD news endpoint |
+| `CONTENT_INGESTION_EODHD__PAGE_SIZE` | `100` | Results per page |
+| `CONTENT_INGESTION_EODHD__RATE_LIMIT_PER_SECOND` | `10.0` | Token-bucket capacity + refill |
+| `CONTENT_INGESTION_FINNHUB__BASE_URL` | `https://finnhub.io/api/v1` | Finnhub API root |
+| `CONTENT_INGESTION_FINNHUB__RATE_LIMIT_PER_MINUTE` | `55` | Token-bucket capacity |
+| `CONTENT_INGESTION_NEWSAPI__BASE_URL` | `https://newsapi.org/v2/everything` | NewsAPI endpoint |
+| `CONTENT_INGESTION_NEWSAPI__PAGE_SIZE` | `100` | Results per page |
+| `CONTENT_INGESTION_NEWSAPI__QUOTA_TTL_SECONDS` | `86400` | Daily quota key TTL in Valkey |
+| `CONTENT_INGESTION_SEC_EDGAR__EFTS_URL` | `https://efts.sec.gov/LATEST/search-index` | EFTS search endpoint |
+| `CONTENT_INGESTION_SEC_EDGAR__FILING_BASE_URL` | `https://www.sec.gov/Archives/edgar/data` | Filing document base |
+| `CONTENT_INGESTION_SEC_EDGAR__DEFAULT_FORMS` | `10-K,10-Q,8-K,DEF14A` | Comma-separated form types |
+| `CONTENT_INGESTION_SEC_EDGAR__MAX_CONCURRENT` | `8` | asyncio semaphore size |
+| `CONTENT_INGESTION_HTTP_CLIENT__TIMEOUT_SECONDS` | `30.0` | httpx total timeout |
+| `CONTENT_INGESTION_HTTP_CLIENT__CONNECT_TIMEOUT_SECONDS` | `5.0` | httpx connect timeout |
+| `CONTENT_INGESTION_HTTP_CLIENT__MAX_RETRIES` | `3` | Default retry count |
+
+**Example Helm `ConfigMap` override** (EODHD base URL for staging):
+```yaml
+data:
+  CONTENT_INGESTION_EODHD__BASE_URL: "https://staging-eodhd.internal/api/news"
+  CONTENT_INGESTION_HTTP_CLIENT__TIMEOUT_SECONDS: "60.0"
+```
+
 ---
 
 ## Observability

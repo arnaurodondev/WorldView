@@ -109,20 +109,45 @@ async def _run_fetch_cycle(
 
     # 2. Fetch articles from external API (outside lock — no DB writes)
     now = ct_mod.utc_now()
-    rate_limiter = TokenBucket(capacity=10, tokens=10.0, refill_rate=10.0, last_refill=now)
+    eodhd_rps = settings.eodhd.rate_limit_per_second
+    rate_limiter = TokenBucket(
+        capacity=int(eodhd_rps),
+        tokens=eodhd_rps,
+        refill_rate=eodhd_rps,
+        last_refill=now,
+    )
 
     client: object
     if source.source_type.value == "eodhd":
-        client = EODHDClient(http_client=http_client, api_key=settings.eodhd_api_key)  # type: ignore[arg-type]
+        client = EODHDClient(  # type: ignore[arg-type]
+            http_client=http_client,
+            api_key=settings.eodhd_api_key,
+            provider_cfg=settings.eodhd,
+        )
     elif source.source_type.value == "sec_edgar":
-        client = SECEdgarClient(http_client=http_client, user_agent=settings.sec_edgar_user_agent)  # type: ignore[arg-type]
+        client = SECEdgarClient(  # type: ignore[arg-type]
+            http_client=http_client,
+            user_agent=settings.sec_edgar_user_agent,
+            provider_cfg=settings.sec_edgar,
+        )
     elif source.source_type.value == "finnhub":
-        client = FinnhubClient(http_client=http_client, api_key=settings.finnhub_api_key)  # type: ignore[arg-type]
-        rate_limiter = TokenBucket(capacity=55, tokens=55.0, refill_rate=55.0 / 60.0, last_refill=now)
+        rate_per_second = settings.finnhub.rate_limit_per_minute / 60.0
+        rate_limiter = TokenBucket(
+            capacity=settings.finnhub.rate_limit_per_minute,
+            tokens=float(settings.finnhub.rate_limit_per_minute),
+            refill_rate=rate_per_second,
+            last_refill=now,
+        )
+        client = FinnhubClient(  # type: ignore[arg-type]
+            http_client=http_client,
+            api_key=settings.finnhub_api_key,
+            provider_cfg=settings.finnhub,
+        )
     elif source.source_type.value == "newsapi":
         client = NewsAPIClient(
             http_client=http_client,  # type: ignore[arg-type]
             api_key=settings.newsapi_key,
+            provider_cfg=settings.newsapi,
             valkey=valkey,  # type: ignore[arg-type]
             daily_limit=settings.newsapi_daily_limit,
         )
@@ -283,7 +308,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     http_client = httpx.AsyncClient(
         transport=SSRFSafeTransport(),
-        timeout=httpx.Timeout(30.0, connect=5.0),
+        timeout=httpx.Timeout(
+            settings.http_client.timeout_seconds,
+            connect=settings.http_client.connect_timeout_seconds,
+        ),
     )
     app.state.http_client = http_client
 

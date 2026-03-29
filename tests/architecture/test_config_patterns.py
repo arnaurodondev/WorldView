@@ -141,9 +141,18 @@ def _check_settings_class(svc: ServiceInfo) -> list[ArchViolation]:
         )
         return violations
 
-    # Check that Settings inherits from BaseSettings
+    # Check that Settings inherits from BaseSettings.
+    # Exception: compound sub-models (e.g. EODHDProviderSettings) inherit from
+    # BaseModel — that is the correct pydantic-settings v2 nested-model pattern
+    # and should not be flagged.  Only the root "Settings" class (name == "Settings"
+    # or a simple single-word variant) must inherit from BaseSettings.
     for line, name, bases in visitor.settings_classes:
+        # Allow BaseModel as base for helper sub-models (compound names)
+        is_root_settings = name == "Settings"
         if "BaseSettings" not in bases and "Settings" not in bases:
+            if not is_root_settings and "BaseModel" in bases:
+                # Nested provider/client settings sub-model — valid pattern
+                continue
             violations.append(
                 ArchViolation(
                     service=svc.name,

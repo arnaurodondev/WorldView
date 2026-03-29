@@ -13,9 +13,9 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import httpx
 
-logger = get_logger(__name__)  # type: ignore[no-any-return]
+    from content_ingestion.config import FinnhubProviderSettings
 
-_BASE_URL = "https://finnhub.io/api/v1"
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class RateLimitError(AdapterError):
@@ -36,11 +36,18 @@ class FinnhubClient:
     Args:
         http_client: An ``httpx.AsyncClient`` for making requests.
         api_key: Finnhub API token.
+        provider_cfg: Operational parameters (base URL).
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, api_key: str) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        api_key: str,
+        provider_cfg: FinnhubProviderSettings,
+    ) -> None:
         self._http = http_client
         self._api_key = api_key
+        self._base_url = provider_cfg.base_url
 
     async def fetch_company_news(
         self,
@@ -70,7 +77,7 @@ class FinnhubClient:
             "token": self._api_key,
         }
 
-        response = await self._http.get(f"{_BASE_URL}/company-news", params=params)
+        response = await self._http.get(f"{self._base_url}/company-news", params=params)
         self._check_response(response)
 
         data = response.json()
@@ -88,7 +95,7 @@ class FinnhubClient:
             List of transcript metadata dicts.
         """
         params = {"symbol": symbol, "token": self._api_key}
-        response = await self._http.get(f"{_BASE_URL}/stock/transcripts/list", params=params)
+        response = await self._http.get(f"{self._base_url}/stock/transcripts/list", params=params)
         self._check_response(response)
 
         data = response.json()
@@ -107,7 +114,7 @@ class FinnhubClient:
             Transcript dict with content.
         """
         params = {"id": transcript_id, "token": self._api_key}
-        response = await self._http.get(f"{_BASE_URL}/stock/transcripts", params=params)
+        response = await self._http.get(f"{self._base_url}/stock/transcripts", params=params)
         self._check_response(response)
 
         data = response.json()
