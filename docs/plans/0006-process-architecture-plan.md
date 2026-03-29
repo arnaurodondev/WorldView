@@ -286,12 +286,13 @@ pattern that applies to all services.
 
 ## 5. Sub-Plan B: Content-Ingestion Decoupling
 
-### Wave B-1: Domain Layer — Task Entity, Enums, Config
+### Wave B-1: Domain Layer — Task Entity, Enums, Config ✅
 
 **Goal**: Define the `ContentIngestionTask` domain entity with state machine, new enums, and config additions that the scheduler-worker pattern requires.
 **Depends on**: Wave A-1
 **Estimated effort**: 30-45 minutes
 **Architecture layer**: domain + config
+**Status**: **DONE** — 2026-03-29 · 26 new tests (317 total unit) · ruff + mypy clean
 
 #### Tasks
 
@@ -331,7 +332,7 @@ re-export from `contracts.enums`. Content-ingestion re-exports from the same sha
 
 ---
 
-#### T-B-1-02: Add ContentIngestionTask Entity with State Machine
+#### T-B-1-02: Add ContentIngestionTask Entity with State Machine ✅
 
 **Type**: impl
 **depends_on**: [T-B-1-01]
@@ -402,14 +403,14 @@ a unit of work for the worker to execute — one fetch cycle for one source.
 - Error paths: every invalid state transition
 
 **Acceptance criteria**:
-- [ ] `ContentIngestionTask` dataclass in `domain/entities.py`
-- [ ] All state transitions enforced with DomainError
-- [ ] Factory method `create_for_source`
-- [ ] 11+ unit tests passing
+- [x] `ContentIngestionTask` dataclass in `domain/entities.py`
+- [x] All state transitions enforced with `InvalidStateTransition` (subclass of `DomainError`)
+- [x] Factory method `create_for_source`
+- [x] 23 unit tests passing (exceeds 11 minimum)
 
 ---
 
-#### T-B-1-03: Add Scheduler/Worker Config to Settings
+#### T-B-1-03: Add Scheduler/Worker Config to Settings ✅
 
 **Type**: impl
 **depends_on**: none
@@ -453,10 +454,10 @@ worker_task_timeout_seconds: float = 120.0
 | test_db_url_read_fallback | Empty db_url_read is valid (fallback handled by session factory) | unit |
 
 **Acceptance criteria**:
-- [ ] All new config fields added to `Settings`
-- [ ] Defaults match documented values
-- [ ] Env prefix `CONTENT_INGESTION_` applies to all new fields
-- [ ] 2+ tests passing
+- [x] All new config fields added to `Settings`
+- [x] Defaults match documented values
+- [x] Env prefix `CONTENT_INGESTION_` applies to all new fields
+- [x] 3 tests passing (defaults, fallback, env overrides)
 
 ---
 
@@ -468,10 +469,10 @@ worker_task_timeout_seconds: float = 120.0
 - `services/market-ingestion/src/market_ingestion/config.py`
 
 #### Validation Gate
-- [ ] ruff check passes on changed files
-- [ ] mypy passes on `content_ingestion`
-- [ ] Unit tests pass — minimum 15 new tests
-- [ ] Domain layer has no infrastructure imports
+- [x] ruff check passes on changed files
+- [x] mypy passes on `content_ingestion`
+- [x] Unit tests pass — 26 new tests (exceeds 15 minimum)
+- [x] Domain layer has no infrastructure imports
 
 #### Regression Guardrails
 - BP-016: Do not add any session management to domain layer
@@ -1379,12 +1380,12 @@ Mitigation: Reuse `FetchAndWriteUseCase` unchanged; only wrap it with task lifec
 
 | Task ID | Title | Wave | Status | Notes |
 |---------|-------|------|--------|-------|
-| T-A-1-01 | Add process architecture rules to RULES.md | A-1 | pending | |
-| T-A-1-02 | Add process topology & DB patterns to STANDARDS.md | A-1 | pending | |
-| T-A-1-03 | Add session-held-across-IO bug pattern | A-1 | pending | |
-| T-B-1-01 | Add IngestionTaskStatus enum | B-1 | pending | |
-| T-B-1-02 | Add ContentIngestionTask entity | B-1 | pending | |
-| T-B-1-03 | Add scheduler/worker config to Settings | B-1 | pending | |
+| T-A-1-01 | Add process architecture rules to RULES.md | A-1 | done | |
+| T-A-1-02 | Add process topology & DB patterns to STANDARDS.md | A-1 | done | |
+| T-A-1-03 | Add session-held-across-IO bug pattern | A-1 | done | |
+| T-B-1-01 | Add IngestionTaskStatus enum | B-1 | done | 7 tests in contracts |
+| T-B-1-02 | Add ContentIngestionTask entity | B-1 | done | 23 unit tests |
+| T-B-1-03 | Add scheduler/worker config to Settings | B-1 | done | 3 unit tests |
 | T-B-2-01 | Implement read/write dual session factory | B-2 | pending | |
 | T-B-2-02 | Alembic migration + ORM model for tasks | B-2 | pending | |
 | T-B-2-03 | Implement TaskRepository with claim_batch | B-2 | pending | |

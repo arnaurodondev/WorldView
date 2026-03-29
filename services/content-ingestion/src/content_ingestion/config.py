@@ -72,6 +72,7 @@ class Settings(BaseSettings):
 
     # ── Database ──────────────────────────────────────────────────────────────
     db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
+    db_url_read: str = ""  # Falls back to db_url if empty (R23)
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -91,8 +92,19 @@ class Settings(BaseSettings):
     # Inter-service token shared across all services (no CONTENT_INGESTION_ prefix)
     internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
 
-    # ── Scheduler / outbox ────────────────────────────────────────────────────
+    # ── Scheduler (process — R22) ────────────────────────────────────────────
     scheduler_interval_seconds: int = 300
+    scheduler_tick_interval_seconds: float = 60.0
+    scheduler_max_tasks_per_tick: int = 100
+
+    # ── Worker (process — R22) ─────────────────────────────────────────────
+    worker_batch_size: int = 5
+    worker_lease_seconds: int = 300
+    worker_idle_sleep_seconds: float = 5.0
+    worker_concurrency: int = 2
+    worker_task_timeout_seconds: float = 120.0
+
+    # ── Outbox / dispatcher ────────────────────────────────────────────────
     outbox_batch_size: int = 100
     outbox_poll_interval_seconds: float = 5.0
     outbox_lease_seconds: int = 30
