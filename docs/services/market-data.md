@@ -493,7 +493,7 @@ Exception
     ├── SecurityNotFoundError
     ├── DuplicateEventError
     ├── IngestionError
-    ├── ParseError          ← also inherits FatalError (messaging lib)
+    ├── ParseError
     └── StaleDataError
 ```
 
@@ -504,11 +504,12 @@ Exception
 | `SecurityNotFoundError` | Lookup for a non-existent security |
 | `DuplicateEventError` | `event_id` already in `ingestion_events` (idempotency guard) |
 | `IngestionError` | Business-rule failure during ingestion (valid payload, invalid context) |
-| `ParseError` | Payload cannot be deserialized — also a `FatalError` so consumer dead-letters immediately |
+| `ParseError` | Payload cannot be deserialized — pure domain exception, no infrastructure dependency |
 | `StaleDataError` | Incoming data has lower provider priority than stored record |
 
-`ParseError` uses multiple inheritance (`MarketDataError, FatalError`) so Kafka consumer
-routing can treat it as `FatalError` without knowing the domain-specific type.
+`ParseError` is a pure domain exception (R12). Consumer infrastructure code that needs
+Kafka dead-lettering should catch `ParseError` and re-raise as `FatalError` from
+`messaging.kafka.consumer.errors`. The existing consumers use `MalformedDataError` directly.
 
 ---
 
@@ -520,7 +521,8 @@ routing can treat it as `FatalError` without knowing the domain-specific type.
    causes silent precision loss.
 
 2. **Raising `IngestionError` for parse failures** — use `ParseError` when data cannot be
-   deserialized. `ParseError` inherits `FatalError` so the consumer dead-letters immediately.
+   deserialized. `ParseError` is a pure domain exception; consumer infrastructure should
+   catch it and re-raise as `FatalError` if immediate dead-lettering is needed.
    `IngestionError` is for business-rule violations where the payload is structurally valid.
 
 3. **Not using the outbox for instrument lifecycle events** — `InstrumentCreated` and

@@ -13,8 +13,6 @@ from market_data.domain.errors import (
     StaleDataError,
 )
 
-from messaging import FatalError
-
 pytestmark = pytest.mark.unit
 
 
@@ -25,7 +23,6 @@ class TestErrorHierarchy:
         assert issubclass(DuplicateEventError, MarketDataError)
         assert issubclass(IngestionError, MarketDataError)
         assert issubclass(ParseError, MarketDataError)
-        assert issubclass(ParseError, FatalError)
         assert issubclass(StaleDataError, MarketDataError)
         assert issubclass(MarketDataError, Exception)
 
@@ -40,11 +37,20 @@ class TestErrorHierarchy:
         ):
             assert issubclass(cls, MarketDataError), f"{cls} is not a subclass of MarketDataError"
 
-    def test_parse_error_multiple_inheritance(self) -> None:
+    def test_parse_error_is_pure_domain(self) -> None:
+        # ParseError must NOT inherit from any infrastructure lib (R12).
+        # Consumers that need dead-lettering must catch ParseError and re-raise as FatalError.
+
+        mro_names = [c.__module__ for c in ParseError.__mro__]
+        assert not any(
+            "messaging" in m for m in mro_names
+        ), "ParseError must not inherit from the messaging lib (R12 violation)"
+
+    def test_parse_error_is_market_data_error(self) -> None:
         err = ParseError("bad payload")
         assert isinstance(err, MarketDataError)
-        assert isinstance(err, FatalError)
         assert isinstance(err, Exception)
+        assert str(err) == "bad payload"
 
     def test_errors_are_raiseable(self) -> None:
         for cls in (
@@ -62,10 +68,6 @@ class TestErrorHierarchy:
     def test_market_data_error_caught_as_exception(self) -> None:
         with pytest.raises(Exception):  # noqa: B017
             raise InstrumentNotFoundError("not found")
-
-    def test_parse_error_caught_as_fatal_error(self) -> None:
-        with pytest.raises(FatalError):
-            raise ParseError("unparseable")
 
     def test_parse_error_caught_as_market_data_error(self) -> None:
         with pytest.raises(MarketDataError):
