@@ -1,0 +1,193 @@
+"""Intelligence consumer — routes signal/graph/contradiction events to fan-out.
+
+Consumer group: ``alert-service-group``
+Topics:
+  - ``nlp.signal.detected.v1``       → AlertType.SIGNAL
+  - ``graph.state.changed.v1``       → AlertType.GRAPH_CHANGE
+  - ``intelligence.contradiction.v1`` → AlertType.CONTRADICTION
+
+At-least-once delivery with manual offset commit (``enable_auto_commit=False``).
+Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
+    BaseKafkaConsumer,
+    ConsumerConfig,
+    FailureInfo,
+    UnitOfWorkProtocol,
+)
+from observability import get_logger  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+# ── Minimal no-op UoW ─────────────────────────────────────────────────────────
+
+
+class _NoOpUoW:
+    async def __aenter__(self) -> _NoOpUoW:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
+        pass
+
+
+# ── Consumer ──────────────────────────────────────────────────────────────────
+
+
+class IntelligenceConsumer(BaseKafkaConsumer[None]):
+    """Consumes intelligence topics and routes each event to fan-out.
+
+    Args:
+        config: Consumer configuration.  ``topics`` should contain all
+            three intelligence topic names; ``group_id`` should be
+            ``alert-service-group``.
+        fanout_use_case: :class:`AlertFanoutUseCase` instance to call for
+            each received event.
+        dedup_client: Optional Valkey client for event deduplication.
+    """
+
+    def __init__(
+        self,
+        config: ConsumerConfig,
+        fanout_use_case: AlertFanoutUseCase,
+        *,
+        dedup_client: Any | None = None,
+    ) -> None:
+        super().__init__(config)
+        self._fanout = fanout_use_case
+        self._dedup_client = dedup_client
+        self._dedup_prefix = f"s10:dedup:{config.group_id}"
+
+    # ── Core processing ───────────────────────────────────────────────────────
+
+    async def process_message(
+        self,
+        key: str | None,
+        value: dict[str, Any],
+        headers: dict[str, str],
+    ) -> None:
+        """Route event to :meth:`AlertFanoutUseCase.execute`."""
+        # The topic is not passed directly to process_message; retrieve it
+        # from the value envelope or headers, or use the last known topic
+        # extracted by BaseKafkaConsumer._handle_message (stored in value).
+        # BaseKafkaConsumer passes the raw message to _handle_message which
+        # calls deserialize_value, then calls process_message with (key, value,
+        # headers).  The topic is available via the raw msg object but not
+        # forwarded.  We extract it from the Kafka message headers if present,
+        # otherwise fall back to checking the event_type in the payload to
+        # determine the topic.
+        topic = self._resolve_topic(value, headers)
+        correlation_id: str | None = value.get("correlation_id")  # type: ignore[assignment]
+
+        result = await self._fanout.execute(event=value, topic=topic, correlation_id=correlation_id)
+
+        logger.debug(  # type: ignore[no-any-return]
+            "intelligence_consumer.processed",
+            topic=topic,
+            event_id=value.get("event_id"),
+            suppressed=result.suppressed,
+            suppression_reason=result.suppression_reason,
+            watchers=result.watchers_count,
+        )
+
+    @staticmethod
+    def _resolve_topic(value: dict[str, Any], headers: dict[str, str]) -> str:
+        """Infer the source topic from event_type or header."""
+        # Try X-Source-Topic header first (set by producer if available)
+        topic_header = headers.get("X-Source-Topic", "")
+        if topic_header:
+            return topic_header
+
+        # Fall back to event_type field in the payload
+        event_type: str = str(value.get("event_type", ""))
+        if event_type.startswith("nlp.signal"):
+            return "nlp.signal.detected.v1"
+        if event_type.startswith("graph.state"):
+            return "graph.state.changed.v1"
+        if event_type.startswith("intelligence.contradiction"):
+            return "intelligence.contradiction.v1"
+
+        # Last resort — return event_type as-is (fanout will skip unknown topics)
+        return event_type
+
+    # ── Retry / failure (log-only) ────────────────────────────────────────────
+
+    async def process_message_from_failure(self, failure: FailureInfo[None]) -> None:
+        logger.warning(  # type: ignore[no-any-return]
+            "intelligence_consumer.retry_not_supported",
+            event_id=failure.event_id,
+        )
+
+    # ── Idempotency (Valkey-backed with no-op fallback) ───────────────────────
+
+    async def is_duplicate(self, event_id: str) -> bool:
+        if self._dedup_client is None:
+            return False
+        key = f"{self._dedup_prefix}:{event_id}"
+        return bool(await self._dedup_client.exists(key))
+
+    async def mark_processed(self, event_id: str) -> None:
+        if self._dedup_client is None:
+            return
+        key = f"{self._dedup_prefix}:{event_id}"
+        await self._dedup_client.set(key, "1", ex=86400)
+
+    # ── Failure tracking (log-only) ───────────────────────────────────────────
+
+    async def store_failure(self, failure: FailureInfo[None]) -> None:  # type: ignore[override]
+        logger.error(  # type: ignore[no-any-return]
+            "intelligence_consumer.failure",
+            event_id=failure.event_id,
+            error=str(failure.last_error),
+            attempt=failure.attempt,
+        )
+        return None
+
+    async def update_failure(self, failure: FailureInfo[None]) -> None:
+        logger.warning(  # type: ignore[no-any-return]
+            "intelligence_consumer.failure_retry",
+            event_id=failure.event_id,
+            attempt=failure.attempt,
+        )
+
+    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+        logger.error(  # type: ignore[no-any-return]
+            "intelligence_consumer.dead_lettered",
+            event_id=failure.event_id,
+            attempts=failure.attempt,
+            error=str(failure.last_error),
+        )
+
+    async def get_pending_retries(self) -> list[FailureInfo[None]]:
+        return []
+
+    # ── UoW (no-op — fanout manages its own session) ──────────────────────────
+
+    async def get_unit_of_work(self) -> UnitOfWorkProtocol:
+        return _NoOpUoW()  # type: ignore[return-value]
+
+    # ── Serialization ─────────────────────────────────────────────────────────
+
+    def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        return json.loads(raw)  # type: ignore[no-any-return]
+
+    def get_schema_path(self, topic: str) -> str | None:
+        return None
+
+    def extract_event_id(self, value: dict[str, Any]) -> str:
+        return str(value.get("event_id", ""))

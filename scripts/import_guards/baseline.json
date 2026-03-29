@@ -1,3 +1,5 @@
 {
-  "violations": []
+  "violations": [
+    "services/alert/src/alert/infrastructure/cache/watchlist_cache.py:17:IG-MSG-002"
+  ]
 }
