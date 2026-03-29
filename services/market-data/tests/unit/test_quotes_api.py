@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from market_data.api.dependencies import get_quote_cache, get_uow
+from market_data.api.dependencies import get_quote_cache, get_quote_uc
 from market_data.api.routers import quotes as quotes_router
 from market_data.api.schemas.quotes import QuoteResponse
 from market_data.domain.entities import Quote
@@ -36,32 +36,22 @@ async def _null_lifespan(app: FastAPI):  # type: ignore[misc]
     yield
 
 
-def _make_app(mock_uow: AsyncMock, mock_cache: AsyncMock) -> tuple[FastAPI, TestClient]:
+def _make_app(mock_quote_uc: MagicMock, mock_cache: AsyncMock) -> tuple[FastAPI, TestClient]:
     app = FastAPI(lifespan=_null_lifespan)
     app.include_router(quotes_router.router, prefix="/api/v1")
 
-    async def override_get_uow():  # type: ignore[misc]
-        yield mock_uow
+    app.dependency_overrides[get_quote_uc] = lambda: mock_quote_uc
+    app.dependency_overrides[get_quote_cache] = lambda: mock_cache
 
-    async def override_get_cache() -> AsyncMock:
-        return mock_cache
-
-    app.dependency_overrides[get_uow] = override_get_uow
-    app.dependency_overrides[get_quote_cache] = override_get_cache
     return app, TestClient(app)
 
 
 def _make_mocks(
     quote: Quote | None = None,
     cache_hit: bool = False,
-) -> tuple[AsyncMock, AsyncMock]:
-    mock_uow = AsyncMock()
-    quotes_repo = MagicMock()
-    quotes_repo.find_by_instrument = AsyncMock(return_value=quote)
-    quotes_repo.find_by_instruments = AsyncMock(return_value=[quote] if quote else [])
-    mock_uow.quotes_read = quotes_repo
-    # Keep write-side alias for assertion compatibility
-    mock_uow.quotes = quotes_repo
+) -> tuple[MagicMock, AsyncMock]:
+    mock_uc = MagicMock()
+    mock_uc.execute = AsyncMock(return_value=quote)
 
     mock_cache = AsyncMock(spec=QuoteCache)
     if cache_hit and quote:
@@ -79,14 +69,14 @@ def _make_mocks(
         mock_cache.get = AsyncMock(return_value=None)
     mock_cache.set = AsyncMock()
 
-    return mock_uow, mock_cache
+    return mock_uc, mock_cache
 
 
 def test_get_quote_found_from_db() -> None:
     """GET /api/v1/quotes/{id} returns quote from DB on cache miss."""
     quote = _make_quote()
-    mock_uow, mock_cache = _make_mocks(quote=quote, cache_hit=False)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=False)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.get("/api/v1/quotes/instr-001")
     assert resp.status_code == 200
@@ -98,18 +88,18 @@ def test_get_quote_found_from_db() -> None:
 def test_get_quote_found_from_cache() -> None:
     """GET /api/v1/quotes/{id} returns quote from cache on cache hit."""
     quote = _make_quote()
-    mock_uow, mock_cache = _make_mocks(quote=quote, cache_hit=True)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=True)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.get("/api/v1/quotes/instr-001")
     assert resp.status_code == 200
-    mock_uow.quotes.find_by_instrument.assert_not_awaited()
+    mock_uc.execute.assert_not_awaited()
 
 
 def test_get_quote_not_found() -> None:
     """GET /api/v1/quotes/{id} returns 404 when no quote exists."""
-    mock_uow, mock_cache = _make_mocks(quote=None)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=None)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.get("/api/v1/quotes/nonexistent")
     assert resp.status_code == 404
@@ -118,8 +108,9 @@ def test_get_quote_not_found() -> None:
 def test_batch_quotes_post() -> None:
     """POST /api/v1/quotes/batch returns quotes for all requested instruments."""
     quote = _make_quote("instr-001")
-    mock_uow, mock_cache = _make_mocks(quote=quote)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=quote)
+    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == "instr-001" else None)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": ["instr-001", "instr-missing"]})
     assert resp.status_code == 200
@@ -131,8 +122,9 @@ def test_batch_quotes_post() -> None:
 def test_batch_quotes_get_latest() -> None:
     """GET /api/v1/quotes/latest returns quotes for all query-param instruments."""
     quote = _make_quote("instr-001")
-    mock_uow, mock_cache = _make_mocks(quote=quote)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=quote)
+    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == "instr-001" else None)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.get("/api/v1/quotes/latest?instrument_ids=instr-001&instrument_ids=instr-002")
     assert resp.status_code == 200
@@ -143,8 +135,8 @@ def test_batch_quotes_get_latest() -> None:
 def test_get_quote_sets_cache_on_db_hit() -> None:
     """On DB hit, the quote is cached for future requests."""
     quote = _make_quote()
-    mock_uow, mock_cache = _make_mocks(quote=quote, cache_hit=False)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=False)
+    _, client = _make_app(mock_uc, mock_cache)
 
     client.get("/api/v1/quotes/instr-001")
     mock_cache.set.assert_awaited_once()
@@ -161,8 +153,8 @@ def test_get_quote_response_null_fields() -> None:
         timestamp=datetime(2024, 3, 15, 14, 30, tzinfo=UTC),
         updated_at=datetime(2024, 3, 15, 14, 30, tzinfo=UTC),
     )
-    mock_uow, mock_cache = _make_mocks(quote=null_quote, cache_hit=False)
-    _, client = _make_app(mock_uow, mock_cache)
+    mock_uc, mock_cache = _make_mocks(quote=null_quote, cache_hit=False)
+    _, client = _make_app(mock_uc, mock_cache)
 
     resp = client.get("/api/v1/quotes/instr-001")
     assert resp.status_code == 200

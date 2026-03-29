@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
     from market_data.application.ports.repositories import (
         FailedTaskRepository,
+        FundamentalMetricsQueryRepository,
+        FundamentalsReadRepository,
         FundamentalsRepository,
         IngestionEventRepository,
         InstrumentRepository,
@@ -116,6 +118,16 @@ class UnitOfWork(ABC):
     @abstractmethod
     def quotes_read(self) -> QuoteRepository:
         """Quote repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
 
     # ── read session ─────────────────────────────────────────────────────────
 

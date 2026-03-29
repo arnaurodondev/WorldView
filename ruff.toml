@@ -42,6 +42,10 @@ unfixable = ["F841"]  # don't auto-remove unused variables
 "services/*/src/*/api/**/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/infrastructure/db/models/*.py" = ["TCH003"]
 "services/*/src/*/infrastructure/*/models.py" = ["TCH003"]
+# Domain entity/enum files re-export shared enums (contracts.enums) at runtime;
+# they appear type-only due to `from __future__ import annotations`.
+"services/*/src/*/domain/entities.py" = ["TCH001"]
+"services/*/src/*/domain/enums.py" = ["TCH001"]
 
 [lint.isort]
 known-first-party = [

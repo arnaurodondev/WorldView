@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 from market_data.application.ports.uow import UnitOfWork
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
+from market_data.infrastructure.db.repositories.fundamental_metrics_read_repo import PgFundamentalMetricsQueryRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
+from market_data.infrastructure.db.repositories.fundamentals_read_repo import PgFundamentalsReadRepository
 from market_data.infrastructure.db.repositories.fundamentals_repo import PgFundamentalsRepository
 from market_data.infrastructure.db.repositories.ingestion_event_repo import PgIngestionEventRepository
 from market_data.infrastructure.db.repositories.instrument_repo import PgInstrumentRepository
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
 
     from market_data.application.ports.repositories import (
         FailedTaskRepository,
+        FundamentalMetricsQueryRepository,
+        FundamentalsReadRepository,
         FundamentalsRepository,
         IngestionEventRepository,
         InstrumentRepository,
@@ -244,3 +248,13 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def quotes_read(self) -> QuoteRepository:
         """Quote repository bound to the read (replica) session."""
         return PgQuoteRepository(self._read())
+
+    @property
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+        return PgFundamentalsReadRepository(self._read())
+
+    @property
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
+        return PgFundamentalMetricsQueryRepository(self._read())

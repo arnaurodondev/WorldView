@@ -6,13 +6,21 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from market_data.api.dependencies import get_uow
+from market_data.api.dependencies import (
+    get_instrument_by_id_uc,
+    get_instrument_by_symbol_uc,
+    get_search_instruments_uc,
+)
 from market_data.api.schemas.instruments import (
     InstrumentFlagsResponse,
     InstrumentListResponse,
     InstrumentResponse,
 )
-from market_data.application.ports.uow import UnitOfWork
+from market_data.application.use_cases.query_instruments import (
+    GetInstrumentByIdUseCase,
+    GetInstrumentBySymbolUseCase,
+    SearchInstrumentsUseCase,
+)
 from market_data.domain.entities import Instrument
 
 router = APIRouter(tags=["instruments"])
@@ -41,10 +49,10 @@ def _to_response(instrument: Instrument) -> InstrumentResponse:
 async def get_instrument_by_symbol(
     symbol: str,
     exchange: str = "",
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetInstrumentBySymbolUseCase, Depends(get_instrument_by_symbol_uc)] = ...,  # type: ignore[assignment]
 ) -> InstrumentResponse:
     """Return the instrument matching the given symbol (and optional exchange)."""
-    instrument = await uow.instruments_read.find_by_symbol_exchange(symbol, exchange)
+    instrument = await uc.execute(symbol, exchange)
     if instrument is None:
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}/{exchange}")
     return _to_response(instrument)
@@ -53,10 +61,10 @@ async def get_instrument_by_symbol(
 @router.get("/instruments/{instrument_id}", response_model=InstrumentResponse)
 async def get_instrument(
     instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetInstrumentByIdUseCase, Depends(get_instrument_by_id_uc)] = ...,  # type: ignore[assignment]
 ) -> InstrumentResponse:
     """Return the instrument with the given UUID."""
-    instrument = await uow.instruments_read.find_by_id(instrument_id)
+    instrument = await uc.execute(instrument_id)
     if instrument is None:
         raise HTTPException(status_code=404, detail=f"Instrument not found: {instrument_id}")
     return _to_response(instrument)
@@ -71,13 +79,11 @@ async def list_instruments(
     exchange: Annotated[str | None, Query(description="Filter by exchange code")] = None,
     limit: Annotated[int, Query(ge=1, le=1000, description="Page size")] = 100,
     offset: Annotated[int, Query(ge=0, description="Page offset")] = 0,
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[SearchInstrumentsUseCase, Depends(get_search_instruments_uc)] = ...,  # type: ignore[assignment]
 ) -> InstrumentListResponse:
     """List instruments with optional DB-side filters and pagination."""
-    repo = uow.instruments_read
-    total, items = await _search_with_count(
-        repo,
-        query=query,
+    total, items = await uc.execute(
+        query,
         has_ohlcv=has_ohlcv,
         has_quotes=has_quotes,
         has_fundamentals=has_fundamentals,
@@ -91,16 +97,3 @@ async def list_instruments(
         limit=limit,
         offset=offset,
     )
-
-
-async def _search_with_count(repo, *, query, has_ohlcv, has_quotes, has_fundamentals, exchange, limit, offset):  # type: ignore[no-untyped-def]
-    """Run count + search in two DB queries (avoids loading all rows for pagination)."""
-    filter_kwargs = {
-        "has_ohlcv": has_ohlcv,
-        "has_quotes": has_quotes,
-        "has_fundamentals": has_fundamentals,
-        "exchange": exchange,
-    }
-    total = await repo.count(query, **filter_kwargs)
-    items = await repo.search(query, **filter_kwargs, limit=limit, offset=offset)
-    return total, items

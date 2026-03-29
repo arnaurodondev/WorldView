@@ -155,6 +155,18 @@ Every class that consumes from a Kafka topic must extend
 `messaging.kafka.consumer.base.BaseKafkaConsumer` and implement its abstract methods.
 Enforced by `tests/architecture/test_consumer_enforcement.py`.
 
+### R25: API layer MUST NOT import from the infrastructure layer
+**Why**: Direct infrastructure imports in API routers couple the HTTP layer to specific
+database drivers, ORM sessions, and repository implementations. This makes the API
+untestable in isolation (requires real DB), prevents adapter substitution, and violates
+hexagonal architecture. The correct call chain is:
+`API router → Use Case (application layer) → Repository port (application layer) ← Infrastructure implementation`
+Every read and write operation in an API router must go through a use case class. Use cases
+receive an already-entered UoW from dependency injection and call repository methods directly.
+Enforced by import guard rule `IG-LAYER-002` in `scripts/import_guards/rules.yaml`.
+Exceptions (e.g. infrastructure cache objects that store API schema types) must be documented
+in `scripts/import_guards/allowlist.yaml` with justification.
+
 ### R21: Domain exception base class MUST be named `DomainError`
 **Why**: Architecture tests (`test_domain_error_enforcement.py`) assert that every
 mature service defines a `DomainError(Exception)` class in `domain/errors.py` (or
@@ -224,3 +236,4 @@ patterns and pool size recommendations.
 | R22 | Infrastructure | MUST |
 | R23 | Infrastructure | MUST |
 | R24 | Infrastructure | MUST NOT |
+| R25 | Architecture | MUST NOT |
