@@ -1,6 +1,6 @@
 # S10 — Alert Service
 
-> **Status**: In-progress (Wave E-1 complete)
+> **Status**: In-progress (Wave E-2 complete)
 > **Port**: 8010
 > **Database**: alert_db (owned, Alembic enabled)
 > **Dependencies**: S1 Portfolio (internal endpoints), Kafka, Valkey
@@ -99,8 +99,73 @@ Environment prefix: `ALERT_`
 
 ---
 
+## Consumer Topology (Wave E-2)
+
+### IntelligenceConsumer
+- **Group**: `alert-service-group`
+- **Topics**: `nlp.signal.detected.v1`, `graph.state.changed.v1`, `intelligence.contradiction.v1`
+- **Routing**: `event_type` field (or `X-Source-Topic` header) → `AlertFanoutUseCase.execute()`
+- **At-least-once** with manual offset commit (`enable_auto_commit=False`)
+
+### WatchlistConsumer
+- **Group**: `alert-service-watchlist-group`
+- **Topic**: `portfolio.watchlist.updated.v1`
+- `item_added` → no-op (cache populated on next lookup)
+- `item_deleted` → DEL `s10:v1:watchlist:by_entity:{entity_id}` for all affected entities
+
+---
+
+## Alert Fan-out Logic (Wave E-2)
+
+### Backfill Suppression (PRD AD-10)
+| Topic | Rule |
+|-------|------|
+| `nlp.signal.detected.v1` | `is_backfill=true` → suppress always |
+| `graph.state.changed.v1` | `is_backfill=true` → suppress always |
+| `intelligence.contradiction.v1` | `is_backfill=true AND (now - occurred_at) > 30 days` → suppress (recent-impact contradictions are still useful) |
+
+### Dedup Window (PRD AD-9)
+```
+dedup_key = sha256(f"{entity_id}:{alert_type}:{epoch // dedup_window_seconds}")
+```
+Default window: 300 s. Same entity+type within one window → single alert.
+
+### Fan-out Transaction
+1. Backfill check → suppress if applicable
+2. Resolve watchers via `WatchlistCache` → S1 fallback
+3. Dedup check via `DedupRepository.exists(dedup_key)`
+4. **Single transaction**: INSERT alert + INSERT pending_alert (per watcher) + INSERT outbox_event (per watcher)
+5. **Post-commit**: WebSocket push via `ConnectionManager` (never inside transaction)
+
+---
+
+## WebSocket Delivery (Wave E-2)
+
+`ConnectionManager` stores active connections in memory (keyed by `user_id`).
+
+**⚠ Single-replica constraint**: connections are in-process memory. Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub).
+
+| Method | Behaviour |
+|--------|-----------|
+| `connect(user_id, ws)` | Accept + register; replaces existing connection |
+| `disconnect(user_id)` | Remove; no-op if not connected |
+| `send_to_user(user_id, data)` | JSON push; cleans up stale connections on failure |
+| `broadcast(data)` | Push to all connected users |
+
+---
+
+## Outbox Dispatcher (Wave E-2)
+
+`AlertOutboxDispatcher` polls `outbox_events` table and produces pre-serialized Avro bytes to Kafka.
+
+- No lease semantics (single-replica deployment)
+- At-least-once: if crash after `produce()` but before `mark_dispatched()`, event is re-queued
+- Produces to `alert.delivered.v1` (topic stored per-row in outbox)
+
+---
+
 ## Implementation Status
 
 - [x] Wave E-1: Service setup, domain, DB, S1 client, tests (43 tests)
-- [ ] Wave E-2: Consumers, alert fan-out, WebSocket, outbox
+- [x] Wave E-2: Consumers, alert fan-out, WebSocket, outbox (97 tests, ruff + mypy clean)
 - [ ] Wave E-3: REST API, health, integration tests, full pipeline validation

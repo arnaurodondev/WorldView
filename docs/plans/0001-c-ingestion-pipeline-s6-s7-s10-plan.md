@@ -4,7 +4,7 @@ prd: PRD-0001
 title: "Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service — Implementation Plan"
 status: in-progress
 created: 2026-03-25
-updated: 2026-03-28
+updated: 2026-03-29
 plans: 3
 
 waves: 11
@@ -449,11 +449,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 
 ---
 
-### Wave E-2: S10 Consumers, Alert Fan-out, WebSocket, Outbox
+### Wave E-2: S10 Consumers, Alert Fan-out, WebSocket, Outbox ✅
 
 **Goal**: Implement the 2-consumer-group topology (intelligence consumer for 3 signal topics + watchlist consumer for cache invalidation), alert fan-out use-case with dedup, WebSocket connection manager, and outbox dispatcher.
 **Depends on**: Wave E-1
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-29 · 97 unit tests pass (35 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -470,12 +471,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/consumer/` — consumer reference
 
 #### Validation Gate
-- [ ] `ruff check services/alert/` passes
-- [ ] `mypy services/alert/src/ --config-file mypy.ini` passes
-- [ ] `python -m pytest services/alert/tests/unit -v` — all tests pass (≥35 total)
-- [ ] Backfill suppression: is_backfill=true → no alert (explicit test)
-- [ ] Dedup window: same (user, entity, type) within 300s → suppressed (explicit test)
-- [ ] `docs/services/alert-service.md` updated with consumer topology, fan-out logic, dedup mechanism
+- [x] `ruff check services/alert/` passes
+- [x] `mypy services/alert/src/ --config-file mypy.ini` passes
+- [x] `python -m pytest services/alert/tests/unit -v` — all tests pass (97 total, 35 new)
+- [x] Backfill suppression: is_backfill=true → no alert (explicit test)
+- [x] Dedup window: same (user, entity, type) within 300s → suppressed (explicit test)
+- [x] `docs/services/alert-service.md` updated with consumer topology, fan-out logic, dedup mechanism
 
 #### Regression Guardrails
 - BP-001: OutboxEventValueSerializer for outbox
