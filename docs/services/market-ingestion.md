@@ -140,7 +140,7 @@ services/market-ingestion/src/app/
 │       └── execute_task.py
 ├── domain/
 │   ├── entities/            # ingestion_task, polling_policy, provider_budget, watermark
-│   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus, etc.
+│   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus (re-export from contracts), etc.
 │   ├── events.py            # MarketDatasetFetched (pointer event)
 │   ├── errors.py
 │   └── value_objects.py     # Timeframe, ObjectRef (claim-check pointer), InstrumentKey, DateRange

@@ -23,3 +23,27 @@ class ContentSourceType(StrEnum):
     FINNHUB = "finnhub"
     NEWSAPI = "newsapi"
     MANUAL = "manual"
+
+
+class IngestionTaskStatus(StrEnum):
+    """Task lifecycle states for the scheduler-worker ingestion pattern.
+
+    State machine::
+
+        PENDING → CLAIMED → RUNNING → SUCCEEDED
+                                     ↘ RETRY → (back to PENDING/CLAIMED)
+                                     ↘ FAILED  (terminal)
+
+    ``CLAIMED`` is used by services with an explicit claim step (e.g. content-ingestion).
+    Services that transition directly from PENDING to RUNNING (e.g. market-ingestion)
+    simply skip the CLAIMED state.
+
+    Used by: S2 (Market Ingestion), S4 (Content Ingestion).
+    """
+
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    RETRY = "retry"
+    FAILED = "failed"
