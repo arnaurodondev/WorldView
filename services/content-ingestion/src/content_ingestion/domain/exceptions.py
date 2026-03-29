@@ -21,3 +21,7 @@ class QuotaExhaustedError(DomainError):
 
 class AdapterError(DomainError):
     """Raised when a source adapter (EODHD, SEC, Finnhub, NewsAPI) fails."""
+
+
+class InvalidStateTransition(DomainError):  # noqa: N818
+    """An entity state transition is not permitted from its current state."""

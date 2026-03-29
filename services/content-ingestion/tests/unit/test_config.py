@@ -124,3 +124,41 @@ class TestFlatSecretsUnaffected:
         assert s.newsapi_daily_limit == 200
         # nested field is still at its default
         assert s.newsapi.quota_ttl_seconds == 86400
+
+
+# ---------------------------------------------------------------------------
+# Scheduler / worker / read-replica config (PLAN-0006 Wave B-1)
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulerWorkerDefaults:
+    def test_scheduler_worker_defaults(self) -> None:
+        s = _make_settings()
+        # Read replica
+        assert s.db_url_read == ""
+        # Scheduler
+        assert s.scheduler_tick_interval_seconds == 60.0
+        assert s.scheduler_max_tasks_per_tick == 100
+        # Worker
+        assert s.worker_batch_size == 5
+        assert s.worker_lease_seconds == 300
+        assert s.worker_idle_sleep_seconds == 5.0
+        assert s.worker_concurrency == 2
+        assert s.worker_task_timeout_seconds == 120.0
+
+    def test_db_url_read_fallback_is_valid_empty(self) -> None:
+        """Empty db_url_read is valid — session factory handles fallback to db_url."""
+        s = _make_settings()
+        assert s.db_url_read == ""
+        assert s.db_url != ""
+
+    def test_scheduler_worker_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CONTENT_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS", "30.0")
+        monkeypatch.setenv("CONTENT_INGESTION_WORKER_BATCH_SIZE", "10")
+        monkeypatch.setenv("CONTENT_INGESTION_WORKER_CONCURRENCY", "4")
+        monkeypatch.setenv("CONTENT_INGESTION_DB_URL_READ", "postgresql+asyncpg://read-replica:5432/db")
+        s = _make_settings()
+        assert s.scheduler_tick_interval_seconds == 30.0
+        assert s.worker_batch_size == 10
+        assert s.worker_concurrency == 4
+        assert s.db_url_read == "postgresql+asyncpg://read-replica:5432/db"
