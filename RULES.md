@@ -165,6 +165,37 @@ service-specific knowledge. Services that want a descriptive alias (e.g.
 
 ---
 
+## Infrastructure Rules
+
+### R22: MUST run each concern as an independent process
+**Why**: Embedding scheduler loops, worker loops, or outbox dispatchers inside the API
+process creates coupling that prevents independent scaling and complicates signal handling.
+Each concern (API, Scheduler, Worker, Dispatcher) MUST have its own entry point
+(`python -m <service>.infrastructure.<component>.<module>`), its own signal handlers
+(SIGINT/SIGTERM), and its own connection pool sizing. The API process MUST NOT start
+background loops in its lifespan. Docker Compose uses the same image with different
+`command` overrides. See STANDARDS.md §14 for implementation patterns.
+
+### R23: MUST support dual database URLs (read/write split)
+**Why**: Read-heavy workloads (dashboards, analytics, health checks) can be offloaded to
+a read replica, reducing contention on the primary. Every service MUST accept two database
+URLs: `DATABASE_URL` (write, required) and `DATABASE_URL_READ` (read, optional). When
+the read URL is not configured, the read factory MUST fall back to the write URL (zero-cost
+compatibility). Read-after-write operations and row-locking queries (`SELECT FOR UPDATE`)
+MUST use the write session. Session factories MUST set `expire_on_commit=False` and
+`pool_pre_ping=True`. See STANDARDS.md §15 for routing rules.
+
+### R24: MUST NOT hold database sessions across external I/O
+**Why**: Holding a database session (and its underlying connection) during HTTP requests,
+MinIO operations, or Kafka publishes wastes pool resources and causes pool exhaustion under
+load. Background processes (workers, schedulers, dispatchers) MUST split operations into
+read → release → I/O → acquire → write phases. API routes using FastAPI `Depends()`
+session-per-request are exempt because they are short-lived. Each process type MUST
+configure pool sizes appropriate to its concurrency profile. See STANDARDS.md §16 for
+patterns and pool size recommendations.
+
+---
+
 ## Summary Table
 
 | Rule | Category | Severity |
@@ -190,3 +221,6 @@ service-specific knowledge. Services that want a descriptive alias (e.g.
 | R19 | Testing | MUST NOT |
 | R20 | Architecture | MUST |
 | R21 | Architecture | MUST |
+| R22 | Infrastructure | MUST |
+| R23 | Infrastructure | MUST |
+| R24 | Infrastructure | MUST NOT |

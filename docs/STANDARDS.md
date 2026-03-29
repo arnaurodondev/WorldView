@@ -25,8 +25,11 @@
 9. [Error Handling](#9-error-handling)
 10. [Testing Conventions](#10-testing-conventions)
 11. [Anti-Patterns — What NOT To Do](#11-anti-patterns--what-not-to-do)
-12. [Platform Rules (R1–R21)](#12-platform-rules-r1r21)
+12. [Platform Rules (R1–R24)](#12-platform-rules-r1r24)
 13. [Automated Enforcement — CI Gates](#13-automated-enforcement--ci-gates)
+14. [Process Topology Standard](#14-process-topology-standard)
+15. [Read/Write Database Session Pattern](#15-readwrite-database-session-pattern)
+16. [Session Optimization](#16-session-optimization)
 
 ---
 
@@ -1338,7 +1341,7 @@ Use this checklist in every PR that adds or modifies a service:
 
 ---
 
-## 12. Platform Rules (R1–R18)
+## 12. Platform Rules (R1–R24)
 
 These rules apply to every contributor (human and AI agent). They are non-negotiable.
 
@@ -1598,3 +1601,244 @@ allowlist:
     path: "services/*/tests/**/*.py"
     reason: "Test factories may use uuid.uuid4() for stub data"
 ```
+
+---
+
+## 14. Process Topology Standard
+
+> **Rules**: R22 (process separation)
+> **Reference implementation**: `services/market-ingestion/`
+
+Services with background processing MUST be decomposed into independent processes. Each process
+has its own entry point, signal handling, and connection pool sizing.
+
+### 14.1 Process Types
+
+| Process | Responsibility | Entry Point Pattern | Concurrency |
+|---------|---------------|--------------------:|-------------|
+| **API** | HTTP request handling (uvicorn) | `python -m <pkg>.app` or `uvicorn <pkg>.app:create_app` | Async — bounded by uvicorn workers |
+| **Scheduler** | Evaluate sources/policies, insert task rows | `python -m <pkg>.infrastructure.schedulers.scheduler` | Single-threaded, tick-based (60s default) |
+| **Worker** | Claim and execute tasks | `python -m <pkg>.infrastructure.workers.worker` | Semaphore-bounded (default 4 concurrent) |
+| **Dispatcher** | Poll outbox, publish to Kafka | `python -m <pkg>.infrastructure.messaging.dispatcher` | Single-threaded poll loop |
+
+### 14.2 Entry Point Pattern
+
+Every process MUST follow this structure:
+
+```python
+# <pkg>/infrastructure/workers/worker.py
+
+import asyncio
+import signal
+
+from <pkg>.config import Settings
+
+async def _run_worker() -> None:
+    settings = Settings()                          # own Settings instance
+    write_factory, read_factory = _build_factories(settings)  # own session factories
+    worker = Worker(write_factory, read_factory, settings)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, worker.stop)  # graceful shutdown
+
+    await worker.run()                             # blocks until stop_event
+
+def main() -> None:
+    asyncio.run(_run_worker())
+
+if __name__ == "__main__":
+    main()
+```
+
+### 14.3 Docker Compose Pattern
+
+Same Dockerfile, different `command` overrides:
+
+```yaml
+services:
+  content-ingestion-api:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["uvicorn", "content_ingestion.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+
+  content-ingestion-scheduler:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.schedulers.scheduler"]
+
+  content-ingestion-worker:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker"]
+
+  content-ingestion-dispatcher:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.dispatcher"]
+```
+
+### 14.4 Pool Size Recommendations
+
+| Process Type | `pool_size` | `max_overflow` | `pool_pre_ping` | Rationale |
+|-------------|------------|---------------|----------------|-----------|
+| API server | 10 | 20 | Yes | Concurrent HTTP requests |
+| Scheduler | 3 | 5 | Yes | Low concurrency, periodic ticks |
+| Worker | 5 | 10 | Yes | Bounded by semaphore concurrency |
+| Dispatcher | 3 | 5 | Yes | Single-threaded poll loop |
+
+### 14.5 Signal Handling
+
+Every process MUST:
+1. Register handlers for `SIGINT` and `SIGTERM`
+2. Set a stop event (`asyncio.Event`) on signal receipt
+3. Complete in-flight work before exiting (graceful drain)
+4. Return exit code 0 on clean shutdown
+
+```python
+loop = asyncio.get_running_loop()
+for sig in (signal.SIGINT, signal.SIGTERM):
+    loop.add_signal_handler(sig, worker.stop)
+```
+
+---
+
+## 15. Read/Write Database Session Pattern
+
+> **Rules**: R23 (read/write split)
+> **Reference implementation**: `services/market-ingestion/src/market_ingestion/infrastructure/db/session.py`
+
+### 15.1 Dual Factory Function
+
+Every service with database access MUST provide a factory that returns both a write and read
+session factory:
+
+```python
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+def _build_factories(
+    settings: Settings,
+) -> tuple[async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
+    """Build write and read session factories.
+
+    When DATABASE_URL_READ is not set, read factory falls back to write factory.
+    """
+    write_engine = create_async_engine(
+        str(settings.db_url),
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_pre_ping=True,
+    )
+    write_factory = async_sessionmaker(write_engine, expire_on_commit=False)
+
+    if settings.db_url_read:
+        read_engine = create_async_engine(
+            str(settings.db_url_read),
+            pool_size=settings.db_pool_size_read,
+            max_overflow=settings.db_max_overflow_read,
+            pool_pre_ping=True,
+        )
+        read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
+    else:
+        read_factory = write_factory  # zero-cost fallback
+
+    return write_factory, read_factory
+```
+
+### 15.2 Configuration
+
+```python
+class Settings(BaseSettings):
+    db_url: PostgresDsn                        # write (required)
+    db_url_read: PostgresDsn | None = None     # read (optional, falls back to db_url)
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
+```
+
+### 15.3 Read/Write Routing Rules
+
+| Operation | Write Session | Read Session |
+|-----------|:---:|:---:|
+| `SELECT` before `INSERT`/`UPDATE` (dedup checks) | **Yes** | No — stale reads cause duplicates |
+| Task claiming (`SELECT FOR UPDATE SKIP LOCKED`) | **Yes** | No — requires row locks |
+| List/dashboard/analytics queries | No | **Yes** |
+| Watermark reads before fetch cycle | Either | **Yes** (staleness acceptable) |
+| Health checks / status endpoints | No | **Yes** |
+| Read immediately after write in same request | **Yes** | No — replication lag |
+
+### 15.4 Anti-Pattern: Read-After-Write on Replica
+
+```python
+# WRONG — read may return stale data due to replication lag
+async with write_factory() as ws:
+    ws.add(entity)
+    await ws.commit()
+
+async with read_factory() as rs:
+    result = await rs.get(Entity, entity.id)  # may be None!
+```
+
+```python
+# CORRECT — use write session for read-after-write
+async with write_factory() as ws:
+    ws.add(entity)
+    await ws.commit()
+    result = await ws.get(Entity, entity.id)  # consistent
+```
+
+---
+
+## 16. Session Optimization
+
+> **Rules**: R24 (session optimization)
+
+### 16.1 Anti-Pattern: Session Held Across External I/O
+
+```python
+# WRONG — connection held idle during HTTP call (BP-057)
+async with session_factory() as session:
+    data = await repo.get(id)              # uses connection
+    result = await http_client.post(...)   # connection held idle!
+    await repo.save(result)                # uses connection again
+    await session.commit()
+```
+
+### 16.2 Correct Pattern: Split Read/IO/Write Phases
+
+```python
+# CORRECT — release connection before I/O
+async with read_factory() as ro:
+    data = await repo.get(id)              # read phase
+
+result = await http_client.post(...)       # I/O phase (no session)
+
+async with write_factory() as rw:
+    await repo.save(result)                # write phase
+    await rw.commit()
+```
+
+### 16.3 Session Lifecycle by Process Type
+
+| Process | Session Lifecycle | Notes |
+|---------|------------------|-------|
+| **API routes** | Session-per-request via `Depends()` | Acceptable — requests are short-lived (ms). Optimize only if profiling shows contention. |
+| **Workers** | Fresh UoW per phase: claim → release → execute → release → write → release | Each external I/O call happens outside a session context. |
+| **Scheduler** | One short UoW per tick: evaluate → insert tasks → commit | Tick completes in ms; no external I/O during session. |
+| **Dispatcher** | One short UoW per poll batch: claim outbox rows → commit → publish to Kafka → mark published → commit | Kafka publish happens between two separate UoW scopes. |
+
+### 16.4 PgBouncer — Production Recommendation
+
+PgBouncer is **not required for development** (single developer, limited load) but is
+**recommended for production** deployments:
+
+- Transaction-mode pooling reduces total connections to PostgreSQL
+- Especially beneficial when multiple process types (API + scheduler + worker + dispatcher) share a database
+- All services already support independent database URLs, making PgBouncer a drop-in addition
+
+For the thesis project, tuning pool sizes per process type (§14.4) delivers 90% of
+PgBouncer's connection-saving benefit without operational overhead.
+
+### 16.5 Managed Database Readiness
+
+All services MUST support independent database URLs (`db_url` setting). This ensures:
+- Seamless migration from shared Postgres container to managed RDS/Cloud SQL
+- Each service can point to its own database instance without code changes
+- Read replicas can be added per-service via `db_url_read`

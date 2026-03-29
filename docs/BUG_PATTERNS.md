@@ -66,6 +66,7 @@
 | [BP-041](#bp-041) | ruff `TCH003`→`TC003` noqa code rename breaks pre-commit | Pre-commit ruff v0.4.0 reports `TCH003`; newer local ruff auto-converts `# noqa: TCH003` → `# noqa: TC003`; hook then re-flags the violation → infinite loop | All SQLAlchemy ORM models with `Mapped[datetime]` imports |
 | [BP-042](#bp-042) | `FailureInfo[None]` has no `value`/`key`/`headers` fields | `AttributeError: 'FailureInfo' object has no attribute 'value'` — only `event_id`, `topic`, `partition`, `offset`, `attempt`, `last_error`, `record` exist | Any `dead_letter` / `process_message_from_failure` implementation on `BaseKafkaConsumer[None]` |
 | [BP-043](#bp-043) | Pydantic V2 `Field(strip_whitespace=True)` is deprecated | `PydanticDeprecatedSince20` warning — `strip_whitespace` is not a valid V2 `Field` kwarg; use `StringConstraints(strip_whitespace=True)` via `Annotated` instead | API request schemas using `Field(...)` |
+| [BP-057](#bp-057) | Database session held across external I/O | `TimeoutError` on `pool.acquire()` — connection pool exhaustion under load | Any background process (worker, scheduler, dispatcher) holding session during HTTP/MinIO/Kafka calls |
 
 ---
 
@@ -2669,3 +2670,129 @@ def test_parse_error_is_pure_domain() -> None:
     mro_names = [c.__module__ for c in ParseError.__mro__]
     assert not any("messaging" in m for m in mro_names)
 ```
+
+---
+
+## BP-057 — Database session held across external I/O
+
+**Severity**: HIGH — pool exhaustion under load (R24)
+**Service**: Any service with background processes (workers, schedulers, dispatchers)
+**Related**: [BP-016](#bp-016) (advisory lock spanning external I/O)
+
+### Symptom
+
+- `TimeoutError` on `pool.acquire()` — all connections busy despite low query volume
+- Connection pool exhaustion under moderate load
+- Long-running "idle in transaction" connections visible in `pg_stat_activity`
+- Intermittent `sqlalchemy.exc.TimeoutError: QueuePool limit of N overflow M reached`
+
+### Cause
+
+A database session (and its underlying connection) is opened before an external I/O call
+(HTTP request, MinIO upload, Kafka publish) and held idle throughout. The connection sits
+in the pool's "checked out" state doing nothing while the I/O completes, preventing other
+coroutines from using it.
+
+```python
+# WRONG — connection held idle during HTTP call
+async with session_factory() as session:
+    data = await repo.get(id)              # uses connection
+    result = await http_client.post(...)   # connection held idle for seconds!
+    await repo.save(result)                # uses connection again
+    await session.commit()
+```
+
+This is especially harmful in workers with semaphore-bounded concurrency — 4 concurrent
+tasks each holding a connection during I/O can exhaust a `pool_size=5` pool.
+
+### Fix
+
+Split into read → release → I/O → acquire → write phases:
+
+```python
+# CORRECT — release connection before I/O
+async with read_factory() as ro:
+    data = await repo.get(id)              # read phase
+
+result = await http_client.post(...)       # I/O phase (no session held)
+
+async with write_factory() as rw:
+    await repo.save(result)                # write phase
+    await rw.commit()
+```
+
+### Detection
+
+Grep for session context managers that span external I/O calls:
+
+```bash
+# Look for session_factory/uow usage that spans http_client, storage, or producer calls
+grep -n "session_factory\|uow\|unit_of_work" services/*/src/**/*.py | \
+  grep -v "test" | grep -v "__pycache__"
+```
+
+Then manually inspect each match for external I/O calls within the same context block.
+
+### Prevention
+
+- R24 enforces this rule project-wide (see RULES.md)
+- STANDARDS.md §16 documents the correct session lifecycle per process type
+- Code review checklist: "Does any session context span an external I/O call?"
+
+---
+
+## BP-058 — UoW `__aexit__` Auto-Commit Causes Double-Commit Side Effects
+
+**Severity**: MEDIUM — silent in SQLAlchemy sessions, but double-fires post-commit hooks (e.g., outbox notifier, on_commit callbacks)
+**Service**: portfolio (S1) — any service using the `UnitOfWork` context manager
+**Resolved by**: PLAN-0001-E-R1 Wave 2 (Option B, QA-006)
+
+### Symptom
+
+- `on_commit` hook (e.g., outbox dispatcher wake signal) is called twice per request
+- Post-commit side effects (cache invalidation, metrics increment) execute twice on clean exit
+- No crash — SQLAlchemy's `AsyncSession.commit()` is idempotent for already-committed sessions
+
+### Cause
+
+`UnitOfWork.__aexit__` auto-commits on clean exit:
+```python
+async def __aexit__(self, exc_type, exc_val, exc_tb):
+    if exc_type is None:
+        await self.commit()  # WRONG — fires even when use case already called commit()
+```
+
+Use cases that call `await uow.commit()` explicitly (e.g., before cache invalidation) get the
+commit called a **second time** by `__aexit__`, triggering any side effects attached to `commit()`
+a second time.
+
+### Fix (Option B)
+
+Remove auto-commit from `__aexit__`. All mutating use cases must call `await uow.commit()` explicitly:
+```python
+async def __aexit__(self, exc_type, exc_val, exc_tb):
+    if exc_type is not None:
+        await self.rollback()
+    # no auto-commit — explicit commit() required in each use case
+```
+
+### Detection
+
+```bash
+# Find any UoW __aexit__ that calls self.commit() unconditionally
+grep -n "await self.commit" services/*/src/**/*unit_of_work*.py
+```
+
+Add the regression guard test:
+```python
+async def test_aexit_does_not_auto_commit_on_clean_exit(mock_session_factory, mock_session):
+    async with SqlAlchemyUnitOfWork(mock_session_factory):
+        pass  # no explicit commit
+    mock_session.commit.assert_not_called()
+```
+
+### Prevention
+
+- Review checklist item: "Does `UnitOfWork.__aexit__` auto-commit? If so, verify all callers are aware of the side effect."
+- Every mutating use case must end with `await uow.commit()` before returning
+- New use case template must include the commit call
