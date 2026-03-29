@@ -23,7 +23,10 @@ def mock_app():
 
     # Mock lifespan dependencies on app.state
     app.state.settings = MagicMock(admin_token=ADMIN_TOKEN)
-    app.state.session_factory = AsyncMock()
+    mock_factory = AsyncMock()
+    app.state.session_factory = mock_factory
+    app.state.write_factory = mock_factory
+    app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()
     app.state.storage = AsyncMock()
     app.state.trigger_fn = AsyncMock()
@@ -60,6 +63,7 @@ class TestAdminAuth:
             yield mock_session
 
         mock_app.state.session_factory = _fake_session
+        mock_app.state.write_factory = _fake_session
 
         resp = await client.get("/api/v1/sources", headers={"X-Admin-Token": ADMIN_TOKEN})
         assert resp.status_code == 200

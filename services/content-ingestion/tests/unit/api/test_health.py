@@ -19,7 +19,10 @@ def mock_app():
         admin_token="test",
         minio_bucket="test-bucket",
     )
-    app.state.session_factory = AsyncMock()
+    mock_factory = AsyncMock()
+    app.state.session_factory = mock_factory
+    app.state.write_factory = mock_factory
+    app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()
     app.state.storage = AsyncMock()
     return app

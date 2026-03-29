@@ -4,6 +4,7 @@
 > **Status**: in-progress
 > **Created**: 2026-03-28
 > **Updated**: 2026-03-29
+
 > **Owner**: Arnau Rodon
 
 ---
@@ -480,12 +481,13 @@ worker_task_timeout_seconds: float = 120.0
 
 ---
 
-### Wave B-2: Infrastructure — DB Migration, Repositories, Dual Session Factory
+### Wave B-2: Infrastructure — DB Migration, Repositories, Dual Session Factory ✅
 
 **Goal**: Create the database schema for `content_ingestion_tasks`, ORM model, task repository with `SELECT FOR UPDATE SKIP LOCKED` claiming, and the read/write dual session factory.
 **Depends on**: Wave B-1
 **Estimated effort**: 45-60 minutes
 **Architecture layer**: infrastructure
+**Status**: **DONE** — 2026-03-29 · 341 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -760,11 +762,11 @@ Store both factories on `app.state` during lifespan.
 - `services/market-ingestion/src/market_ingestion/infrastructure/db/unit_of_work.py`
 
 #### Validation Gate
-- [ ] ruff check passes on changed files
-- [ ] mypy passes on `content_ingestion`
-- [ ] Unit tests pass — minimum 31 new tests (from B-2 tasks)
-- [ ] Alembic migration generates clean DDL
-- [ ] No cross-service DB access
+- [x] ruff check passes on changed files
+- [x] mypy passes on `content_ingestion`
+- [x] Unit tests pass — 341 total (23 new from B-2 tasks)
+- [x] Alembic migration generates clean DDL
+- [x] No cross-service DB access
 
 #### Regression Guardrails
 - BP-006: Alembic migration must NOT hardcode localhost URL

@@ -18,7 +18,7 @@ from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
 from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
-from content_ingestion.infrastructure.db.session import create_session_factory
+from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.messaging.outbox.dispatcher import ContentIngestionOutboxDispatcher
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch, s4_dlq_total, s4_outbox_pending_total
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY, IngestionScheduler
@@ -283,10 +283,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database — returns (engine, session_factory) so we can dispose engine on shutdown
-    engine, session_factory = create_session_factory(settings)
+    # 3. Database — dual session factory (R23: read/write split)
+    engine, write_factory, read_factory = _build_factories(settings)
+    session_factory = write_factory  # backward compat alias
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
 
     # 5. Valkey
     valkey = create_valkey_client_from_url(settings.valkey_url)
