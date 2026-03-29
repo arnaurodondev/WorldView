@@ -206,6 +206,8 @@ class RecordTransactionUseCase:
             )
         )
 
+        await uow.commit()
+
         log = logger.bind(
             tenant_id=str(cmd.tenant_id),
             portfolio_id=str(cmd.portfolio_id),

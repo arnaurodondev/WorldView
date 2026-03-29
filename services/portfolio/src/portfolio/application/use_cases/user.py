@@ -60,6 +60,7 @@ class CreateUserUseCase:
         )
         await uow.outbox.save(record)
 
+        await uow.commit()
         logger.info("user_created", tenant_id=str(user.tenant_id), user_id=str(user.id))
         return user
 

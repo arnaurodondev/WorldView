@@ -91,6 +91,7 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
                     )
                     return
             await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
+            await uow.commit()  # type: ignore[attr-defined]
 
         logger.info(  # type: ignore[no-any-return]
             "instrument_ref_upserted",

@@ -92,6 +92,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # Option B (QA-006): __aexit__ never auto-commits — only rolls back on exception.
+        # Explicit await uow.commit() is required in every mutating use case.
         try:
             if exc_type is not None:
                 try:
@@ -102,8 +104,6 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
                         error=str(rollback_err),
                         original_exception=repr(exc_val),
                     )
-            else:
-                await self.commit()
         finally:
             if self._session is not None:
                 await self._session.close()

@@ -122,6 +122,7 @@ class CreateWatchlistUseCase:
                 cmd.tenant_id,
             )
         )
+        await uow.commit()
         logger.info("watchlist_created", watchlist_id=str(watchlist.id), user_id=str(cmd.user_id))
         return watchlist
 
@@ -169,6 +170,7 @@ class DeleteWatchlistUseCase:
                 cmd.tenant_id,
             )
         )
+        await uow.commit()
         logger.info("watchlist_deleted", watchlist_id=str(cmd.watchlist_id))
 
 
