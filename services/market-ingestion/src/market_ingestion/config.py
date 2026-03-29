@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     bronze_bucket: str = "market-bronze"
     canonical_bucket: str = "market-canonical"
 
+    # Provider base URLs (operational — overridable without image rebuild)
+    eodhd_base_url: str = "https://eodhd.com/api"
+
     # Provider API keys
     eodhd_api_key: str = "demo"
     finnhub_api_key: str = ""

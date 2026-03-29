@@ -30,11 +30,15 @@ def _make_response(status_code: int, content: bytes = b"[]") -> MagicMock:
     return r
 
 
-def _make_adapter(status_code: int = 200, content: bytes = b"[]") -> tuple[EODHDProviderAdapter, MagicMock]:
+def _make_adapter(
+    status_code: int = 200,
+    content: bytes = b"[]",
+    base_url: str = "https://eodhd.com/api",
+) -> tuple[EODHDProviderAdapter, MagicMock]:
     """Return (adapter, mock_client) with a pre-configured GET response."""
     client = MagicMock()
     client.get = AsyncMock(return_value=_make_response(status_code, content))
-    adapter = EODHDProviderAdapter(api_key="test-key", client=client)
+    adapter = EODHDProviderAdapter(api_key="test-key", client=client, base_url=base_url)
     return adapter, client
 
 
@@ -285,3 +289,34 @@ async def test_health_check_returns_false_on_network_error():
     adapter = EODHDProviderAdapter(api_key="test-key", client=client)
 
     assert await adapter.health_check() is False
+
+
+# ---------------------------------------------------------------------------
+# base_url injection (T-B-1-01)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_eodhd_adapter_custom_base_url():
+    """Adapter uses the injected base_url for all HTTP calls."""
+    adapter, client = _make_adapter(base_url="https://staging.eodhd.example.com/api")
+
+    await adapter.fetch_ohlcv("AAPL", "1d", _START, _END)
+
+    url: str = client.get.call_args[0][0]
+    assert url.startswith("https://staging.eodhd.example.com/api"), url
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_eodhd_adapter_default_base_url():
+    """Adapter defaults to the production EODHD base URL when none is provided."""
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_make_response(200, b"[]"))
+    adapter = EODHDProviderAdapter(api_key="test-key", client=client)
+
+    await adapter.fetch_ohlcv("AAPL", "1d", _START, _END)
+
+    url: str = client.get.call_args[0][0]
+    assert url.startswith("https://eodhd.com/api"), url

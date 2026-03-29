@@ -33,6 +33,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.debug is False
     assert "postgresql" in s.database_url
     assert s.eodhd_api_key == "demo"
+    assert s.eodhd_base_url == "https://eodhd.com/api"
     assert s.storage_bucket == "market-ingestion"
     assert s.bronze_bucket == "market-bronze"
     assert s.canonical_bucket == "market-canonical"
@@ -141,3 +142,21 @@ def test_settings_provider_keys_optional():
     assert s.finnhub_api_key == ""
     assert s.polygon_api_key == ""
     assert s.alpha_vantage_api_key == ""
+
+
+def test_settings_eodhd_base_url_default():
+    """eodhd_base_url defaults to production EODHD endpoint."""
+    from market_ingestion.config import Settings
+
+    s = Settings()
+    assert s.eodhd_base_url == "https://eodhd.com/api"
+
+
+def test_settings_eodhd_base_url_from_env(monkeypatch):
+    """MARKET_INGESTION_EODHD_BASE_URL overrides the base URL without image rebuild."""
+    monkeypatch.setenv("MARKET_INGESTION_EODHD_BASE_URL", "https://staging.eodhd.example.com/api")
+
+    from market_ingestion.config import Settings
+
+    s = Settings()
+    assert s.eodhd_base_url == "https://staging.eodhd.example.com/api"

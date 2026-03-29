@@ -23,11 +23,13 @@ def build_provider_registry(settings: object | None = None) -> ProviderRegistry:
     registry = ProviderRegistry()
 
     api_key: str = "demo"
+    base_url: str = "https://eodhd.com/api"
     if settings is not None:
         api_key = getattr(settings, "eodhd_api_key", "demo")
+        base_url = getattr(settings, "eodhd_base_url", "https://eodhd.com/api")
 
     client = httpx.AsyncClient()
-    registry.register(EODHDProviderAdapter(api_key=api_key, client=client))
+    registry.register(EODHDProviderAdapter(api_key=api_key, client=client, base_url=base_url))
     registry.register(YahooFinanceProviderAdapter())
     return registry
 

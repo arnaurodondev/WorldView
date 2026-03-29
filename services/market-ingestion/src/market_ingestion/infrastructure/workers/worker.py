@@ -178,6 +178,7 @@ class WorkerProcess:
             EODHDProviderAdapter(
                 api_key=self._settings.eodhd_api_key,
                 client=client,
+                base_url=self._settings.eodhd_base_url,
             )
         )
         return registry

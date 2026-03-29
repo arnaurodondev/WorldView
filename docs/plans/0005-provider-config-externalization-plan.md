@@ -1,7 +1,7 @@
 # PLAN-0005: Provider Config Externalization — Nested Settings Pattern
 
 > **PRD**: N/A (architectural improvement)
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-03-28
 > **Updated**: 2026-03-29
 > **Owner**: Arnau Rodon
@@ -532,13 +532,14 @@ In the Configuration section, add a sub-section "Nested Provider Settings" docum
 
 ## 5. Sub-Plan B: S2 Market-Ingestion
 
-### Wave B-1: Externalize EODHD Base URL
+### Wave B-1: Externalize EODHD Base URL ✅
 
 **Goal**: Add `eodhd_base_url` to market-ingestion `Settings`; inject it into `EODHDProviderAdapter` at construction; remove `_BASE_URL` module-level constant.
 
 **Depends on**: none (independent of Sub-plan A)
 **Estimated effort**: 20–30 min
 **Architecture layer**: config + infrastructure
+**Status**: **DONE** — 2026-03-29 · 374 unit tests pass · ruff + mypy clean
 
 ---
 
@@ -576,10 +577,10 @@ Replace all uses of `_BASE_URL` with `self._base_url`.
 Pass `base_url=settings.eodhd_base_url` at construction.
 
 **Acceptance criteria**:
-- [ ] `_BASE_URL` module-level constant removed from `eodhd.py`
-- [ ] `eodhd_base_url` field added to market-ingestion `Settings` with correct default
-- [ ] Wiring passes `base_url=settings.eodhd_base_url` at adapter construction
-- [ ] `ruff check` and `mypy` pass on all 3 modified files
+- [x] `_BASE_URL` module-level constant removed from `eodhd.py`
+- [x] `eodhd_base_url` field added to market-ingestion `Settings` with correct default
+- [x] Wiring passes `base_url=settings.eodhd_base_url` at adapter construction
+- [x] `ruff check` and `mypy` pass on all 3 modified files
 
 ---
 
@@ -600,8 +601,8 @@ Pass `base_url=settings.eodhd_base_url` at construction.
 | `test_market_ingestion_eodhd_base_url_env_override` | `monkeypatch.setenv("MARKET_INGESTION_EODHD_BASE_URL", "http://mock")` → `Settings().eodhd_base_url == "http://mock"` | unit |
 
 **Acceptance criteria**:
-- [ ] 2 tests pass
-- [ ] `docs/services/market-ingestion.md` updated to document `eodhd_base_url`
+- [x] 2 tests pass
+- [x] `docs/services/market-ingestion.md` updated to document `eodhd_base_url`
 
 ---
 
