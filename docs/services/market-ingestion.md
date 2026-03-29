@@ -180,6 +180,13 @@ and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (a
 everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
 the other 5 endpoints require a paid subscription.
 
+**Provider configuration (env vars):**
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `MARKET_INGESTION_EODHD_API_KEY` | `demo` | EODHD API key (set to live key in production) |
+| `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | EODHD base URL (override for staging/mock without image rebuild) |
+
 ---
 
 ## Runtime Processes (4)
@@ -244,7 +251,7 @@ sequenceDiagram
 |------|------|---------|
 | Unit | Domain entities, canonical transformation | `make test` |
 | Unit | Use cases (mock repos + adapters) | `make test` |
-| Unit | EODHD adapter (mocked) | `make test` (22 tests) |
+| Unit | EODHD adapter (mocked) | `make test` (24 tests) |
 | Live | EODHD adapter with real demo API calls | `make test -- tests/live/test_eodhd_live.py` (56 tests: 48 passed, 8 xfailed for paid-only) |
 | Integration | Worker → MinIO round-trip | `make test-integration` |
 | Contract | Avro event contract (market.dataset.fetched mapper/topic/schema alignment) | `make test-contract` |

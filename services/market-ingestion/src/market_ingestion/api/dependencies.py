@@ -66,7 +66,9 @@ def get_provider_registry(
     from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
 
     client = httpx.AsyncClient()
-    registry.register(EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client))
+    registry.register(
+        EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client, base_url=settings.eodhd_base_url)
+    )
     return registry
 
 
