@@ -10,7 +10,7 @@
 | PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | in-progress | 9/11 | — | 2026-03-28 |
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
 | PLAN-0001-E-R1 | S1+S2+S3 Remaining Open Items: UoW commit, TOCTOU dedup, arch violations, topic mismatch, domain layer, auth | QA-CROSS-002 | in-progress | 1/6 | — | 2026-03-28 |
-| PLAN-0005 | Provider Config Externalization — Nested Settings Pattern (S4 + S2) | N/A | draft | 0/3 | — | 2026-03-28 |
+| PLAN-0005 | Provider Config Externalization — Nested Settings Pattern (S4 + S2) | N/A | in-progress | 1/3 | — | 2026-03-28 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)

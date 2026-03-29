@@ -2,8 +2,48 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class EODHDProviderSettings(BaseModel):
+    """Operational parameters for the EODHD news provider."""
+
+    base_url: str = "https://eodhd.com/api/news"
+    page_size: int = 100
+    rate_limit_per_second: float = 10.0
+
+
+class FinnhubProviderSettings(BaseModel):
+    """Operational parameters for the Finnhub provider."""
+
+    base_url: str = "https://finnhub.io/api/v1"
+    rate_limit_per_minute: int = 55
+
+
+class NewsAPIProviderSettings(BaseModel):
+    """Operational parameters for the NewsAPI.org provider."""
+
+    base_url: str = "https://newsapi.org/v2/everything"
+    page_size: int = 100
+    quota_ttl_seconds: int = 86400
+
+
+class SECEdgarProviderSettings(BaseModel):
+    """Operational parameters for the SEC EDGAR provider."""
+
+    efts_url: str = "https://efts.sec.gov/LATEST/search-index"
+    filing_base_url: str = "https://www.sec.gov/Archives/edgar/data"
+    default_forms: str = "10-K,10-Q,8-K,DEF14A"
+    max_concurrent: int = 8
+
+
+class HTTPClientSettings(BaseModel):
+    """Shared httpx client tuning parameters."""
+
+    timeout_seconds: float = 30.0
+    connect_timeout_seconds: float = 5.0
+    max_retries: int = 3
 
 
 class Settings(BaseSettings):
@@ -21,6 +61,7 @@ class Settings(BaseSettings):
         env_prefix="CONTENT_INGESTION_",
         env_file=".env",
         extra="ignore",
+        env_nested_delimiter="__",
     )
 
     # ── External API keys (no CONTENT_INGESTION_ prefix — shared variables) ──
@@ -70,6 +111,13 @@ class Settings(BaseSettings):
     backfill_to_date: str = ""
     backfill_sources: str = ""
     backfill_batch_delay_seconds: float = 0.5
+
+    # ── Provider settings (operational params — overridable via ConfigMap) ───
+    eodhd: EODHDProviderSettings = EODHDProviderSettings()
+    finnhub: FinnhubProviderSettings = FinnhubProviderSettings()
+    newsapi: NewsAPIProviderSettings = NewsAPIProviderSettings()
+    sec_edgar: SECEdgarProviderSettings = SECEdgarProviderSettings()
+    http_client: HTTPClientSettings = HTTPClientSettings()
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────
     service_name: str = "content-ingestion"
