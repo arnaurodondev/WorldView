@@ -11,12 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Yield a scoped database session from the app's session factory."""
-    async with request.app.state.session_factory() as session:
+    """Yield a scoped write database session from the app's session factory."""
+    async with request.app.state.write_factory() as session:
+        yield session
+
+
+async def get_read_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a scoped read database session from the app's read factory."""
+    async with request.app.state.read_factory() as session:
         yield session
 
 
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+ReadSessionDep = Annotated[AsyncSession, Depends(get_read_session)]
 
 
 # ── Admin auth ───────────────────────────────────────────────────────────────

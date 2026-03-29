@@ -29,6 +29,7 @@ dev = [
     "ruff==0.4",
     "mypy==1.10",
     "fakeredis[aioredis]>=2.23",
+    "testcontainers[postgres]>=4.0",
 ]
 
 [tool.hatch.build.targets.wheel]

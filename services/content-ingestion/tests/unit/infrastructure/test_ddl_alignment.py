@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from content_ingestion.infrastructure.db.models import (
+    ContentIngestionTaskModel,
     DeadLetterQueueModel,
     FetchLogModel,
     OutboxEventModel,
@@ -137,11 +138,24 @@ class TestArticleFetchLogDDLAlignment:
         assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
 
 
+class TestContentIngestionTasksDDLAlignment:
+    def test_content_ingestion_tasks_ddl_matches_orm(self) -> None:
+        migration_text = _read_all_migrations()
+        ddl_cols = _extract_ddl_columns(migration_text, "content_ingestion_tasks")
+        orm_cols = _get_orm_columns(ContentIngestionTaskModel)
+
+        missing_in_ddl = orm_cols - ddl_cols
+        extra_in_ddl = ddl_cols - orm_cols
+
+        assert not missing_in_ddl, f"ORM columns missing from DDL: {missing_in_ddl}"
+        assert not extra_in_ddl, f"DDL columns not in ORM: {extra_in_ddl}"
+
+
 class TestNoUUID4Defaults:
     def test_no_gen_random_uuid_in_migrations(self) -> None:
         """No migration should use gen_random_uuid() — all IDs are app-generated UUIDv7 (R10, M-8)."""
         for path in sorted(_MIGRATION_DIR.glob("*.py")):
             content = path.read_text()
-            assert "gen_random_uuid()" not in content, (
-                f"gen_random_uuid() found in {path.name} — use app-generated UUIDv7 instead"
-            )
+            assert (
+                "gen_random_uuid()" not in content
+            ), f"gen_random_uuid() found in {path.name} — use app-generated UUIDv7 instead"
