@@ -71,6 +71,7 @@ class ArchivePortfolioUseCase:
             lease_expires=None,
         )
         await uow.outbox.save(record)
+        await uow.commit()
         logger.info("portfolio_archived", portfolio_id=str(portfolio_id))
 
 
@@ -112,6 +113,7 @@ class RenamePortfolioUseCase:
             lease_expires=None,
         )
         await uow.outbox.save(record)
+        await uow.commit()
         logger.info(
             "portfolio_renamed",
             portfolio_id=str(cmd.portfolio_id),

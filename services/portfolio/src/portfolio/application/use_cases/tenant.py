@@ -47,6 +47,7 @@ class CreateTenantUseCase:
         )
         await uow.outbox.save(record)
 
+        await uow.commit()
         logger.info("tenant_created", tenant_id=str(tenant.id), name=tenant.name)
         return tenant
 

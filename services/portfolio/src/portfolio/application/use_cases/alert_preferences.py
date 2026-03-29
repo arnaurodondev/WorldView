@@ -86,6 +86,7 @@ class UpsertAlertPreferenceUseCase:
             updated_at=utc_now(),
         )
         await uow.alert_preferences.upsert(pref)
+        await uow.commit()
         return pref
 
 
@@ -109,6 +110,7 @@ class SetEntitySuppressionUseCase:
             suppressed_at=utc_now(),
         )
         await uow.entity_suppressions.save(suppression)
+        await uow.commit()
         return suppression
 
 
@@ -130,3 +132,4 @@ class RemoveEntitySuppressionUseCase:
                 f"No suppression found for entity {cmd.entity_id} and user {cmd.user_id}"
             )
         await uow.entity_suppressions.delete(cmd.user_id, cmd.entity_id)
+        await uow.commit()

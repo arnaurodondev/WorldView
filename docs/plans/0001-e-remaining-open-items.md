@@ -4,8 +4,8 @@ prd: QA-CROSS-002
 title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency Decisions"
 status: in-progress
 created: 2026-03-28
-updated: 2026-03-28
-waves_done: 2
+updated: 2026-03-29
+waves_done: 3
 plans: 1
 waves: 6
 tasks: 18
@@ -85,10 +85,11 @@ The `IdempotencyRepository.create_if_not_exists(key)` method is already implemen
 
 ---
 
-## Wave 2: QA-006 — UoW Double-Commit in Watchlist Use Cases (portfolio)
+## Wave 2: QA-006 — UoW Double-Commit in Watchlist Use Cases (portfolio) ✅
 
 **Priority**: MEDIUM — latent issue, silent in SQLAlchemy but fragile
 **Decision required**: Choose between Option A and Option B (see below)
+**Status**: **DONE** — 2026-03-29 · 281 unit tests pass · ruff + mypy clean
 
 ### Context
 
@@ -132,10 +133,10 @@ SQLAlchemy `AsyncSession.commit()` on an already-committed session is a no-op, s
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T05 | Decision: pick Option A, B, or C | Architecture | Decision |
-| T06 | Implement chosen option in `UnitOfWork.__aexit__` | `application/ports/unit_of_work.py` | Implement |
-| T07 | Audit all use cases for commit consistency | `application/use_cases/*.py` | Audit |
-| T08 | Update tests to reflect new commit semantics | `tests/unit/` | Test |
+| T05 | ✅ Decision: **Option B** — remove auto-commit from `__aexit__` | Architecture | Decision |
+| T06 | ✅ Implement Option B in `UnitOfWork.__aexit__` (both abstract + concrete); added `await uow.commit()` to all 11 mutating use cases + `InstrumentEventConsumer.process_message()` | `application/ports/unit_of_work.py`, `infrastructure/db/unit_of_work.py`, all use case files, consumer | Implement |
+| T07 | ✅ Audited all use cases: 11 missing explicit commit fixed; `Add/RemoveWatchlistMemberUseCase` already had correct explicit commits | `application/use_cases/*.py` | Audit |
+| T08 | ✅ Added QA-006 regression guard `test_aexit_does_not_auto_commit_on_clean_exit`; updated `test_commit_calls_on_commit_hook` assertion `>= 1` → `== 1`; added `commit_count` to `FakeUnitOfWork` | `tests/unit/test_unit_of_work.py`, `tests/unit/fakes.py` | Test |
 
 ---
 

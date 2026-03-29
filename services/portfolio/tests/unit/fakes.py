@@ -335,6 +335,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._entity_suppressions = FakeEntitySuppressionRepository()
         self.committed = False
         self.rolled_back = False
+        self.commit_count = 0
 
     @property
     def tenants(self) -> FakeTenantRepository:
@@ -386,6 +387,7 @@ class FakeUnitOfWork(UnitOfWork):
 
     async def commit(self) -> None:
         self.committed = True
+        self.commit_count += 1
 
     async def rollback(self) -> None:
         self.rolled_back = True
