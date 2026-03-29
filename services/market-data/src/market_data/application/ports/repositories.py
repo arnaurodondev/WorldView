@@ -6,15 +6,21 @@ infrastructure layer.  Concrete implementations live in
 
 All methods are ``async`` — no synchronous I/O is allowed in the
 application layer.
+
+Read-side query types (``MetricDataPoint``, ``ScreenFilter``, ``ScreenResult``)
+are defined here so the application layer owns the contract that both use
+cases and infrastructure implementations depend on.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from datetime import date, datetime
+    from decimal import Decimal
 
     from market_data.domain.entities import (
         FundamentalsRecord,
@@ -23,8 +29,40 @@ if TYPE_CHECKING:
         Quote,
         Security,
     )
-    from market_data.domain.enums import Timeframe
+    from market_data.domain.enums import FundamentalsSection, Timeframe
     from market_data.domain.value_objects import InstrumentFlags
+
+
+# ── Read-side query result types ─────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class MetricDataPoint:
+    """A single timeseries data point from the ``fundamental_metrics`` table."""
+
+    as_of_date: date
+    value_numeric: Decimal | None
+    value_text: str | None
+    period_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenFilter:
+    """A single metric filter for instrument screening."""
+
+    metric: str
+    min_value: float | None = None
+    max_value: float | None = None
+    period_type: str | None = None
+    sector: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenResult:
+    """One instrument matching the screen criteria."""
+
+    instrument_id: str
+    metrics: dict[str, Decimal | None]
 
 
 class SecurityRepository(ABC):
@@ -312,3 +350,57 @@ class OutboxEventRepository(ABC):
     @abstractmethod
     async def release_stale(self, stale_before: datetime) -> int:
         """Release all records whose lease expired before ``stale_before``; return count."""
+
+
+# ── Read-side fundamentals query port ────────────────────────────────────────
+
+
+class FundamentalsReadRepository(ABC):
+    """Read-only access to fundamentals section tables.
+
+    Separate from the write-focused ``FundamentalsRepository`` so that read
+    operations in the API layer go through a clean port without inheriting the
+    13 upsert methods that only belong to the consumer write path.
+    """
+
+    @abstractmethod
+    async def find_by_section(
+        self,
+        instrument_id: str,
+        section: FundamentalsSection,
+    ) -> list[FundamentalsRecord]:
+        """Return all fundamentals records for the given instrument and section."""
+
+
+# ── Read-side fundamental metrics query port ─────────────────────────────────
+
+
+class FundamentalMetricsQueryRepository(ABC):
+    """Read-only query interface for the ``fundamental_metrics`` projection table."""
+
+    @abstractmethod
+    async def get_timeseries(
+        self,
+        instrument_id: str,
+        metric: str,
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        period_type: str | None = None,
+        limit: int = 1000,
+    ) -> list[MetricDataPoint]:
+        """Return timeseries data points for an instrument/metric combination."""
+
+    @abstractmethod
+    async def screen(
+        self,
+        filters: list[ScreenFilter],
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ScreenResult]:
+        """Screen instruments by metric thresholds; return matching instruments."""
+
+    @abstractmethod
+    async def get_available_metrics(self, instrument_id: str) -> list[str]:
+        """Return all distinct metric names available for an instrument."""

@@ -11,11 +11,11 @@ if TYPE_CHECKING:
 
 import common.ids
 import common.time
-from contracts.enums import (
-    ContentSourceType as SourceType,  # type: ignore[import-untyped]  # noqa: TC001 — runtime re-export
+from contracts.enums import (  # type: ignore[import-untyped]
+    ContentSourceType as SourceType,
 )
-from contracts.enums import (
-    IngestionTaskStatus as IngestionTaskStatus,  # type: ignore[import-untyped]
+from contracts.enums import (  # type: ignore[import-untyped]
+    IngestionTaskStatus as IngestionTaskStatus,
 )
 
 

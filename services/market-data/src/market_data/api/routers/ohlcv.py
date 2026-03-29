@@ -7,9 +7,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from market_data.api.dependencies import get_uow
+from market_data.api.dependencies import (
+    get_available_timeframes_uc,
+    get_ohlcv_bars_uc,
+    get_ohlcv_bulk_uc,
+    get_ohlcv_range_uc,
+)
 from market_data.api.schemas.ohlcv import OHLCVBarResponse, OHLCVListResponse, OHLCVRangeResponse
-from market_data.application.ports.uow import UnitOfWork
+from market_data.application.use_cases.query_ohlcv import (
+    GetAvailableTimeframesUseCase,
+    GetOHLCVBarsUseCase,
+    GetOHLCVBulkUseCase,
+    GetOHLCVRangeUseCase,
+)
 from market_data.domain.entities import OHLCVBar
 from market_data.domain.enums import Timeframe
 
@@ -45,7 +55,7 @@ async def get_ohlcv_bulk(
     timeframe: str = "1d",
     start: date | None = None,
     end: date | None = None,
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetOHLCVBulkUseCase, Depends(get_ohlcv_bulk_uc)] = ...,  # type: ignore[assignment]
 ) -> list[OHLCVListResponse]:
     """Bulk fetch OHLCV bars for multiple instruments."""
     tf = _resolve_timeframe(timeframe)
@@ -55,27 +65,24 @@ async def get_ohlcv_bulk(
     effective_start = start or date(2000, 1, 1)
     effective_end = end or date(9999, 12, 31)
 
-    repo = uow.ohlcv_read
-    results = []
-    for iid in instrument_ids:
-        bars = await repo.find_by_instrument_timeframe_range(iid, tf, effective_start, effective_end)
-        results.append(
-            OHLCVListResponse(
-                items=[_to_bar_response(b) for b in bars],
-                total=len(bars),
-                timeframe=timeframe,
-            )
+    all_bars = await uc.execute(instrument_ids, tf, effective_start, effective_end)
+    return [
+        OHLCVListResponse(
+            items=[_to_bar_response(b) for b in bars],
+            total=len(bars),
+            timeframe=timeframe,
         )
-    return results
+        for bars in all_bars
+    ]
 
 
 @router.get("/ohlcv/{instrument_id}/timeframes", response_model=list[str])
 async def get_available_timeframes(
     instrument_id: str,
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetAvailableTimeframesUseCase, Depends(get_available_timeframes_uc)] = ...,  # type: ignore[assignment]
 ) -> list[str]:
     """Return all timeframes with stored bars for the given instrument."""
-    timeframes = await uow.ohlcv_read.get_available_timeframes(instrument_id)
+    timeframes = await uc.execute(instrument_id)
     return [str(tf) for tf in timeframes]
 
 
@@ -83,13 +90,11 @@ async def get_available_timeframes(
 async def get_ohlcv_range(
     instrument_id: str,
     timeframe: str = "1d",
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetOHLCVRangeUseCase, Depends(get_ohlcv_range_uc)] = ...,  # type: ignore[assignment]
 ) -> OHLCVRangeResponse:
     """Return the min/max date range for the instrument/timeframe combination."""
     tf = _resolve_timeframe(timeframe)
-    repo = uow.ohlcv_read
-    result = await repo.get_date_range(instrument_id, tf)
-    count_bars = await repo.find_by_instrument_timeframe_range(instrument_id, tf, date(2000, 1, 1), date(9999, 12, 31))
+    result = await uc.execute(instrument_id, tf)
     if result is None:
         return OHLCVRangeResponse(
             instrument_id=instrument_id,
@@ -98,13 +103,13 @@ async def get_ohlcv_range(
             max_date=None,
             count=0,
         )
-    min_d, max_d = result
+    min_d, max_d, count = result
     return OHLCVRangeResponse(
         instrument_id=instrument_id,
         timeframe=timeframe,
         min_date=min_d,
         max_date=max_d,
-        count=len(count_bars),
+        count=count,
     )
 
 
@@ -114,7 +119,7 @@ async def get_ohlcv_bars(
     timeframe: str = "1d",
     start: date | None = None,
     end: date | None = None,
-    uow: Annotated[UnitOfWork, Depends(get_uow)] = ...,  # type: ignore[assignment]
+    uc: Annotated[GetOHLCVBarsUseCase, Depends(get_ohlcv_bars_uc)] = ...,  # type: ignore[assignment]
 ) -> OHLCVListResponse:
     """Return OHLCV bars for an instrument within an optional date range."""
     tf = _resolve_timeframe(timeframe)
@@ -124,8 +129,7 @@ async def get_ohlcv_bars(
     effective_start = start or date(2000, 1, 1)
     effective_end = end or date(9999, 12, 31)
 
-    bars = await uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, tf, effective_start, effective_end)
-
+    bars = await uc.execute(instrument_id, tf, effective_start, effective_end)
     return OHLCVListResponse(
         items=[_to_bar_response(b) for b in bars],
         total=len(bars),

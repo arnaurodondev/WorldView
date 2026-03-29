@@ -65,6 +65,7 @@ These are non-negotiable. Hooks enforce several of them automatically.
 13. **Use shared libs** — `common`, `contracts`, `messaging`, `storage`, `observability`, `ml-clients`
 14. **Frontend → S9 only** — frontend never talks to backend services directly
 15. **Update docs** — every API/event/schema/config change must update docs
+16. **API layer uses only use cases** — API routers must never import from `infrastructure/`; all reads/writes go through use case classes (R25, enforced by IG-LAYER-002)
 
 ---
 

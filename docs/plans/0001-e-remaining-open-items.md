@@ -5,7 +5,7 @@ title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency 
 status: in-progress
 created: 2026-03-28
 updated: 2026-03-29
-waves_done: 3
+waves_done: 4
 plans: 1
 waves: 6
 tasks: 18
@@ -140,10 +140,11 @@ SQLAlchemy `AsyncSession.commit()` on an already-committed session is a no-op, s
 
 ---
 
-## Wave 3: QA-013 — market-data API Routers Import Infrastructure Directly (market-data)
+## Wave 3: QA-013 — market-data API Routers Import Infrastructure Directly (market-data) ✅
 
 **Priority**: MEDIUM — architecture violation, not runtime bug
 **Decision required**: Scope of refactoring
+**Status**: **DONE** — 2026-03-29 · 312 unit tests pass · ruff + mypy clean
 
 ### Context
 
@@ -186,10 +187,10 @@ Audit needed to identify all routers with direct infra imports. Key suspects:
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T09 | Audit all routers for direct infrastructure imports | `api/routers/*.py` | Audit |
-| T10 | Decision: Option A (UoW only) vs Option B (use cases) | Architecture | Decision |
-| T11 | Refactor impacted routers per decision | `api/routers/*.py` | Refactor |
-| T12 | Add import guard rule for API → Infrastructure violation | `scripts/import_guards/` | Enforce |
+| T09 | ✅ Audit all routers for direct infrastructure imports | `api/routers/*.py` | Audit |
+| T10 | ✅ Decision: Option B (full use cases) chosen by user | Architecture | Decision |
+| T11 | ✅ All 6 routers refactored; 12 use case classes created; all router tests updated; 28 new use case unit tests | `api/routers/*.py`, `application/use_cases/` | Refactor |
+| T12 | ✅ Added IG-LAYER-002 rule + QuoteCache allowlist exception | `scripts/import_guards/` | Enforce |
 
 ---
 
@@ -341,7 +342,7 @@ Before `/implement` is invoked on any wave, the following decisions must be made
 | Wave | Question | Options | Recommendation |
 |------|----------|---------|----------------|
 | Wave 2 (QA-006) | UoW commit pattern | A: no explicit commit, B: no auto-commit in `__aexit__`, C: idempotent commit | **Option B** |
-| Wave 3 (QA-013) | Router refactoring scope | A: route via UoW, B: full use cases | **Option A** (lower effort) |
+| Wave 3 (QA-013) | Router refactoring scope | A: route via UoW, B: full use cases | **Option B** (full use cases, chosen by user) ✅ |
 | Wave 5 (QA-016) | Topic alignment direction | A: market-data → `market.instrument.*`, B: portfolio → `market.events.v1` | Investigate first |
 | Wave 6 (QA-018) | Auth mechanism | A: X-Internal-Token, B: mTLS, C: no auth | **Option A** |
 
