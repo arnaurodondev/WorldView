@@ -2623,3 +2623,49 @@ class DomainEvent:
 ```
 
 Subclasses that intentionally use a higher version override it explicitly. Version 0 should never appear in production events and can be used as a signal for misconfiguration.
+
+
+---
+
+## BP-056: Infrastructure Lib Imported in Domain Layer via Multiple Inheritance
+
+**Severity**: MAJOR — architecture violation (R12)
+**Service**: market-data (S3); generalizes to any service
+
+### Pattern
+
+```python
+# WRONG — domain/errors.py pulls in messaging lib
+from messaging.kafka.consumer.errors import FatalError
+
+class ParseError(MarketDataError, FatalError):  # R12 violation
+    ...
+```
+
+Using multiple inheritance to "conveniently" combine a domain error with an infrastructure error type pulls the infrastructure library into the domain layer. This breaks hexagonal architecture boundaries and creates a hidden coupling that is hard to detect through normal code review.
+
+### Why it happens
+
+The intent is that Kafka consumer routing treats `ParseError` as `FatalError` so the message is dead-lettered. Multiple inheritance feels like a neat shortcut. But it violates R12: domain layer must have zero infrastructure imports.
+
+### Fix
+
+Keep `ParseError` as a pure domain exception. Consumer infrastructure code maps it:
+
+```python
+# CORRECT — infrastructure/messaging/consumers/foo_consumer.py
+except ParseError as exc:
+    raise FatalError(str(exc)) from exc
+```
+
+Or, if the consumer already raises a messaging-layer error directly (e.g. `MalformedDataError`), no mapping is needed at all.
+
+### Regression Guard
+
+Add a unit test that walks the MRO and asserts no `messaging` module appears:
+
+```python
+def test_parse_error_is_pure_domain() -> None:
+    mro_names = [c.__module__ for c in ParseError.__mro__]
+    assert not any("messaging" in m for m in mro_names)
+```
