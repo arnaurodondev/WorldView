@@ -5,6 +5,7 @@ title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency 
 status: in-progress
 created: 2026-03-28
 updated: 2026-03-28
+waves_done: 2
 plans: 1
 waves: 6
 tasks: 18
@@ -191,10 +192,12 @@ Audit needed to identify all routers with direct infra imports. Key suspects:
 
 ---
 
-## Wave 4: QA-017 — `ParseError` Inherits from `messaging` Lib in Domain Layer (market-ingestion)
+## Wave 4: QA-017 — `ParseError` Inherits from `messaging` Lib in Domain Layer (market-data) ✅
 
 **Priority**: MEDIUM — architecture violation (R12: domain layer independence)
 **Decision required**: None — fix is unambiguous, but needs verification of all usages
+**Status**: **DONE** — 2026-03-28 · 276 unit tests pass · ruff + mypy (errors.py) clean
+**Note**: Violation was in `market-data` (S3), not `market-ingestion` as stated in the summary table. The existing consumers already use `MalformedDataError` directly, so T14 (consumer mapping) was a no-op.
 
 ### Context
 
@@ -235,9 +238,9 @@ except ParseError as exc:
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T13 | Remove `FatalError` import from `domain/errors.py`; make `ParseError` inherit from `DomainError` | `domain/errors.py` | Fix |
-| T14 | Add error mapping in consumer infrastructure layer | `infrastructure/messaging/consumers/*.py` | Fix |
-| T15 | Update tests to use the correct exception hierarchy | `tests/unit/` | Test |
+| T13 | ✅ Remove `FatalError` import from `domain/errors.py`; make `ParseError` inherit from `MarketDataError` | `domain/errors.py` | Fix |
+| T14 | ✅ No consumer mapping needed — existing consumers raise `MalformedDataError` directly (N/A) | `infrastructure/messaging/consumers/*.py` | Fix |
+| T15 | ✅ Updated tests: removed `FatalError` assertions, added `test_parse_error_is_pure_domain` (R12 guard) | `tests/unit/test_domain_errors.py` | Test |
 
 ---
 
