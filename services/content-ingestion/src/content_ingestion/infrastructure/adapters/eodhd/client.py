@@ -13,10 +13,9 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import httpx
 
-logger = get_logger(__name__)  # type: ignore[no-any-return]
+    from content_ingestion.config import EODHDProviderSettings
 
-_BASE_URL = "https://eodhd.com/api/news"
-_PAGE_SIZE = 100
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class EODHDClient:
@@ -25,11 +24,19 @@ class EODHDClient:
     Args:
         http_client: An ``httpx.AsyncClient`` for making requests.
         api_key: EODHD API token.
+        provider_cfg: Operational parameters (base URL, page size).
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, api_key: str) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        api_key: str,
+        provider_cfg: EODHDProviderSettings,
+    ) -> None:
         self._http = http_client
         self._api_key = api_key
+        self._base_url = provider_cfg.base_url
+        self._page_size = provider_cfg.page_size
 
     async def fetch_news(
         self,
@@ -56,7 +63,7 @@ class EODHDClient:
         params: dict[str, str | int] = {
             "api_token": self._api_key,
             "fmt": "json",
-            "limit": _PAGE_SIZE,
+            "limit": self._page_size,
             "offset": offset,
         }
         if ticker:
@@ -66,7 +73,7 @@ class EODHDClient:
         if to_date:
             params["to"] = to_date
 
-        response = await self._http.get(_BASE_URL, params=params)
+        response = await self._http.get(self._base_url, params=params)
 
         if response.status_code == 429:
             msg = "EODHD rate limit exceeded (HTTP 429)"
@@ -89,7 +96,7 @@ class EODHDClient:
     ) -> list[dict[str, Any]]:
         """Paginate through all available news articles.
 
-        Continues fetching while the response length equals ``_PAGE_SIZE``.
+        Continues fetching while the response length equals ``page_size``.
         """
         all_articles: list[dict[str, Any]] = []
         offset = 0
@@ -103,8 +110,8 @@ class EODHDClient:
             )
             all_articles.extend(page)
 
-            if len(page) < _PAGE_SIZE:
+            if len(page) < self._page_size:
                 break
-            offset += _PAGE_SIZE
+            offset += self._page_size
 
         return all_articles

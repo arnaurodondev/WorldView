@@ -3,7 +3,7 @@
 > **PRD**: N/A (architectural improvement)
 > **Status**: in-progress
 > **Created**: 2026-03-28
-> **Updated**: 2026-03-28
+> **Updated**: 2026-03-29
 > **Owner**: Arnau Rodon
 
 ---
@@ -186,13 +186,14 @@ so env vars like `CONTENT_INGESTION_EODHD__BASE_URL` map to `settings.eodhd.base
 
 ---
 
-### Wave A-2: Refactor Clients + Update app.py Wiring + Tests + Docs
+### Wave A-2: Refactor Clients + Update app.py Wiring + Tests + Docs ✅
 
 **Goal**: Remove all module-level globals from 4 client files; update constructor signatures to accept provider settings; update `app.py` to pass settings at construction; update existing client unit tests; add docs update.
 
 **Depends on**: Wave A-1
 **Estimated effort**: 60–90 min
 **Architecture layer**: infrastructure + wiring
+**Status**: **DONE** — 2026-03-29 · 291 unit tests pass · ruff + mypy clean
 
 ---
 
@@ -228,9 +229,9 @@ Remove module-level `_BASE_URL = ...` and `_PAGE_SIZE = ...`. Update `__init__` 
 - Delete the two module-level constant lines
 
 **Acceptance criteria**:
-- [ ] No `_BASE_URL` or `_PAGE_SIZE` module-level names remain in the file
-- [ ] Constructor accepts `provider_cfg: EODHDProviderSettings`
-- [ ] `ruff check` and `mypy` pass on the file
+- [x] No `_BASE_URL` or `_PAGE_SIZE` module-level names remain in the file
+- [x] Constructor accepts `provider_cfg: EODHDProviderSettings`
+- [x] `ruff check` and `mypy` pass on the file
 
 ---
 
@@ -265,9 +266,9 @@ Remove `_BASE_URL = "https://finnhub.io/api/v1"`. Update `__init__` to accept
 - Import `FinnhubProviderSettings` from `content_ingestion.config`
 
 **Acceptance criteria**:
-- [ ] No `_BASE_URL` module-level name remains in the file
-- [ ] Constructor accepts `provider_cfg: FinnhubProviderSettings`
-- [ ] `ruff check` and `mypy` pass
+- [x] No `_BASE_URL` module-level name remains in the file
+- [x] Constructor accepts `provider_cfg: FinnhubProviderSettings`
+- [x] `ruff check` and `mypy` pass
 
 ---
 
@@ -309,9 +310,9 @@ to accept `provider_cfg: NewsAPIProviderSettings`. Store values as instance attr
 - Import `NewsAPIProviderSettings` from `content_ingestion.config`
 
 **Acceptance criteria**:
-- [ ] No `_BASE_URL`, `_PAGE_SIZE`, `_QUOTA_TTL_SECONDS` module-level names remain
-- [ ] Constructor accepts `provider_cfg: NewsAPIProviderSettings`
-- [ ] `ruff check` and `mypy` pass
+- [x] No `_BASE_URL`, `_PAGE_SIZE`, `_QUOTA_TTL_SECONDS` module-level names remain
+- [x] Constructor accepts `provider_cfg: NewsAPIProviderSettings`
+- [x] `ruff check` and `mypy` pass
 
 ---
 
@@ -366,10 +367,10 @@ See T-A-2-05 for how `max_retries` flows from settings → `RetryConfig`.
 - Delete all 4 module-level constant lines
 
 **Acceptance criteria**:
-- [ ] No `_EFTS_URL`, `_FILING_BASE_URL`, `_DEFAULT_FORMS`, `_MAX_CONCURRENT` remain in `sec_edgar/client.py`
-- [ ] Constructor accepts `provider_cfg: SECEdgarProviderSettings`
-- [ ] `search_filings` uses `forms or self._default_forms` pattern
-- [ ] `ruff check` and `mypy` pass on both files
+- [x] No `_EFTS_URL`, `_FILING_BASE_URL`, `_DEFAULT_FORMS`, `_MAX_CONCURRENT` remain in `sec_edgar/client.py`
+- [x] Constructor accepts `provider_cfg: SECEdgarProviderSettings`
+- [x] `search_filings` uses `forms or self._default_forms` pattern
+- [x] `ruff check` and `mypy` pass on both files
 
 ---
 
@@ -445,10 +446,10 @@ client = NewsAPIClient(
 ```
 
 **Acceptance criteria**:
-- [ ] No hardcoded `httpx.Timeout(30.0, ...)` — values come from `settings.http_client`
-- [ ] No hardcoded `TokenBucket(capacity=10, ...)` or `TokenBucket(capacity=55, ...)` — values from `settings.eodhd` / `settings.finnhub`
-- [ ] All 4 client constructors pass their respective `provider_cfg` argument
-- [ ] `ruff check` and `mypy` pass on `app.py`
+- [x] No hardcoded `httpx.Timeout(30.0, ...)` — values come from `settings.http_client`
+- [x] No hardcoded `TokenBucket(capacity=10, ...)` or `TokenBucket(capacity=55, ...)` — values from `settings.eodhd` / `settings.finnhub`
+- [x] All 4 client constructors pass their respective `provider_cfg` argument
+- [x] `ruff check` and `mypy` pass on `app.py`
 
 ---
 
@@ -494,11 +495,11 @@ In the Configuration section, add a sub-section "Nested Provider Settings" docum
 - Note that API keys remain as flat fields (Kubernetes `Secret`)
 
 **Acceptance criteria**:
-- [ ] All 4 client test files updated — existing tests pass with `provider_cfg` arg added
-- [ ] 6+ new tests covering custom URL/config overrides
-- [ ] `test_app_fetch_cycle.py` / `test_app_robustness.py` / `test_scheduler.py` reviewed and updated if needed
-- [ ] `python -m pytest services/content-ingestion/tests/unit/ -v` — all tests pass
-- [ ] `docs/services/content-ingestion.md` updated
+- [x] All 4 client test files updated — existing tests pass with `provider_cfg` arg added
+- [x] 6+ new tests covering custom URL/config overrides (10 added: 2 EODHD + 1 Finnhub + 1 NewsAPI + 4 SEC EDGAR + 2 forms override)
+- [x] `test_app_fetch_cycle.py` / `test_app_robustness.py` / `test_scheduler.py` reviewed and updated if needed (test_newsapi.py + test_sec_edgar.py downstream updated)
+- [x] `python -m pytest services/content-ingestion/tests/unit/ -v` — all tests pass (291 pass)
+- [x] `docs/services/content-ingestion.md` updated
 
 ---
 
@@ -517,11 +518,11 @@ In the Configuration section, add a sub-section "Nested Provider Settings" docum
 - `docs/services/content-ingestion.md`
 
 #### Validation Gate
-- [ ] `ruff check services/content-ingestion/src/` passes
-- [ ] `mypy services/content-ingestion/src/` passes
-- [ ] `python -m pytest services/content-ingestion/tests/unit/ -v` — all tests pass (0 failures)
-- [ ] No module-level `_BASE_URL`, `_PAGE_SIZE`, `_QUOTA_TTL_SECONDS`, `_EFTS_URL`, `_FILING_BASE_URL`, `_DEFAULT_FORMS`, `_MAX_CONCURRENT` remain in any adapter file
-- [ ] `docs/services/content-ingestion.md` updated
+- [x] `ruff check services/content-ingestion/src/` passes
+- [x] `mypy services/content-ingestion/src/` passes (pre-existing import-not-found only)
+- [x] `python -m pytest services/content-ingestion/tests/unit/ -v` — all tests pass (291 pass, 0 failures)
+- [x] No module-level `_BASE_URL`, `_PAGE_SIZE`, `_QUOTA_TTL_SECONDS`, `_EFTS_URL`, `_FILING_BASE_URL`, `_DEFAULT_FORMS`, `_MAX_CONCURRENT` remain in any adapter file
+- [x] `docs/services/content-ingestion.md` updated
 
 #### Regression Guardrails
 - **BP-023** (pre-commit ruff-format sync): Run `uvx ruff format services/content-ingestion/` before committing — ensure no AM/MM staged Python files

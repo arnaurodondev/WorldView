@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from content_ingestion.config import SECEdgarProviderSettings
 from content_ingestion.domain.entities import Source, SourceType
 from content_ingestion.domain.exceptions import ConfigurationError
 from content_ingestion.infrastructure.adapters.base import RetryConfig
@@ -44,16 +45,28 @@ class TestSECEdgarUserAgentValidation:
     def test_raises_on_empty_user_agent(self) -> None:
         mock_http = AsyncMock()
         with pytest.raises(ConfigurationError, match="User-Agent"):
-            SECEdgarClient(http_client=mock_http, user_agent="")
+            SECEdgarClient(
+                http_client=mock_http,
+                user_agent="",
+                provider_cfg=SECEdgarProviderSettings(),
+            )
 
     def test_raises_on_whitespace_user_agent(self) -> None:
         mock_http = AsyncMock()
         with pytest.raises(ConfigurationError, match="User-Agent"):
-            SECEdgarClient(http_client=mock_http, user_agent="   ")
+            SECEdgarClient(
+                http_client=mock_http,
+                user_agent="   ",
+                provider_cfg=SECEdgarProviderSettings(),
+            )
 
     def test_accepts_valid_user_agent(self) -> None:
         mock_http = AsyncMock()
-        client = SECEdgarClient(http_client=mock_http, user_agent="worldview/1.0 test@example.com")
+        client = SECEdgarClient(
+            http_client=mock_http,
+            user_agent="worldview/1.0 test@example.com",
+            provider_cfg=SECEdgarProviderSettings(),
+        )
         assert client._user_agent == "worldview/1.0 test@example.com"
 
 

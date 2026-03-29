@@ -142,6 +142,6 @@ class TestNoUUID4Defaults:
         """No migration should use gen_random_uuid() — all IDs are app-generated UUIDv7 (R10, M-8)."""
         for path in sorted(_MIGRATION_DIR.glob("*.py")):
             content = path.read_text()
-            assert (
-                "gen_random_uuid()" not in content
-            ), f"gen_random_uuid() found in {path.name} — use app-generated UUIDv7 instead"
+            assert "gen_random_uuid()" not in content, (
+                f"gen_random_uuid() found in {path.name} — use app-generated UUIDv7 instead"
+            )

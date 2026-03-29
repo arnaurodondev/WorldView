@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from content_ingestion.config import NewsAPIProviderSettings
 from content_ingestion.domain.exceptions import AdapterError
 from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
 
@@ -19,6 +20,23 @@ def _articles_response(n: int = 1, total: int | None = None) -> dict:
     return {"status": "ok", "totalResults": total if total is not None else n, "articles": articles}
 
 
+def _make_client(
+    http: httpx.AsyncClient,
+    api_key: str = "key",
+    valkey=None,
+    daily_limit: int = 100,
+    **cfg_overrides,
+) -> NewsAPIClient:
+    """Construct a NewsAPIClient with default provider settings, allowing overrides."""
+    return NewsAPIClient(
+        http_client=http,
+        api_key=api_key,
+        provider_cfg=NewsAPIProviderSettings(**cfg_overrides),
+        valkey=valkey,
+        daily_limit=daily_limit,
+    )
+
+
 class TestNewsAPIClient:
     async def test_fetch_articles_sends_api_key_header(self) -> None:
         captured_headers = None
@@ -29,7 +47,7 @@ class TestNewsAPIClient:
             return httpx.Response(200, json=_articles_response(1))
 
         async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
-            client = NewsAPIClient(http_client=http, api_key="test-api-key")
+            client = _make_client(http, api_key="test-api-key")
             result = await client.fetch_articles(query="AI")
 
         assert captured_headers is not None
@@ -41,7 +59,7 @@ class TestNewsAPIClient:
             return httpx.Response(429)
 
         async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
-            client = NewsAPIClient(http_client=http, api_key="key")
+            client = _make_client(http)
             with pytest.raises(AdapterError, match="429"):
                 await client.fetch_articles(query="test")
 
@@ -55,7 +73,7 @@ class TestNewsAPIClient:
             return httpx.Response(200, json=_articles_response(n=50, total=80))
 
         async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
-            client = NewsAPIClient(http_client=http, api_key="key")
+            client = _make_client(http)
             result = await client.fetch_all_pages(query="test")
 
         # 50 >= 80? No → page 2. 100 >= 80? Yes → stop.
@@ -70,7 +88,7 @@ class TestNewsAPIClient:
             return httpx.Response(200, json=_articles_response(n=50, total=200))
 
         async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
-            client = NewsAPIClient(http_client=http, api_key="key", valkey=valkey, daily_limit=1)
+            client = _make_client(http, valkey=valkey, daily_limit=1)
             result = await client.fetch_all_pages(query="test")
 
         # First page OK (count=1, within limit), second page quota exceeded (count=2 > 1)
@@ -85,11 +103,32 @@ class TestNewsAPIClient:
             return httpx.Response(200, json=_articles_response(1))
 
         async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
-            client = NewsAPIClient(http_client=http, api_key="key")
+            client = _make_client(http)
             await client.fetch_articles(query="AI", from_date="2026-03-01")
 
         assert captured_url is not None
         assert "from=2026-03-01" in captured_url
+
+    async def test_newsapi_client_custom_quota_ttl(self) -> None:
+        """TTL value passed to valkey.expire matches quota_ttl_seconds."""
+        recorded_ttl = None
+
+        class _RecordingValkey:
+            async def incr(self, key: str) -> int:
+                return 1
+
+            async def expire(self, _key: str, ttl: int) -> None:
+                nonlocal recorded_ttl
+                recorded_ttl = ttl
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=_articles_response(1))
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http, valkey=_RecordingValkey(), quota_ttl_seconds=3600)
+            await client.fetch_articles(query="test")
+
+        assert recorded_ttl == 3600
 
 
 class _FakeValkey:

@@ -142,9 +142,12 @@ class TestNewsAPIClientQuota:
         mock_valkey.incr.return_value = 6  # After increment: was 5, now 6
         mock_http = AsyncMock()
 
+        from content_ingestion.config import NewsAPIProviderSettings
+
         client = NewsAPIClient(
             http_client=mock_http,
             api_key="test-key",
+            provider_cfg=NewsAPIProviderSettings(),
             valkey=mock_valkey,
             daily_limit=100,
         )
@@ -157,9 +160,12 @@ class TestNewsAPIClientQuota:
         mock_valkey.incr.return_value = 1
         mock_http = AsyncMock()
 
+        from content_ingestion.config import NewsAPIProviderSettings
+
         client = NewsAPIClient(
             http_client=mock_http,
             api_key="test-key",
+            provider_cfg=NewsAPIProviderSettings(),
             valkey=mock_valkey,
             daily_limit=100,
         )
@@ -172,9 +178,12 @@ class TestNewsAPIClientQuota:
         mock_valkey.incr.return_value = 101  # Over the limit of 100
         mock_http = AsyncMock()
 
+        from content_ingestion.config import NewsAPIProviderSettings
+
         client = NewsAPIClient(
             http_client=mock_http,
             api_key="test-key",
+            provider_cfg=NewsAPIProviderSettings(),
             valkey=mock_valkey,
             daily_limit=100,
         )

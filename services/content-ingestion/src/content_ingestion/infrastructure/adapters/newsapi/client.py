@@ -14,13 +14,10 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import httpx
 
+    from content_ingestion.config import NewsAPIProviderSettings
     from messaging.valkey.client import ValkeyClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
-_BASE_URL = "https://newsapi.org/v2/everything"
-_PAGE_SIZE = 100
-_QUOTA_TTL_SECONDS = 86400
 
 
 class NewsAPIClient:
@@ -29,6 +26,7 @@ class NewsAPIClient:
     Args:
         http_client: An ``httpx.AsyncClient`` for making requests.
         api_key: NewsAPI key (sent in ``X-Api-Key`` header).
+        provider_cfg: Operational parameters (base URL, page size, quota TTL).
         valkey: Valkey client for daily quota tracking.
         daily_limit: Maximum requests per day.
     """
@@ -37,11 +35,15 @@ class NewsAPIClient:
         self,
         http_client: httpx.AsyncClient,
         api_key: str,
+        provider_cfg: NewsAPIProviderSettings,
         valkey: ValkeyClient | None = None,
         daily_limit: int = 100,
     ) -> None:
         self._http = http_client
         self._api_key = api_key
+        self._base_url = provider_cfg.base_url
+        self._page_size = provider_cfg.page_size
+        self._quota_ttl_seconds = provider_cfg.quota_ttl_seconds
         self._valkey = valkey
         self._daily_limit = daily_limit
 
@@ -68,7 +70,7 @@ class NewsAPIClient:
         current = await self._valkey.incr(key)
         # Set TTL on first increment only
         if current == 1:
-            await self._valkey.expire(key, _QUOTA_TTL_SECONDS)
+            await self._valkey.expire(key, self._quota_ttl_seconds)
 
         if current > self._daily_limit:
             msg = f"NewsAPI daily quota exhausted ({current}/{self._daily_limit})"
@@ -104,13 +106,13 @@ class NewsAPIClient:
             "q": query,
             "sortBy": "publishedAt",
             "language": language,
-            "pageSize": _PAGE_SIZE,
+            "pageSize": self._page_size,
             "page": page,
         }
         if from_date:
             params["from"] = from_date
 
-        response = await self._http.get(_BASE_URL, params=params, headers=headers)
+        response = await self._http.get(self._base_url, params=params, headers=headers)
 
         if response.status_code == 429:
             msg = "NewsAPI rate limit exceeded (HTTP 429)"

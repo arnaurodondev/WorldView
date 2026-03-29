@@ -14,12 +14,9 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import httpx
 
-logger = get_logger(__name__)  # type: ignore[no-any-return]
+    from content_ingestion.config import SECEdgarProviderSettings
 
-_EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
-_FILING_BASE_URL = "https://www.sec.gov/Archives/edgar/data"
-_DEFAULT_FORMS = "10-K,10-Q,8-K,DEF14A"
-_MAX_CONCURRENT = 8
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class SECEdgarClient:
@@ -28,32 +25,41 @@ class SECEdgarClient:
     Args:
         http_client: An ``httpx.AsyncClient`` for making requests.
         user_agent: Required User-Agent header (SEC policy).
+        provider_cfg: Operational parameters (URLs, form types, concurrency).
 
     Raises:
         ConfigurationError: If ``user_agent`` is empty.
     """
 
-    def __init__(self, http_client: httpx.AsyncClient, user_agent: str) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        user_agent: str,
+        provider_cfg: SECEdgarProviderSettings,
+    ) -> None:
         if not user_agent or not user_agent.strip():
             msg = "SEC EDGAR requires a User-Agent header. Set SEC_EDGAR_USER_AGENT."
             raise ConfigurationError(msg)
         self._http = http_client
         self._user_agent = user_agent
-        self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+        self._efts_url = provider_cfg.efts_url
+        self._filing_base_url = provider_cfg.filing_base_url
+        self._default_forms = provider_cfg.default_forms
+        self._semaphore = asyncio.Semaphore(provider_cfg.max_concurrent)
 
     async def search_filings(
         self,
         *,
         from_date: str = "",
         to_date: str = "",
-        forms: str = _DEFAULT_FORMS,
+        forms: str = "",
     ) -> list[dict[str, Any]]:
         """Search EFTS for recent filings.
 
         Args:
             from_date: Start date ``YYYY-MM-DD``.
             to_date: End date ``YYYY-MM-DD``.
-            forms: Comma-separated form types.
+            forms: Comma-separated form types.  Defaults to ``default_forms`` from config.
 
         Returns:
             List of filing metadata dicts.
@@ -61,8 +67,9 @@ class SECEdgarClient:
         Raises:
             AdapterError: On HTTP errors.
         """
+        actual_forms = forms or self._default_forms
         params: dict[str, str] = {
-            "forms": forms,
+            "forms": actual_forms,
         }
         if from_date and to_date:
             params["dateRange"] = "custom"
@@ -72,7 +79,7 @@ class SECEdgarClient:
         headers = {"User-Agent": self._user_agent}
 
         async with self._semaphore:
-            response = await self._http.get(_EFTS_URL, params=params, headers=headers)
+            response = await self._http.get(self._efts_url, params=params, headers=headers)
 
         if response.status_code == 429:
             msg = "SEC EDGAR rate limit exceeded (HTTP 429)"
@@ -108,7 +115,7 @@ class SECEdgarClient:
             AdapterError: On HTTP errors.
         """
         acc_clean = accession_no.replace("-", "")
-        url = f"{_FILING_BASE_URL}/{cik}/{acc_clean}/{filename}"
+        url = f"{self._filing_base_url}/{cik}/{acc_clean}/{filename}"
         headers = {"User-Agent": self._user_agent}
 
         async with self._semaphore:
