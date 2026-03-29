@@ -6,7 +6,7 @@ from enum import StrEnum
 
 import pytest
 
-from contracts.enums import ContentSourceType
+from contracts.enums import ContentSourceType, IngestionTaskStatus
 
 pytestmark = pytest.mark.unit
 
@@ -33,3 +33,44 @@ class TestContentSourceType:
         from contracts import ContentSourceType as RootType
 
         assert RootType is ContentSourceType
+
+
+class TestIngestionTaskStatus:
+    def test_is_str_enum(self) -> None:
+        assert issubclass(IngestionTaskStatus, StrEnum)
+
+    def test_all_six_values(self) -> None:
+        expected = {"pending", "claimed", "running", "succeeded", "retry", "failed"}
+        assert {v.value for v in IngestionTaskStatus} == expected
+
+    def test_member_count(self) -> None:
+        assert len(IngestionTaskStatus) == 6
+
+    def test_string_comparison(self) -> None:
+        assert IngestionTaskStatus.PENDING == "pending"
+        assert IngestionTaskStatus.CLAIMED == "claimed"
+        assert IngestionTaskStatus.RUNNING == "running"
+        assert IngestionTaskStatus.SUCCEEDED == "succeeded"
+        assert IngestionTaskStatus.RETRY == "retry"
+        assert IngestionTaskStatus.FAILED == "failed"
+
+    def test_from_string(self) -> None:
+        assert IngestionTaskStatus("pending") is IngestionTaskStatus.PENDING
+        assert IngestionTaskStatus("claimed") is IngestionTaskStatus.CLAIMED
+        assert IngestionTaskStatus("failed") is IngestionTaskStatus.FAILED
+
+    def test_claimable_states(self) -> None:
+        """Only PENDING and RETRY are valid states from which a task can be claimed."""
+        claimable = {IngestionTaskStatus.PENDING, IngestionTaskStatus.RETRY}
+        non_claimable = {s for s in IngestionTaskStatus if s not in claimable}
+        assert non_claimable == {
+            IngestionTaskStatus.CLAIMED,
+            IngestionTaskStatus.RUNNING,
+            IngestionTaskStatus.SUCCEEDED,
+            IngestionTaskStatus.FAILED,
+        }
+
+    def test_importable_from_root(self) -> None:
+        from contracts import IngestionTaskStatus as RootType
+
+        assert RootType is IngestionTaskStatus

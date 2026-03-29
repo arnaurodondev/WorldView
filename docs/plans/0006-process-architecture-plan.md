@@ -297,42 +297,37 @@ pattern that applies to all services.
 
 ---
 
-#### T-B-1-01: Add IngestionTaskStatus Enum
+#### T-B-1-01: Add IngestionTaskStatus Enum ✅
 
 **Type**: impl
 **depends_on**: none
 **blocks**: [T-B-1-02]
-**Target files**: `services/content-ingestion/src/content_ingestion/domain/entities.py`
+**Target files**: `libs/contracts/src/contracts/enums.py` (standardized in shared lib instead of service-local)
 
-**What to build**:
-Add an `IngestionTaskStatus` StrEnum to the domain entities module. This enum models the
-task lifecycle for the scheduler-worker pattern, consistent with market-ingestion's approach.
+**What was built**:
+Standardized `IngestionTaskStatus` StrEnum in `contracts.enums` (shared library) instead of
+adding it only to content-ingestion. Market-ingestion's local copy was replaced with a
+re-export from `contracts.enums`. Content-ingestion re-exports from the same shared location.
 
 **Entities / Components**:
 - **Name**: `IngestionTaskStatus`
-- **Purpose**: State machine states for content ingestion tasks
-- **Values**:
-  - `PENDING` — Task created by scheduler, awaiting claim
-  - `CLAIMED` — Task claimed by a worker (lease set)
-  - `RUNNING` — Worker actively executing the task
-  - `SUCCEEDED` — Task completed successfully
-  - `FAILED` — Task failed permanently (max attempts reached)
-  - `RETRY` — Task failed but eligible for retry (returned to queue)
+- **Purpose**: State machine states for ingestion tasks (shared across S2 + S4)
+- **Values**: PENDING, CLAIMED, RUNNING, SUCCEEDED, RETRY, FAILED
 - **Invariants**:
   - Only `PENDING` and `RETRY` tasks can be claimed
   - `CLAIMED` → `RUNNING` → `SUCCEEDED` | `FAILED` | `RETRY`
   - `FAILED` is a terminal state
+  - `CLAIMED` is optional — S2 skips it (PENDING → RUNNING directly)
 
-**Tests to write**:
-
-| Test Name | What It Verifies | Type |
-|-----------|-----------------|------|
-| test_ingestion_task_status_values | All 6 values exist and are StrEnum | unit |
-| test_ingestion_task_status_claimable | Only PENDING and RETRY are claimable states | unit |
+**Tests written**: 7 in `libs/contracts/tests/test_enums.py` (TestIngestionTaskStatus class)
+**Market-ingestion tests updated**: exhaustive membership tests now include `claimed`
 
 **Acceptance criteria**:
-- [ ] `IngestionTaskStatus` StrEnum with 6 values in `domain/entities.py`
-- [ ] Consistent with market-ingestion's status model
+- [x] `IngestionTaskStatus` StrEnum with 6 values in `contracts.enums`
+- [x] Consistent with market-ingestion's status model
+- [x] Market-ingestion re-exports from contracts (backward compat preserved)
+- [x] Content-ingestion re-exports from contracts
+- [x] 7 new tests passing in contracts, 48 market-ingestion domain tests passing
 
 ---
 

@@ -30,6 +30,21 @@ The two must be kept in sync. `scripts/gen-contracts.sh` validates this.
 
 ## Public API
 
+### Shared Enums
+
+| Enum | Values | Used By | Purpose |
+|------|--------|---------|---------|
+| `ContentSourceType` | eodhd, sec_edgar, finnhub, newsapi, manual | S4, S5 | Content source discriminator in Kafka events |
+| `IngestionTaskStatus` | pending, claimed, running, succeeded, retry, failed | S2, S4 | Scheduler-worker task lifecycle states |
+
+Import from `contracts.enums` or the package root:
+```python
+from contracts.enums import ContentSourceType, IngestionTaskStatus
+from contracts import IngestionTaskStatus  # also works
+```
+
+Services re-export from their domain layer for internal use (e.g. `market_ingestion.domain.enums`).
+
 ### Canonical Models
 
 **Market data (OHLCV, quotes, fundamentals):**

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from contracts.enums import (
+    IngestionTaskStatus as IngestionTaskStatus,  # type: ignore[import-untyped]  # — canonical re-export
+)
 from messaging.enums import OutboxStatus as OutboxStatus  # — canonical re-export
 
 
@@ -30,14 +33,6 @@ class DatasetType(StrEnum):
 class FundamentalsVariant(StrEnum):
     ANNUAL = "annual"
     QUARTERLY = "quarterly"
-
-
-class IngestionTaskStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    RETRY = "retry"
-    FAILED = "failed"
 
 
 class BackfillStatus(StrEnum):
