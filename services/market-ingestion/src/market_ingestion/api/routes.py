@@ -38,11 +38,11 @@ from market_ingestion.api.schemas import (
 from market_ingestion.application.use_cases.backfill import BackfillUseCase
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
 from market_ingestion.domain.enums import DatasetType, Provider
-from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import ObjectStoreAdapter
+    from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.config import Settings
 
 logger = get_logger(__name__)
@@ -69,7 +69,7 @@ async def healthz() -> HealthResponse:
 @router.get("/readyz", response_model=ReadyResponse, tags=["probes"])
 async def readyz(
     settings: Settings = Depends(get_settings),
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
     object_store: ObjectStoreAdapter = Depends(get_object_store),
 ) -> ReadyResponse:
     """Readiness probe — checks DB connectivity and storage availability."""
@@ -117,7 +117,7 @@ async def readyz(
 async def trigger_ingestion(
     req: TriggerRequest,
     _auth: InternalAuthDep,
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> TriggerResponse:
     """Trigger immediate ingestion for one or more symbols."""
     try:
@@ -160,7 +160,7 @@ async def trigger_ingestion(
 async def trigger_backfill(
     req: BackfillRequest,
     _auth: InternalAuthDep,
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> BackfillResponse:
     """Trigger a historical backfill for a single symbol."""
     try:
@@ -204,7 +204,7 @@ async def trigger_backfill(
     tags=["ingestion"],
 )
 async def ingest_status(
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> TaskStatusResponse:
     """Return task counts grouped by status."""
     counts = await uow.tasks.count_by_status()
@@ -222,7 +222,7 @@ async def ingest_status(
     tags=["policies"],
 )
 async def list_policies(
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> PolicyListResponse:
     """List all enabled polling policies."""
     policies = await uow.policies.list_enabled()
