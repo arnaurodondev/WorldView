@@ -76,6 +76,10 @@ def _make_pending(user_id: UUID, alert_id: UUID) -> PendingAlert:
 
 # ── GET /api/v1/alerts/pending ────────────────────────────────────────────────
 
+# Patch paths target the use case module where the repos are imported.
+_PENDING_REPO_PATH = "alert.application.use_cases.pending_alerts.PendingAlertRepository"
+_ALERT_REPO_PATH = "alert.application.use_cases.pending_alerts.AlertRepository"
+
 
 class TestGetPendingAlerts:
     @pytest.mark.unit
@@ -85,8 +89,8 @@ class TestGetPendingAlerts:
         user_id = str(uuid4())
 
         with (
-            patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo,
-            patch("alert.api.routes.AlertRepository"),
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH),
         ):
             MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[])
 
@@ -107,8 +111,8 @@ class TestGetPendingAlerts:
         pending = _make_pending(user_id, alert.alert_id)
 
         with (
-            patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo,
-            patch("alert.api.routes.AlertRepository") as MockAlertRepo,
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH) as MockAlertRepo,
         ):
             MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending])
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert)
@@ -135,8 +139,8 @@ class TestGetPendingAlerts:
             return []
 
         with (
-            patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo,
-            patch("alert.api.routes.AlertRepository"),
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH),
         ):
             MockPendingRepo.return_value.list_by_user = _capture_list
 
@@ -155,8 +159,8 @@ class TestGetPendingAlerts:
         pending = _make_pending(user_id, uuid4())
 
         with (
-            patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo,
-            patch("alert.api.routes.AlertRepository") as MockAlertRepo,
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH) as MockAlertRepo,
         ):
             MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending])
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=None)  # orphan
@@ -179,7 +183,7 @@ class TestAcknowledgeAlert:
         user_id = uuid4()
         alert_id = uuid4()
 
-        with patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo:
+        with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=True)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -196,7 +200,7 @@ class TestAcknowledgeAlert:
         user_id = uuid4()
         alert_id = uuid4()
 
-        with patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo:
+        with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=False)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -212,7 +216,7 @@ class TestAcknowledgeAlert:
         user_id = uuid4()
         alert_id = uuid4()
 
-        with patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo:
+        with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=False)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -233,7 +237,7 @@ class TestAcknowledgeAlert:
             captured.append((uid, aid))
             return True
 
-        with patch("alert.api.routes.PendingAlertRepository") as MockPendingRepo:
+        with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = _capture_ack
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:

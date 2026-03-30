@@ -14,8 +14,10 @@ from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSock
 
 from alert.api.dependencies import DbSessionDep
 from alert.api.schemas import PendingAlertResponse, PendingAlertsResponse
-from alert.infrastructure.db.repositories.alert import AlertRepository
-from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+from alert.application.use_cases.pending_alerts import (
+    AcknowledgeAlertUseCase,
+    GetPendingAlertsUseCase,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -40,27 +42,20 @@ async def get_pending_alerts(
     current deployment the caller passes it as a query parameter (S9
     API gateway will inject it from the auth token).
     """
-    pending_repo = PendingAlertRepository(session)
-    alert_repo = AlertRepository(session)
+    pairs = await GetPendingAlertsUseCase().execute(session, user_id, limit=limit, offset=offset)
 
-    pendings = await pending_repo.list_by_user(user_id, limit=limit, offset=offset)
-
-    alert_responses: list[PendingAlertResponse] = []
-    for p in pendings:
-        alert = await alert_repo.get_by_id(p.alert_id)
-        if alert is None:
-            continue
-        alert_responses.append(
-            PendingAlertResponse(
-                pending_id=p.pending_id,
-                alert_id=p.alert_id,
-                entity_id=alert.entity_id,
-                alert_type=str(alert.alert_type),
-                source_topic=alert.source_topic,
-                payload=alert.payload,
-                created_at=p.created_at,
-            )
+    alert_responses = [
+        PendingAlertResponse(
+            pending_id=p.pending_id,
+            alert_id=p.alert_id,
+            entity_id=alert.entity_id,
+            alert_type=str(alert.alert_type),
+            source_topic=alert.source_topic,
+            payload=alert.payload,
+            created_at=p.created_at,
         )
+        for p, alert in pairs
+    ]
 
     return PendingAlertsResponse(
         alerts=alert_responses,
@@ -85,8 +80,7 @@ async def acknowledge_alert(
     Returns 200 on success.  Returns 404 — not 403 — when the alert
     does not exist OR belongs to a different user (avoids user enumeration).
     """
-    pending_repo = PendingAlertRepository(session)
-    updated = await pending_repo.acknowledge(user_id, alert_id)
+    updated = await AcknowledgeAlertUseCase().execute(session, user_id, alert_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")
     await session.commit()
