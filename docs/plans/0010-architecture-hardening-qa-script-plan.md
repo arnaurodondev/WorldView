@@ -57,7 +57,7 @@ application layer. Routes become thin wrappers that only import from `applicatio
 
 ---
 
-### Wave A-1: S5 (content-store) + S10 (alert) DLQ Use Cases
+### Wave A-1: S5 (content-store) + S10 (alert) DLQ Use Cases ✅ COMPLETE
 
 **Goal**: Wrap the existing `DLQRepository` behind a port ABC and a use case for S5 and S10.
 Both services already have `DLQRepository` in infrastructure — the work is adding the
@@ -299,7 +299,7 @@ Use `AsyncMock` for repo and session.
 
 ---
 
-### Wave A-2: S6 (nlp-pipeline) DLQ Ports + Use Case
+### Wave A-2: S6 (nlp-pipeline) DLQ Ports + Use Case ✅ COMPLETE
 
 **Goal**: Create `application/ports/` for S6 and introduce `DLQAdminUseCase`.
 Current `api/routes/dlq.py` uses direct SQLAlchemy ORM — extract into a proper
@@ -453,7 +453,7 @@ async def _get_dlq_use_case(
 
 ---
 
-### Wave A-3: S7 (knowledge-graph) DLQ Ports + Use Case
+### Wave A-3: S7 (knowledge-graph) DLQ Ports + Use Case ✅ COMPLETE
 
 **Goal**: Same as Wave A-2, but for S7. S7 currently uses raw SQL with `text()` in
 route handlers instead of ORM. The `SqlAlchemy*Repository` layer is more important here.
@@ -576,7 +576,7 @@ async def _get_dlq_use_case(request: Request) -> DLQAdminUseCase:
 
 ## Sub-Plan B: Security Hardening + Backpressure Verification
 
-### Wave B-1: Storage Secret Externalization + Backpressure Audit
+### Wave B-1: Storage Secret Externalization + Backpressure Audit ✅ COMPLETE
 
 **Goal**: Remove hardcoded MinIO credentials from nlp-pipeline. Verify the
 `BackpressureController.wait_for_resume()` is wired into the consumer loop.
@@ -691,7 +691,7 @@ that references the default values.
 
 ## Sub-Plan C: Full Platform QA Test Script
 
-### Wave C-1: Makefile + test-full.sh Updates
+### Wave C-1: Makefile + test-full.sh Updates ✅ COMPLETE
 
 **Goal**: Create a `Makefile` with convenient test targets and update `test-full.sh`
 to include: (1) cross-service e2e tests at `tests/e2e/`, (2) correct env var
