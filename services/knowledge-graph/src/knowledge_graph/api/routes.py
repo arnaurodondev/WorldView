@@ -25,11 +25,10 @@ from knowledge_graph.api.schemas import (
     RelationResponse,
     RelationsListResponse,
 )
-from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-    CanonicalEntityRepository,
-)
-from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
-    RelationRepository,
+from knowledge_graph.application.use_cases.graph_query import (
+    GetEntityGraphUseCase,
+    GetGraphStatsUseCase,
+    ListRelationsUseCase,
 )
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -97,40 +96,21 @@ async def get_entity_graph(
     """
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        entity_repo = CanonicalEntityRepository(session)
-        entity_row = await entity_repo.get(entity_id)
-        if entity_row is None:
-            raise HTTPException(status_code=404, detail="Entity not found")
-
-        relation_repo = RelationRepository(session)
-        relation_rows = await relation_repo.list_for_entity(
+        entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
+            session,
             entity_id=entity_id,
             min_confidence=min_confidence,
             semantic_mode=semantic_mode,
             limit=limit,
         )
 
-        # Collect all referenced entity_ids (excluding center)
-        referenced_ids: set[UUID] = set()
-        for r in relation_rows:
-            sub = r["subject_entity_id"]
-            obj = r["object_entity_id"]
-            if isinstance(sub, UUID) and sub != entity_id:
-                referenced_ids.add(sub)
-            if isinstance(obj, UUID) and obj != entity_id:
-                referenced_ids.add(obj)
-
-        # Fetch all referenced entities
-        entities_map: dict[str, EntitySummary] = {}
-        for ref_id in referenced_ids:
-            ref_row = await entity_repo.get(ref_id)
-            if ref_row is not None:
-                entities_map[str(ref_id)] = _entity_summary(ref_row)
+    if entity_row is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
 
     return GraphNeighborhoodResponse(
         center=_entity_summary(entity_row),
         relations=[_relation_response(r) for r in relation_rows],
-        entities=entities_map,
+        entities={k: _entity_summary(v) for k, v in entities_map_data.items()},
     )
 
 
@@ -151,8 +131,8 @@ async def list_relations(
     """Paginated, filtered relation list."""
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        relation_repo = RelationRepository(session)
-        rows, total = await relation_repo.list_filtered(
+        rows, total = await ListRelationsUseCase().execute(
+            session,
             subject_entity_id=subject_entity_id,
             object_entity_id=object_entity_id,
             canonical_type=canonical_type,
@@ -178,8 +158,7 @@ async def get_graph_stats(request: Request) -> GraphStatsResponse:
     """Return aggregate knowledge graph statistics."""
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        relation_repo = RelationRepository(session)
-        stats = await relation_repo.get_stats()
+        stats = await GetGraphStatsUseCase().execute(session)
 
     return GraphStatsResponse(
         entity_count=int(stats["entity_count"]),  # type: ignore[call-overload]
