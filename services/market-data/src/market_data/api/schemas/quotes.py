@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class QuoteResponse(BaseModel):
@@ -22,7 +22,7 @@ class QuoteResponse(BaseModel):
 class BatchQuoteRequest(BaseModel):
     """Request body for batch quote lookup."""
 
-    instrument_ids: list[str]
+    instrument_ids: list[str] = Field(min_length=1, max_length=200)  # F-SEC-006: prevent DoS amplification
 
 
 class BatchQuoteResponse(BaseModel):

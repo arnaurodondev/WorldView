@@ -59,7 +59,7 @@ async def _get_quote_cached(
 # Literal-path routes BEFORE path-param routes
 @router.get("/quotes/latest", response_model=BatchQuoteResponse)
 async def get_quotes_latest(
-    instrument_ids: Annotated[list[str], Query()] = ...,  # type: ignore[assignment]
+    instrument_ids: Annotated[list[str], Query(max_length=200)] = ...,  # type: ignore[assignment]  # F-SEC-006
     uc: Annotated[GetQuoteUseCase, Depends(get_quote_uc)] = ...,  # type: ignore[assignment]
     cache: Annotated[QuoteCache, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
 ) -> BatchQuoteResponse:

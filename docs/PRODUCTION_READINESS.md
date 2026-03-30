@@ -26,9 +26,9 @@
 | 1.3 | Rotate all dev credentials that have been committed to git history | P0 | TODO | Even though `.env` is gitignored, `docker.env` examples contain real-ish defaults |
 | 1.4 | Set up secret rotation policy for database passwords, API keys, JWT signing keys | P2 | TODO | |
 | 1.5 | Implement startup validation: crash if required secrets are empty/default | P1 | TODO | Add pydantic validator that rejects known dev values in production mode |
-| 1.6 | Replace all `minioadmin` defaults in `docker.env.example` files with `<CHANGE_ME>` — use Docker secrets or Vault for production injection | P0 | TODO | Ref: F-SEC-004, PLAN-0008 Sub-plan F. Affects all services that use MinIO credentials. |
+| 1.6 | Replace all `minioadmin` defaults in `docker.env.example` files with `<CHANGE_ME>` — use Docker secrets or Vault for production injection | P0 | PARTIAL | Added "Dev default — replace with real credentials" comment to all 9 service docker.env.example files (PLAN-0008 Wave F-1). Full `<CHANGE_ME>` replacement tracked as follow-up. |
 | 1.7 | Replace all `internal_service_token = ""` empty defaults with a mandatory non-empty secret injected at deploy time | P0 | TODO | Affects portfolio and market-ingestion. Empty token means the X-Internal-Token auth header accepts any request. |
-| 1.8 | Switch `warnings.warn` for missing secrets to `structlog` WARNING | P1 | TODO | `warnings.warn` is not captured by the structured log pipeline; silent in production log aggregators. Ref: F-SEC-001. |
+| 1.8 | Switch `warnings.warn` for missing secrets to `structlog` WARNING | P1 | DONE | Replaced `warnings.warn` with `structlog.get_logger().warning()` in market-ingestion and portfolio configs. PLAN-0008 Wave F-1 (T-F-1-02). |
 
 ---
 
@@ -127,8 +127,8 @@
 | 8.5 | Configure health check probes (liveness, readiness, startup) in K8s | P1 | TODO | `/healthz` and `/readyz` endpoints ready |
 | 8.6 | Set up a reverse proxy / load balancer (nginx, Traefik, or cloud LB) | P0 | TODO | |
 | 8.7 | Configure graceful shutdown timeouts matching Kafka consumer commit intervals | P1 | TODO | |
-| 8.8 | Add `portfolio-instrument-consumer` as an independent container in production manifests | P1 | TODO | Consumer was in-process with the API (F-DS-011); extracted to standalone process in PLAN-0008 Wave C-3. Must appear in K8s/Compose deployment with its own lifecycle. |
-| 8.9 | Add `max_length=200` to `BatchQuoteRequest.instrument_ids` and all unbounded list query parameters in market-data | P1 | TODO | Unbounded batch endpoints can be used for DoS amplification. Ref: F-SEC-006/007, PLAN-0008. |
+| 8.8 | Add `portfolio-instrument-consumer` as an independent container in production manifests | P1 | DONE | Extracted from API process in PLAN-0008 Wave C-3; added to docker-compose.yml as `portfolio-instrument-consumer`. K8s manifests pending. |
+| 8.9 | Add `max_length=200` to `BatchQuoteRequest.instrument_ids` and all unbounded list query parameters in market-data | P1 | DONE | Added `max_length=200` to `BatchQuoteRequest.instrument_ids`, `/quotes/latest` Query, and `/ohlcv/bulk` Query. PLAN-0008 Wave F-1 (T-F-1-03). |
 
 ---
 

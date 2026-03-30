@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import warnings
-
+import structlog
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -80,22 +79,30 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _warn_missing_internal_token(self) -> Settings:
-        """Warn at startup if internal_service_token is unset (QA-018)."""
+        """Warn at startup if internal_service_token is unset (QA-018).
+
+        Uses structlog so the warning is captured by the structured log pipeline
+        in production log aggregators (F-SEC-001).
+        """
         if not self.internal_service_token:
-            warnings.warn(
-                "MARKET_INGESTION_INTERNAL_SERVICE_TOKEN is not set — all mutating API "
-                "endpoints (POST /trigger, POST /backfill) will return 401. "
-                "Set this env var before deploying to production.",
-                stacklevel=2,
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_internal_service_token",
+                message=(
+                    "MARKET_INGESTION_INTERNAL_SERVICE_TOKEN is not set — all mutating API "
+                    "endpoints (POST /trigger, POST /backfill) will return 401. "
+                    "Set this env var before deploying to production."
+                ),
             )
         return self
 
     @model_validator(mode="after")
     def _warn_demo_eodhd_key(self) -> Settings:
         if self.eodhd_api_key == "demo":
-            warnings.warn(
-                "EODHD API key is 'demo' — limited to demo endpoints only. "
-                "Set MARKET_INGESTION_EODHD_API_KEY for production use.",
-                stacklevel=2,
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "demo_eodhd_api_key",
+                message=(
+                    "EODHD API key is 'demo' — limited to demo endpoints only. "
+                    "Set MARKET_INGESTION_EODHD_API_KEY for production use."
+                ),
             )
         return self
