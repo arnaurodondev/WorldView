@@ -1,0 +1,48 @@
+"""Use case for DLQ admin operations (list, inspect, retry, resolve).
+
+Depends only on the ``DLQRepositoryPort`` ABC — no infrastructure imports.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from nlp_pipeline.application.ports.repositories import DLQEntryData, DLQRepositoryPort
+
+
+class DLQAdminUseCase:
+    """Application-layer use case for DLQ administration."""
+
+    def __init__(self, repo: DLQRepositoryPort) -> None:
+        self._repo = repo
+
+    async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[DLQEntryData], int]:
+        """List open (failed) DLQ entries with total count."""
+        return await self._repo.list_open(limit=limit, offset=offset)
+
+    async def get_by_id(self, dlq_id: UUID) -> DLQEntryData | None:
+        """Fetch a single DLQ entry by ID, or None if not found."""
+        return await self._repo.get_by_id(dlq_id)
+
+    async def requeue(self, entry: DLQEntryData) -> UUID:
+        """Requeue a DLQ entry back into the outbox, then commit.
+
+        Takes the full DLQEntryData so the use case is self-contained.
+        Returns the new outbox event ID.
+        """
+        new_id = await self._repo.requeue(
+            dlq_id=entry.dlq_id,
+            payload_avro=entry.payload_avro,
+            topic=entry.topic,
+            partition_key=str(entry.original_event_id),
+        )
+        await self._repo.commit()
+        return new_id
+
+    async def mark_resolved(self, dlq_id: UUID, note: str) -> None:
+        """Mark a DLQ entry as resolved with a note, then commit."""
+        await self._repo.mark_resolved(dlq_id, note)
+        await self._repo.commit()
