@@ -73,6 +73,8 @@
 | [BP-061](#bp-061) | Missing `InstrumentUpdated` on capability flag change | Consumer updates `instrument.flags.has_ohlcv/has_quotes/has_fundamentals` via `update_flags()` but never emits `InstrumentUpdated` event — downstream service (S1) cache never refreshed | S3 consumers; any service that updates entity capability flags without publishing a change event |
 | [BP-062](#bp-062) | Cross-service field name mismatch: `entity_id` vs `instrument_id` | Producer event only has `instrument_id`; consumer reads `entity_id` — field is always `None`, stable ID (M-017) never populated; `InstrumentRef.id` becomes transient `new_uuid7()` instead of deterministic | S3→S1 instrument sync; any event containing a cross-service stable ID that differs from the local field name |
 | [BP-063](#bp-063) | Consumer uses JSON deserialization for Avro-encoded messages | `json.loads(raw)` when producer sends Confluent Avro (magic byte + schema ID + avro bytes) — `json.JSONDecodeError` or garbled data | S1 portfolio `InstrumentEventConsumer`; any service consuming from topics produced by `OutboxEventValueSerializer` |
+| [BP-067](#bp-067) | pytest `--strict-markers` + new `e2e` marker not registered | `Failed: 'e2e' not found in markers configuration option` — collection error blocks ALL tests in the service | Any service pyproject.toml adding e2e tests when `--strict-markers` is set but `e2e` is missing from markers list |
+| [BP-068](#bp-068) | `postgres:16-alpine` image missing pgvector extension | `ERROR: could not open extension control file ".../vector.control": No such file or directory` when bootstrapping nlp_db/intelligence_db | Test infrastructure for S6 (nlp-pipeline), S7 (knowledge-graph); any service using `VECTOR(N)` columns |
 
 ---
 
@@ -3057,3 +3059,85 @@ from typing import TYPE_CHECKING, Any
 ```
 
 **Affected areas**: All SQLAlchemy ORM model files using `Mapped[datetime]`, `Mapped[date]`, `Mapped[Decimal]`, or any other stdlib type that is only imported under `TYPE_CHECKING`.
+
+---
+
+## BP-067
+
+**Category**: pytest configuration — `--strict-markers` + missing marker registration
+
+**Date discovered**: 2026-03-30
+**Service affected**: `alert` (discovered during QA-S4S5S6S7S10-001)
+
+### Symptom
+
+```
+ERRORS
+ERROR services/alert/tests/e2e/test_api_workflows.py - Failed: 'e2e' not found in `markers` configuration option
+```
+
+All tests in the service fail to collect, not just the e2e tests.
+
+### Root cause
+
+The service's `pyproject.toml` uses `addopts = "--strict-markers"` which turns any unregistered marker into a hard error at collection time. When new e2e test files are added with `pytestmark = [pytest.mark.e2e, ...]` but `e2e` is not listed in `[tool.pytest.ini_options] markers`, every test in the service's `testpaths` fails to collect.
+
+### Fix
+
+Add the `e2e` marker to the markers list in `pyproject.toml` before committing new e2e test files:
+
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "unit: ...",
+    "integration: ...",
+    "contract: ...",
+    "e2e: end-to-end tests against a real database",  # ← ADD THIS
+]
+```
+
+### Affected areas
+
+Any service using `--strict-markers` (currently: alert, content-ingestion) when e2e tests are first added. Check `addopts` in `pyproject.toml` before adding new marker types to tests.
+
+---
+
+## BP-068
+
+**Category**: Docker Compose infrastructure — missing pgvector extension in postgres image
+
+**Date discovered**: 2026-03-30
+**Service affected**: S6 (nlp-pipeline), S7 (knowledge-graph) test infrastructure
+
+### Symptom
+
+```
+ERROR:  could not open extension control file
+"/usr/share/postgresql/16/extension/vector.control": No such file or directory
+```
+
+When `init-test-databases.sh` runs `CREATE EXTENSION IF NOT EXISTS vector` in the docker-entrypoint-initdb.d script, the `postgres:16-alpine` image does not include pgvector. The database creation succeeds but pgvector is missing.
+
+### Root cause
+
+`postgres:16-alpine` is a minimal PostgreSQL image with no third-party extensions. The `nlp_db` and `intelligence_db` databases require pgvector for `VECTOR(1024)` column types and HNSW indexes used by S6 and S7.
+
+### Fix
+
+Replace `postgres:16-alpine` with `pgvector/pgvector:pg16` in `docker-compose.test.yml`. This is an official image that is functionally identical to `postgres:16` but with pgvector pre-installed:
+
+```yaml
+# WRONG — no pgvector support
+postgres:
+  image: postgres:16-alpine
+
+# CORRECT — pgvector pre-installed
+postgres:
+  image: pgvector/pgvector:pg16
+```
+
+The init script can then call `CREATE EXTENSION IF NOT EXISTS vector` without error.
+
+### Affected areas
+
+All test profiles using the shared `postgres` service in `docker-compose.test.yml` when S6 or S7 databases are being initialized. The `pgvector/pgvector:pg16` image is a drop-in replacement and works for all other services too.
