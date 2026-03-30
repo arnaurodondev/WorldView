@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from alert.application.use_cases.alert_fanout import FanoutResult
 from alert.infrastructure.consumer.intelligence_consumer import IntelligenceConsumer
+from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
@@ -142,3 +143,79 @@ class TestIntelligenceConsumer:
     async def test_is_duplicate_no_client(self) -> None:
         consumer, _ = _make_consumer()
         assert await consumer.is_duplicate("any-id") is False
+
+    # ── Valkey error resilience (T-A-1-03) ───────────────────────────────────
+
+    @pytest.mark.unit
+    async def test_is_duplicate_valkey_error_returns_false(self) -> None:
+        """When Valkey raises, is_duplicate returns False without propagating."""
+        mock_dedup = AsyncMock()
+        mock_dedup.exists = AsyncMock(side_effect=ConnectionError("valkey down"))
+        consumer, _ = _make_consumer()
+        consumer._dedup_client = mock_dedup
+
+        with capture_logs() as cap:
+            result = await consumer.is_duplicate("evt-err-001")
+
+        assert result is False
+        assert any(
+            e.get("event") == "intelligence_consumer.valkey_check_failed" for e in cap
+        ), f"Expected warning log not found in {cap}"
+
+    @pytest.mark.unit
+    async def test_mark_processed_valkey_error_logs_warning(self) -> None:
+        """When Valkey raises on set, mark_processed logs warning and returns silently."""
+        mock_dedup = AsyncMock()
+        mock_dedup.set = AsyncMock(side_effect=ConnectionError("valkey down"))
+        consumer, _ = _make_consumer()
+        consumer._dedup_client = mock_dedup
+
+        with capture_logs() as cap:
+            await consumer.mark_processed("evt-err-002")  # must not raise
+
+        assert any(
+            e.get("event") == "intelligence_consumer.valkey_mark_failed" for e in cap
+        ), f"Expected warning log not found in {cap}"
+
+    # ── Topic whitelist (T-A-1-04) ────────────────────────────────────────────
+
+    @pytest.mark.unit
+    def test_resolve_topic_from_header_known(self) -> None:
+        """Known X-Source-Topic header returns header value without warning."""
+        headers = {"X-Source-Topic": "nlp.signal.detected.v1"}
+        with capture_logs() as cap:
+            result = IntelligenceConsumer._resolve_topic({}, headers)
+        assert result == "nlp.signal.detected.v1"
+        assert not any("unknown_topic_from_header" in e.get("event", "") for e in cap)
+
+    @pytest.mark.unit
+    def test_resolve_topic_from_header_unknown_logs_warning(self) -> None:
+        """Unknown X-Source-Topic header logs a warning but still returns the header value."""
+        headers = {"X-Source-Topic": "some.unknown.topic.v9"}
+        with capture_logs() as cap:
+            result = IntelligenceConsumer._resolve_topic({}, headers)
+        assert result == "some.unknown.topic.v9"
+        assert any(
+            e.get("event") == "intelligence_consumer.unknown_topic_from_header" for e in cap
+        ), f"Expected warning not found in {cap}"
+
+    @pytest.mark.unit
+    def test_resolve_topic_fallback_signal(self) -> None:
+        value = {"event_type": "nlp.signal.detected"}
+        assert IntelligenceConsumer._resolve_topic(value, {}) == "nlp.signal.detected.v1"
+
+    @pytest.mark.unit
+    def test_resolve_topic_fallback_graph(self) -> None:
+        value = {"event_type": "graph.state.changed"}
+        assert IntelligenceConsumer._resolve_topic(value, {}) == "graph.state.changed.v1"
+
+    @pytest.mark.unit
+    def test_resolve_topic_unknown_logs_warning(self) -> None:
+        """Fully unresolvable event_type logs a warning and returns event_type as-is."""
+        value = {"event_type": "totally.unknown.event", "event_id": "abc"}
+        with capture_logs() as cap:
+            result = IntelligenceConsumer._resolve_topic(value, {})
+        assert result == "totally.unknown.event"
+        assert any(
+            e.get("event") == "intelligence_consumer.unresolvable_topic" for e in cap
+        ), f"Expected warning not found in {cap}"

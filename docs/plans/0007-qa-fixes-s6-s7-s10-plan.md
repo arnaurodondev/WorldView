@@ -2,7 +2,7 @@
 id: PLAN-0007
 prd: PLAN-0001-C (QA pass)
 title: "PLAN-0001-C QA Fixes — Idempotency, Valkey Hardening, Observability, Deployment Constraints"
-status: draft
+status: in-progress
 created: 2026-03-30
 updated: 2026-03-30
 waves_done: 0
@@ -36,11 +36,12 @@ tasks: 8
 
 ---
 
-## Wave A-1: Consumer Idempotency & Valkey Hardening
+## Wave A-1: Consumer Idempotency & Valkey Hardening ✅
 
 **Goal**: Eliminate duplicate-on-redelivery risk in S6 and make Valkey dedup failure-safe in S7 + S10.
 **Depends on**: none
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-03-30 · 15 new unit tests · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 ### Pre-read (agent must read before starting)
@@ -264,11 +265,11 @@ Note: `_resolve_topic` is `@staticmethod` — the logger call needs to use the m
 ---
 
 ### Wave A-1 Validation Gate
-- [ ] `ruff check` + `ruff format --check` on changed files
-- [ ] `mypy` on changed packages
-- [ ] `python -m pytest tests/ -m "unit" -v` in each changed service (S6, S7, S10) — all pass
-- [ ] Minimum 10 new unit tests total across all 4 tasks
-- [ ] No architecture violations
+- [x] `ruff check` + `ruff format --check` on changed files
+- [x] `mypy` on changed packages
+- [x] `python -m pytest tests/ -m "unit" -v` in each changed service (S6, S7, S10) — all pass
+- [x] Minimum 10 new unit tests total across all 4 tasks (15 written: 5 S6, 3 S7, 7 S10)
+- [x] No architecture violations
 
 ### Regression Guardrails
 - **BP-064**: No `204` response + `None` body. Not applicable here (no API changes).

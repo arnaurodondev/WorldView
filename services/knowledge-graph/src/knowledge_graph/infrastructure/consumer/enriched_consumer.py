@@ -247,13 +247,28 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return False
         key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
+        try:
+            return bool(await self._dedup_client.exists(key))
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer.valkey_check_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
+            return False  # prefer at-least-once over skipping
 
     async def mark_processed(self, event_id: str) -> None:
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)  # 24h TTL
+        try:
+            await self._dedup_client.set(key, "1", ex=86400)  # 24h TTL
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer.valkey_mark_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Failure tracking (log-only for Wave D-2)
