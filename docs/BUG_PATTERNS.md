@@ -2986,3 +2986,49 @@ def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[
 ```
 
 **Affected areas**: S1 portfolio `InstrumentEventConsumer`; any consumer receiving from topics produced by `OutboxEventValueSerializer`.
+
+## BP-064
+
+**Category**: FastAPI — status code 204 with non-Response return type
+
+**Symptom**: FastAPI raises a validation error or returns malformed response when using `@router.delete(..., status_code=204)` with a function that returns `None` or a dict in FastAPI ≤0.111.
+
+**Root cause**: FastAPI 0.111 requires a `Response` return type annotation (or `response_class=Response`) to correctly handle status 204 without a body. Returning `None` from an endpoint with `status_code=204` triggers internal validation.
+
+**Fix**: Use `status_code=200` and return a dict, OR explicitly annotate the return type as `Response`:
+
+```python
+# Option A (simplest):
+@router.delete("/alerts/{alert_id}/ack")
+async def ack(alert_id: UUID) -> dict[str, str]:
+    ...
+    return {"status": "acknowledged"}
+
+# Option B (proper 204 no-content):
+from fastapi import Response
+@router.delete("/alerts/{alert_id}/ack", status_code=204)
+async def ack(alert_id: UUID) -> Response:
+    ...
+    return Response(status_code=204)
+```
+
+**Affected areas**: Any FastAPI ≤0.111 DELETE/POST endpoint that returns 204.
+
+## BP-065
+
+**Category**: pre-commit hooks — stash/unstash conflict during commit
+
+**Symptom**: Pre-commit hook succeeds in auto-fixing files but then fails with "Stashed changes conflicted with hook auto-fixes... Rolling back fixes...". The commit never succeeds despite ruff reporting no errors after the fix.
+
+**Root cause**: pre-commit stashes unstaged changes before running hooks. If the hooks modify staged files AND there are untracked directories (e.g., `tests/e2e/`), the stash restore conflicts with the hook's in-place edits.
+
+**Fix**: Run `uvx ruff format` + `uvx ruff check --fix` on all staged files BEFORE `git add` and BEFORE `git commit`. The staged index must be identical to the working tree for the files being committed:
+
+```bash
+uvx ruff format services/<service>/
+uvx ruff check --fix services/<service>/
+git add -u services/<service>/
+git commit -m "..."
+```
+
+**Affected areas**: Any commit that includes new Python files alongside untracked directories in the repo (e.g., e2e test scaffolds, scratch dirs).
