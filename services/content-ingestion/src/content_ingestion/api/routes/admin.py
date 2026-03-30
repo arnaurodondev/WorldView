@@ -2,10 +2,11 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import common.time  # type: ignore[import-untyped]
 from content_ingestion.api.dependencies import AdminAuthDep, DbSessionDep
 from content_ingestion.api.schemas import (
     SourceCreateRequest,
@@ -16,6 +17,7 @@ from content_ingestion.api.schemas import (
     StatusResponse,
     TriggerResponse,
 )
+from content_ingestion.domain.entities import ContentIngestionTask, Source, SourceType
 from content_ingestion.infrastructure.db.models import (
     DeadLetterQueueModel,
     FetchLogModel,
@@ -24,6 +26,7 @@ from content_ingestion.infrastructure.db.models import (
     SourceModel,
 )
 from content_ingestion.infrastructure.db.repositories.source import SourceRepository
+from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -63,9 +66,12 @@ async def create_source(
     body: SourceCreateRequest,
     _auth: AdminAuthDep,
     session: DbSessionDep,
-    request: Request,
 ) -> SourceResponse:
-    """Create a new polling source and hot-add to scheduler if running."""
+    """Create a new polling source.
+
+    The scheduler process will automatically pick up new enabled sources
+    on its next tick — no hot-add needed (R22).
+    """
     repo = SourceRepository(session)
     source = await repo.create(
         name=body.name,
@@ -74,23 +80,6 @@ async def create_source(
         enabled=body.enabled,
     )
     await session.commit()
-
-    # Hot-add to scheduler
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None and body.enabled:
-        from content_ingestion.domain.entities import Source as DomainSource
-        from content_ingestion.domain.entities import SourceType
-
-        domain_source = DomainSource(
-            name=source.name,
-            source_type=SourceType(source.source_type),
-            enabled=source.enabled,
-            config=source.config,
-            id=source.id,
-            created_at=source.created_at,
-        )
-        scheduler.add_source(domain_source)
-
     return _source_to_response(source)
 
 
@@ -100,27 +89,22 @@ async def update_source(
     body: SourceUpdateRequest,
     _auth: AdminAuthDep,
     session: DbSessionDep,
-    request: Request,
 ) -> SourceResponse:
-    """Update an existing polling source."""
+    """Update an existing polling source.
+
+    Enabling/disabling a source takes effect on the next scheduler tick (R22).
+    """
     repo = SourceRepository(session)
     existing = await repo.get_by_id(source_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    was_enabled = existing.enabled
     updates = body.model_dump(exclude_unset=True)
     if updates:
         source = await repo.update(source_id, **updates)
     else:
         source = existing
     await session.commit()
-
-    # Hot-remove from scheduler if source was disabled
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None and was_enabled and not source.enabled:
-        scheduler.remove_source(source.name)
-
     return _source_to_response(source)
 
 
@@ -129,24 +113,32 @@ async def trigger_source(
     source_id: UUID,
     _auth: AdminAuthDep,
     session: DbSessionDep,
-    request: Request,
 ) -> TriggerResponse:
-    """Trigger an immediate fetch cycle for a source (bypasses scheduler)."""
+    """Trigger an immediate fetch cycle for a source.
+
+    Creates a task row that a worker will pick up — no fire-and-forget (R22).
+    """
     repo = SourceRepository(session)
-    source = await repo.get_by_id(source_id)
-    if source is None:
+    source_model = await repo.get_by_id(source_id)
+    if source_model is None:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    # Schedule an immediate run via the scheduler callback stored on app state
-    trigger_fn = getattr(request.app.state, "trigger_fn", None)
-    if trigger_fn is not None:
-        import asyncio
+    # Create domain source and build a task
+    source = Source(
+        id=source_model.id,
+        name=source_model.name,
+        source_type=SourceType(source_model.source_type),
+        enabled=source_model.enabled,
+        config=source_model.config,
+        created_at=source_model.created_at,
+    )
+    task = ContentIngestionTask.create_for_source(source, window_start=common.time.utc_now())
 
-        task = asyncio.create_task(trigger_fn(source))
-        # Store reference to prevent GC; fire-and-forget pattern
-        request.app.state._trigger_task = task
+    task_repo = TaskRepository(session)
+    await task_repo.add(task)
+    await session.commit()
 
-    return TriggerResponse(source_id=source_id)
+    return TriggerResponse(source_id=source_id, task_id=task.id)
 
 
 @router.get("/status", response_model=StatusResponse)

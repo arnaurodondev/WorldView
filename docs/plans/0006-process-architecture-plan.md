@@ -1,7 +1,7 @@
 # PLAN-0006: Process Architecture & Database Standardization
 
 > **PRD**: N/A (architectural improvement — user-driven)
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-03-28
 > **Updated**: 2026-03-30
 
@@ -1054,12 +1054,13 @@ concurrency, and signal handling. Mirrors `services/market-ingestion/infrastruct
 
 ---
 
-### Wave B-4: API Cleanup, Dispatcher Extraction, Docker Compose
+### Wave B-4: API Cleanup, Dispatcher Extraction, Docker Compose ✅
 
 **Goal**: Remove scheduler and dispatcher from the API process lifespan, update trigger endpoint, verify standalone dispatcher, add Docker Compose service definitions, update documentation.
 **Depends on**: Wave B-3
 **Estimated effort**: 45-60 minutes
 **Architecture layer**: API + infrastructure + config + docs
+**Status**: **DONE** — 2026-03-30 · 9 new tests (373 total unit) · ruff + mypy clean
 
 #### Tasks
 
@@ -1292,17 +1293,17 @@ Update all documentation to reflect the new 4-process architecture.
 - `infra/compose/docker-compose.yml`
 
 #### Validation Gate
-- [ ] ruff check passes on changed files
-- [ ] mypy passes on `content_ingestion`
-- [ ] All existing unit + integration tests pass (no regressions)
-- [ ] New tests pass — minimum 8 new
-- [ ] API starts without scheduler/dispatcher
-- [ ] Documentation updated
+- [x] ruff check passes on changed files
+- [x] mypy passes on `content_ingestion`
+- [x] All existing unit + integration tests pass (no regressions) — 373 total
+- [x] New tests pass — 9 new (exceeds 8 minimum)
+- [x] API starts without scheduler/dispatcher (verified via lifespan tests)
+- [x] Documentation updated (.claude-context.md, plan, tracking)
 
 #### Regression Guardrails
-- BP-002: Docker Compose env_file path must be correct
-- BP-006: No hardcoded localhost in Alembic or compose
-- BP-010: Headless processes need health checks via different mechanism (TCP or file-based, not HTTP)
+- BP-002: Docker Compose env_file path correct ✅ (`../../services/content-ingestion/configs/docker.env`)
+- BP-006: No hardcoded localhost in compose ✅ (uses service names via env_file)
+- BP-010: Headless processes have no HTTP health check ✅ (only API has healthcheck)
 
 ---
 
@@ -1398,8 +1399,8 @@ Mitigation: Reuse `FetchAndWriteUseCase` unchanged; only wrap it with task lifec
 | T-B-3-02 | ClaimTasksUseCase | B-3 | done | 3 tests |
 | T-B-3-03 | ExecuteContentTaskUseCase | B-3 | done | 6 tests |
 | T-B-3-04 | WorkerProcess + entry point | B-3 | done | 5 tests |
-| T-B-4-01 | Refactor app.py lifespan | B-4 | pending | |
-| T-B-4-02 | Update POST /trigger to create task | B-4 | pending | |
-| T-B-4-03 | Verify + harden standalone dispatcher | B-4 | pending | |
-| T-B-4-04 | Docker Compose service definitions | B-4 | pending | |
-| T-B-4-05 | Update documentation | B-4 | pending | |
+| T-B-4-01 | Refactor app.py lifespan | B-4 | done | 7 tests |
+| T-B-4-02 | Update POST /trigger to create task | B-4 | done | TriggerResponse.task_id |
+| T-B-4-03 | Verify + harden standalone dispatcher | B-4 | done | 2 tests |
+| T-B-4-04 | Docker Compose service definitions | B-4 | done | 4 processes |
+| T-B-4-05 | Update documentation | B-4 | done | .claude-context.md |
