@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
-    from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
-    from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
-    from content_ingestion.infrastructure.db.repositories.source import SourceRepository
-    from content_ingestion.infrastructure.db.repositories.task import TaskRepository
+    from content_ingestion.application.ports.repositories import (
+        AdapterStatePort,
+        FetchLogPort,
+        OutboxPort,
+        SourcePort,
+        TaskPort,
+    )
 
 
 class UnitOfWork(ABC):
@@ -34,27 +36,27 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
-    def tasks(self) -> TaskRepository:
+    def tasks(self) -> TaskPort:
         """Task repository (write session)."""
 
     @property
     @abstractmethod
-    def sources(self) -> SourceRepository:
+    def sources(self) -> SourcePort:
         """Source repository."""
 
     @property
     @abstractmethod
-    def fetch_logs(self) -> FetchLogRepository:
+    def fetch_logs(self) -> FetchLogPort:
         """Fetch log repository (write session)."""
 
     @property
     @abstractmethod
-    def outbox(self) -> OutboxRepository:
+    def outbox(self) -> OutboxPort:
         """Outbox repository (write session)."""
 
     @property
     @abstractmethod
-    def adapter_state(self) -> AdapterStateRepository:
+    def adapter_state(self) -> AdapterStatePort:
         """Adapter state repository (write session)."""
 
     async def __aenter__(self) -> UnitOfWork:
