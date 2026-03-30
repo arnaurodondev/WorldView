@@ -120,7 +120,7 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
 | S8 | **RAG / Chat** | 8008 | None (stateless) | ⏳ Planned | Hybrid retrieval, LLM completion, streaming SSE, citations |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
-| S10 | **Alert Service** | 8010 | `alert_db` | 🔄 In-progress | Fan-out alerts via WebSocket, watchlist resolution, dedup |
+| S10 | **Alert Service** | 8010 | `alert_db` | ✅ Mature | Fan-out alerts via WebSocket, watchlist resolution, dedup, REST API, health, metrics |
 | -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |
 | -- | **Frontend** | 5173 | -- | ⏳ Scaffolded | React + Vite + TypeScript web app |
 
@@ -430,7 +430,7 @@ S1, S2, S3 are **mature** with full hexagonal architecture, comprehensive tests,
 
 ### Phase 2: Unstructured Intelligence Pipeline 🔄
 
-Active PRD: `docs/specs/0014-PRD-v1-final.md`. S4 and S5 are complete (PLAN-0001-B, 2026-03-27). S6 is complete (PLAN-0001-C C-1..C-4, 2026-03-27). S7, S9, S10, intelligence-migrations remain in progress.
+Active PRD: `docs/specs/0014-PRD-v1-final.md`. S4 and S5 are complete (PLAN-0001-B, 2026-03-27). S6 is complete (PLAN-0001-C C-1..C-4, 2026-03-27). S10 is complete (PLAN-0001-C Wave E-3, 2026-03-29). S7, S9, intelligence-migrations remain in progress.
 
 | Milestone | Status |
 |-----------|--------|
@@ -440,7 +440,7 @@ Active PRD: `docs/specs/0014-PRD-v1-final.md`. S4 and S5 are complete (PLAN-0001
 | S6 NLP Pipeline (8 blocks: sectioning through LLM extraction) | ✅ |
 | S7 Knowledge Graph (materialization, confidence, contradiction) | 🔄 |
 | intelligence-migrations (DDL, seeds, partitions) | 🔄 |
-| S10 Alert Service (consumers, WebSocket, dedup) | 🔄 |
+| S10 Alert Service (consumers, WebSocket, dedup, REST API, M7 pipeline test) | ✅ |
 | S9 API Gateway (routing, composition, rate limiting) | 🔄 |
 
 ### Phase 3: RAG/Chatbot + Frontend ⏳

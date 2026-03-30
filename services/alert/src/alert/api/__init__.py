@@ -1,0 +1,1 @@
+"""Alert service API package."""

@@ -5,7 +5,7 @@ title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency 
 status: in-progress
 created: 2026-03-28
 updated: 2026-03-29
-waves_done: 4
+waves_done: 5
 plans: 1
 waves: 6
 tasks: 18
@@ -246,10 +246,11 @@ except ParseError as exc:
 
 ---
 
-## Wave 5: QA-016 — Topic Name Mismatch Between market-data (S3) and portfolio (S1)
+## Wave 5: QA-016 — Topic Name Mismatch Between market-data (S3) and portfolio (S1) ✅
 
 **Priority**: HIGH — potential silent message loss if consumers subscribe to wrong topic
 **Decision required**: Verify actual topic names in use; align if mismatched
+**Status**: **DONE** — 2026-03-29 · 333 market-data + 281 portfolio unit tests pass · ruff + mypy clean
 
 ### Context
 
@@ -282,9 +283,9 @@ Before implementing any fix, verify:
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T16 | Investigate actual topic names on both sides | Code audit | Audit |
-| T17 | Decision: which side to change if mismatch found | Architecture | Decision |
-| T18 | Align topic names and update integration tests | Both services | Fix |
+| T16 | ✅ Investigated: market-data EVENT_TOPIC_MAP routed both events to `market.events.v1`; portfolio subscribed to `market.instrument.created/updated` | Code audit | Audit |
+| T17 | ✅ Decision: Option A — align market-data to publish to `market.instrument.created` and `market.instrument.updated` | Architecture | Decision |
+| T18 | ✅ Fixed EVENT_TOPIC_MAP; added event_to_outbox_payload() (entity_id, tuple→list); replaced collect_event with atomic outbox writes in all 3 consumers; added InstrumentUpdated on flag changes; updated canonical Avro schemas; updated portfolio consumer to Avro deserialization; added 15+ new unit tests | Both services | Fix |
 
 ---
 

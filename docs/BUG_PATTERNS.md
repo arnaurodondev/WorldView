@@ -67,6 +67,12 @@
 | [BP-042](#bp-042) | `FailureInfo[None]` has no `value`/`key`/`headers` fields | `AttributeError: 'FailureInfo' object has no attribute 'value'` — only `event_id`, `topic`, `partition`, `offset`, `attempt`, `last_error`, `record` exist | Any `dead_letter` / `process_message_from_failure` implementation on `BaseKafkaConsumer[None]` |
 | [BP-043](#bp-043) | Pydantic V2 `Field(strip_whitespace=True)` is deprecated | `PydanticDeprecatedSince20` warning — `strip_whitespace` is not a valid V2 `Field` kwarg; use `StringConstraints(strip_whitespace=True)` via `Annotated` instead | API request schemas using `Field(...)` |
 | [BP-057](#bp-057) | Database session held across external I/O | `TimeoutError` on `pool.acquire()` — connection pool exhaustion under load | Any background process (worker, scheduler, dispatcher) holding session during HTTP/MinIO/Kafka calls |
+| [BP-058](#bp-058) | `collect_event()` with no outbox_notifier — silent event loss | `uow.collect_event(...)` accumulates events but they are never dispatched: `outbox_notifier` is `None` in `uow_factory()` in `app.py` — Kafka topic never receives messages | S3 (market-data), any service wiring `SqlAlchemyUnitOfWork` without injecting `outbox_notifier` |
+| [BP-059](#bp-059) | EVENT_TOPIC_MAP routes events to wrong/shared topic | Both `InstrumentCreated` and `InstrumentUpdated` routed to `market.events.v1` instead of dedicated topics — consumers subscribed to correct topics receive nothing | S3 (market-data) `infrastructure/messaging/outbox/dispatcher.py` EVENT_TOPIC_MAP; any service using a shared routing constant |
+| [BP-060](#bp-060) | `collect_event()` for cross-service events instead of atomic outbox write | `collect_event` + `uow.commit()` is a two-step path that can fail if `outbox_notifier` is not wired; direct `await uow.outbox_events.create()` within the same transaction is atomic | S3 consumers; any consumer emitting domain events that other services depend on |
+| [BP-061](#bp-061) | Missing `InstrumentUpdated` on capability flag change | Consumer updates `instrument.flags.has_ohlcv/has_quotes/has_fundamentals` via `update_flags()` but never emits `InstrumentUpdated` event — downstream service (S1) cache never refreshed | S3 consumers; any service that updates entity capability flags without publishing a change event |
+| [BP-062](#bp-062) | Cross-service field name mismatch: `entity_id` vs `instrument_id` | Producer event only has `instrument_id`; consumer reads `entity_id` — field is always `None`, stable ID (M-017) never populated; `InstrumentRef.id` becomes transient `new_uuid7()` instead of deterministic | S3→S1 instrument sync; any event containing a cross-service stable ID that differs from the local field name |
+| [BP-063](#bp-063) | Consumer uses JSON deserialization for Avro-encoded messages | `json.loads(raw)` when producer sends Confluent Avro (magic byte + schema ID + avro bytes) — `json.JSONDecodeError` or garbled data | S1 portfolio `InstrumentEventConsumer`; any service consuming from topics produced by `OutboxEventValueSerializer` |
 
 ---
 
@@ -2796,3 +2802,187 @@ async def test_aexit_does_not_auto_commit_on_clean_exit(mock_session_factory, mo
 - Review checklist item: "Does `UnitOfWork.__aexit__` auto-commit? If so, verify all callers are aware of the side effect."
 - Every mutating use case must end with `await uow.commit()` before returning
 - New use case template must include the commit call
+
+## BP-059 — Use Case Calls `async with self._uow:` on Already-Entered UoW
+
+**Category**: Architecture | **Severity**: Runtime error / silent data loss risk
+**Discovered**: 2026-03-29 — PLAN-0001-E-R1 Wave 3 (QA-013)
+
+### Pattern
+
+When a service's dependency injection framework already enters the UoW before yielding it
+(e.g., `async with uow_factory() as uow: yield uow`), any use case that wraps its body
+in `async with self._uow:` will trigger a nested context manager entry:
+
+```python
+# WRONG — double-enters the UoW when get_uow yields an already-entered instance
+class GetInstrumentUseCase:
+    async def execute(self, instrument_id: str):
+        async with self._uow:             # ← second __aenter__ — undefined behaviour
+            return await self._uow.instruments_read.find_by_id(instrument_id)
+```
+
+### Root Cause
+
+Two different UoW entry conventions exist across services:
+1. **market-data** (S3): `get_uow` dependency yields an *already-entered* UoW
+   (`async with SqlAlchemyUnitOfWork(...) as uow: yield uow`)
+2. **portfolio** (S1): `get_uow` dependency yields an *uninitialized* factory — use cases
+   enter it themselves
+
+If a use case written for S1's convention is used in S3 (or vice versa), the double-entry
+will either re-open the session (wasting connections) or raise a runtime error.
+
+### Fix
+
+Check the service's `api/dependencies.py` to determine which convention it uses.
+For S3-style (already-entered), use cases must NOT wrap in `async with self._uow:`:
+
+```python
+# CORRECT for market-data — call repo methods directly, no context manager
+class GetInstrumentUseCase:
+    async def execute(self, instrument_id: str):
+        return await self._uow.instruments_read.find_by_id(instrument_id)
+```
+
+### Detection
+
+```bash
+# In a service that yields pre-entered UoW: grep for use cases wrapping in async with
+grep -n "async with self._uow" services/market-data/src/**/use_cases/*.py
+```
+
+### Prevention
+
+- Service `.claude-context.md` must document which UoW convention is in use
+- Use case template for market-data omits the `async with self._uow:` wrapper
+
+---
+
+## BP-058
+
+**Category**: Kafka / outbox — silent event loss
+
+**Symptom**: Kafka topics receive no messages despite consumers calling `uow.collect_event()` and committing. No errors in logs.
+
+**Root cause**: `SqlAlchemyUnitOfWork.commit()` calls `self._outbox_notifier(events)` only if the notifier is not `None`. If `app.py` wires the UoW factory without injecting an outbox notifier, all collected events are silently discarded after commit.
+
+```python
+# WRONG — in app.py
+def uow_factory() -> SqlAlchemyUnitOfWork:
+    return SqlAlchemyUnitOfWork(write_factory, read_factory)
+    # outbox_notifier defaults to None → collect_event() is a no-op
+
+# CORRECT — inject the notifier
+def uow_factory() -> SqlAlchemyUnitOfWork:
+    return SqlAlchemyUnitOfWork(write_factory, read_factory, outbox_notifier=dispatcher.notify)
+```
+
+**Affected areas**: S3 (market-data) `app.py`; any service wiring `SqlAlchemyUnitOfWork` without `outbox_notifier`.
+
+**Fix**: Either inject `outbox_notifier` into `SqlAlchemyUnitOfWork`, or bypass the notifier entirely and write directly to `outbox_events` via `await uow.outbox_events.create(...)` within the same DB transaction (preferred — see BP-060).
+
+---
+
+## BP-059
+
+**Category**: Kafka / outbox — wrong topic routing
+
+**Symptom**: Portfolio (S1) receives no instrument sync events. market-data consumers process data but no instrument events appear on `market.instrument.created` or `market.instrument.updated`.
+
+**Root cause**: `EVENT_TOPIC_MAP` in `dispatcher.py` routed both event types to a shared legacy topic instead of their dedicated topics:
+
+```python
+# WRONG (pre QA-016 fix)
+EVENT_TOPIC_MAP = {
+    "market.instrument.created": "market.events.v1",  # ← WRONG
+    "market.instrument.updated": "market.events.v1",  # ← WRONG
+}
+
+# CORRECT
+EVENT_TOPIC_MAP = {
+    "market.instrument.created": "market.instrument.created",
+    "market.instrument.updated": "market.instrument.updated",
+}
+```
+
+**Affected areas**: S3 (market-data) `infrastructure/messaging/outbox/dispatcher.py`; any service with a centralized `EVENT_TOPIC_MAP`.
+
+**Regression guard**: `test_no_event_routes_to_market_events_v1` in `test_outbox_dispatcher.py` asserts no event type uses the legacy topic.
+
+---
+
+## BP-060
+
+**Category**: Kafka / outbox — non-atomic event emission
+
+**Symptom**: Events sometimes not dispatched (if `outbox_notifier` is missing or crashes after commit). Double-dispatch risk if `commit()` is called twice. Race between DB write and event emission.
+
+**Root cause**: `uow.collect_event()` stores events in memory; they are emitted after `commit()` via the optional `outbox_notifier`. If the notifier is not wired, events are lost. Even if wired, there's a window between DB commit and notification.
+
+**Fix**: Write directly to `outbox_events` within the same DB transaction as domain writes. The dispatcher polls and publishes atomically:
+
+```python
+# PREFERRED — atomic outbox write in consumer (no outbox_notifier needed)
+event = InstrumentCreated(instrument_id=..., symbol=..., exchange=...)
+await uow.outbox_events.create(
+    event_type=event.event_type,
+    topic=EVENT_TOPIC_MAP[event.event_type],
+    payload=event_to_outbox_payload(event),
+)
+# event is committed atomically with the domain write in the same transaction
+```
+
+**Affected areas**: S3 consumers; any consumer emitting domain events that other services depend on.
+
+---
+
+## BP-061
+
+**Category**: Domain events — missing `InstrumentUpdated` on flag change
+
+**Symptom**: Portfolio (S1) `InstrumentRef` cache never shows `has_ohlcv=True` / `has_quotes=True` / `has_fundamentals=True` even after data has been materialized.
+
+**Root cause**: Consumers correctly call `uow.instruments.update_flags()` when a new data type is materialized for an existing instrument, but never emit `InstrumentUpdated`. S1 only learns of flag changes via events; without the event, it never refreshes its cache.
+
+**Affected areas**: S3 consumers (`ohlcv_consumer`, `quotes_consumer`, `fundamentals_consumer`); any consumer that updates an entity's capability flags.
+
+**Fix**: Always emit an `InstrumentUpdated` (or equivalent) event atomically with the flag update, listing the changed fields in `fields_updated`.
+
+---
+
+## BP-062
+
+**Category**: Cross-service contract — field name mismatch for stable ID
+
+**Symptom**: Portfolio `InstrumentRef.id` is always a new `uuid7()` for each Kafka replay. `InstrumentRef.entity_id` is always `None`. Stable ID guarantee (M-017) is violated.
+
+**Root cause**: Market-data emits events with `instrument_id` as the stable identifier. Portfolio consumer reads `value.get("entity_id")` for the stable ID. The field was never populated, so M-017 (stable ID via `entity_id`) was silently broken.
+
+**Fix**: The producer must populate `entity_id = instrument_id` in the event payload. Use `event_to_outbox_payload()` which sets `entity_id = instrument_id` before the outbox write.
+
+**Affected areas**: S3→S1 instrument sync; any cross-service event containing a stable entity identifier under a different name than the consumer expects.
+
+---
+
+## BP-063
+
+**Category**: Kafka serialization — consumer format mismatch
+
+**Symptom**: `json.JSONDecodeError` on Kafka message deserialization. Or garbled data (first bytes are binary, not `{`).
+
+**Root cause**: Producer uses `OutboxEventValueSerializer` (Confluent Avro: magic byte `0x00` + 4-byte schema ID + Avro binary). Consumer does `json.loads(raw)` expecting plain JSON.
+
+**Fix**: Use `deserialize_confluent_avro(schema_path, raw)` with a fallback to JSON:
+
+```python
+def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+    if schema_path:
+        try:
+            return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
+        except Exception:
+            pass
+    return cast("dict[str, Any]", json.loads(raw))
+```
+
+**Affected areas**: S1 portfolio `InstrumentEventConsumer`; any consumer receiving from topics produced by `OutboxEventValueSerializer`.

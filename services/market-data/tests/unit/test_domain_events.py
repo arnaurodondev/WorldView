@@ -46,11 +46,32 @@ class TestInstrumentCreatedEvent:
             exchange="NASDAQ",
         )
         assert event.event_type == "market.instrument.created"
-        assert event.schema_version == 1
+        assert event.schema_version == 2  # bumped in Wave 5 (QA-016)
         assert event.instrument_id == "inst-1"
         assert event.security_id == "sec-1"
         assert event.symbol == "AAPL"
         assert event.exchange == "NASDAQ"
+
+    def test_instrument_created_optional_fields_default_none(self) -> None:
+        """name, isin, instrument_type default to None for backward compat."""
+        event = InstrumentCreated(instrument_id="inst-1", symbol="AAPL", exchange="NASDAQ")
+        assert event.name is None
+        assert event.isin is None
+        assert event.instrument_type is None
+
+    def test_instrument_created_optional_fields_can_be_set(self) -> None:
+        """name, isin, instrument_type can be set when data is available."""
+        event = InstrumentCreated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            name="Apple Inc.",
+            isin="US0378331005",
+            instrument_type="Common Stock",
+        )
+        assert event.name == "Apple Inc."
+        assert event.isin == "US0378331005"
+        assert event.instrument_type == "Common Stock"
 
     def test_instrument_created_is_frozen(self) -> None:
         event = InstrumentCreated(symbol="AAPL", exchange="NASDAQ")
@@ -65,7 +86,8 @@ class TestInstrumentCreatedEvent:
         assert InstrumentCreated.event_type == "market.instrument.created"  # type: ignore[attr-defined]
 
     def test_instrument_created_schema_version(self) -> None:
-        assert InstrumentCreated.schema_version == 1  # type: ignore[attr-defined]
+        # schema_version=2 since Wave 5: added name, isin, instrument_type fields (QA-016)
+        assert InstrumentCreated.schema_version == 2  # type: ignore[attr-defined]
 
 
 # ── T-E2-2-02: ClassVar fields not in dataclass fields ────────────────────────
@@ -130,3 +152,36 @@ class TestInstrumentUpdatedEvent:
     def test_instrument_updated_inherits_domain_event(self) -> None:
         event = InstrumentUpdated()
         assert isinstance(event, DomainEvent)
+
+    def test_instrument_updated_fields_updated_defaults_empty(self) -> None:
+        """fields_updated defaults to an empty tuple."""
+        event = InstrumentUpdated(instrument_id="inst-1")
+        assert event.fields_updated == ()
+
+    def test_instrument_updated_fields_updated_can_be_set(self) -> None:
+        """fields_updated captures which flags changed."""
+        event = InstrumentUpdated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            has_ohlcv=True,
+            fields_updated=("has_ohlcv",),
+        )
+        assert event.fields_updated == ("has_ohlcv",)
+
+
+# ── QA-016 regression guard ───────────────────────────────────────────────────
+
+
+class TestQA016TopicAlignment:
+    """Regression guard: event_type values must match dedicated Kafka topic names."""
+
+    def test_instrument_created_event_type_is_not_legacy_topic(self) -> None:
+        """QA-016: InstrumentCreated must NOT use the legacy market.events.v1 topic."""
+        assert InstrumentCreated.event_type != "market.events.v1"  # type: ignore[attr-defined]
+        assert InstrumentCreated.event_type == "market.instrument.created"  # type: ignore[attr-defined]
+
+    def test_instrument_updated_event_type_is_not_legacy_topic(self) -> None:
+        """QA-016: InstrumentUpdated must NOT use the legacy market.events.v1 topic."""
+        assert InstrumentUpdated.event_type != "market.events.v1"  # type: ignore[attr-defined]
+        assert InstrumentUpdated.event_type == "market.instrument.updated"  # type: ignore[attr-defined]
