@@ -117,7 +117,11 @@ class FakeTransactionRepo(TransactionRepository):
 
     async def find_by_external_ref(self, portfolio_id, tenant_id, external_ref):
         return next(
-            (t for t in self.saved if t.portfolio_id == portfolio_id and t.external_ref == external_ref),
+            (
+                t
+                for t in self.saved
+                if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id and t.external_ref == external_ref
+            ),
             None,
         )
 
@@ -240,7 +244,11 @@ class FakeUoW(UnitOfWork):
     def entity_suppressions(self):
         return None
 
-    async def commit(self): ...
+    commit_count: int = 0
+
+    async def commit(self) -> None:
+        self.commit_count += 1
+
     async def rollback(self): ...
 
 
@@ -332,6 +340,8 @@ async def test_buy_creates_transaction_and_holding(uow, cmd) -> None:
     holdings = await uow._holdings.list_by_portfolio(cmd.portfolio_id)
     assert len(holdings) == 1
     assert holdings[0].quantity == Decimal("10")
+    # T-G-1-01: verify commit was called exactly once (not zero, not two)
+    assert uow.commit_count == 1
 
 
 @pytest.mark.asyncio
@@ -438,6 +448,12 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
     assert len(uow._transactions.saved) == 1
+    # T-G-1-02: outbox must have exactly 2 records (1x TransactionRecorded + 1x HoldingChanged from
+    # first call only; the duplicate second call must not add more)
+    assert len(uow._outbox.saved) == 2, "outbox must not be doubled by a duplicate idempotent call"
+    # T-G-1-02: holdings must be unchanged (same quantity as after first call)
+    holdings = await uow._holdings.list_by_portfolio(cmd_with_key.portfolio_id)
+    assert holdings[0].quantity == result1.transaction.quantity
 
 
 @pytest.mark.asyncio
@@ -694,3 +710,121 @@ async def test_f_ds_002_idem_key_recorded_transaction_missing_raises_conflict(uo
     uc = RecordTransactionUseCase()
     with pytest.raises(IdempotencyConflictError, match="already recorded but"):
         await uc.execute(cmd_with_key, uow)
+
+
+# ── T-G-1-03: Error path tests ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inactive_tenant_raises_domain_error(
+    tenant_id, owner_id, portfolio_id, instrument_id, user, portfolio, instrument
+) -> None:
+    """Inactive tenant must raise TenantInactiveError (T-G-1-03)."""
+    from portfolio.domain.errors import TenantInactiveError
+
+    inactive_tenant = Tenant(id=tenant_id, name="ACME", status=TenantStatus.SUSPENDED)
+    uow = FakeUoW(tenant=inactive_tenant, user=user, portfolio=portfolio, instrument=instrument)
+    cmd = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        currency="USD",
+        executed_at=_NOW,
+    )
+    with pytest.raises(TenantInactiveError):
+        await RecordTransactionUseCase().execute(cmd, uow)
+
+
+@pytest.mark.asyncio
+async def test_inactive_user_raises_domain_error(
+    tenant_id, owner_id, portfolio_id, instrument_id, tenant, portfolio, instrument
+) -> None:
+    """Suspended user must raise UserInactiveError (T-G-1-03)."""
+    from portfolio.domain.errors import UserInactiveError
+
+    suspended_user = User(id=owner_id, tenant_id=tenant_id, email="a@b.com", status=UserStatus.INACTIVE)
+    uow = FakeUoW(tenant=tenant, user=suspended_user, portfolio=portfolio, instrument=instrument)
+    cmd = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        currency="USD",
+        executed_at=_NOW,
+    )
+    with pytest.raises(UserInactiveError):
+        await RecordTransactionUseCase().execute(cmd, uow)
+
+
+@pytest.mark.asyncio
+async def test_portfolio_not_found_raises_domain_error(
+    tenant_id, owner_id, instrument_id, tenant, user, instrument
+) -> None:
+    """Portfolio not found → PortfolioNotFoundError (T-G-1-03)."""
+    from portfolio.domain.errors import PortfolioNotFoundError
+
+    some_portfolio = Portfolio(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        name="Other",
+        currency="USD",
+        status=PortfolioStatus.ACTIVE,
+    )
+    uow = FakeUoW(tenant=tenant, user=user, portfolio=some_portfolio, instrument=instrument)
+    cmd = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=uuid4(),  # wrong portfolio_id — not found
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        currency="USD",
+        executed_at=_NOW,
+    )
+    with pytest.raises(PortfolioNotFoundError):
+        await RecordTransactionUseCase().execute(cmd, uow)
+
+
+@pytest.mark.asyncio
+async def test_wrong_owner_raises_authorization_error(
+    tenant_id, owner_id, portfolio_id, instrument_id, tenant, user, instrument
+) -> None:
+    """Portfolio owned by a different user → AuthorizationError (T-G-1-03)."""
+    from portfolio.domain.errors import AuthorizationError
+
+    other_owner_id = uuid4()
+    portfolio = Portfolio(
+        id=portfolio_id,
+        tenant_id=tenant_id,
+        owner_id=other_owner_id,  # different owner
+        name="Test",
+        currency="USD",
+        status=PortfolioStatus.ACTIVE,
+    )
+    uow = FakeUoW(tenant=tenant, user=user, portfolio=portfolio, instrument=instrument)
+    cmd = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,  # caller is owner_id, not other_owner_id
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        currency="USD",
+        executed_at=_NOW,
+    )
+    with pytest.raises(AuthorizationError):
+        await RecordTransactionUseCase().execute(cmd, uow)
