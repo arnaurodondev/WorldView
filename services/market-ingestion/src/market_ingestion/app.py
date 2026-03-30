@@ -65,6 +65,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
+    # 3. DB session factories — built once at startup, shared across all requests
+    from market_ingestion.infrastructure.db.session import _build_factories
+
+    write_factory, read_factory = _build_factories(settings)
+    app.state.write_session_factory = write_factory
+    app.state.read_session_factory = read_factory
+
     log.info("service_started", service=settings.service_name, version=app.version)
     yield
     log.info("service_stopped", service=settings.service_name)

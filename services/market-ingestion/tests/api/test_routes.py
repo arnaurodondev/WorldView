@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from market_ingestion.api.dependencies import get_object_store, get_uow
+from market_ingestion.api.dependencies import get_object_store, get_settings, get_uow
 from market_ingestion.app import create_app
 
 pytestmark = pytest.mark.unit
@@ -51,14 +51,22 @@ def app_with_overrides():
     """Create the app with all external dependencies replaced by mocks.
 
     Sets a known internal_service_token so auth tests can use _TEST_TOKEN.
+    Overrides get_settings so verify_internal_token (which uses Depends(get_settings))
+    receives the test token — no longer relying on app.state.settings mutation.
     """
+    from market_ingestion.config import Settings
+
     app = create_app()
-    app.state.settings.internal_service_token = _TEST_TOKEN
     mock_uow = _make_mock_uow()
+    test_settings = Settings(internal_service_token=_TEST_TOKEN)  # type: ignore[call-arg]
+
+    def override_get_settings() -> Settings:
+        return test_settings
 
     async def override_get_uow():
         yield mock_uow
 
+    app.dependency_overrides[get_settings] = override_get_settings
     app.dependency_overrides[get_uow] = override_get_uow
     app.dependency_overrides[get_object_store] = _make_mock_object_store
     yield app, mock_uow

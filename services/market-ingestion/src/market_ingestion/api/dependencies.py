@@ -11,12 +11,11 @@ import httpx
 from fastapi import Depends, Header, HTTPException, Request
 
 from market_ingestion.config import Settings
-from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
-from market_ingestion.infrastructure.db.session import _build_factories
-from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import CanonicalSerializer, ObjectStoreAdapter
+    from market_ingestion.application.ports.unit_of_work import UnitOfWork
+    from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
 
 @lru_cache(maxsize=1)
@@ -26,14 +25,19 @@ def get_settings() -> Settings:
 
 
 async def get_uow(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> AsyncGenerator[SqlaUnitOfWork, None]:
-    """Provide a fresh SqlaUnitOfWork for each request.
+    request: Request,
+) -> AsyncGenerator[UnitOfWork, None]:
+    """Provide a fresh UnitOfWork for each request.
 
-    The session is opened and committed/rolled-back on exit.
+    Reads session factories from app.state (built once at lifespan startup).
+    The session is opened and rolled-back on exception; callers must call commit() explicitly.
     """
-    write_factory, read_factory = _build_factories(settings)
-    uow = SqlaUnitOfWork(write_factory, read_factory)
+    from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+
+    uow = SqlaUnitOfWork(
+        request.app.state.write_session_factory,
+        request.app.state.read_session_factory,
+    )
     async with uow:
         yield uow
 
@@ -63,6 +67,8 @@ def get_provider_registry(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ProviderRegistry:
     """Provide the provider registry (EODHD + stubs)."""
+    from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
+
     registry = ProviderRegistry()
     from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
 
@@ -81,11 +87,11 @@ def get_canonical_serializer() -> CanonicalSerializer:
 
 
 async def verify_internal_token(
-    request: Request,
-    x_internal_token: str | None = Header(None),
+    x_internal_token: Annotated[str | None, Header()] = None,
+    settings: Annotated[Settings, Depends(get_settings)] = ...,  # type: ignore[assignment]
 ) -> None:
     """Validate X-Internal-Token against the configured service token (QA-018)."""
-    expected = request.app.state.settings.internal_service_token
+    expected = settings.internal_service_token
     if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing internal token")
 
