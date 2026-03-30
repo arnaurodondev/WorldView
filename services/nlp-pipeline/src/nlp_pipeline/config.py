@@ -84,8 +84,8 @@ class Settings(BaseSettings):
 
     # Storage (MinIO/S3 for Silver tier reading)
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str = ""
+    storage_secret_key: str = ""
 
     # Admin API
     admin_token: str = ""
