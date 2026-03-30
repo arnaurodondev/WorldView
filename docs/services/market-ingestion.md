@@ -19,15 +19,17 @@ serve end-user queries, directly write to `market_data_db`.
 
 ## API Surface
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (DB + MinIO check) | — |
-| GET | `/metrics` | Prometheus metrics | — |
-| POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | — |
-| POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | — |
-| GET | `/api/v1/ingest/status` | Current ingestion task status | — |
-| GET | `/api/v1/policies` | List polling policies | slow |
+| Method | Path | Description | Auth | Cache |
+|--------|------|-------------|------|-------|
+| GET | `/healthz` | Liveness | — | — |
+| GET | `/readyz` | Readiness (DB + MinIO check) | — | — |
+| GET | `/metrics` | Prometheus metrics | — | — |
+| POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | `X-Internal-Token` required | — |
+| POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | `X-Internal-Token` required | — |
+| GET | `/api/v1/ingest/status` | Current ingestion task status | — | — |
+| GET | `/api/v1/policies` | List polling policies | — | slow |
+
+**Authentication**: Mutating endpoints (`POST /trigger`, `POST /backfill`) require `X-Internal-Token: <token>` header. Set `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` env var. Returns `401` if header is missing or does not match.
 
 ---
 

@@ -69,11 +69,26 @@ class Settings(BaseSettings):
     dispatcher_lease_seconds: int = 60
     dispatcher_max_attempts: int = 5
 
+    # Internal service-to-service auth (QA-018)
+    internal_service_token: str = ""
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_missing_internal_token(self) -> Settings:
+        """Warn at startup if internal_service_token is unset (QA-018)."""
+        if not self.internal_service_token:
+            warnings.warn(
+                "MARKET_INGESTION_INTERNAL_SERVICE_TOKEN is not set — all mutating API "
+                "endpoints (POST /trigger, POST /backfill) will return 401. "
+                "Set this env var before deploying to production.",
+                stacklevel=2,
+            )
+        return self
 
     @model_validator(mode="after")
     def _warn_demo_eodhd_key(self) -> Settings:

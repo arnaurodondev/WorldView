@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
 import httpx
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException, Request
 
 from market_ingestion.config import Settings
 from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
@@ -77,3 +78,16 @@ def get_canonical_serializer() -> CanonicalSerializer:
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 
     return DefaultCanonicalSerializer()
+
+
+async def verify_internal_token(
+    request: Request,
+    x_internal_token: str | None = Header(None),
+) -> None:
+    """Validate X-Internal-Token against the configured service token (QA-018)."""
+    expected = request.app.state.settings.internal_service_token
+    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
+
+
+InternalAuthDep = Annotated[None, Depends(verify_internal_token)]
