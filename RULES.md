@@ -179,6 +179,18 @@ service-specific knowledge. Services that want a descriptive alias (e.g.
 
 ## Infrastructure Rules
 
+### R26: UoW `__aexit__` MUST NOT commit — all commits must be explicit
+**Why**: Auto-commit in `__aexit__` means silent writes on any code path that exits the
+context manager without an explicit `commit()` call. It also makes double-commit bugs
+undetectable (SQLAlchemy silently ignores the second commit on most drivers). This was
+a live bug in market-ingestion `SqlaUnitOfWork` (F-DS-004) that committed empty
+transactions on every read-only call. **Option B standard**: `__aexit__` MUST only roll
+back on exception and close the session in `finally`. Every mutating use case MUST call
+`await uow.commit()` explicitly before returning.
+**Enforcement**: REVIEW_CHECKLIST §UoW. Any concrete `UnitOfWork.__aexit__` that calls
+`commit()` in an `else` or unconditional branch is a BLOCKING review violation. See
+STANDARDS.md §17 for the canonical implementation.
+
 ### R22: MUST run each concern as an independent process
 **Why**: Embedding scheduler loops, worker loops, or outbox dispatchers inside the API
 process creates coupling that prevents independent scaling and complicates signal handling.
@@ -237,3 +249,4 @@ patterns and pool size recommendations.
 | R23 | Infrastructure | MUST |
 | R24 | Infrastructure | MUST NOT |
 | R25 | Architecture | MUST NOT |
+| R26 | Infrastructure | MUST NOT |

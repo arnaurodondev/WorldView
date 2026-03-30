@@ -240,6 +240,33 @@ except Exception as exc:
 **Risk**: Clients (or proxies that log 503 bodies) receive internal connection strings including database host, port, user, and potentially password (BP-047).
 **Fix**: `checks["db"] = "error"` — opaque string in HTTP; log full details via structured logger internally only.
 
+### HR-025: UoW `__aexit__` Auto-Commit (R26 Violation)
+
+```python
+# BAD — Option A (auto-commit in __aexit__)
+async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    try:
+        if exc_type is not None:
+            await self.rollback()
+        else:
+            await self.commit()   # ← FORBIDDEN
+    ...
+```
+
+**Risk**: BLOCKING — silent writes on every clean context exit. Read-only use cases commit
+empty transactions. Double-commit bugs are invisible (second `session.commit()` is a no-op).
+Discovered as a live bug in market-ingestion `SqlaUnitOfWork` (F-DS-004/PLAN-0008).
+
+**Grep pattern**:
+```bash
+grep -rn "else.*commit\|__aexit__.*commit" services/*/src/*/infrastructure/db/unit_of_work.py
+```
+
+**Fix**: Remove `else: await self.commit()` from `__aexit__`. Add explicit `await uow.commit()`
+to every mutating use case. See STANDARDS.md §17 and RULES.md R26.
+
+---
+
 ### HR-024: `asyncio.Event.set()` in librdkafka Delivery Callback Without `call_soon_threadsafe`
 ```python
 def _cb(err, _msg):

@@ -2,7 +2,7 @@
 
 > **Purpose**: Track all changes required to migrate the worldview platform from local Docker Compose development to a production-ready deployment.
 > **Status**: Draft — items are categorized by priority and effort.
-> **Last updated**: 2026-03-27
+> **Last updated**: 2026-03-30
 
 ---
 
@@ -26,6 +26,9 @@
 | 1.3 | Rotate all dev credentials that have been committed to git history | P0 | TODO | Even though `.env` is gitignored, `docker.env` examples contain real-ish defaults |
 | 1.4 | Set up secret rotation policy for database passwords, API keys, JWT signing keys | P2 | TODO | |
 | 1.5 | Implement startup validation: crash if required secrets are empty/default | P1 | TODO | Add pydantic validator that rejects known dev values in production mode |
+| 1.6 | Replace all `minioadmin` defaults in `docker.env.example` files with `<CHANGE_ME>` — use Docker secrets or Vault for production injection | P0 | TODO | Ref: F-SEC-004, PLAN-0008 Sub-plan F. Affects all services that use MinIO credentials. |
+| 1.7 | Replace all `internal_service_token = ""` empty defaults with a mandatory non-empty secret injected at deploy time | P0 | TODO | Affects portfolio and market-ingestion. Empty token means the X-Internal-Token auth header accepts any request. |
+| 1.8 | Switch `warnings.warn` for missing secrets to `structlog` WARNING | P1 | TODO | `warnings.warn` is not captured by the structured log pipeline; silent in production log aggregators. Ref: F-SEC-001. |
 
 ---
 
@@ -50,7 +53,7 @@
 | 3.1 | Replace dev JWT secret with production-grade key (RS256 asymmetric recommended) | P0 | TODO | Currently HS256 with dev-secret default |
 | 3.2 | Implement proper user registration / OAuth2 flow | P0 | TODO | Current JWT is manually issued; no user management |
 | 3.3 | Add tenant isolation to all database queries (WHERE tenant_id = ...) | P0 | TODO | Multi-tenancy design exists but not enforced at query level everywhere |
-| 3.4 | Protect `/metrics` endpoints — internal network only or basic auth | P1 | TODO | Currently unauthenticated on all services |
+| 3.4 | Protect `/metrics` endpoints — bind to internal interface only or add network-level access controls | P1 | TODO | Currently exposed on 0.0.0.0; metrics expose request rates, latencies, queue depths — operational intelligence. Ref: F-SEC-010, PLAN-0008. |
 | 3.5 | Protect `/readyz` and admin endpoints from external access | P1 | TODO | Readyz leaks dependency health details |
 | 3.6 | Add rate limiting to API Gateway (middleware exists but not wired) | P1 | TODO | `RateLimitMiddleware` defined but not applied |
 | 3.7 | Restrict CORS origins to production frontend domain only | P1 | TODO | Currently `allow_methods=["*"]`, `allow_headers=["*"]` |
@@ -83,6 +86,7 @@
 | 5.5 | Tune consumer group rebalance settings for production load | P2 | TODO | |
 | 5.6 | Set up dead letter topic monitoring and alerting | P1 | TODO | DLQ tables exist per service but no alerting |
 | 5.7 | Configure topic retention policies per topic | P2 | TODO | |
+| 5.8 | Before any non-fresh deployment, drain `market.events.v1` topic to zero consumer lag before deploying topic-alignment wave — or add a one-time bridge consumer | P1 | TODO | Ref: F-DS-014 PLAN-0001-E-R1 Wave 5. Existing consumers may be reading from old topic name; abrupt switch drops in-flight events. |
 
 ---
 
@@ -123,6 +127,8 @@
 | 8.5 | Configure health check probes (liveness, readiness, startup) in K8s | P1 | TODO | `/healthz` and `/readyz` endpoints ready |
 | 8.6 | Set up a reverse proxy / load balancer (nginx, Traefik, or cloud LB) | P0 | TODO | |
 | 8.7 | Configure graceful shutdown timeouts matching Kafka consumer commit intervals | P1 | TODO | |
+| 8.8 | Add `portfolio-instrument-consumer` as an independent container in production manifests | P1 | TODO | Consumer was in-process with the API (F-DS-011); extracted to standalone process in PLAN-0008 Wave C-3. Must appear in K8s/Compose deployment with its own lifecycle. |
+| 8.9 | Add `max_length=200` to `BatchQuoteRequest.instrument_ids` and all unbounded list query parameters in market-data | P1 | TODO | Unbounded batch endpoints can be used for DoS amplification. Ref: F-SEC-006/007, PLAN-0008. |
 
 ---
 
@@ -202,11 +208,11 @@
 
 | Priority | Count | Description |
 |----------|-------|-------------|
-| P0 | 14 | Must fix before any production deployment |
-| P1 | 28 | Must fix before serving real users |
+| P0 | 16 | Must fix before any production deployment |
+| P1 | 34 | Must fix before serving real users |
 | P2 | 22 | Should fix within first production sprint |
 | P3 | 5 | Nice-to-have improvements |
-| **Total** | **69** | |
+| **Total** | **77** | |
 
 ---
 
