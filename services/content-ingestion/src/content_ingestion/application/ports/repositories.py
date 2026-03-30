@@ -11,6 +11,11 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
+    from content_ingestion.domain.entities import ContentIngestionTask
+
+
+# ── Existing ports ───────────────────────────────────────────────────────────
+
 
 @runtime_checkable
 class FetchLogPort(Protocol):
@@ -67,3 +72,89 @@ class BronzeStoragePort(Protocol):
     async def delete_object(self, key: str) -> None:
         """Delete a bronze object by key (best-effort orphan GC)."""
         ...
+
+
+# ── New ports (PLAN-0009 Wave A-1) ──────────────────────────────────────────
+
+
+@runtime_checkable
+class SourcePort(Protocol):
+    """Port for the sources repository."""
+
+    async def get_all(self) -> list[Any]: ...
+
+    async def get_by_id(self, source_id: UUID) -> Any: ...
+
+    async def list_enabled(self) -> list[Any]: ...
+
+    async def create(
+        self,
+        name: str,
+        source_type: str,
+        config: dict[str, Any],
+        enabled: bool = True,
+    ) -> Any: ...
+
+    async def update(self, source_id: UUID, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class TaskPort(Protocol):
+    """Port for the content_ingestion_tasks repository."""
+
+    async def add(self, task: ContentIngestionTask) -> None: ...
+
+    async def add_many_idempotent(self, tasks: list[ContentIngestionTask]) -> int: ...
+
+    async def claim_batch(
+        self,
+        *,
+        worker_id: str,
+        limit: int,
+        lease_seconds: int,
+    ) -> list[ContentIngestionTask]: ...
+
+    async def update_status(
+        self,
+        task_id: UUID,
+        status: Any,
+        error_detail: str | None = None,
+    ) -> None: ...
+
+    async def has_active_task(self, source_id: UUID) -> bool: ...
+
+    async def count_by_status(self) -> dict[str, int]: ...
+
+
+@runtime_checkable
+class AdapterStatePort(Protocol):
+    """Port for the source_adapter_state repository."""
+
+    async def get(self, source_id: UUID) -> Any: ...
+
+    async def upsert(
+        self,
+        source_id: UUID,
+        *,
+        last_watermark: datetime | None = None,
+        last_cursor: str | None = None,
+        last_run_at: datetime | None = None,
+        next_run_at: datetime | None = None,
+        error_count: int | None = None,
+        last_error: str | None = None,
+    ) -> Any: ...
+
+    async def reset_errors(self, source_id: UUID) -> None: ...
+
+
+@runtime_checkable
+class DLQPort(Protocol):
+    """Port for the dead_letter_queue repository."""
+
+    async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[Any], int]: ...
+
+    async def get_by_id(self, dlq_id: UUID) -> Any: ...
+
+    async def mark_resolved(self, dlq_id: UUID, note: str) -> None: ...
+
+    async def requeue(self, dlq_id: UUID) -> UUID | None: ...
