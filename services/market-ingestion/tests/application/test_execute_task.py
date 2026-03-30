@@ -704,3 +704,53 @@ async def test_execute_task_idempotent_on_replay() -> None:
     uow.outbox.add.assert_awaited_once()
     # Task succeeds
     task.succeed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# T-D-2-02: InvalidStateTransition → FAILED task persisted (F-DS-005)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invalid_state_transition_persists_failed_task() -> None:
+    """F-DS-005 regression: InvalidStateTransition must call _persist_fail so the task
+    transitions to FAILED in the DB instead of remaining stuck in RUNNING state.
+    """
+    from market_ingestion.domain.errors import InvalidStateTransition
+
+    task = _make_task()
+    wm = _make_watermark()
+    uow = _make_uow(watermark=wm)
+
+    # Make task.succeed() raise InvalidStateTransition (task in wrong state)
+    task.succeed = MagicMock(side_effect=InvalidStateTransition("task already succeeded"))
+
+    uc, uow, _registry, _store, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(InvalidStateTransition):
+        await uc.execute(task)
+
+    # task.fail() must have been called (inside _persist_fail)
+    task.fail.assert_called_once()
+    # tasks.save must have been called with the task in FAILED state
+    uow.tasks.save.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_state_transition_reraises() -> None:
+    """F-DS-005 regression: InvalidStateTransition still propagates after persistence
+    so the caller (scheduler) can handle or log the fatal error.
+    """
+    from market_ingestion.domain.errors import InvalidStateTransition
+
+    task = _make_task()
+    uow = _make_uow()
+    original_exc = InvalidStateTransition("already in terminal state")
+    task.succeed = MagicMock(side_effect=original_exc)
+
+    uc, _uow, _registry, _store, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(InvalidStateTransition) as exc_info:
+        await uc.execute(task)
+
+    assert exc_info.value is original_exc, "must re-raise the original exception"

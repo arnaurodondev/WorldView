@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import SectionModel
 
 if TYPE_CHECKING:
@@ -22,18 +22,22 @@ class SectionRepository:
         self._session = session
 
     async def add(self, section: Section) -> None:
-        row = SectionModel(
-            section_id=section.section_id,
-            doc_id=section.doc_id,
-            section_index=section.section_index,
-            section_type=section.section_type,
-            title=section.title,
-            speaker=section.speaker,
-            char_start=section.char_start,
-            char_end=section.char_end,
-            token_count=section.token_count,
+        stmt = (
+            pg_insert(SectionModel)
+            .values(
+                section_id=section.section_id,
+                doc_id=section.doc_id,
+                section_index=section.section_index,
+                section_type=section.section_type,
+                title=section.title,
+                speaker=section.speaker,
+                char_start=section.char_start,
+                char_end=section.char_end,
+                token_count=section.token_count,
+            )
+            .on_conflict_do_nothing(index_elements=["section_id"])
         )
-        self._session.add(row)
+        await self._session.execute(stmt)
 
     async def add_batch(self, sections: list[Section]) -> None:
         for section in sections:
@@ -48,6 +52,3 @@ class SectionRepository:
     async def get(self, section_id: UUID) -> SectionModel | None:
         result = await self._session.execute(select(SectionModel).where(SectionModel.section_id == section_id))
         return result.scalar_one_or_none()  # type: ignore[no-any-return]
-
-    def _new_id(self) -> UUID:
-        return common.ids.new_uuid7()

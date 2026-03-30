@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkModel
 
@@ -21,20 +22,24 @@ class ChunkRepository:
         self._session = session
 
     async def add(self, chunk: Chunk) -> None:
-        row = ChunkModel(
-            chunk_id=chunk.chunk_id,
-            doc_id=chunk.doc_id,
-            section_id=chunk.section_id,
-            chunk_index=chunk.chunk_index,
-            char_start=chunk.char_start,
-            char_end=chunk.char_end,
-            token_count=chunk.token_count,
-            sentence_start_idx=chunk.sentence_start_idx,
-            sentence_end_idx=chunk.sentence_end_idx,
-            speaker=chunk.speaker,
-            heading_path=chunk.heading_path,
+        stmt = (
+            pg_insert(ChunkModel)
+            .values(
+                chunk_id=chunk.chunk_id,
+                doc_id=chunk.doc_id,
+                section_id=chunk.section_id,
+                chunk_index=chunk.chunk_index,
+                char_start=chunk.char_start,
+                char_end=chunk.char_end,
+                token_count=chunk.token_count,
+                sentence_start_idx=chunk.sentence_start_idx,
+                sentence_end_idx=chunk.sentence_end_idx,
+                speaker=chunk.speaker,
+                heading_path=chunk.heading_path,
+            )
+            .on_conflict_do_nothing(index_elements=["chunk_id"])
         )
-        self._session.add(row)
+        await self._session.execute(stmt)
 
     async def add_batch(self, chunks: list[Chunk]) -> None:
         for chunk in chunks:

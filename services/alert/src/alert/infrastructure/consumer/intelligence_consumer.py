@@ -28,6 +28,14 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+_KNOWN_TOPICS: frozenset[str] = frozenset(
+    {
+        "nlp.signal.detected.v1",
+        "graph.state.changed.v1",
+        "intelligence.contradiction.v1",
+    }
+)
+
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────
 
@@ -111,6 +119,11 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         # Try X-Source-Topic header first (set by producer if available)
         topic_header = headers.get("X-Source-Topic", "")
         if topic_header:
+            if topic_header not in _KNOWN_TOPICS:
+                logger.warning(  # type: ignore[no-any-return]
+                    "intelligence_consumer.unknown_topic_from_header",
+                    topic=topic_header,
+                )
             return topic_header
 
         # Fall back to event_type field in the payload
@@ -122,7 +135,12 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         if event_type.startswith("intelligence.contradiction"):
             return "intelligence.contradiction.v1"
 
-        # Last resort — return event_type as-is (fanout will skip unknown topics)
+        # Unresolvable — log warning; fanout degrades gracefully for unknown topics
+        logger.warning(  # type: ignore[no-any-return]
+            "intelligence_consumer.unresolvable_topic",
+            event_type=event_type,
+            event_id=value.get("event_id"),
+        )
         return event_type
 
     # ── Retry / failure (log-only) ────────────────────────────────────────────
@@ -139,13 +157,28 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return False
         key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
+        try:
+            return bool(await self._dedup_client.exists(key))
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "intelligence_consumer.valkey_check_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
+            return False  # prefer at-least-once over skipping
 
     async def mark_processed(self, event_id: str) -> None:
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        try:
+            await self._dedup_client.set(key, "1", ex=86400)
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "intelligence_consumer.valkey_mark_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
 
     # ── Failure tracking (log-only) ───────────────────────────────────────────
 

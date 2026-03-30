@@ -196,6 +196,10 @@ class ExecuteTaskUseCase:
 
         except InvalidStateTransition as exc:
             log.error("invalid_state_transition", error=str(exc))
+            # F-DS-005: persist task failure before re-raising so the task does not
+            # remain stuck in RUNNING state. _persist_fail opens a new UoW context
+            # (the outer one was rolled back when this exception escaped the async with).
+            await self._persist_fail(task, exc)
             raise
 
         log.info("task_succeeded", row_count=row_count)
