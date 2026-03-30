@@ -9,7 +9,7 @@
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
 | PLAN-0007 | PLAN-0001-C QA Fixes: Idempotency, Valkey Hardening, Observability, Deployment Constraints | PLAN-0001-C QA | in-progress | 1/2 | — | 2026-03-30 |
-| PLAN-0008 | QA Follow-Up — Standards Enforcement, Architecture Hardening & Production Readiness | PLAN-0001-E-R1 QA | in-progress | 1/12 | — | 2026-03-30 |
+| PLAN-0008 | QA Follow-Up — Standards Enforcement, Architecture Hardening & Production Readiness | PLAN-0001-E-R1 QA | completed | 10/10 | 2026-03-30 | 2026-03-30 |
 | PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | in-progress | 1/4 | — | 2026-03-30 |
 <!-- New plans are appended here by the /plan skill -->
 
