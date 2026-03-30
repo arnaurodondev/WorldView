@@ -9,6 +9,9 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from alert.application.use_cases.dlq_admin import DLQAdminUseCase
+from alert.infrastructure.db.repositories.dlq import DLQRepository
+
 # ── Database session ─────────────────────────────────────────────────────────
 
 
@@ -38,3 +41,14 @@ async def verify_admin_token(
 
 
 AdminAuthDep = Annotated[None, Depends(verify_admin_token)]
+
+
+# ── DLQ admin use case ────────────────────────────────────────────────────────
+
+
+def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_db_session)]) -> DLQAdminUseCase:
+    """Build a DLQAdminUseCase for the current request session."""
+    return DLQAdminUseCase(DLQRepository(session))
+
+
+DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
