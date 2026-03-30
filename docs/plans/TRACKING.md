@@ -8,6 +8,7 @@
 | Plan ID | Title | PRD | Status | Waves Done/Total | QA | Updated |
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
+| PLAN-0007 | PLAN-0001-C QA Fixes: Idempotency, Valkey Hardening, Observability, Deployment Constraints | PLAN-0001-C QA | draft | 0/2 | — | 2026-03-30 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
