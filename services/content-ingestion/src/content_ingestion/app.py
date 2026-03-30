@@ -21,6 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
+from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from content_ingestion.infrastructure.metrics.prometheus import s4_dlq_total, s4_outbox_pending_total
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
@@ -119,6 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = session_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
+    app.state.uow_factory = lambda: SqlaUnitOfWork(write_factory, read_factory)
 
     # 4. Valkey
     valkey = create_valkey_client_from_url(settings.valkey_url)

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from content_ingestion.application.ports.unit_of_work import UnitOfWork
 from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
+from content_ingestion.infrastructure.db.repositories.dlq import DLQRepository
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
 from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
 from content_ingestion.infrastructure.db.repositories.source import SourceRepository
@@ -54,6 +55,7 @@ class SqlaUnitOfWork(UnitOfWork):
         self._fetch_logs: FetchLogRepository | None = None
         self._outbox: OutboxRepository | None = None
         self._adapter_state: AdapterStateRepository | None = None
+        self._dlq: DLQRepository | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -82,6 +84,11 @@ class SqlaUnitOfWork(UnitOfWork):
         assert self._adapter_state is not None, "UnitOfWork not entered"
         return self._adapter_state
 
+    @property
+    def dlq(self) -> DLQRepository:
+        assert self._dlq is not None, "UnitOfWork not entered"
+        return self._dlq
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlaUnitOfWork:
@@ -92,10 +99,11 @@ class SqlaUnitOfWork(UnitOfWork):
             await self._read_session.__aenter__()
 
         self._tasks = TaskRepository(self._write_session)
-        self._sources = SourceRepository(self._read_session)
+        self._sources = SourceRepository(self._write_session)
         self._fetch_logs = FetchLogRepository(self._write_session)
         self._outbox = OutboxRepository(self._write_session)
         self._adapter_state = AdapterStateRepository(self._write_session)
+        self._dlq = DLQRepository(self._write_session)
         self._callbacks = []
         return self
 

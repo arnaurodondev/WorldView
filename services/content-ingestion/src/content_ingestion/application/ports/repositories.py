@@ -37,6 +37,8 @@ class FetchLogPort(Protocol):
         row_id: UUID,
     ) -> Any: ...
 
+    async def count_by_source_since(self, source_id: UUID, since: datetime) -> int: ...
+
 
 @runtime_checkable
 class OutboxPort(Protocol):
@@ -51,6 +53,8 @@ class OutboxPort(Protocol):
         topic: str,
         payload: dict[str, Any],
     ) -> Any: ...
+
+    async def count_pending(self) -> int: ...
 
 
 @runtime_checkable
@@ -146,6 +150,8 @@ class AdapterStatePort(Protocol):
 
     async def reset_errors(self, source_id: UUID) -> None: ...
 
+    async def get_all(self) -> list[Any]: ...
+
 
 @runtime_checkable
 class DLQPort(Protocol):
@@ -158,3 +164,5 @@ class DLQPort(Protocol):
     async def mark_resolved(self, dlq_id: UUID, note: str) -> None: ...
 
     async def requeue(self, dlq_id: UUID) -> UUID | None: ...
+
+    async def count_failed(self) -> int: ...

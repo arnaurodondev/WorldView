@@ -133,18 +133,21 @@ class TestPortAbstractions:
         mock = AsyncMock()
         mock.exists_by_url_hash = AsyncMock()
         mock.create = AsyncMock()
+        mock.count_by_source_since = AsyncMock()
         assert isinstance(mock, FetchLogPort)
 
     def test_outbox_port_is_runtime_checkable(self) -> None:
         """OutboxPort is a runtime-checkable Protocol."""
         mock = AsyncMock()
         mock.append = AsyncMock()
+        mock.count_pending = AsyncMock()
         assert isinstance(mock, OutboxPort)
 
     def test_bronze_storage_port_is_runtime_checkable(self) -> None:
         """BronzeStoragePort is a runtime-checkable Protocol."""
         mock = AsyncMock()
         mock.put_object = AsyncMock()
+        mock.delete_object = AsyncMock()
         assert isinstance(mock, BronzeStoragePort)
 
     def test_use_case_has_no_infrastructure_imports(self) -> None:

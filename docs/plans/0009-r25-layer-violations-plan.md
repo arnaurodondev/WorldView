@@ -118,7 +118,9 @@ admin.py → CreateSourceUseCase (application) → SourcePort (application) ← 
 
 ## Sub-Plan B: API Route Refactoring
 
-### Wave B-1: Admin Route Use Cases
+### Wave B-1: Admin Route Use Cases ✅
+
+**Status**: **DONE** — 2026-03-30 · 384 tests pass · ruff + mypy clean
 
 | Task | Description | Files |
 |------|-------------|-------|
@@ -142,7 +144,7 @@ admin.py → CreateSourceUseCase (application) → SourcePort (application) ← 
 | T-B-13 | Refactor `internal.py` to call use cases | `api/routes/internal.py` |
 | T-B-14 | Update DLQ + internal API tests | `tests/unit/api/test_*.py` |
 
-**Validation**: ruff + mypy + all unit tests pass. Integration/E2E tests pass.
+**Validation**: [x] ruff + mypy + all 384 unit tests pass. Zero infra imports in admin.py.
 
 ---
 

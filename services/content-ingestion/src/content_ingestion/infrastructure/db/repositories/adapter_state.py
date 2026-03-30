@@ -20,6 +20,10 @@ class AdapterStateRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get_all(self) -> list[SourceAdapterStateModel]:
+        result = await self._session.execute(select(SourceAdapterStateModel))
+        return list(result.scalars().all())
+
     async def get(self, source_id: UUID) -> SourceAdapterStateModel | None:
         result = await self._session.execute(
             select(SourceAdapterStateModel).where(SourceAdapterStateModel.source_id == source_id)

@@ -118,5 +118,5 @@ class TestSqlaUnitOfWork:
         async with SqlaUnitOfWork(write_factory, read_factory=read_factory) as uow:
             # Tasks should use write session
             assert uow.tasks._session is write_session
-            # Sources should use read session
-            assert uow.sources._session is read_session
+            # Sources uses write session (admin use cases need write access)
+            assert uow.sources._session is write_session
