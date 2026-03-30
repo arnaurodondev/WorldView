@@ -47,13 +47,14 @@ class TestS1Contract:
         )
 
         client = _make_client(httpserver)
-        result = await client.get_watchers_by_entity("eid-1")
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
 
-        assert len(result) == 2
-        assert result[0].user_id == "user-aaa"
-        assert result[0].watchlist_id == "wl-1"
-        assert result[0].alert_types == ["SIGNAL"]
-        assert result[1].user_id == "user-bbb"
+        assert ok is True
+        assert len(watchers) == 2
+        assert watchers[0].user_id == "user-aaa"
+        assert watchers[0].watchlist_id == "wl-1"
+        assert watchers[0].alert_types == ["SIGNAL"]
+        assert watchers[1].user_id == "user-bbb"
 
     @pytest.mark.contract
     async def test_post_watchers_by_entities_returns_map(self, httpserver: HTTPServer) -> None:
@@ -90,6 +91,7 @@ class TestS1Contract:
         ).respond_with_response(Response(status=503))
 
         client = _make_client(httpserver)
-        result = await client.get_watchers_by_entity("eid-1")
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
 
-        assert result == []
+        assert ok is False
+        assert watchers == []

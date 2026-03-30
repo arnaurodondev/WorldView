@@ -23,6 +23,7 @@ from nlp_pipeline.infrastructure.consumer.article_consumer import (
     _enqueue_enriched,
     _is_valid_uuid,
 )
+from structlog.testing import capture_logs
 
 
 def _make_settings() -> MagicMock:
@@ -261,3 +262,115 @@ class TestEnqueueEnriched:
         assert payload["doc_id"] == str(doc_id)
         assert payload["routing_tier"] == "medium"
         assert payload["event_type"] == "nlp.article.enriched"
+
+
+# ── D-004: nlp commit failure logging (T-A-2-04) ─────────────────────────────
+
+
+def _make_failing_nlp_session_factory() -> tuple[AsyncMock, MagicMock]:
+    """Build (session, session_factory) where session.commit raises RuntimeError."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.add = MagicMock()
+    session.commit = AsyncMock(side_effect=RuntimeError("nlp db down"))
+
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    sf = MagicMock()
+    sf.return_value = cm
+    return session, sf
+
+
+_HALT_PATCHES = (
+    patch("nlp_pipeline.infrastructure.consumer.article_consumer.section_document", return_value=[]),
+    patch(
+        "nlp_pipeline.infrastructure.consumer.article_consumer.run_ner_block",
+        new=AsyncMock(return_value=([], MagicMock())),
+    ),
+    patch("nlp_pipeline.infrastructure.consumer.article_consumer.compute_routing_score", return_value=MagicMock()),
+    patch(
+        "nlp_pipeline.infrastructure.consumer.article_consumer.apply_suppression_gate",
+        return_value="halt",  # ProcessingPath.HALT is StrEnum("halt")
+    ),
+    patch(
+        "nlp_pipeline.infrastructure.consumer.article_consumer.run_embeddings_block",
+        new=AsyncMock(return_value=([], [], [], [])),
+    ),
+    patch("nlp_pipeline.infrastructure.consumer.article_consumer._enqueue_enriched", new=AsyncMock()),
+)
+
+
+@pytest.mark.unit
+class TestNlpCommitFailure:
+    """Tests for D-004 warning log on nlp_db commit failure."""
+
+    @pytest.mark.asyncio
+    async def test_nlp_commit_failure_logs_warning(self) -> None:
+        """When session.commit() raises, nlp_commit_failed_intel_writes_may_be_orphaned is logged."""
+        doc_id = uuid.uuid4()
+        _session, nlp_sf = _make_failing_nlp_session_factory()
+
+        consumer = _make_consumer(
+            nlp_session_factory=nlp_sf,
+            intelligence_session_factory=MagicMock(),
+        )
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=set())
+
+        with capture_logs() as cap:
+            for p in _HALT_PATCHES:
+                p.start()
+            with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+                try:
+                    with pytest.raises(RuntimeError, match="nlp db down"):
+                        await consumer._run_pipeline(
+                            doc_id=doc_id,
+                            minio_key="bucket/key",
+                            source_type="eodhd",
+                            published_at=None,
+                            extracted_at=datetime.now(UTC),
+                            is_backfill=False,
+                            correlation_id=None,
+                        )
+                finally:
+                    for p in _HALT_PATCHES:
+                        p.stop()
+
+        assert any(
+            e.get("event") == "nlp_commit_failed_intel_writes_may_be_orphaned"
+            and str(doc_id) in str(e.get("doc_id", ""))
+            for e in cap
+        ), f"Expected warning not found in: {cap}"
+
+    @pytest.mark.asyncio
+    async def test_nlp_commit_failure_reraises(self) -> None:
+        """The RuntimeError from session.commit() is re-raised after the warning log."""
+        doc_id = uuid.uuid4()
+        _session, nlp_sf = _make_failing_nlp_session_factory()
+
+        consumer = _make_consumer(
+            nlp_session_factory=nlp_sf,
+            intelligence_session_factory=MagicMock(),
+        )
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=set())
+
+        for p in _HALT_PATCHES:
+            p.start()
+        with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+            try:
+                with pytest.raises(RuntimeError, match="nlp db down"):
+                    await consumer._run_pipeline(
+                        doc_id=doc_id,
+                        minio_key="bucket/key",
+                        source_type="eodhd",
+                        published_at=None,
+                        extracted_at=datetime.now(UTC),
+                        is_backfill=False,
+                        correlation_id=None,
+                    )
+            finally:
+                for p in _HALT_PATCHES:
+                    p.stop()

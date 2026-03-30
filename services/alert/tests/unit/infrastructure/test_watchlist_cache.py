@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from alert.infrastructure.cache.watchlist_cache import WatchlistCache
@@ -15,11 +15,22 @@ def _mock_valkey() -> AsyncMock:
     return AsyncMock()
 
 
-def _mock_s1(watchers: list[WatcherInfo] | None = None) -> AsyncMock:
-    """Return a mock S1Client that returns the given watchers."""
+def _mock_s1(watchers: list[WatcherInfo] | None = None, *, failure: bool = False) -> AsyncMock:
+    """Return a mock S1Client.
+
+    Args:
+        watchers: Watchers to return on success (default: empty list).
+        failure:  When True the client signals an S1 error (ok=False).
+    """
     mock = AsyncMock(spec=S1Client)
-    mock.get_watchers_by_entity = AsyncMock(return_value=watchers or [])
+    if failure:
+        mock.get_watchers_by_entity = AsyncMock(return_value=([], False))
+    else:
+        mock.get_watchers_by_entity = AsyncMock(return_value=(watchers or [], True))
     return mock
+
+
+_COUNTER_PATH = "alert.infrastructure.cache.watchlist_cache.s10_s1_lookup_failed_total"
 
 
 class TestWatchlistCache:
@@ -116,3 +127,71 @@ class TestWatchlistCache:
         cache = WatchlistCache(valkey, s1)
         # Should not raise
         await cache.invalidate("entity-1")
+
+
+# ── S1 failure signalling (T-A-2-02) ─────────────────────────────────────────
+
+
+class TestS1FailureSignalling:
+    @pytest.mark.unit
+    async def test_s1_failure_increments_counter(self) -> None:
+        """S1 network/HTTP error → s10_s1_lookup_failed_total counter incremented."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)  # cache miss
+        s1 = _mock_s1(failure=True)
+
+        cache = WatchlistCache(valkey, s1, ttl=300)
+        with patch(_COUNTER_PATH) as mock_counter:
+            result = await cache.get_watchers("entity-1")
+
+        assert result == []
+        mock_counter.inc.assert_called_once()
+
+    @pytest.mark.unit
+    async def test_s1_failure_logs_warning(self) -> None:
+        """S1 failure → watchlist_s1_unavailable warning logged with entity_id."""
+        from structlog.testing import capture_logs
+
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        s1 = _mock_s1(failure=True)
+
+        cache = WatchlistCache(valkey, s1, ttl=300)
+        with capture_logs() as cap:
+            with patch(_COUNTER_PATH):
+                await cache.get_watchers("entity-99")
+
+        assert any(
+            e.get("event") == "watchlist_s1_unavailable" and e.get("entity_id") == "entity-99" for e in cap
+        ), f"Expected warning not found in: {cap}"
+
+    @pytest.mark.unit
+    async def test_s1_empty_ok_no_counter(self) -> None:
+        """S1 returns empty list (success) → counter NOT incremented."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        s1 = _mock_s1([])  # empty list, ok=True
+
+        cache = WatchlistCache(valkey, s1, ttl=300)
+        with patch(_COUNTER_PATH) as mock_counter:
+            result = await cache.get_watchers("entity-1")
+
+        assert result == []
+        mock_counter.inc.assert_not_called()
+
+    @pytest.mark.unit
+    async def test_s1_success_cached(self) -> None:
+        """S1 returns watchers (success) → result is cached in Valkey."""
+        valkey = _mock_valkey()
+        valkey.get = AsyncMock(return_value=None)
+        watchers = [WatcherInfo("u1", "w1", ["SIGNAL"])]
+        s1 = _mock_s1(watchers)
+
+        cache = WatchlistCache(valkey, s1, ttl=300)
+        with patch(_COUNTER_PATH) as mock_counter:
+            result = await cache.get_watchers("entity-1")
+
+        assert len(result) == 1
+        assert result[0].user_id == "u1"
+        mock_counter.inc.assert_not_called()
+        valkey.set.assert_called_once()

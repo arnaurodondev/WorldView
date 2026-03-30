@@ -213,6 +213,26 @@ Admin endpoints protected by `X-Admin-Token` header (`ALERT_ADMIN_TOKEN` env var
 
 ---
 
+## Deployment Constraints
+
+### Single-Replica Requirement (WebSocket)
+
+The `ConnectionManager` stores active WebSocket connections in process memory (`_connections: dict[UUID, WebSocket]`). Running ≥2 replicas of S10 would mean a push arriving at replica A cannot reach a user connected to replica B.
+
+**Current deployment**: single-replica only.  Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub) to broadcast push notifications across all replicas.
+
+This constraint is documented in the `.. warning::` docstring of `services/alert/src/alert/infrastructure/websocket/manager.py`.
+
+### S9 Auth-Injection (user_id Parameter)
+
+The REST and WebSocket endpoints accept `user_id` as a required query parameter (`Query(...)`). **S10 does not validate the user_id against a session token** — it trusts the S9 API Gateway to inject the correct `user_id` from the authenticated JWT before forwarding the request to S10.
+
+**Security invariant**: S10 must never be exposed directly to end-user traffic. All external requests must flow through S9, which enforces authentication and injects the `user_id` claim. S10 endpoints reject connections without `user_id` (returns 422/403), but do not verify it corresponds to a valid session.
+
+This is noted in the docstrings of the REST and WebSocket route handlers in `services/alert/src/alert/api/routes.py`.
+
+---
+
 ## Implementation Status
 
 - [x] Wave E-1: Service setup, domain, DB, S1 client, tests (43 tests)

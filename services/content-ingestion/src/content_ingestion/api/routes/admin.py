@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
-from content_ingestion.api.dependencies import AdminAuthDep, UoWDep
+from content_ingestion.api.dependencies import AdminAuthDep, ReadUoWDep, UoWDep
 from content_ingestion.api.schemas import (
     SourceCreateRequest,
     SourceListResponse,
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 @router.get("/sources", response_model=SourceListResponse)
 async def list_sources(
     _auth: AdminAuthDep,
-    uow: UoWDep,
+    uow: ReadUoWDep,
 ) -> SourceListResponse:
     """List all configured polling sources."""
     uc = ListSourcesUseCase(uow)
@@ -117,7 +117,7 @@ async def trigger_source(
 @router.get("/status", response_model=StatusResponse)
 async def pipeline_status(
     _auth: AdminAuthDep,
-    uow: UoWDep,
+    uow: ReadUoWDep,
 ) -> StatusResponse:
     """Pipeline ingestion status summary."""
     uc = GetPipelineStatusUseCase(uow)

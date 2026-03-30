@@ -46,12 +46,18 @@ class S1Client:
 
     # ----- public API -----
 
-    async def get_watchers_by_entity(self, entity_id: str) -> list[WatcherInfo]:
-        """GET /internal/v1/watchlists/by-entity/{entity_id} → list of watchers."""
+    async def get_watchers_by_entity(self, entity_id: str) -> tuple[list[WatcherInfo], bool]:
+        """GET /internal/v1/watchlists/by-entity/{entity_id} → (watchers, success).
+
+        Returns:
+            A 2-tuple ``(watchers, ok)`` where ``ok`` is ``True`` when the
+            request succeeded (even if the entity has no watchers) and
+            ``False`` on any network or HTTP error.
+        """
         url = f"{self._base_url}/internal/v1/watchlists/by-entity/{entity_id}"
         data = await self._get_json(url)
         if data is None:
-            return []
+            return [], False
         return [
             WatcherInfo(
                 user_id=w["user_id"],
@@ -59,7 +65,7 @@ class S1Client:
                 alert_types=w.get("alert_types", []),
             )
             for w in data.get("watchers", [])
-        ]
+        ], True
 
     async def get_watchers_by_entities(self, entity_ids: list[str]) -> dict[str, list[WatcherInfo]]:
         """POST /internal/v1/watchlists/by-entities → {entity_id: [watchers]}."""

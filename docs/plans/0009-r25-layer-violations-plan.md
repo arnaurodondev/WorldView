@@ -132,19 +132,22 @@ admin.py → CreateSourceUseCase (application) → SourcePort (application) ← 
 | T-B-06 | Refactor `admin.py` to call use cases (remove all infra imports) | `api/routes/admin.py` |
 | T-B-07 | Update admin API tests for use-case-based routes | `tests/unit/api/test_admin.py` |
 
-### Wave B-2: DLQ + Internal Route Use Cases
+### Wave B-2: DLQ + Internal Route Use Cases ✅
+
+**Status**: **DONE** — 2026-03-30 · 399 tests pass · ruff + mypy clean
 
 | Task | Description | Files |
 |------|-------------|-------|
-| T-B-08 | Create `ListDLQEntriesUseCase` | `application/use_cases/dlq_list.py` |
+| T-B-08 | Create `ListDLQEntriesUseCase` + `GetDLQEntryUseCase` | `application/use_cases/dlq_list.py` |
 | T-B-09 | Create `RetryDLQEntryUseCase` | `application/use_cases/dlq_retry.py` |
 | T-B-10 | Create `ResolveDLQEntryUseCase` | `application/use_cases/dlq_resolve.py` |
 | T-B-11 | Refactor `dlq.py` to call use cases | `api/routes/dlq.py` |
 | T-B-12 | Create `SubmitContentUseCase` | `application/use_cases/submit_content.py` |
 | T-B-13 | Refactor `internal.py` to call use cases | `api/routes/internal.py` |
-| T-B-14 | Update DLQ + internal API tests | `tests/unit/api/test_*.py` |
+| T-B-14 | Update DLQ + internal API tests | `tests/unit/api/test_admin.py` |
 
-**Validation**: [x] ruff + mypy + all 384 unit tests pass. Zero infra imports in admin.py.
+**Validation**: [x] ruff + mypy + all 399 unit tests pass. Zero infra imports in any route file.
+**Note**: Also introduced `ReadOnlyUnitOfWork` (R27) — read-only use cases and endpoints now use the read replica. `ListSources`, `PipelineStatus`, `ListDLQ`, `GetDLQEntry` all use `ReadUoWDep`.
 
 ---
 

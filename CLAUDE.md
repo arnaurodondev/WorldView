@@ -66,6 +66,7 @@ These are non-negotiable. Hooks enforce several of them automatically.
 14. **Frontend → S9 only** — frontend never talks to backend services directly
 15. **Update docs** — every API/event/schema/config change must update docs
 16. **API layer uses only use cases** — API routers must never import from `infrastructure/`; all reads/writes go through use case classes (R25, enforced by IG-LAYER-002)
+17. **Read-only use cases use read replica** — use cases that only query data MUST depend on `ReadOnlyUnitOfWork` (not `UnitOfWork`); API routes use `ReadUoWDep` for reads, `UoWDep` for writes (R27)
 
 ---
 

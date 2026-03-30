@@ -37,10 +37,12 @@ class TestS1Client:
         client = S1Client(_settings(), client=mock_client)
         result = await client.get_watchers_by_entity("eid-1")
 
-        assert len(result) == 2
-        assert result[0].user_id == "u1"
-        assert result[0].alert_types == ["SIGNAL"]
-        assert result[1].user_id == "u2"
+        watchers, ok = result
+        assert ok is True
+        assert len(watchers) == 2
+        assert watchers[0].user_id == "u1"
+        assert watchers[0].alert_types == ["SIGNAL"]
+        assert watchers[1].user_id == "u2"
         mock_client.get.assert_called_once()
 
     @pytest.mark.unit
@@ -52,20 +54,22 @@ class TestS1Client:
         mock_client.get = AsyncMock(return_value=mock_resp)
 
         client = S1Client(_settings(), client=mock_client)
-        result = await client.get_watchers_by_entity("eid-1")
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
 
-        assert result == []
+        assert ok is False
+        assert watchers == []
 
     @pytest.mark.unit
     async def test_get_watchers_by_entity_connection_error(self) -> None:
-        """Connection refused → graceful empty list."""
+        """Connection refused → graceful empty list, ok=False."""
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
         client = S1Client(_settings(), client=mock_client)
-        result = await client.get_watchers_by_entity("eid-1")
+        watchers, ok = await client.get_watchers_by_entity("eid-1")
 
-        assert result == []
+        assert ok is False
+        assert watchers == []
 
     @pytest.mark.unit
     async def test_get_watchers_by_entities_success(self) -> None:

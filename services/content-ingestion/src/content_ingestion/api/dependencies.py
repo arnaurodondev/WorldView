@@ -7,7 +7,8 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from content_ingestion.application.ports.unit_of_work import UnitOfWork
+from content_ingestion.application.ports.repositories import BronzeStoragePort
+from content_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 # ── Database session ─────────────────────────────────────────────────────────
 
@@ -37,6 +38,25 @@ def get_uow(request: Request) -> UnitOfWork:
 
 
 UoWDep = Annotated[UnitOfWork, Depends(get_uow)]
+
+
+def get_read_uow(request: Request) -> ReadOnlyUnitOfWork:
+    """Create a read-only Unit of Work from the app's factory (R27)."""
+    return request.app.state.read_uow_factory()  # type: ignore[no-any-return]
+
+
+ReadUoWDep = Annotated[ReadOnlyUnitOfWork, Depends(get_read_uow)]
+
+
+# ── Bronze storage ──────────────────────────────────────────────────────────
+
+
+def get_bronze_storage(request: Request) -> BronzeStoragePort:
+    """Get the bronze storage adapter wired in the composition root."""
+    return request.app.state.bronze_storage  # type: ignore[no-any-return]
+
+
+BronzeStorageDep = Annotated[BronzeStoragePort, Depends(get_bronze_storage)]
 
 
 # ── Admin auth ───────────────────────────────────────────────────────────────

@@ -120,3 +120,44 @@ class TestSqlaUnitOfWork:
             assert uow.tasks._session is write_session
             # Sources uses write session (admin use cases need write access)
             assert uow.sources._session is write_session
+
+
+class TestSqlaReadOnlyUnitOfWork:
+    async def test_read_uow_uses_read_session(self) -> None:
+        """ReadOnlyUnitOfWork uses the read factory session for all repos."""
+        read_session = AsyncMock(name="read")
+        read_session.__aenter__ = AsyncMock(return_value=read_session)
+        read_session.__aexit__ = AsyncMock(return_value=None)
+
+        read_factory = MagicMock(name="read_factory")
+        read_factory.return_value = read_session
+
+        from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork
+
+        async with SqlaReadOnlyUnitOfWork(read_factory) as uow:
+            assert uow.sources._session is read_session
+            assert uow.tasks._session is read_session
+            assert uow.adapter_state._session is read_session
+            assert uow.dlq._session is read_session
+
+    async def test_read_uow_has_no_commit(self) -> None:
+        """ReadOnlyUnitOfWork has no commit method (enforced by type system)."""
+        from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork
+
+        assert not hasattr(SqlaReadOnlyUnitOfWork, "commit")
+
+    async def test_read_uow_closes_session(self) -> None:
+        """Exiting the context closes the read session."""
+        read_session = AsyncMock(name="read")
+        read_session.__aenter__ = AsyncMock(return_value=read_session)
+        read_session.__aexit__ = AsyncMock(return_value=None)
+
+        read_factory = MagicMock(name="read_factory")
+        read_factory.return_value = read_session
+
+        from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork
+
+        async with SqlaReadOnlyUnitOfWork(read_factory):
+            pass
+
+        read_session.__aexit__.assert_called_once()

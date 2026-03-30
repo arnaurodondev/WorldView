@@ -338,7 +338,15 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 correlation_id=correlation_id,
             )
 
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                logger.warning(  # type: ignore[no-any-return]
+                    "nlp_commit_failed_intel_writes_may_be_orphaned",
+                    doc_id=str(doc_id),
+                    exc_info=True,
+                )
+                raise
 
         logger.info(  # type: ignore[no-any-return]
             "article_processed",

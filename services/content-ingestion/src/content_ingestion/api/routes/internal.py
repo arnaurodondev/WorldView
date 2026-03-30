@@ -1,18 +1,16 @@
 """Internal API endpoints — service-to-service (S9 webhook → S4)."""
 
+from __future__ import annotations
+
 import hashlib
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, status
 
-import common.ids
-import common.time as ct
-from content_ingestion.api.dependencies import DbSessionDep, InternalAuthDep
+import common.ids  # type: ignore[import-untyped]
+from content_ingestion.api.dependencies import BronzeStorageDep, InternalAuthDep, UoWDep
 from content_ingestion.api.schemas import IngestSubmitRequest, IngestSubmitResponse, check_url_ssrf_async
-from content_ingestion.application.use_cases.fetch_and_write import build_raw_article_payload
+from content_ingestion.application.use_cases.submit_content import SubmitContentUseCase
 from content_ingestion.domain.entities import SourceType
-from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
-from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
-from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 
 router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
@@ -27,8 +25,8 @@ async def internal_health() -> dict[str, str]:
 async def ingest_submit(
     body: IngestSubmitRequest,
     _auth: InternalAuthDep,
-    session: DbSessionDep,
-    request: Request,
+    uow: UoWDep,
+    bronze: BronzeStorageDep,
 ) -> IngestSubmitResponse:
     """Accept a raw document submission from S9 (webhook or manual).
 
@@ -56,8 +54,6 @@ async def ingest_submit(
         url = body.url or ""
 
     url_hash_val = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    doc_id = common.ids.new_uuid7()
-    now = ct.utc_now()
 
     # Validate source_type
     try:
@@ -68,56 +64,12 @@ async def ingest_submit(
             detail="Invalid source_type. Allowed: eodhd, sec_edgar, finnhub, newsapi, manual",
         )
 
-    # Dedup check BEFORE MinIO write to avoid orphaned objects
-    fetch_log_repo = FetchLogRepository(session)
-    if await fetch_log_repo.exists_by_url_hash(url_hash_val):
-        return IngestSubmitResponse(doc_id=doc_id, status="duplicate")
-
-    # Write to MinIO bronze
-    storage = request.app.state.storage
-    bronze = MinioBronzeAdapter(storage)
-    minio_key = await bronze.put_object(
-        source_type=str(source_type),
+    uc = SubmitContentUseCase(uow, bronze)
+    result = await uc.execute(
+        url=url,
         url_hash=url_hash_val,
         raw_bytes=raw_bytes,
-        url=url,
-        fetched_at=ct.to_iso8601(now),
-        published_at=ct.to_iso8601(body.published_at) if body.published_at else None,
-    )
-
-    # Insert fetch_log + outbox atomically
-    outbox_repo = OutboxRepository(session)
-    fetch_log_id = common.ids.new_uuid7()
-
-    await fetch_log_repo.create(
-        url=url,
-        url_hash=url_hash_val,
-        source_id=doc_id,
-        http_status=200,
-        byte_size=len(raw_bytes),
-        fetched_at=now,
+        source_type=str(source_type),
         published_at=body.published_at,
-        row_id=fetch_log_id,
     )
-
-    payload = build_raw_article_payload(
-        doc_id=doc_id,
-        source_type=str(source_type),
-        source_url=url,
-        minio_bronze_key=minio_key,
-        raw_bytes=raw_bytes,
-        fetch_id=fetch_log_id,
-        published_at=ct.to_iso8601(body.published_at) if body.published_at else None,
-        is_backfill=False,
-    )
-
-    await outbox_repo.append(
-        aggregate_type="article",
-        aggregate_id=doc_id,
-        event_type="content.article.raw.v1",
-        topic="content.article.raw.v1",
-        payload=payload,
-    )
-
-    await session.commit()
-    return IngestSubmitResponse(doc_id=doc_id)
+    return IngestSubmitResponse(doc_id=result.doc_id, status=result.status)

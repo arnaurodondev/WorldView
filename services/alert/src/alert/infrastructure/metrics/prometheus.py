@@ -31,3 +31,8 @@ s10_alerts_pending_total = Gauge(
     "s10_alerts_pending_total",
     "Current number of unacknowledged pending_alerts rows",
 )
+
+s10_s1_lookup_failed_total = Counter(
+    "s10_s1_lookup_failed_total",
+    "Total S1 watchlist lookup failures (network/HTTP error).",
+)
