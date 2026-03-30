@@ -16,12 +16,13 @@ Review scope: `$ARGUMENTS` (if empty, review all uncommitted changes)
 ## Phase 0 — Context Loading (Silent)
 
 1. Read `RULES.md` and `AGENTS.md` — understand project constraints
-2. Read `.claude/review/protocols/PR_INVESTIGATION_PROTOCOL.md` — your reasoning framework
-3. Read `.claude/review/checklists/REVIEW_CHECKLIST.md` — your checklist
-4. Read `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` — your pattern detector
-5. Read `docs/BUG_PATTERNS.md` — known historical bugs
-6. Read service docs for affected services: `docs/services/<service>.md`
-7. Get the diff: `git diff` (unstaged) + `git diff --cached` (staged)
+2. Read `docs/STANDARDS.md` — engineering standards (§17 UoW pattern, §11 anti-patterns, §14 process topology) — **mandatory pre-read**
+3. Read `.claude/review/protocols/PR_INVESTIGATION_PROTOCOL.md` — your reasoning framework
+4. Read `.claude/review/checklists/REVIEW_CHECKLIST.md` — your checklist
+5. Read `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` — your pattern detector
+6. Read `docs/BUG_PATTERNS.md` — known historical bugs
+7. Read service docs for affected services: `docs/services/<service>.md`
+8. Get the diff: `git diff` (unstaged) + `git diff --cached` (staged)
 
 ## Phase 1 — Change Surface Mapping
 

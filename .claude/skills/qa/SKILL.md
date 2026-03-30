@@ -57,9 +57,10 @@ Before spawning agents, load the shared context they will all need:
 
 1. Read `RULES.md` — hard rules all agents must enforce
 2. Read `AGENTS.md` — coding standards and architecture patterns
-3. For each service in scope, read `services/<service>/.claude-context.md`
-4. If `--plan` was given, read the full plan file for task requirements and acceptance criteria
-5. Collect the diff or file contents for all files in scope
+3. Read `docs/STANDARDS.md` — engineering standards (§17 UoW pattern, §11 anti-patterns, §12 platform rules, §14 process topology) — **mandatory**
+4. For each service in scope, read `services/<service>/.claude-context.md`
+5. If `--plan` was given, read the full plan file for task requirements and acceptance criteria
+6. Collect the diff or file contents for all files in scope
 
 ---
 

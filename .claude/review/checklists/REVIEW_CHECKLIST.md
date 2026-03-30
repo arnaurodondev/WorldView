@@ -40,6 +40,14 @@
 - [ ] **Atomic dedup**: `is_duplicate` + `process_message` + `mark_processed` are NOT in separate transactions — use BP-035/BP-045 `INSERT…ON CONFLICT DO NOTHING RETURNING` inside the same UoW as business logic; `is_duplicate()` → `return False`; `mark_processed()` → no-op (HR-021)
 - [ ] **All storage steps have skip-if-exists (D-008)**: if `_store_bronze` has an `exists()` guard, `_store_canonical` and any other storage steps must have the same guard — partial guards break retry idempotency (BP-048)
 
+## 4b. Unit of Work / Transaction Integrity (R26)
+
+- [ ] UoW `__aexit__`: no `else: await self.commit()` — only rolls back on exception (R26, HR-025)
+- [ ] Every mutating use case calls `await uow.commit()` explicitly before returning (not relying on `__aexit__`)
+- [ ] Rollback is wrapped in try/except; session close is in the `finally` block (prevents session leak when rollback raises)
+- [ ] Post-commit hooks run INSIDE `commit()` via `_drain_post_commit_hooks()` — NOT in `__aexit__()` (see STANDARDS.md §17.3)
+- [ ] Post-commit hook failures are caught and logged — never propagated (a cache-flush failure must not dead-letter a successfully-committed message)
+
 ## 5. Data Integrity
 
 - [ ] UUIDv7 for all new entity IDs (`common.ids.new_uuid7()`)

@@ -30,6 +30,7 @@
 14. [Process Topology Standard](#14-process-topology-standard)
 15. [Read/Write Database Session Pattern](#15-readwrite-database-session-pattern)
 16. [Session Optimization](#16-session-optimization)
+17. [Unit of Work — Explicit Commit Pattern](#17-unit-of-work--explicit-commit-pattern)
 
 ---
 
@@ -1301,6 +1302,7 @@ The following patterns are **explicitly forbidden** and constitute review blocke
 | Health endpoints returning `{"status": "ok"}` without checks | Hides dependency failures | Real DB/Kafka/Valkey checks |
 | Route logic in `app.py` | Violates single-responsibility | Routes in `api/routes/` |
 | Infrastructure imports in domain layer | Breaks hexagonal architecture | Use ports/protocols |
+| `else: await self.commit()` in `__aexit__` | Silent writes on every clean context exit; double-commit undetectable (R26) | Option B: `__aexit__` only rolls back on exception; every mutating use case calls `await uow.commit()` explicitly — see §17 |
 | `from __future__ import annotations` missing | Lazy evaluation needed for `TYPE_CHECKING` pattern | Add to every file using `if TYPE_CHECKING` |
 | `print()` statements | Not structured, not queryable | `logger.info(...)` with keyword args |
 
@@ -1444,6 +1446,14 @@ Each microservice adds operational overhead. The decision must be deliberate and
 | R16 | Process | MUST NOT |
 | R17 | Process | MUST |
 | R18 | Process | MUST |
+| R19 | Testing | MUST NOT |
+| R20 | Architecture | MUST |
+| R21 | Architecture | MUST |
+| R22 | Infrastructure | MUST |
+| R23 | Infrastructure | MUST |
+| R24 | Infrastructure | MUST NOT |
+| R25 | Architecture | MUST NOT |
+| R26 | Infrastructure | MUST NOT |
 
 ---
 
@@ -1842,3 +1852,140 @@ All services MUST support independent database URLs (`db_url` setting). This ens
 - Seamless migration from shared Postgres container to managed RDS/Cloud SQL
 - Each service can point to its own database instance without code changes
 - Read replicas can be added per-service via `db_url_read`
+
+---
+
+## 17. Unit of Work — Explicit Commit Pattern
+
+> **Rules**: R26 (UoW must not auto-commit in `__aexit__`)
+> **Reference implementations**: `services/portfolio/src/portfolio/infrastructure/db/unit_of_work.py`,
+> `services/market-data/src/market_data/infrastructure/db/unit_of_work.py`
+
+### 17.1 The Standard: Option B (Explicit-Commit Only)
+
+The **Option B** pattern is the **cross-service standard** for all `UnitOfWork` concrete
+implementations. It has two invariants:
+
+1. `__aexit__` **NEVER commits** — it only rolls back on exception and closes the session.
+2. Every mutating use case **MUST call `await uow.commit()` explicitly** before returning.
+
+```python
+# ✅ CORRECT — Option B (cross-service standard)
+class SqlaUnitOfWork(AbstractUnitOfWork):
+    async def __aenter__(self) -> "SqlaUnitOfWork":
+        self._session = self._session_factory()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        try:
+            if exc_type is not None:
+                await self.rollback()
+        except Exception:
+            pass  # swallow rollback failure — session close in finally is the real cleanup
+        finally:
+            await self._session.close()
+
+    async def commit(self) -> None:
+        await self._session.commit()
+        await self._drain_post_commit_hooks()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
+```
+
+Every mutating use case wraps its work and calls `commit()` explicitly:
+
+```python
+# ✅ CORRECT — use case calls commit explicitly
+async def execute(self, cmd: CreateFoo) -> Foo:
+    async with await self._uow_factory() as uow:
+        entity = Foo(...)
+        await uow.foos.add(entity)
+        await uow.commit()           # ← explicit; __aexit__ never commits
+        return entity
+```
+
+### 17.2 Anti-Pattern: Option A (Auto-Commit in `__aexit__`)
+
+```python
+# ❌ WRONG — Option A (R26 violation, BLOCKING review finding)
+async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    try:
+        if exc_type is not None:
+            await self.rollback()
+        else:
+            await self.commit()   # FORBIDDEN — auto-commits silently on clean exit
+    except Exception:
+        pass
+    finally:
+        await self._session.close()
+```
+
+**Why this is dangerous**:
+- Read-only use cases that open a UoW and do not call `commit()` will auto-commit an empty
+  transaction — wasting DB resources and potentially flushing dirty state from ORM identity map.
+- Use cases that raise after partial writes still execute rollback correctly, but read-only
+  paths that never call `commit()` silently commit.
+- Double-commit bugs are invisible: the second `session.commit()` call is a no-op in most
+  drivers (SQLAlchemy AsyncSession silently succeeds on a clean session).
+
+**Audit command**:
+```bash
+grep -rn "else.*commit\|__aexit__.*commit" services/*/src/*/infrastructure/db/unit_of_work.py
+```
+Any match is a R26 violation.
+
+### 17.3 Post-Commit Hooks
+
+Post-commit hooks (e.g., cache invalidation, metrics emission) run AFTER the database
+transaction commits. They are drained inside `commit()` — NOT inside `__aexit__`.
+
+```python
+# ✅ CORRECT — hooks drained inside commit(), not __aexit__()
+async def commit(self) -> None:
+    await self._session.commit()
+    await self._drain_post_commit_hooks()  # runs only on explicit commit
+
+async def _drain_post_commit_hooks(self) -> None:
+    while self._post_commit_hooks:
+        hook = self._post_commit_hooks.pop(0)
+        try:
+            await hook
+        except Exception:
+            logger.warning("post_commit_hook_failed", exc_info=True)
+            # hook failure must NOT propagate — committed message must not be dead-lettered
+```
+
+If a post-commit hook raises, **log and continue** — a successfully-committed message must
+never be dead-lettered because a cache flush failed.
+
+### 17.4 Dispatch UoW (Outbox-Only Pattern)
+
+For services where the UoW wraps an outbox repository (e.g., content-ingestion outbox
+dispatcher), the correct pattern delegates session lifecycle to the session context manager:
+
+```python
+# ✅ CORRECT — Dispatch UoW delegates to session lifecycle
+async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    if exc_type is not None:
+        await self._session.rollback()
+    await self._session.close()
+```
+
+This pattern is correct for outbox-only UoWs because `session.close()` without `commit()`
+closes without committing — consistent with Option B.
+
+### 17.5 Compliance Checklist
+
+Before merging any service with a `UnitOfWork` implementation:
+- [ ] `__aexit__` has **no** `else: await self.commit()` branch (R26)
+- [ ] `__aexit__` has a `finally` block that calls `session.close()` on all paths
+- [ ] Every mutating use case calls `await uow.commit()` before returning
+- [ ] Read-only use cases do NOT call `commit()` (no phantom commits)
+- [ ] Post-commit hooks run inside `commit()`, not `__aexit__()`
+- [ ] Hook failures are caught and logged — never propagated to the base consumer
