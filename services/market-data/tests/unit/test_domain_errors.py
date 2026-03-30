@@ -38,13 +38,15 @@ class TestErrorHierarchy:
             assert issubclass(cls, MarketDataError), f"{cls} is not a subclass of MarketDataError"
 
     def test_parse_error_is_pure_domain(self) -> None:
-        # ParseError must NOT inherit from any infrastructure lib (R12).
+        # ParseError must NOT inherit from any infrastructure module (R12).
         # Consumers that need dead-lettering must catch ParseError and re-raise as FatalError.
-
-        mro_names = [c.__module__ for c in ParseError.__mro__]
-        assert not any(
-            "messaging" in m for m in mro_names
-        ), "ParseError must not inherit from the messaging lib (R12 violation)"
+        # T-G-1-04: guard against ALL infrastructure prefixes, not just messaging.
+        mro_modules = {cls.__module__ for cls in ParseError.__mro__}
+        forbidden_prefixes = ("market_data.infrastructure", "messaging", "kafka", "confluent")
+        for module in mro_modules:
+            assert not any(
+                module.startswith(p) for p in forbidden_prefixes
+            ), f"ParseError inherits from infrastructure module: {module} (R12 violation)"
 
     def test_parse_error_is_market_data_error(self) -> None:
         err = ParseError("bad payload")
