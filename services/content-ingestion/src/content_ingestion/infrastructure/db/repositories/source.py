@@ -24,6 +24,11 @@ class SourceRepository:
         result = await self._session.execute(select(SourceModel))
         return list(result.scalars().all())
 
+    async def list_enabled(self) -> list[SourceModel]:
+        """Return all sources where ``enabled=True``."""
+        result = await self._session.execute(select(SourceModel).where(SourceModel.enabled.is_(True)))
+        return list(result.scalars().all())
+
     async def get_by_id(self, source_id: UUID) -> SourceModel | None:
         result = await self._session.execute(select(SourceModel).where(SourceModel.id == source_id))
         return cast("SourceModel | None", result.scalar_one_or_none())
