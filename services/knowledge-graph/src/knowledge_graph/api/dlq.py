@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import text
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.api.schemas import DLQEntryResponse, DLQListResponse, DLQResolveRequest
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -119,8 +120,6 @@ async def resolve_dlq_entry(
     _auth: AdminAuth,
 ) -> dict[str, str]:
     """Mark a DLQ entry as resolved with an optional note."""
-    from common.time import utc_now  # type: ignore[import-untyped]
-
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         result = await session.execute(

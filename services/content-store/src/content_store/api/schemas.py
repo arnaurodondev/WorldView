@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── DLQ ──────────────────────────────────────────────────────────────────────
 
@@ -27,4 +27,4 @@ class DLQListResponse(BaseModel):
 
 
 class DLQResolveRequest(BaseModel):
-    note: str
+    note: str = Field(..., max_length=2000)

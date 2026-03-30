@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     storage_secret_key: str = "minioadmin"
 
     # Admin API
-    admin_token: str = "change-me-in-production"
+    admin_token: str = ""
 
     # Observability (STANDARDS.md §5 — mandatory)
     log_level: str = "INFO"
