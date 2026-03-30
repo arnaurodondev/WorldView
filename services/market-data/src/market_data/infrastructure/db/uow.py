@@ -9,14 +9,19 @@ On ``commit()``:
   2. The optional ``outbox_notifier`` callable is invoked with the list of
      accumulated domain events (for immediate outbox dispatch).
   3. ``collected_events`` is cleared.
+  4. Post-commit hooks are run with independent error isolation — hook errors
+     are logged as warnings and do NOT propagate (F-DS-015).
 
 On ``__aexit__`` with an unhandled exception:
-  - The write session is rolled back before re-raising.
+  - Rollback is attempted; any rollback error is suppressed.
+  - Sessions are always closed in the ``finally`` block (F-DS-006).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+
+import structlog
 
 from market_data.application.ports.uow import UnitOfWork
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
@@ -30,6 +35,8 @@ from market_data.infrastructure.db.repositories.ohlcv_repo import PgOHLCVReposit
 from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutboxEventRepository
 from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
+
+logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
@@ -97,12 +104,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if exc_type is not None:
-            await self.rollback()
-        if self._write_session:
-            await self._write_session.close()
-        if self._read_session and self._read_session is not self._write_session:
-            await self._read_session.close()
+        # F-DS-006: rollback errors must not prevent session cleanup.
+        try:
+            if exc_type is not None:
+                await self.rollback()
+        except Exception as exc:
+            logger.warning("uow_rollback_failed", error=str(exc))
+        finally:
+            if self._write_session:
+                await self._write_session.close()
+            if self._read_session and self._read_session is not self._write_session:
+                await self._read_session.close()
 
     # ── transaction ────────────────────────────────────────────────────────────
 
@@ -114,10 +126,15 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._events.clear()
         if events and self._outbox_notifier is not None:
             await self._outbox_notifier(events)
+        # F-DS-015: run each hook in isolation so a cache/side-effect failure
+        # does not propagate out of commit() and dead-letter the Kafka message.
         hooks = self._post_commit_hooks[:]
         self._post_commit_hooks.clear()
         for hook in hooks:
-            await hook
+            try:
+                await hook
+            except Exception as exc:
+                logger.warning("post_commit_hook_failed", error=str(exc))
 
     async def rollback(self) -> None:
         if self._write_session:

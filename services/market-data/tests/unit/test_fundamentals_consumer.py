@@ -712,3 +712,88 @@ async def test_fundamentals_consumer_missing_period_end_uses_fallback() -> None:
     record = mock_uow.fundamentals.upsert_earnings_trend.call_args[0][0]
     # period_end should be ingested_at (approximately now)
     assert before <= record.period_end <= after
+
+
+# ---------------------------------------------------------------------------
+# T-E-2-02/03: FundamentalsConsumer populates description from company_profile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_populates_description() -> None:
+    """EODHD General.Description is passed into InstrumentCreated.description (T-E-2-02)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-001")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)  # skip security enrichment path
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Alphabet Inc.",
+            "ISIN": "US02079K3059",
+            "Description": "Alphabet is a holding company whose business includes Google.",
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] == "Alphabet is a holding company whose business includes Google."
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_description_none_when_absent() -> None:
+    """Missing Description key → description=None (not empty string) (T-E-2-02)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-002")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc."},  # no Description key
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_description_none_for_empty_string() -> None:
+    """Empty string Description → None (falsy coercion, no empty strings in event)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-003")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "Description": ""},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] is None

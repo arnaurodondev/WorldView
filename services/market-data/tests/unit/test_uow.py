@@ -109,3 +109,70 @@ class TestUoWOutboxNotifier:
         async with uow:
             uow.collect_event(event)
             await uow.commit()  # no notifier — should be silent
+
+
+# ---------------------------------------------------------------------------
+# F-DS-006: Session always closed even when rollback raises
+# ---------------------------------------------------------------------------
+
+
+class TestUoWSessionCleanup:
+    async def test_uow_session_closed_when_rollback_raises(self):
+        """Sessions must be closed even if rollback() raises (F-DS-006)."""
+        mock_session = AsyncMock()
+        mock_session.rollback = AsyncMock(side_effect=OSError("connection lost"))
+        factory = _make_session_factory(mock_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=factory, read_factory=factory)
+
+        with pytest.raises(ValueError):
+            async with uow:
+                raise ValueError("trigger rollback path")
+
+        # Sessions must be closed regardless of rollback failure
+        mock_session.close.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# F-DS-015: Post-commit hook errors do not propagate
+# ---------------------------------------------------------------------------
+
+
+class TestUoWPostCommitHooks:
+    async def test_post_commit_hook_runs_after_successful_commit(self):
+        """Scheduled hook is called after DB commit succeeds."""
+        mock_session = AsyncMock()
+        factory = _make_session_factory(mock_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=factory, read_factory=factory)
+
+        hook_called = False
+
+        async def _hook() -> None:
+            nonlocal hook_called
+            hook_called = True
+
+        async with uow:
+            uow.schedule_post_commit(_hook())
+            await uow.commit()
+
+        assert hook_called
+
+    async def test_post_commit_hook_failure_does_not_propagate(self):
+        """Hook exception must be swallowed and logged, not raised (F-DS-015).
+
+        A cache-invalidation failure must not dead-letter the Kafka message —
+        the DB commit has already succeeded and is durable.
+        """
+        mock_session = AsyncMock()
+        factory = _make_session_factory(mock_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=factory, read_factory=factory)
+
+        async def _failing_hook() -> None:
+            raise RuntimeError("cache unavailable")
+
+        async with uow:
+            uow.schedule_post_commit(_failing_hook())
+            # Must not raise despite hook failure
+            await uow.commit()
+
+        # Session.commit() must still have been called
+        mock_session.commit.assert_called_once()

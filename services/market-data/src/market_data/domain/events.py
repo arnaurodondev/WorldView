@@ -65,6 +65,7 @@ class InstrumentCreated(DomainEvent):
     name: str | None = None
     isin: str | None = None
     instrument_type: str | None = None
+    description: str | None = None  # From EODHD General.Description — used by S7 for definition embedding
 
 
 @dataclass(frozen=True)

@@ -53,11 +53,51 @@ class TestInstrumentCreatedEvent:
         assert event.exchange == "NASDAQ"
 
     def test_instrument_created_optional_fields_default_none(self) -> None:
-        """name, isin, instrument_type default to None for backward compat."""
+        """name, isin, instrument_type, description default to None for backward compat."""
         event = InstrumentCreated(instrument_id="inst-1", symbol="AAPL", exchange="NASDAQ")
         assert event.name is None
         assert event.isin is None
         assert event.instrument_type is None
+        assert event.description is None
+
+    def test_instrument_created_has_description_field(self) -> None:
+        """description field is present in InstrumentCreated and defaults to None (T-E-2-01)."""
+        event = InstrumentCreated(instrument_id="inst-1", symbol="AAPL", exchange="NASDAQ")
+        assert hasattr(event, "description")
+        assert event.description is None
+
+    def test_instrument_created_description_can_be_set(self) -> None:
+        """description can be populated when company profile data is available."""
+        event = InstrumentCreated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            description="Apple Inc. designs and manufactures consumer electronics.",
+        )
+        assert event.description == "Apple Inc. designs and manufactures consumer electronics."
+
+    def test_instrument_created_description_in_avro_dict(self) -> None:
+        """description is included in the serialized payload via dataclasses.asdict (T-E-2-01)."""
+        import dataclasses
+
+        event = InstrumentCreated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            description="A technology company.",
+        )
+        raw = dataclasses.asdict(event)
+        assert "description" in raw
+        assert raw["description"] == "A technology company."
+
+    def test_instrument_created_description_none_serializes_as_none(self) -> None:
+        """description=None serializes as None (not absent) for Avro null union."""
+        import dataclasses
+
+        event = InstrumentCreated(instrument_id="inst-1", symbol="AAPL", exchange="NASDAQ")
+        raw = dataclasses.asdict(event)
+        assert "description" in raw
+        assert raw["description"] is None
 
     def test_instrument_created_optional_fields_can_be_set(self) -> None:
         """name, isin, instrument_type can be set when data is available."""
