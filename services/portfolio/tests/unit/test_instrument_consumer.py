@@ -139,9 +139,12 @@ def _make_consumer_with_fake_uow(fake_uow: FakeUoW):
     consumer = InstrumentEventConsumer(config=config, session_factory=MagicMock())
 
     async def _fake_get_uow():
+        consumer._current_uow = fake_uow  # type: ignore[attr-defined]
         return fake_uow
 
     consumer.get_unit_of_work = _fake_get_uow  # type: ignore[method-assign]
+    # Set _current_uow immediately so process_message (called without _handle_message) can use it.
+    consumer._current_uow = fake_uow  # type: ignore[attr-defined]
     return consumer
 
 
@@ -173,8 +176,13 @@ async def test_process_message_upserts_instrument() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_message_missing_event_id_uses_new_uuid() -> None:
-    """process_message handles a payload without event_id gracefully."""
+async def test_process_message_missing_event_id_raises_malformed_data_error() -> None:
+    """process_message raises MalformedDataError when event_id is absent (T-C-2-02).
+
+    Missing event_id makes atomic idempotency impossible — the message is dead-lettered.
+    """
+    from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
     fake_uow = FakeUoW()
     consumer = _make_consumer_with_fake_uow(fake_uow)
 
@@ -183,10 +191,11 @@ async def test_process_message_missing_event_id_uses_new_uuid() -> None:
         "exchange": "NASDAQ",
     }
 
-    await consumer.process_message(key=None, value=value, headers={})
+    with pytest.raises(MalformedDataError, match="Missing or null event_id"):
+        await consumer.process_message(key=None, value=value, headers={})
 
-    assert len(fake_uow._instruments_repo.upserted) == 1
-    assert fake_uow._instruments_repo.upserted[0].symbol == "TSLA"
+    # No upsert should have occurred
+    assert len(fake_uow._instruments_repo.upserted) == 0
 
 
 @pytest.mark.asyncio
@@ -213,6 +222,22 @@ async def test_mark_processed_is_noop() -> None:
 
     # No records should be in the idempotency store (no separate write)
     assert len(fake_uow._idempotency_repo.recorded) == 0
+
+
+@pytest.mark.asyncio
+async def test_process_message_invalid_event_id_raises_malformed_data_error() -> None:
+    """process_message raises MalformedDataError when event_id is not a valid UUID."""
+    from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    value = {"event_id": "not-a-valid-uuid", "symbol": "AAPL", "exchange": "NASDAQ"}
+
+    with pytest.raises(MalformedDataError, match="Invalid event_id format"):
+        await consumer.process_message(key=None, value=value, headers={})
+
+    assert len(fake_uow._instruments_repo.upserted) == 0
 
 
 @pytest.mark.asyncio

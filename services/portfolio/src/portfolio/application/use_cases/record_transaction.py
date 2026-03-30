@@ -17,6 +17,7 @@ from portfolio.domain.enums import TransactionDirection, TransactionType
 from portfolio.domain.errors import (
     AuthorizationError,
     CurrencyMismatchError,
+    IdempotencyConflictError,
     IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
     PortfolioNotFoundError,
@@ -79,6 +80,13 @@ class RecordTransactionUseCase:
                 )
                 if existing is not None:
                     return RecordTransactionResult(transaction=existing)
+                # F-DS-002: idempotency key recorded but transaction missing — inconsistent state.
+                # This can happen if a previous request committed the idempotency row but then
+                # rolled back before writing the transaction. Raise to surface as 409.
+                raise IdempotencyConflictError(
+                    f"Idempotency key {cmd.idempotency_key!r} already recorded but "
+                    "original transaction not found; state is inconsistent. Retry the request."
+                )
 
         # Validate tenant
         tenant = await uow.tenants.get(cmd.tenant_id)
@@ -206,7 +214,26 @@ class RecordTransactionUseCase:
             )
         )
 
-        await uow.commit()
+        # Catch IntegrityError from concurrent same-key commits (TOCTOU race post-BP-035).
+        # Both requests passed create_if_not_exists (neither had committed yet), then one
+        # wins the commit race and the other hits a unique constraint violation.
+        # Import is at call-site to keep the infrastructure detail contained (sqlalchemy
+        # is a dependency of the infrastructure layer; use case tolerates this boundary cross).
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await uow.commit()
+        except IntegrityError as exc:
+            await uow.rollback()
+            if cmd.idempotency_key is not None:
+                existing = await uow.transactions.find_by_external_ref(
+                    cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
+                )
+                if existing is not None:
+                    return RecordTransactionResult(transaction=existing)
+            raise IdempotencyConflictError(
+                f"Concurrent idempotency conflict on key {cmd.idempotency_key!r}; " "retry the request."
+            ) from exc
 
         log = logger.bind(
             tenant_id=str(cmd.tenant_id),

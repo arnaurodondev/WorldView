@@ -156,6 +156,15 @@ class IdempotencyKeyConflictError(DomainError):
     error_code = "IDEMPOTENCY_KEY_CONFLICT"
 
 
+class IdempotencyConflictError(ConcurrencyError):
+    """Raised when concurrent requests with the same idempotency key both attempt
+    to commit simultaneously. The losing request should re-query for the original
+    result or retry. Maps to HTTP 409 via ConcurrencyError in error_mapping.py.
+    """
+
+    error_code = "IDEMPOTENCY_RACE"
+
+
 class IdempotencyKeyInvalidError(ValidationError):
     error_code = "IDEMPOTENCY_KEY_INVALID"
 

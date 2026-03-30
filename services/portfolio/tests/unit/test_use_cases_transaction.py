@@ -512,3 +512,185 @@ async def test_idempotency_uses_atomic_dedup_not_check_then_record(uow, cmd) -> 
     assert len(create_calls) == 1, "create_if_not_exists must be called exactly once"
     assert len(exists_calls) == 0, "exists() must not be called — use create_if_not_exists (BP-035)"
     assert len(record_calls) == 0, "record() must not be called — use create_if_not_exists (BP-035)"
+
+
+# ── T-C-1-04: IntegrityError → 409 (concurrent same-key commit) ──────────────
+
+
+def _make_integrity_error():
+    """Create a minimal sqlalchemy IntegrityError for use in tests."""
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
+    return SAIntegrityError("INSERT ...", {}, Exception("UNIQUE constraint failed"))
+
+
+class _IntegrityErrorUoW(FakeUoW):
+    """FakeUoW whose commit() raises IntegrityError to simulate a concurrent-commit race.
+
+    rollback() clears pending in-memory saves to mimic real DB transaction isolation
+    (in a real DB, a rolled-back write is not visible to subsequent queries).
+    """
+
+    async def commit(self) -> None:
+        raise _make_integrity_error()
+
+    async def rollback(self) -> None:
+        # Clear all pending saves — simulates the DB rollback undoing the writes.
+        self._transactions.saved.clear()
+
+
+class _IntegrityErrorUoWWithWinner(FakeUoW):
+    """FakeUoW where the 'winner' concurrent request already committed its transaction.
+
+    commit() raises IntegrityError (the unique constraint the loser hits),
+    rollback() clears the loser's pending writes but keeps the winner's committed row.
+    find_by_external_ref then finds the winner's transaction, and the use case returns it.
+    """
+
+    def __init__(self, *args, winner_tx, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._winner_tx = winner_tx
+        # The winner's row is already in the DB (committed before this request).
+        self._transactions.saved.append(winner_tx)
+
+    async def commit(self) -> None:
+        raise _make_integrity_error()
+
+    async def rollback(self) -> None:
+        # Wipe the loser's pending saves, then restore the winner's committed row.
+        self._transactions.saved.clear()
+        self._transactions.saved.append(self._winner_tx)
+
+
+@pytest.mark.asyncio
+async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
+    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+) -> None:
+    """When commit() races with an IntegrityError and the winner's transaction exists,
+    the loser returns the existing transaction (idempotent 200, not 500).
+
+    This covers the TOCTOU race: both requests pass create_if_not_exists, then one
+    hits the DB unique constraint at commit time. The loser re-queries and returns
+    the winner's result.
+    """
+    from portfolio.domain.entities.transaction import Transaction
+
+    idem_key = str(uuid4())
+
+    winner_tx = Transaction(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("10"),
+        price=Decimal("150.00"),
+        fees=Decimal("0"),
+        currency="USD",
+        executed_at=_NOW,
+        external_ref=idem_key,
+    )
+    uow = _IntegrityErrorUoWWithWinner(
+        tenant=tenant, user=user, portfolio=portfolio, instrument=instrument, winner_tx=winner_tx
+    )
+
+    cmd_with_key = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("10"),
+        price=Decimal("150.00"),
+        currency="USD",
+        executed_at=_NOW,
+        idempotency_key=idem_key,
+    )
+
+    uc = RecordTransactionUseCase()
+    result = await uc.execute(cmd_with_key, uow)
+
+    assert result.transaction.id == winner_tx.id, "Loser must return the winner's transaction"
+
+
+@pytest.mark.asyncio
+async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict(
+    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+) -> None:
+    """When commit() raises IntegrityError and no idempotency key is present,
+    IdempotencyConflictError is raised (maps to HTTP 409).
+    """
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    uow = _IntegrityErrorUoW(tenant=tenant, user=user, portfolio=portfolio, instrument=instrument)
+
+    cmd_no_key = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("10"),
+        price=Decimal("150.00"),
+        currency="USD",
+        executed_at=_NOW,
+    )
+
+    uc = RecordTransactionUseCase()
+    with pytest.raises(IdempotencyConflictError):
+        await uc.execute(cmd_no_key, uow)
+
+
+@pytest.mark.asyncio
+async def test_integrity_error_on_commit_with_key_but_no_existing_raises_conflict(
+    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+) -> None:
+    """When commit() raises IntegrityError with an idempotency key but the winner's
+    transaction is not yet visible (e.g. not flushed), IdempotencyConflictError is raised.
+    """
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    idem_key = str(uuid4())
+    uow = _IntegrityErrorUoW(tenant=tenant, user=user, portfolio=portfolio, instrument=instrument)
+    # No winner transaction pre-seeded — find_by_external_ref returns None.
+
+    cmd_with_key = RecordTransactionCommand(
+        tenant_id=tenant_id,
+        portfolio_id=portfolio_id,
+        owner_id=owner_id,
+        instrument_id=instrument_id,
+        transaction_type=TransactionType.BUY,
+        direction=TransactionDirection.INFLOW,
+        quantity=Decimal("10"),
+        price=Decimal("150.00"),
+        currency="USD",
+        executed_at=_NOW,
+        idempotency_key=idem_key,
+    )
+
+    uc = RecordTransactionUseCase()
+    with pytest.raises(IdempotencyConflictError, match="Concurrent idempotency conflict"):
+        await uc.execute(cmd_with_key, uow)
+
+
+@pytest.mark.asyncio
+async def test_f_ds_002_idem_key_recorded_transaction_missing_raises_conflict(uow, cmd) -> None:
+    """F-DS-002 regression: when create_if_not_exists returns False (key already recorded)
+    but find_by_external_ref returns None (transaction missing), IdempotencyConflictError
+    is raised — the inconsistent state must surface as 409, not proceed silently.
+    """
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    idem_key = str(uuid4())
+    # Pre-record the idempotency key but do NOT save a corresponding transaction.
+    from uuid import UUID as _UUID
+
+    uow._idempotency._seen.add(_UUID(idem_key))
+
+    cmd_with_key = RecordTransactionCommand(**{**cmd.__dict__, "idempotency_key": idem_key})
+
+    uc = RecordTransactionUseCase()
+    with pytest.raises(IdempotencyConflictError, match="already recorded but"):
+        await uc.execute(cmd_with_key, uow)

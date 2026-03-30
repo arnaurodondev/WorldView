@@ -15,6 +15,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.domain.entities.instrument import InstrumentRef
@@ -41,7 +42,9 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
-        return cast("UnitOfWorkProtocol", SqlAlchemyUnitOfWork(self._session_factory))
+        uow = cast("UnitOfWorkProtocol", SqlAlchemyUnitOfWork(self._session_factory))
+        self._current_uow = uow  # required by BaseKafkaConsumer._handle_message pattern
+        return uow
 
     # ── Core message processing ───────────────────────────────────────────────
 
@@ -53,10 +56,26 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     ) -> None:
         """Upsert an InstrumentRef from the deserialized Kafka message value.
 
+        Uses _current_uow set by BaseKafkaConsumer._handle_message (no nested UoW).
         Dedup is handled atomically via INSERT … ON CONFLICT DO NOTHING RETURNING
         inside the same transaction as the upsert (BP-035). is_duplicate() always
-        returns False; mark_processed() is a no-op.
+        returns False; mark_processed() is a no-op. Base class calls commit() after
+        this method returns — do NOT call uow.commit() here.
         """
+        uow = self._current_uow
+        if uow is None:
+            raise RuntimeError("process_message called outside _handle_message context — programming error")
+
+        # T-C-2-02: Reject messages without event_id as fatal (MalformedDataError).
+        # Missing event_id makes atomic idempotency impossible — dead-letter the message.
+        raw_event_id = value.get("event_id", "")
+        if not raw_event_id:
+            raise MalformedDataError("Missing or null event_id in instrument event — cannot perform idempotency check")
+        try:
+            event_uid = UUID(str(raw_event_id))
+        except ValueError as exc:
+            raise MalformedDataError(f"Invalid event_id format in instrument event: {raw_event_id!r}") from exc
+
         raw_entity_id = value.get("entity_id")
         try:
             entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
@@ -68,11 +87,15 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         # so replaying the same event always produces the same InstrumentRef.id (M-017).
         instrument_id = entity_id if entity_id is not None else new_uuid7()
 
-        raw_event_id = value.get("event_id", "")
-        try:
-            event_uid = UUID(raw_event_id) if raw_event_id else None
-        except ValueError:
-            event_uid = None
+        # Atomic dedup: INSERT idempotency record and upsert instrument in the
+        # same transaction. If event_uid is already recorded, skip silently.
+        is_new = await uow.idempotency.create_if_not_exists(event_uid)  # type: ignore[attr-defined]
+        if not is_new:
+            logger.debug(  # type: ignore[no-any-return]
+                "instrument_consumer_duplicate_event",
+                event_id=str(event_uid)[:8],
+            )
+            return
 
         instrument = InstrumentRef(
             id=instrument_id,
@@ -82,22 +105,11 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),
             entity_id=entity_id,
-            source_event_id=event_uid if event_uid is not None else new_uuid7(),
+            source_event_id=event_uid,
             synced_at=utc_now(),
         )
-        async with await self.get_unit_of_work() as uow:
-            # Atomic dedup: INSERT idempotency record and upsert instrument in the
-            # same transaction. If event_uid is already recorded, skip silently.
-            if event_uid is not None:
-                is_new = await uow.idempotency.create_if_not_exists(event_uid)  # type: ignore[attr-defined]
-                if not is_new:
-                    logger.debug(  # type: ignore[no-any-return]
-                        "instrument_consumer_duplicate_event",
-                        event_id=str(event_uid)[:8],
-                    )
-                    return
-            await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
-            await uow.commit()  # type: ignore[attr-defined]
+        await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
+        # Note: commit() is called by BaseKafkaConsumer._handle_message after this returns.
 
         logger.info(  # type: ignore[no-any-return]
             "instrument_ref_upserted",
