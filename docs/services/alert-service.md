@@ -1,6 +1,6 @@
 # S10 — Alert Service
 
-> **Status**: In-progress (Wave E-2 complete)
+> **Status**: ✅ Feature-complete (Wave E-3 complete — 2026-03-29)
 > **Port**: 8010
 > **Database**: alert_db (owned, Alembic enabled)
 > **Dependencies**: S1 Portfolio (internal endpoints), Kafka, Valkey
@@ -96,6 +96,9 @@ Environment prefix: `ALERT_`
 | `ALERT_LOG_LEVEL` | `INFO` | Log level |
 | `ALERT_LOG_JSON` | `true` | JSON-structured logs |
 | `ALERT_OTLP_ENDPOINT` | `` | OTLP exporter endpoint |
+| `ALERT_ADMIN_TOKEN` | `` | DLQ admin endpoint bearer token |
+| `ALERT_HOST` | `0.0.0.0` | Server bind host |
+| `ALERT_PORT` | `8010` | Server bind port |
 
 ---
 
@@ -164,8 +167,54 @@ Default window: 300 s. Same entity+type within one window → single alert.
 
 ---
 
+## REST API (Wave E-3)
+
+### GET /api/v1/alerts/pending
+Returns paginated unacknowledged alerts for a user.
+
+**Query params**: `user_id` (UUID, required), `limit` (1–200, default 50), `offset` (default 0)
+**Response**: `{ alerts: PendingAlertResponse[], total, limit, offset }`
+
+### DELETE /api/v1/alerts/{alert_id}/ack
+Marks an alert as acknowledged for a user.
+
+**Query params**: `user_id` (UUID, required)
+**Returns**: 200 `{"status": "acknowledged"}` on success; 404 when not found or wrong user (avoids user enumeration, per AD-11)
+
+### WebSocket /api/v1/alerts/stream
+Real-time alert stream pushed to connected users.
+
+**Query params**: `user_id` (UUID, required)
+**Protocol**: S10 pushes JSON `{ alert_id, entity_id, alert_type, created_at }` on each new alert
+
+---
+
+## Health & Observability (Wave E-3)
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /healthz` | Liveness probe — always 200 |
+| `GET /readyz` | Readiness — checks alert_db, Kafka, Valkey, S1 (503 on any failure) |
+| `GET /metrics` | Prometheus metrics (s10_ prefix) |
+
+**Metrics**: `s10_alerts_fanned_out_total[type]`, `s10_alerts_deduplicated_total`, `s10_websocket_pushes_total`, `s10_alerts_pending_total`
+
+---
+
+## DLQ Admin (Wave E-3)
+
+Admin endpoints protected by `X-Admin-Token` header (`ALERT_ADMIN_TOKEN` env var).
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /admin/dlq` | List failed DLQ entries (paginated) |
+| `GET /admin/dlq/{dlq_id}` | Get a single DLQ entry |
+| `POST /admin/dlq/{dlq_id}/resolve` | Mark entry as resolved with a note |
+
+---
+
 ## Implementation Status
 
 - [x] Wave E-1: Service setup, domain, DB, S1 client, tests (43 tests)
 - [x] Wave E-2: Consumers, alert fan-out, WebSocket, outbox (97 tests, ruff + mypy clean)
-- [ ] Wave E-3: REST API, health, integration tests, full pipeline validation
+- [x] Wave E-3: REST API, health, integration tests, full pipeline validation (114 unit tests, ruff + mypy clean — 2026-03-29)

@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, Any, cast
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
-from market_data.domain.events import InstrumentCreated
+from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
+from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -192,22 +193,37 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_ohlcv=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            uow.collect_event(
-                InstrumentCreated(
-                    instrument_id=instrument.id,
-                    security_id=instrument.security_id,
-                    symbol=symbol,
-                    exchange=exchange,
-                )
+            created_event = InstrumentCreated(
+                instrument_id=instrument.id,
+                security_id=instrument.security_id,
+                symbol=symbol,
+                exchange=exchange,
+            )
+            await uow.outbox_events.create(
+                event_type=created_event.event_type,
+                topic=EVENT_TOPIC_MAP[created_event.event_type],
+                payload=event_to_outbox_payload(created_event),
             )
         elif not instrument.flags.has_ohlcv:
-            await uow.instruments.update_flags(
-                instrument.id,
-                InstrumentFlags(
-                    has_ohlcv=True,
-                    has_quotes=instrument.flags.has_quotes,
-                    has_fundamentals=instrument.flags.has_fundamentals,
-                ),
+            updated_flags = InstrumentFlags(
+                has_ohlcv=True,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=instrument.flags.has_fundamentals,
+            )
+            await uow.instruments.update_flags(instrument.id, updated_flags)
+            updated_event = InstrumentUpdated(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                has_ohlcv=True,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=instrument.flags.has_fundamentals,
+                fields_updated=("has_ohlcv",),
+            )
+            await uow.outbox_events.create(
+                event_type=updated_event.event_type,
+                topic=EVENT_TOPIC_MAP[updated_event.event_type],
+                payload=event_to_outbox_payload(updated_event),
             )
 
         # Resolve timeframe

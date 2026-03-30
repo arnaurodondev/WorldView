@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.domain.entities.instrument import InstrumentRef
 
@@ -21,6 +23,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _CONSUMER_GROUP = "portfolio-instrument-sync"
 _TOPICS = ["market.instrument.created", "market.instrument.updated"]
+
+# Canonical Avro schemas at repo root/infra/kafka/schemas/
+# Resolve: consumers/ → messaging/ → infrastructure/ → portfolio/ → src/ → portfolio/ → services/ → repo root
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
 
 
 class InstrumentEventConsumer(BaseKafkaConsumer[None]):
@@ -147,11 +153,22 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
-        """Deserialize raw bytes as JSON (instruments use JSON, not Avro)."""
-        return json.loads(raw)  # type: ignore[no-any-return]
+        """Deserialize Avro bytes, falling back to JSON if no schema or deserialization fails."""
+        if schema_path:
+            try:
+                return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
+            except Exception:
+                logger.debug(  # type: ignore[no-any-return]
+                    "instrument_consumer_avro_deserialize_failed_falling_back_to_json",
+                    schema_path=schema_path,
+                )
+        return cast("dict[str, Any]", json.loads(raw))
 
     def get_schema_path(self, topic: str) -> str | None:
-        return None
+        """Return the canonical Avro schema path for the given topic, or None."""
+        schema_file = f"{topic}.avsc"
+        path = _SCHEMA_DIR / schema_file
+        return str(path) if path.exists() else None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))

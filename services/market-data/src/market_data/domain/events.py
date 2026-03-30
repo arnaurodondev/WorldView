@@ -50,15 +50,21 @@ class InstrumentCreated(DomainEvent):
     """Emitted when a new instrument is first seen during data ingestion.
 
     Published to topic ``market.instrument.created``.
+
+    schema_version=2: adds optional name, isin, instrument_type fields populated
+    from EODHD company_profile data when available.
     """
 
     event_type: ClassVar[str] = "market.instrument.created"
-    schema_version: ClassVar[int] = 1
+    schema_version: ClassVar[int] = 2
 
     instrument_id: str = ""
     security_id: str = ""
     symbol: str = ""
     exchange: str = ""
+    name: str | None = None
+    isin: str | None = None
+    instrument_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,9 @@ class InstrumentUpdated(DomainEvent):
     """Emitted when an existing instrument's capability flags change.
 
     Published to topic ``market.instrument.updated``.
+
+    ``fields_updated`` lists the names of the fields that changed so consumers
+    can selectively process the update without inspecting all flag values.
     """
 
     event_type: ClassVar[str] = "market.instrument.updated"
@@ -77,3 +86,4 @@ class InstrumentUpdated(DomainEvent):
     has_ohlcv: bool = False
     has_quotes: bool = False
     has_fundamentals: bool = False
+    fields_updated: tuple[str, ...] = field(default_factory=tuple)

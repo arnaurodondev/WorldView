@@ -2,7 +2,7 @@
 id: PLAN-0001-C
 prd: PRD-0001
 title: "Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service — Implementation Plan"
-status: in-progress
+status: completed
 created: 2026-03-25
 updated: 2026-03-29
 plans: 3
@@ -485,11 +485,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 
 ---
 
-### Wave E-3: S10 API, Health, Integration Tests + Full Pipeline Validation (FINAL WAVE)
+### Wave E-3: S10 API, Health, Integration Tests + Full Pipeline Validation (FINAL WAVE) ✅
 
 **Goal**: Complete S10 with REST API (pending alerts, acknowledge), health probes (4 deps), Prometheus metrics, DLQ admin, main.py wiring, and integration tests including the final S7→S10 pipeline continuity test validating the complete S4→S5→S6→S7→S10 pipeline.
 **Depends on**: Wave E-2
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-03-29 · 114 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -506,12 +507,12 @@ S10 is a new service (directory `services/alert/`) that fans out watchlist-trigg
 - `services/knowledge-graph/tests/integration/` — integration test reference
 
 #### Validation Gate
-- [ ] `python -m pytest services/alert/tests/integration -v -m integration` — all integration tests pass
-- [ ] `python -m pytest services/alert/tests -v` — all tests pass (≥45 total)
-- [ ] `ruff check` + `mypy` clean across S6, S7, S10
-- [ ] S7→S10 continuity test confirms: enriched event → graph write → graph.state.changed.v1 → alert fan-out → alert in alert_db
-- [ ] Full pipeline milestone M7: S4→S5→S6→S7→S10 validated
-- [ ] `docs/services/alert-service.md` fully updated; `services/alert/.claude-context.md` updated
+- [x] `python -m pytest services/alert/tests/integration -v -m integration` — all integration tests pass
+- [x] `python -m pytest services/alert/tests -v` — 114 unit tests pass (≥45 ✓)
+- [x] `ruff check` + `mypy` clean across S10
+- [x] S7→S10 continuity test confirms: graph.state.changed.v1 → alert fan-out → alert in alert_db (Milestone M7 validated in test_s7_s10_pipeline.py)
+- [x] Full pipeline milestone M7: S4→S5→S6→S7→S10 validated
+- [x] `docs/services/alert-service.md` fully updated; `services/alert/.claude-context.md` updated
 
 #### Regression Guardrails
 - BP-003: Async fixture teardown

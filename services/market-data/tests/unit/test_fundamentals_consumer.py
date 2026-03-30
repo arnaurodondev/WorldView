@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from market_data.domain.entities import Instrument
@@ -114,12 +114,15 @@ async def test_fundamentals_consumer_skips_non_fundamentals() -> None:
 
 @pytest.mark.asyncio
 async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
-    """Consumer creates a new Instrument if symbol/exchange not found."""
+    """Consumer creates a new Instrument if symbol/exchange not found.
+
+    QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+    """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
-    mock_uow.collect_event = MagicMock()  # sync method — must not be AsyncMock
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
 
     raw = _make_fundamentals_json(["income_statement"])
@@ -130,7 +133,66 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     await consumer.process_message(None, _make_message(), {})
 
     mock_uow.instruments.upsert.assert_awaited_once()
-    mock_uow.collect_event.assert_called_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_enriches_instrument_created_with_company_profile() -> None:
+    """InstrumentCreated outbox payload includes name/isin from company_profile if present."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-002")
+    # Return None so FIX-F4 security enrichment path is skipped (not testing it here)
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "ISIN": "US02079K3059"},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["name"] == "Alphabet Inc."
+    assert outbox_payload["isin"] == "US02079K3059"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing() -> None:
+    """Consumer emits InstrumentUpdated to outbox when instrument lacks has_fundamentals.
+
+    QA-016: the flag-change path previously emitted nothing; now atomically writes to outbox.
+    """
+    instrument = _make_instrument(has_fundamentals=False)
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.update_flags = AsyncMock()
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-003")
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.instruments.update_flags.assert_awaited_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.updated"
+    assert call_kwargs.kwargs["payload"]["has_fundamentals"] is True
+    assert call_kwargs.kwargs["payload"]["fields_updated"] == ["has_fundamentals"]
 
 
 @pytest.mark.asyncio
