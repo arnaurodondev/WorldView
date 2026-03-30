@@ -474,3 +474,118 @@ async def test_policies_returns_200(app_with_overrides):
     data = resp.json()
     assert data["total"] == 1
     assert data["policies"][0]["provider"] == "eodhd"
+
+
+# ---------------------------------------------------------------------------
+# T-G-2-01: Missing auth tests (QA-018 / F-QA-005-014)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_policies_does_not_require_token(app_with_overrides):
+    """GET /api/v1/policies must NOT require authentication (read-only endpoint)."""
+    app, mock_uow = app_with_overrides
+    mock_uow.policies.list_enabled = AsyncMock(return_value=[])
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # No X-Internal-Token header
+        resp = await ac.get("/api/v1/policies")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_metrics_does_not_require_token(app_with_overrides):
+    """GET /metrics must NOT require authentication (public observability endpoint)."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/metrics")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_trigger_empty_configured_token_returns_401(app_with_overrides):
+    """When settings.internal_service_token is empty, even a valid-looking header → 401.
+
+    The auth logic checks `not expected` first; empty string always fails regardless
+    of what the client sends.
+    """
+    from market_ingestion.config import Settings
+
+    app, mock_uow = app_with_overrides
+    mock_uow.tasks.add_many = AsyncMock(return_value=1)
+    # Override settings with empty token
+    empty_token_settings = Settings(internal_service_token="")  # type: ignore[call-arg]
+    app.dependency_overrides[get_settings] = lambda: empty_token_settings
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": "some-token"},  # valid-looking header but server has no token
+    ) as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/trigger",
+            json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
+        )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_trigger_with_empty_token_header_returns_401(app_with_overrides):
+    """X-Internal-Token: '' (empty string) must return 401."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": ""},
+    ) as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/trigger",
+            json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
+        )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_storage_fails(app_with_overrides):
+    """GET /readyz must return 503 and include 'storage' in body when storage check fails."""
+    app, mock_uow = app_with_overrides
+    mock_uow.tasks.count_by_status = AsyncMock(return_value={"pending": 0})
+    # Override object_store to raise on exists()
+    from market_ingestion.api.dependencies import get_object_store
+
+    failing_store = MagicMock()
+    failing_store.exists = AsyncMock(side_effect=OSError("minio down"))
+    app.dependency_overrides[get_object_store] = lambda: failing_store
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/readyz")
+    assert resp.status_code == 503
+    assert "storage" in str(resp.json())
+
+
+@pytest.mark.asyncio
+async def test_settings_structlog_warning_on_empty_internal_token(monkeypatch):
+    """Empty internal_service_token emits a structlog WARNING (not warnings.warn) (F-SEC-001)."""
+    import os
+
+    for key in list(os.environ):
+        if key.startswith("MARKET_INGESTION_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_SECRET_KEY", "test-secret")
+    # internal_service_token defaults to "" — should trigger the warning
+
+    import structlog.testing
+    from market_ingestion.config import Settings
+
+    with structlog.testing.capture_logs() as logs:
+        _ = Settings()  # type: ignore[call-arg]
+
+    warning_logs = [e for e in logs if e.get("log_level") == "warning"]
+    assert any(
+        "missing_internal_service_token" in str(e) for e in warning_logs
+    ), f"Expected missing_internal_service_token warning in structlog output, got: {logs}"
