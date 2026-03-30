@@ -265,10 +265,11 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         except Exception as exc:
             raise MalformedDataError(f"Fundamentals parse failed: {exc}") from exc
 
-        # Extract company profile metadata early so InstrumentCreated can carry name/isin
+        # Extract company profile metadata early so InstrumentCreated can carry name/isin/description
         general = payload.get("company_profile") or {}
         company_name: str | None = general.get("Name") if isinstance(general, dict) else None
         company_isin: str | None = general.get("ISIN") if isinstance(general, dict) else None
+        company_description: str | None = general.get("Description") or None if isinstance(general, dict) else None
 
         # Resolve or create instrument
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
@@ -288,6 +289,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 exchange=exchange,
                 name=company_name,
                 isin=company_isin,
+                description=company_description,
             )
             await uow.outbox_events.create(
                 event_type=created_event.event_type,
