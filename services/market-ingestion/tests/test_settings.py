@@ -21,13 +21,9 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MARKET_INGESTION_STORAGE_ACCESS_KEY", "test-key")
     monkeypatch.setenv("MARKET_INGESTION_STORAGE_SECRET_KEY", "test-secret")
 
-    import warnings
-
     from market_ingestion.config import Settings
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # suppress EODHD demo-key warning in this test
-        s = Settings()
+    s = Settings()
     assert s.port == 8002
     assert s.host == Settings.model_fields["host"].default
     assert s.debug is False
