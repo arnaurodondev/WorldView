@@ -29,7 +29,6 @@ def mock_app():
     app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()
     app.state.storage = AsyncMock()
-    app.state.trigger_fn = AsyncMock()
 
     return app
 

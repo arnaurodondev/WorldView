@@ -1,94 +1,16 @@
-"""Unit tests for _run_fetch_cycle in app.py (T-R1-5-02)."""
+"""Unit tests for _metrics_poller in app.py.
+
+Note: _run_fetch_cycle was removed in PLAN-0006 Wave B-4 — its functionality
+lives in ExecuteContentTaskUseCase (tested in test_execute_task.py).
+"""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from content_ingestion.domain.entities import Source, SourceType
 
 pytestmark = pytest.mark.unit
-
-
-def _make_source(name: str = "test", source_type: SourceType = SourceType.EODHD) -> Source:
-    return Source(name=name, source_type=source_type, enabled=True, config={"ticker": "AAPL"})
-
-
-class TestRunFetchCycle:
-    async def test_unknown_source_type_returns_early(self) -> None:
-        """If ADAPTER_REGISTRY has no entry for source_type, returns immediately."""
-        from content_ingestion.app import _run_fetch_cycle
-
-        source = _make_source(source_type=SourceType.EODHD)
-        settings = MagicMock()
-
-        # Patch ADAPTER_REGISTRY to be empty
-        with patch("content_ingestion.app.ADAPTER_REGISTRY", {}):
-            await _run_fetch_cycle(
-                source=source,
-                settings=settings,
-                session_factory=MagicMock(),
-                storage=MagicMock(),
-                valkey=MagicMock(),
-                http_client=MagicMock(),
-            )
-        # No assertion needed — just verifying no exception raised
-
-    async def test_empty_fetch_results_skips_write_phase(self) -> None:
-        """If adapter returns empty results, we never acquire the advisory lock."""
-        from content_ingestion.app import _run_fetch_cycle
-
-        source = _make_source()
-        settings = MagicMock(backfill_enabled=False, eodhd_api_key="key")
-
-        mock_adapter = AsyncMock(fetch=AsyncMock(return_value=[]))
-        mock_adapter_cls = MagicMock(return_value=mock_adapter)
-
-        mock_session_factory = MagicMock()
-
-        # Read-only session for watermark
-        ro_session = AsyncMock()
-        ro_session.__aenter__ = AsyncMock(return_value=ro_session)
-        ro_session.__aexit__ = AsyncMock(return_value=False)
-
-        # Dedup session
-        dedup_session = AsyncMock()
-        dedup_session.__aenter__ = AsyncMock(return_value=dedup_session)
-        dedup_session.__aexit__ = AsyncMock(return_value=False)
-
-        call_count = 0
-
-        def session_factory_side_effect():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return ro_session
-            return dedup_session
-
-        mock_session_factory.side_effect = session_factory_side_effect
-
-        with (
-            patch("content_ingestion.app.ADAPTER_REGISTRY", {SourceType.EODHD: mock_adapter_cls}),
-            patch(
-                "content_ingestion.infrastructure.db.repositories.adapter_state.AdapterStateRepository.get",
-                new_callable=AsyncMock,
-                return_value=None,
-            ),
-            patch("content_ingestion.app.FetchLogRepository"),
-        ):
-            await _run_fetch_cycle(
-                source=source,
-                settings=settings,
-                session_factory=mock_session_factory,
-                storage=MagicMock(),
-                valkey=MagicMock(),
-                http_client=MagicMock(),
-            )
-
-        # pg_advisory_lock should NOT have been called (no write phase)
-        # This is verified by the fact that we only created 2 sessions (ro + dedup),
-        # not a 3rd one for the write phase
-        assert call_count == 2
 
 
 class TestMetricsPoller:

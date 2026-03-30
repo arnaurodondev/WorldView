@@ -462,6 +462,81 @@ services:
       retries: 3
       start_period: 10s
 
+  # ── Content Ingestion (S4) — 4 processes, same image ──────────────────────
+  # API server
+  content-ingestion:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["uvicorn", "content_ingestion.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8004:8000"
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Scheduler process — evaluates sources and creates tasks
+  content-ingestion-scheduler:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_process"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Worker process — claims and executes ingestion tasks
+  content-ingestion-worker:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    # Scale: docker compose up --scale content-ingestion-worker=3
+
+  # Outbox dispatcher — publishes events from outbox to Kafka
+  content-ingestion-dispatcher:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
 volumes:
   minio_data:
   postgres_data:

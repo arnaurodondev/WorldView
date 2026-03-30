@@ -246,7 +246,17 @@ class AlertFanoutUseCase:
 
         # ── 5. Dedup check ───────────────────────────────────────────────────
         now = utc_now()
-        dedup_key = Alert.compute_dedup_key(entity_uuid, alert_type, now, self._dedup_window)
+        # Use event's occurred_at for the dedup window bucket (stable across re-deliveries).
+        # If re-delivered in a different 300s window, the same event still hashes to the
+        # same dedup_key, preventing duplicate alerts.  Fall back to now() on parse failure.
+        occurred_at_raw = event.get("occurred_at", "")
+        try:
+            event_time = datetime.fromisoformat(str(occurred_at_raw))
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=UTC)
+        except (ValueError, AttributeError, TypeError):
+            event_time = now
+        dedup_key = Alert.compute_dedup_key(entity_uuid, alert_type, event_time, self._dedup_window)
 
         async with self._sf() as session:
             dedup_repo = DedupRepository(session)

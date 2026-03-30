@@ -125,8 +125,9 @@ class SourceUpdateRequest(BaseModel):
 
 
 class TriggerResponse(BaseModel):
-    status: str = "triggered"
+    status: str = "queued"
     source_id: UUID
+    task_id: UUID | None = None
 
 
 # ── Status ───────────────────────────────────────────────────────────────────
