@@ -9,7 +9,7 @@
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
 | PLAN-0001-E-R1 | S1+S2+S3 Remaining Open Items: UoW commit, TOCTOU dedup, arch violations, topic mismatch, domain layer, auth | QA-CROSS-002 | in-progress | 5/6 | — | 2026-03-29 |
-| PLAN-0006 | Process Architecture & Database Standardization: S4 Decoupling + Scheduler-Worker + R/W Split | N/A | in-progress | 3/5 | — | 2026-03-29 |
+| PLAN-0006 | Process Architecture & Database Standardization: S4 Decoupling + Scheduler-Worker + R/W Split | N/A | in-progress | 4/5 | — | 2026-03-30 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)

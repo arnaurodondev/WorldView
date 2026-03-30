@@ -3,7 +3,7 @@
 > **PRD**: N/A (architectural improvement — user-driven)
 > **Status**: in-progress
 > **Created**: 2026-03-28
-> **Updated**: 2026-03-29
+> **Updated**: 2026-03-30
 
 > **Owner**: Arnau Rodon
 
@@ -777,12 +777,13 @@ Store both factories on `app.state` during lifespan.
 
 ---
 
-### Wave B-3: Application — Use Cases, Scheduler Process, Worker Process
+### Wave B-3: Application — Use Cases, Scheduler Process, Worker Process ✅
 
 **Goal**: Create the use cases for task scheduling and execution, plus standalone scheduler and worker processes with signal handling and entry points.
 **Depends on**: Wave B-2
 **Estimated effort**: 60-90 minutes
 **Architecture layer**: application + infrastructure (processes)
+**Status**: **DONE** — 2026-03-30 · 25 new tests (366 total unit) · ruff + mypy clean
 
 #### Tasks
 
@@ -1038,18 +1039,18 @@ concurrency, and signal handling. Mirrors `services/market-ingestion/infrastruct
 - `services/market-ingestion/src/market_ingestion/application/use_cases/claim_tasks.py`
 
 #### Validation Gate
-- [ ] ruff check passes on changed files
-- [ ] mypy passes on `content_ingestion`
-- [ ] Unit tests pass — minimum 21 new tests (from B-3 tasks)
-- [ ] Entry points work: `python -m content_ingestion.infrastructure.scheduler.scheduler_process --help` (or just imports cleanly)
-- [ ] Entry points work: `python -m content_ingestion.infrastructure.workers.worker --help`
-- [ ] No architecture violations (use cases import domain, not infrastructure)
+- [x] ruff check passes on changed files
+- [x] mypy passes on `content_ingestion`
+- [x] Unit tests pass — 25 new tests (366 total, exceeds 21 minimum)
+- [x] Entry points work: `python -m content_ingestion.infrastructure.scheduler.scheduler_process` imports cleanly
+- [x] Entry points work: `python -m content_ingestion.infrastructure.workers.worker` imports cleanly
+- [x] No architecture violations (schedule_sources + claim_tasks import domain only, not infrastructure)
 
 #### Regression Guardrails
-- BP-016: ExecuteContentTaskUseCase MUST NOT hold session during external API calls
-- BP-015: Advisory lock hash uses `hashlib.sha256`, not Python `hash()`
-- BP-001: Outbox serialization uses OutboxEventValueSerializer
-- BP-035: Task claiming uses SELECT FOR UPDATE SKIP LOCKED (not SELECT then UPDATE)
+- BP-016: ExecuteContentTaskUseCase MUST NOT hold session during external API calls ✅
+- BP-015: Advisory lock hash uses `hashlib.sha256`, not Python `hash()` ✅ (uses string key)
+- BP-001: Outbox serialization uses OutboxEventValueSerializer ✅ (reuses FetchAndWriteUseCase)
+- BP-035: Task claiming uses SELECT FOR UPDATE SKIP LOCKED (not SELECT then UPDATE) ✅ (via ClaimTasksUseCase → TaskRepository)
 
 ---
 
@@ -1388,15 +1389,15 @@ Mitigation: Reuse `FetchAndWriteUseCase` unchanged; only wrap it with task lifec
 | T-B-1-01 | Add IngestionTaskStatus enum | B-1 | done | 7 tests in contracts |
 | T-B-1-02 | Add ContentIngestionTask entity | B-1 | done | 23 unit tests |
 | T-B-1-03 | Add scheduler/worker config to Settings | B-1 | done | 3 unit tests |
-| T-B-2-01 | Implement read/write dual session factory | B-2 | pending | |
-| T-B-2-02 | Alembic migration + ORM model for tasks | B-2 | pending | |
-| T-B-2-03 | Implement TaskRepository with claim_batch | B-2 | pending | |
-| T-B-2-04 | Update Unit of Work for dual sessions | B-2 | pending | |
-| T-B-2-05 | Update API dependencies for dual sessions | B-2 | pending | |
-| T-B-3-01 | ScheduleDueSourcesUseCase + SchedulerProcess | B-3 | pending | |
-| T-B-3-02 | ClaimTasksUseCase | B-3 | pending | |
-| T-B-3-03 | ExecuteContentTaskUseCase | B-3 | pending | |
-| T-B-3-04 | WorkerProcess + entry point | B-3 | pending | |
+| T-B-2-01 | Implement read/write dual session factory | B-2 | done | |
+| T-B-2-02 | Alembic migration + ORM model for tasks | B-2 | done | |
+| T-B-2-03 | Implement TaskRepository with claim_batch | B-2 | done | |
+| T-B-2-04 | Update Unit of Work for dual sessions | B-2 | done | |
+| T-B-2-05 | Update API dependencies for dual sessions | B-2 | done | |
+| T-B-3-01 | ScheduleDueSourcesUseCase + SchedulerProcess | B-3 | done | 8 use case + 3 process tests |
+| T-B-3-02 | ClaimTasksUseCase | B-3 | done | 3 tests |
+| T-B-3-03 | ExecuteContentTaskUseCase | B-3 | done | 6 tests |
+| T-B-3-04 | WorkerProcess + entry point | B-3 | done | 5 tests |
 | T-B-4-01 | Refactor app.py lifespan | B-4 | pending | |
 | T-B-4-02 | Update POST /trigger to create task | B-4 | pending | |
 | T-B-4-03 | Verify + harden standalone dispatcher | B-4 | pending | |
