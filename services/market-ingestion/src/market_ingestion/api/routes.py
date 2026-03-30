@@ -19,6 +19,7 @@ import prometheus_client
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from market_ingestion.api.dependencies import (
+    InternalAuthDep,
     get_object_store,
     get_settings,
     get_uow,
@@ -115,6 +116,7 @@ async def readyz(
 )
 async def trigger_ingestion(
     req: TriggerRequest,
+    _auth: InternalAuthDep,
     uow: SqlaUnitOfWork = Depends(get_uow),
 ) -> TriggerResponse:
     """Trigger immediate ingestion for one or more symbols."""
@@ -157,6 +159,7 @@ async def trigger_ingestion(
 )
 async def trigger_backfill(
     req: BackfillRequest,
+    _auth: InternalAuthDep,
     uow: SqlaUnitOfWork = Depends(get_uow),
 ) -> BackfillResponse:
     """Trigger a historical backfill for a single symbol."""

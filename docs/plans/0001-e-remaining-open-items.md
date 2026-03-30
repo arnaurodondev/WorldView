@@ -2,10 +2,10 @@
 id: PLAN-0001-E-R1
 prd: QA-CROSS-002
 title: "S1+S2+S3 Remaining Open Items — Architecture + Security + Consistency Decisions"
-status: in-progress
+status: completed
 created: 2026-03-28
-updated: 2026-03-29
-waves_done: 5
+updated: 2026-03-30
+waves_done: 6
 plans: 1
 waves: 6
 tasks: 18
@@ -289,10 +289,11 @@ Before implementing any fix, verify:
 
 ---
 
-## Wave 6: QA-018 — market-ingestion Mutating Endpoints Have No Authentication
+## Wave 6: QA-018 — market-ingestion Mutating Endpoints Have No Authentication ✅
 
 **Priority**: HIGH — any process on the internal network can trigger ingestion tasks
 **Decision required**: Auth mechanism (X-Internal-Token vs API key vs service mesh)
+**Status**: **DONE** — 2026-03-30 · 379 unit tests pass · ruff + mypy clean
 
 ### Context
 
@@ -328,11 +329,11 @@ Any service (or attacker with internal network access) can arbitrarily schedule 
 
 | # | Task | File | Type |
 |---|------|------|------|
-| T19 | Add `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` to `config.py` with startup warning if unset | `src/market_ingestion/config.py` | Config |
-| T20 | Add `verify_internal_token` dependency and `InternalAuthDep` alias | `src/market_ingestion/api/deps.py` | Auth |
-| T21 | Apply `InternalAuthDep` to `POST /tasks`, `POST /backfills`, `POST /admin/*` | `src/market_ingestion/api/routes.py` | Security |
-| T22 | Add unit tests for authenticated + unauthenticated requests | `tests/unit/api/` | Test |
-| T23 | Add `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` to `.env.example` and docker-compose | `infra/` | Config |
+| T19 | ✅ Added `internal_service_token: str = ""` + `_warn_missing_internal_token` validator | `src/market_ingestion/config.py` | Config |
+| T20 | ✅ Added `verify_internal_token` + `InternalAuthDep` using `hmac.compare_digest` | `src/market_ingestion/api/dependencies.py` | Auth |
+| T21 | ✅ Applied `_auth: InternalAuthDep` to `POST /trigger` and `POST /backfill` | `src/market_ingestion/api/routes.py` | Security |
+| T22 | ✅ Added 5 new auth tests (4× 401 for missing/wrong token, 1× GET is public); updated 3 existing POST tests to include token; updated fixtures | `tests/api/test_routes.py`, `tests/test_settings.py` | Test |
+| T23 | ✅ Added `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` to both env example files | `configs/dev.local.env.example`, `configs/docker.env.example` | Config |
 
 ---
 

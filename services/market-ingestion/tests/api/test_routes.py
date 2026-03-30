@@ -43,10 +43,17 @@ def _make_mock_object_store():
     return store
 
 
+_TEST_TOKEN = "test-internal-secret"  # noqa: S105
+
+
 @pytest.fixture
 def app_with_overrides():
-    """Create the app with all external dependencies replaced by mocks."""
+    """Create the app with all external dependencies replaced by mocks.
+
+    Sets a known internal_service_token so auth tests can use _TEST_TOKEN.
+    """
     app = create_app()
+    app.state.settings.internal_service_token = _TEST_TOKEN
     mock_uow = _make_mock_uow()
 
     async def override_get_uow():
@@ -60,9 +67,14 @@ def app_with_overrides():
 
 @pytest.fixture
 async def client(app_with_overrides):
+    """Client fixture with X-Internal-Token pre-set for authenticated requests."""
     app, mock_uow = app_with_overrides
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": _TEST_TOKEN},
+    ) as ac:
         yield ac, mock_uow
 
 
@@ -120,7 +132,11 @@ async def test_trigger_returns_202(app_with_overrides):
     mock_uow.tasks.add_many = AsyncMock(return_value=2)
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": _TEST_TOKEN},
+    ) as ac:
         resp = await ac.post(
             "/api/v1/ingest/trigger",
             json={
@@ -175,7 +191,11 @@ async def test_backfill_returns_202(app_with_overrides):
     mock_uow.tasks.add_many = AsyncMock(return_value=3)
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": _TEST_TOKEN},
+    ) as ac:
         resp = await ac.post(
             "/api/v1/ingest/backfill",
             json={
@@ -289,7 +309,11 @@ async def test_backfill_10_year_range_accepted(app_with_overrides):
     app, mock_uow = app_with_overrides
     mock_uow.tasks.add_many = AsyncMock(return_value=1)
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": _TEST_TOKEN},
+    ) as ac:
         resp = await ac.post(
             "/api/v1/ingest/backfill",
             json={
@@ -319,6 +343,103 @@ async def test_backfill_exceeds_10_year_rejected(client):
         },
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Authentication — POST /api/v1/ingest/trigger (QA-018)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trigger_without_token_returns_401(app_with_overrides):
+    """POST /trigger with no X-Internal-Token must return 401 (QA-018)."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/trigger",
+            json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
+        )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_trigger_with_wrong_token_returns_401(app_with_overrides):
+    """POST /trigger with an incorrect token must return 401 (QA-018)."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": "wrong-token"},
+    ) as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/trigger",
+            json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
+        )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Authentication — POST /api/v1/ingest/backfill (QA-018)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backfill_without_token_returns_401(app_with_overrides):
+    """POST /backfill with no X-Internal-Token must return 401 (QA-018)."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/backfill",
+            json={
+                "provider": "eodhd",
+                "symbol": "AAPL",
+                "start_date": "2024-01-01",
+                "end_date": "2024-03-01",
+            },
+        )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_backfill_with_wrong_token_returns_401(app_with_overrides):
+    """POST /backfill with an incorrect token must return 401 (QA-018)."""
+    app, _ = app_with_overrides
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-Token": "wrong-token"},
+    ) as ac:
+        resp = await ac.post(
+            "/api/v1/ingest/backfill",
+            json={
+                "provider": "eodhd",
+                "symbol": "AAPL",
+                "start_date": "2024-01-01",
+                "end_date": "2024-03-01",
+            },
+        )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET endpoints are not protected (QA-018 — read-only endpoints are public)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_require_token(app_with_overrides):
+    """GET /api/v1/ingest/status must not require authentication."""
+    app, mock_uow = app_with_overrides
+    mock_uow.tasks.count_by_status = AsyncMock(return_value={"pending": 0})
+    transport = ASGITransport(app=app)
+    # No X-Internal-Token header — read-only endpoint should still return 200
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/api/v1/ingest/status")
+    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
