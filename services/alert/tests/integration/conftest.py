@@ -78,7 +78,7 @@ def db_session_factory(postgres_container: str) -> Any:
 @pytest.fixture
 async def db_session(db_session_factory: Any) -> AsyncGenerator[AsyncSession, None]:
     """Yield a per-test AsyncSession.  Rolls back after the test (BP-003)."""
-    factory, engine = db_session_factory
+    factory, _engine = db_session_factory
     async with factory() as session:
         yield session
         await session.rollback()
