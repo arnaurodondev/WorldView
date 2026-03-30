@@ -12,7 +12,7 @@ from observability.logging import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from content_ingestion.application.ports.unit_of_work import UnitOfWork
+    from content_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork
 
 logger = get_logger(__name__)
 
@@ -37,9 +37,12 @@ class PipelineStatus:
 
 
 class GetPipelineStatusUseCase:
-    """Aggregate pipeline status from multiple repositories."""
+    """Aggregate pipeline status from multiple repositories.
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    Read-only — uses ``ReadOnlyUnitOfWork`` to leverage the read replica (R27).
+    """
+
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(self) -> PipelineStatus:
@@ -66,7 +69,6 @@ class GetPipelineStatusUseCase:
 
             outbox_pending = await self._uow.outbox.count_pending()
             dlq_count = await self._uow.dlq.count_failed()
-            await self._uow.commit()
 
         return PipelineStatus(
             sources=details,

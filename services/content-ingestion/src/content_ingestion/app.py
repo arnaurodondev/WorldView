@@ -21,8 +21,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
-from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
 from content_ingestion.infrastructure.metrics.prometheus import s4_dlq_total, s4_outbox_pending_total
+from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -121,6 +122,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.uow_factory = lambda: SqlaUnitOfWork(write_factory, read_factory)
+    app.state.read_uow_factory = lambda: SqlaReadOnlyUnitOfWork(read_factory)
 
     # 4. Valkey
     valkey = create_valkey_client_from_url(settings.valkey_url)
@@ -136,6 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     storage = build_object_storage(settings=storage_settings)
     app.state.storage = storage
+    app.state.bronze_storage = MinioBronzeAdapter(storage)
 
     # 6. HTTP client with SSRF-safe transport (DNS rebinding prevention — BP-024)
     from content_ingestion.infrastructure.http.ssrf_transport import SSRFSafeTransport

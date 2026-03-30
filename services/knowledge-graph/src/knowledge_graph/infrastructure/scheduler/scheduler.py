@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
 
+from knowledge_graph.infrastructure.metrics.prometheus import s7_worker_crash_total
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -112,8 +113,31 @@ class KnowledgeGraphScheduler:
         """Return the real worker.run if available, otherwise a no-op stub."""
         worker = self._workers.get(name)
         if worker is not None and hasattr(worker, "run"):
-            return worker.run
+            return self._wrap_worker(name, worker.run)
         return self._make_stub(name)
+
+    def _wrap_worker(self, name: str, fn: Any) -> Any:
+        """Wrap a worker.run coroutine function with crash instrumentation.
+
+        On unhandled exception: increments ``s7_worker_crash_total``, logs
+        ``kg_worker_crashed`` at ERROR, then re-raises so APScheduler can
+        record the failure and apply coalesce/retry logic.
+        """
+
+        async def _instrumented() -> None:
+            try:
+                await fn()
+            except Exception:
+                s7_worker_crash_total.labels(worker=name).inc()
+                logger.error(  # type: ignore[no-any-return]
+                    "kg_worker_crashed",
+                    worker=name,
+                    exc_info=True,
+                )
+                raise
+
+        _instrumented.__name__ = f"instrumented_{name}"
+        return _instrumented
 
     @staticmethod
     def _make_stub(worker_name: str) -> Any:

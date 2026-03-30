@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from alert.infrastructure.metrics.prometheus import s10_s1_lookup_failed_total
+
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
@@ -49,9 +51,12 @@ class WatchlistCache:
 
         # --- cache miss → S1 ---
         logger.debug("watchlist_cache_miss", entity_id=entity_id)
-        watchers = await self._s1.get_watchers_by_entity(entity_id)
+        watchers, ok = await self._s1.get_watchers_by_entity(entity_id)
 
-        if watchers:
+        if not ok:
+            s10_s1_lookup_failed_total.inc()
+            logger.warning("watchlist_s1_unavailable", entity_id=entity_id)  # type: ignore[no-any-return]
+        elif watchers:
             await self._safe_set(key, self._serialise(watchers))
 
         return watchers

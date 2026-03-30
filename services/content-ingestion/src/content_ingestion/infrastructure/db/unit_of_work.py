@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from content_ingestion.application.ports.unit_of_work import UnitOfWork
+from content_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
 from content_ingestion.infrastructure.db.repositories.dlq import DLQRepository
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
@@ -22,12 +22,81 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
-class SqlaUnitOfWork(UnitOfWork):
-    """SQLAlchemy-backed Unit of Work.
+class SqlaReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
+    """Read-only Unit of Work backed by the read-replica session.
 
-    Opens a write session (and optionally a separate read session) and
-    aggregates all five repositories. On ``commit()`` any registered
-    ``on_commit`` callbacks are invoked (e.g. to signal the outbox dispatcher).
+    Exposes all repository properties for queries but provides no
+    ``commit()`` or ``rollback()`` — enforcing read-only semantics (R27).
+    """
+
+    def __init__(self, read_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._read_factory = read_factory
+        self._session: AsyncSession | None = None
+        self._tasks: TaskRepository | None = None
+        self._sources: SourceRepository | None = None
+        self._fetch_logs: FetchLogRepository | None = None
+        self._outbox: OutboxRepository | None = None
+        self._adapter_state: AdapterStateRepository | None = None
+        self._dlq: DLQRepository | None = None
+
+    @property
+    def tasks(self) -> TaskRepository:
+        assert self._tasks is not None, "ReadOnlyUnitOfWork not entered"
+        return self._tasks
+
+    @property
+    def sources(self) -> SourceRepository:
+        assert self._sources is not None, "ReadOnlyUnitOfWork not entered"
+        return self._sources
+
+    @property
+    def fetch_logs(self) -> FetchLogRepository:
+        assert self._fetch_logs is not None, "ReadOnlyUnitOfWork not entered"
+        return self._fetch_logs
+
+    @property
+    def outbox(self) -> OutboxRepository:
+        assert self._outbox is not None, "ReadOnlyUnitOfWork not entered"
+        return self._outbox
+
+    @property
+    def adapter_state(self) -> AdapterStateRepository:
+        assert self._adapter_state is not None, "ReadOnlyUnitOfWork not entered"
+        return self._adapter_state
+
+    @property
+    def dlq(self) -> DLQRepository:
+        assert self._dlq is not None, "ReadOnlyUnitOfWork not entered"
+        return self._dlq
+
+    async def __aenter__(self) -> SqlaReadOnlyUnitOfWork:
+        self._session = self._read_factory()
+        await self._session.__aenter__()
+        self._tasks = TaskRepository(self._session)
+        self._sources = SourceRepository(self._session)
+        self._fetch_logs = FetchLogRepository(self._session)
+        self._outbox = OutboxRepository(self._session)
+        self._adapter_state = AdapterStateRepository(self._session)
+        self._dlq = DLQRepository(self._session)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        if self._session is not None:
+            await self._session.__aexit__(None, None, None)
+            self._session = None
+
+
+class SqlaUnitOfWork(UnitOfWork):
+    """SQLAlchemy-backed Unit of Work (read-write).
+
+    Opens a write session and aggregates all repositories. On ``commit()``
+    any registered ``on_commit`` callbacks are invoked (e.g. to signal the
+    outbox dispatcher).
 
     Usage::
 

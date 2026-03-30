@@ -39,3 +39,9 @@ s7_embeddings_refreshed_total = Counter(
     "Total entity/relation embeddings refreshed, by worker.",
     ["worker"],
 )
+
+s7_worker_crash_total = Counter(
+    "s7_worker_crash_total",
+    "Total unhandled exceptions from background worker jobs, by worker.",
+    ["worker"],
+)

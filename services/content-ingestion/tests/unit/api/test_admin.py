@@ -1,4 +1,4 @@
-"""Unit tests for admin API endpoints."""
+"""Unit tests for admin, DLQ, and internal API endpoints."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 pytestmark = pytest.mark.unit
 
 ADMIN_TOKEN = "test-admin-token"  # noqa: S105
+INTERNAL_TOKEN = "test-internal-token"  # noqa: S105
 
 
 def _make_source(
@@ -46,9 +47,29 @@ def _make_adapter_state(source_id: UUID, *, error_count: int = 0) -> MagicMock:
     return state
 
 
+def _make_dlq_entry(*, dlq_id: UUID | None = None, status: str = "failed") -> MagicMock:
+    """Build a mock DLQ entry."""
+    import common.ids
+    import common.time
+
+    entry = MagicMock()
+    entry.dlq_id = dlq_id or common.ids.new_uuid7()
+    entry.original_event_id = common.ids.new_uuid7()
+    entry.topic = "content.article.raw.v1"
+    entry.error_detail = "test error"
+    entry.status = status
+    entry.created_at = common.time.utc_now()
+    entry.resolved_at = None
+    entry.resolution_note = None
+    return entry
+
+
 @pytest.fixture
 def mock_uow():
-    """Create a mock Unit of Work with all repo stubs."""
+    """Create a mock Unit of Work with all repo stubs.
+
+    This mock satisfies both UnitOfWork and ReadOnlyUnitOfWork interfaces.
+    """
     uow = AsyncMock()
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=False)
@@ -67,21 +88,34 @@ def mock_uow():
 
 
 @pytest.fixture
-def mock_app(mock_uow):
+def mock_bronze():
+    """Create a mock bronze storage adapter."""
+    bronze = AsyncMock()
+    bronze.put_object = AsyncMock(return_value="content-ingestion/manual/abc123/raw/v1.json")
+    return bronze
+
+
+@pytest.fixture
+def mock_app(mock_uow, mock_bronze):
     """Create a FastAPI app with mocked state for testing."""
     from content_ingestion.app import create_app
 
     app = create_app()
 
     # Mock lifespan dependencies on app.state
-    app.state.settings = MagicMock(admin_token=ADMIN_TOKEN)
+    app.state.settings = MagicMock(
+        admin_token=ADMIN_TOKEN,
+        internal_service_token=INTERNAL_TOKEN,
+    )
     mock_factory = AsyncMock()
     app.state.session_factory = mock_factory
     app.state.write_factory = mock_factory
     app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()
     app.state.storage = AsyncMock()
+    app.state.bronze_storage = mock_bronze
     app.state.uow_factory = lambda: mock_uow
+    app.state.read_uow_factory = lambda: mock_uow
 
     return app
 
@@ -301,3 +335,146 @@ class TestPipelineStatus:
         assert data["sources"][0]["errors_24h"] == 2
         assert data["outbox_pending"] == 5
         assert data["dlq_count"] == 1
+
+
+# ── DLQ Route tests ─────────────────────────────────────────────────────────
+
+
+class TestListDLQ:
+    async def test_list_dlq_empty(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.dlq.list_open = AsyncMock(return_value=([], 0))
+
+        resp = await client.get("/admin/dlq", headers={"X-Admin-Token": ADMIN_TOKEN})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["entries"] == []
+        assert data["count"] == 0
+
+    async def test_list_dlq_with_entries(self, client: AsyncClient, mock_uow) -> None:
+        entry = _make_dlq_entry()
+        mock_uow.dlq.list_open = AsyncMock(return_value=([entry], 1))
+
+        resp = await client.get("/admin/dlq", headers={"X-Admin-Token": ADMIN_TOKEN})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["entries"]) == 1
+        assert data["entries"][0]["topic"] == "content.article.raw.v1"
+        assert data["count"] == 1
+
+
+class TestGetDLQEntry:
+    async def test_get_dlq_entry_found(self, client: AsyncClient, mock_uow) -> None:
+        entry = _make_dlq_entry()
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=entry)
+
+        resp = await client.get(f"/admin/dlq/{entry.dlq_id}", headers={"X-Admin-Token": ADMIN_TOKEN})
+        assert resp.status_code == 200
+        assert resp.json()["topic"] == "content.article.raw.v1"
+
+    async def test_get_dlq_entry_not_found(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=None)
+
+        resp = await client.get(
+            "/admin/dlq/00000000-0000-0000-0000-000000000001",
+            headers={"X-Admin-Token": ADMIN_TOKEN},
+        )
+        assert resp.status_code == 404
+
+
+class TestRetryDLQ:
+    async def test_retry_dlq_success(self, client: AsyncClient, mock_uow) -> None:
+        import common.ids
+
+        entry = _make_dlq_entry()
+        new_id = common.ids.new_uuid7()
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=entry)
+        mock_uow.dlq.requeue = AsyncMock(return_value=new_id)
+
+        resp = await client.post(f"/admin/dlq/{entry.dlq_id}/retry", headers={"X-Admin-Token": ADMIN_TOKEN})
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "requeued"
+        assert resp.json()["new_event_id"] == str(new_id)
+        mock_uow.commit.assert_awaited_once()
+
+    async def test_retry_dlq_not_found(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=None)
+
+        resp = await client.post(
+            "/admin/dlq/00000000-0000-0000-0000-000000000001/retry",
+            headers={"X-Admin-Token": ADMIN_TOKEN},
+        )
+        assert resp.status_code == 404
+
+
+class TestResolveDLQ:
+    async def test_resolve_dlq_success(self, client: AsyncClient, mock_uow) -> None:
+        entry = _make_dlq_entry()
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=entry)
+        mock_uow.dlq.mark_resolved = AsyncMock()
+
+        resp = await client.post(
+            f"/admin/dlq/{entry.dlq_id}/resolve",
+            headers={"X-Admin-Token": ADMIN_TOKEN},
+            json={"note": "manually verified"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "resolved"
+        mock_uow.commit.assert_awaited_once()
+
+    async def test_resolve_dlq_not_found(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.dlq.get_by_id = AsyncMock(return_value=None)
+
+        resp = await client.post(
+            "/admin/dlq/00000000-0000-0000-0000-000000000001/resolve",
+            headers={"X-Admin-Token": ADMIN_TOKEN},
+            json={"note": "nope"},
+        )
+        assert resp.status_code == 404
+
+
+# ── Internal Submit tests ───────────────────────────────────────────────────
+
+
+class TestInternalSubmit:
+    async def test_submit_raw_content_success(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.fetch_logs.exists_by_url_hash = AsyncMock(return_value=False)
+        mock_uow.fetch_logs.create = AsyncMock()
+        mock_uow.outbox.append = AsyncMock()
+
+        resp = await client.post(
+            "/internal/v1/ingest/submit",
+            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            json={"source_type": "manual", "raw_content": "some article text"},
+        )
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert "doc_id" in data
+        mock_uow.commit.assert_awaited_once()
+
+    async def test_submit_duplicate_returns_duplicate(self, client: AsyncClient, mock_uow) -> None:
+        mock_uow.fetch_logs.exists_by_url_hash = AsyncMock(return_value=True)
+
+        resp = await client.post(
+            "/internal/v1/ingest/submit",
+            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            json={"source_type": "manual", "raw_content": "duplicate content"},
+        )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "duplicate"
+
+    async def test_submit_both_url_and_content_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/internal/v1/ingest/submit",
+            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            json={"source_type": "manual", "url": "https://example.com", "raw_content": "test"},
+        )
+        assert resp.status_code == 422
+
+    async def test_submit_neither_url_nor_content_rejected(self, client: AsyncClient) -> None:
+        resp = await client.post(
+            "/internal/v1/ingest/submit",
+            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            json={"source_type": "manual"},
+        )
+        assert resp.status_code == 422

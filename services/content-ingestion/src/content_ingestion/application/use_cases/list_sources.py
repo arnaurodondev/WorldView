@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
-    from content_ingestion.application.ports.unit_of_work import UnitOfWork
+    from content_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork
 
 logger = get_logger(__name__)
 
@@ -28,9 +28,12 @@ class SourceListItem:
 
 
 class ListSourcesUseCase:
-    """List all configured polling sources, enriched with adapter state metadata."""
+    """List all configured polling sources, enriched with adapter state metadata.
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    Read-only — uses ``ReadOnlyUnitOfWork`` to leverage the read replica (R27).
+    """
+
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(self) -> list[SourceListItem]:
@@ -38,7 +41,6 @@ class ListSourcesUseCase:
         async with self._uow:
             sources = await self._uow.sources.get_all()
             states = await self._uow.adapter_state.get_all()
-            await self._uow.commit()
 
         state_map = {s.source_id: s for s in states}
         items = []

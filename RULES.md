@@ -218,6 +218,14 @@ session-per-request are exempt because they are short-lived. Each process type M
 configure pool sizes appropriate to its concurrency profile. See STANDARDS.md §16 for
 patterns and pool size recommendations.
 
+### R27: Read-only use cases MUST depend on `ReadOnlyUnitOfWork`
+**Why**: Use cases that only query data (no mutations) MUST declare their dependency as
+`ReadOnlyUnitOfWork` (not `UnitOfWork`). This ensures they use the read replica session
+(R23 read/write split), preventing accidental writes and distributing read load away from
+the primary. The `ReadOnlyUnitOfWork` has no `commit()` or `rollback()` methods — mypy
+will catch any misuse at type-check time. API route handlers MUST use `ReadUoWDep` for
+read-only endpoints and `UoWDep` for mutating endpoints.
+
 ---
 
 ## Summary Table
@@ -250,3 +258,4 @@ patterns and pool size recommendations.
 | R24 | Infrastructure | MUST NOT |
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
+| R27 | Architecture | MUST |

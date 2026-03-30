@@ -2,10 +2,10 @@
 id: PLAN-0007
 prd: PLAN-0001-C (QA pass)
 title: "PLAN-0001-C QA Fixes — Idempotency, Valkey Hardening, Observability, Deployment Constraints"
-status: in-progress
+status: completed
 created: 2026-03-30
 updated: 2026-03-30
-waves_done: 0
+waves_done: 2
 plans: 1
 waves: 2
 tasks: 8
@@ -278,11 +278,12 @@ Note: `_resolve_topic` is `@staticmethod` — the logger call needs to use the m
 
 ---
 
-## Wave A-2: Observability, S1 Signaling & Documentation
+## Wave A-2: Observability, S1 Signaling & Documentation ✅
 
 **Goal**: Make S7 worker crashes visible in Prometheus; add S1 availability signaling in S10; document the D-004 eventual consistency gap and the S10 single-replica + auth-injection constraints.
 **Depends on**: Wave A-1 (can share test session setup patterns)
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-03-30 · 11 new unit tests · ruff + mypy clean
 **Architecture layer**: infrastructure + observability + docs
 
 ### Pre-read (agent must read before starting)
@@ -529,12 +530,12 @@ Update `.claude-context.md` Pitfalls section with:
 ---
 
 ### Wave A-2 Validation Gate
-- [ ] `ruff check` + `ruff format --check` on changed files
-- [ ] `mypy` on changed packages
-- [ ] `python -m pytest tests/ -m "unit" -v` in each changed service (S6, S7, S10) — all pass
-- [ ] Minimum 11 new unit tests total across all 4 tasks
-- [ ] Documentation: `docs/services/alert-service.md` has `## Deployment Constraints` section
-- [ ] `services/nlp-pipeline/.claude-context.md` updated with D-004 note
+- [x] `ruff check` + `ruff format --check` on changed files
+- [x] `mypy` on changed packages
+- [x] `python -m pytest tests/ -m "unit" -v` in each changed service (S6 217, S7 177, S10 126) — all pass
+- [x] Minimum 11 new unit tests total across all 4 tasks (11 written: 4 S7, 5 S10, 2 S6)
+- [x] Documentation: `docs/services/alert-service.md` has `## Deployment Constraints` section
+- [x] `services/nlp-pipeline/.claude-context.md` updated with D-004 note
 
 ### Regression Guardrails
 - **BP-067**: Direct Kafka produce (bypassing outbox) must be wrapped in try/except. Not applicable here (no new Kafka produces), but check `alert_consumer.py` if touching that file.

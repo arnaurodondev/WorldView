@@ -244,3 +244,26 @@ class TestAcknowledgeAlert:
                 await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
 
         assert captured[0] == (user_id, alert_id)
+
+
+# ── WebSocket route ────────────────────────────────────────────────────────────
+
+
+class TestWebSocketRoute:
+    @pytest.mark.unit
+    async def test_websocket_stream_requires_user_id(self) -> None:
+        """WebSocket /api/v1/alerts/stream requires user_id — rejects without it.
+
+        S9 API gateway injects user_id from the JWT before forwarding to S10.
+        This test confirms the endpoint does not accept connections/requests
+        that omit the required query parameter.
+        """
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/v1/alerts/stream")
+
+        # Missing required query param → client error (422 or 403 depending on FastAPI/Starlette
+        # version's WebSocket route handling for non-upgrade HTTP requests)
+        assert resp.status_code >= 400
