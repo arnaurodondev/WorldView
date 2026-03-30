@@ -109,13 +109,12 @@ class SqlaUnitOfWork(UnitOfWork):
         exc: BaseException | None,
         tb: object | None,
     ) -> None:
-        # BP-037: _close_sessions() MUST run in finally — even if rollback/commit raises.
-        # Original exception is preserved: the cleanup error is only logged, not re-raised.
+        # R26 / Option B: __aexit__ MUST NOT auto-commit.
+        # On exception: rollback. On clean exit: do nothing (caller must commit explicitly).
+        # _close_sessions() MUST run in finally — even if rollback raises (BP-037).
         try:
             if exc is not None:
                 await self.rollback()
-            else:
-                await self.commit()
         except Exception as cleanup_err:
             logger.error(
                 "uow_cleanup_error",

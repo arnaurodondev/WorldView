@@ -70,7 +70,13 @@ class UnitOfWork(ABC):
         exc: BaseException | None,
         tb: object | None,
     ) -> None:
-        """Roll back automatically on exception."""
+        """Exit the unit of work context.
+
+        **Option B standard (R26)**: This method NEVER commits.
+        On exception: rolls back the transaction.
+        On clean exit: does nothing — session is closed by the concrete implementation.
+        Callers MUST call ``await uow.commit()`` explicitly before exiting the context.
+        """
         if exc is not None:
             await self.rollback()
 

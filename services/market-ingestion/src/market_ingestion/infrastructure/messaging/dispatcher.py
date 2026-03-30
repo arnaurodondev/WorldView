@@ -115,7 +115,7 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
         method signatures from our ``OutboxRepository`` ABC.  We bypass the
         mismatch by dispatching via our port methods directly.
         """
-        uow = SqlaUnitOfWork(self._write_factory)
+        uow = await self.get_unit_of_work()
         async with uow:
             now = datetime.now(UTC)
             records = await uow.outbox.claim_batch(
@@ -152,7 +152,7 @@ class MarketIngestionOutboxDispatcher(BaseOutboxDispatcher):
         """Attempt to publish a single record; update outbox state on outcome."""
         delivery_error: BaseException | None = None
         delivery_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _cb(err: Any, _msg: Any) -> None:
             nonlocal delivery_error
