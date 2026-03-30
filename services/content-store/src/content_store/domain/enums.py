@@ -8,11 +8,11 @@ from contracts.enums import ContentSourceType as SourceType
 from messaging.enums import OutboxStatus as OutboxStatus
 
 __all__ = [  # — intentional grouping: re-exports first, then local
-    "OutboxStatus",
-    "SourceType",
     "DedupOutcome",
     "DocumentStatus",
+    "OutboxStatus",
     "ResolutionStatus",
+    "SourceType",
 ]
 
 

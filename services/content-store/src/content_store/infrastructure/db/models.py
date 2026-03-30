@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TCH003 — SQLAlchemy resolves Mapped[datetime] via get_type_hints() at runtime
-from uuid import UUID  # noqa: TCH003 — SQLAlchemy resolves Mapped[UUID] via get_type_hints() at runtime
+from datetime import datetime  # — SQLAlchemy resolves Mapped[datetime] via get_type_hints() at runtime
+from uuid import UUID  # — SQLAlchemy resolves Mapped[UUID] via get_type_hints() at runtime
 
 from sqlalchemy import (
     BigInteger,

@@ -3032,3 +3032,28 @@ git commit -m "..."
 ```
 
 **Affected areas**: Any commit that includes new Python files alongside untracked directories in the repo (e.g., e2e test scaffolds, scratch dirs).
+
+---
+
+## BP-066
+
+**Category**: SQLAlchemy ORM — `Mapped[datetime]` unresolvable with `from __future__ import annotations`
+
+**Symptom**: `sqlalchemy.exc.ArgumentError: Could not resolve all types within mapped annotation: "Mapped[datetime]"` when running tests that import ORM models.
+
+**Root cause**: `from __future__ import annotations` makes ALL annotations strings (PEP 563 lazy evaluation). SQLAlchemy 2.x uses `get_type_hints()` at class-definition time to resolve `Mapped[X]` annotations. If `datetime` is imported only under `TYPE_CHECKING`, it is not in the module namespace at runtime and cannot be resolved.
+
+**Fix**: Move `from datetime import datetime` (and any other types used in `Mapped[...]` columns) to a **runtime import** — outside the `TYPE_CHECKING` block:
+
+```python
+# WRONG — causes ArgumentError
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from datetime import datetime
+
+# CORRECT — datetime available at runtime for SQLAlchemy
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+```
+
+**Affected areas**: All SQLAlchemy ORM model files using `Mapped[datetime]`, `Mapped[date]`, `Mapped[Decimal]`, or any other stdlib type that is only imported under `TYPE_CHECKING`.

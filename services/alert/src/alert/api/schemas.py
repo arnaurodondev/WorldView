@@ -57,4 +57,4 @@ class DLQListResponse(BaseModel):
 class DLQResolveRequest(BaseModel):
     """Request body for resolving a DLQ entry."""
 
-    note: str = Field(default="", description="Resolution note")
+    note: str = Field(default="", max_length=2000, description="Resolution note")

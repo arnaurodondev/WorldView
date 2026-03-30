@@ -20,7 +20,7 @@ def upgrade() -> None:
             processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_processed_events_processed_at" " ON processed_events (processed_at)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_processed_events_processed_at ON processed_events (processed_at)")
 
 
 def downgrade() -> None:

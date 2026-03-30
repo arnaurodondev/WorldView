@@ -52,7 +52,7 @@ class TestStageARawHash:
         existing_id = UUID("01234567-89ab-cdef-0123-456789abcdef")
         repo = AsyncMock()
         repo.check_exists.return_value = existing_id
-        raw_hash, decision = await check_stage_a(b"content", repo)
+        _raw_hash, decision = await check_stage_a(b"content", repo)
         assert decision is not None
         assert decision.outcome == DedupOutcome.DUPLICATE_EXACT
         assert decision.matched_doc_id == existing_id
@@ -128,7 +128,7 @@ class TestStageBNormalizedHash:
         existing_id = UUID("01234567-89ab-cdef-0123-456789abcdef")
         repo = AsyncMock()
         repo.check_exists.return_value = existing_id
-        norm_hash, decision = await check_stage_b("https://example.com", "text", repo)
+        _norm_hash, decision = await check_stage_b("https://example.com", "text", repo)
         assert decision is not None
         assert decision.outcome == DedupOutcome.DUPLICATE_NORMALIZED
         assert decision.matched_doc_id == existing_id

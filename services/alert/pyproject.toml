@@ -44,4 +44,5 @@ markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external infra (DB, Kafka, Valkey)",
     "contract: contract tests against S1 API",
+    "e2e: end-to-end tests against a real alert_db database",
 ]
