@@ -4,7 +4,7 @@ title: QA Follow-Up — Standards Enforcement, Architecture Hardening & Producti
 status: draft
 created: 2026-03-30
 updated: 2026-03-30
-waves_done: 1
+waves_done: 3
 plans: 7
 waves: 12
 tasks: 48
