@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 import common.ids
 import common.time
@@ -105,6 +105,13 @@ class OutboxRepository:
             .where(OutboxEventModel.id == record_id)
             .values(status="dead_letter", lease_owner=None, leased_until=None)
         )
+
+    async def count_pending(self) -> int:
+        """Count outbox events in ``pending`` status."""
+        result = await self._session.execute(
+            select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending")
+        )
+        return result.scalar() or 0
 
     # ── Service-specific helpers ──────────────────────────────────────────────
 

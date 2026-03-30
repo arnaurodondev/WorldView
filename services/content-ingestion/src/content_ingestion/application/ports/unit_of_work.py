@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from content_ingestion.application.ports.repositories import (
         AdapterStatePort,
+        DLQPort,
         FetchLogPort,
         OutboxPort,
         SourcePort,
@@ -58,6 +59,11 @@ class UnitOfWork(ABC):
     @abstractmethod
     def adapter_state(self) -> AdapterStatePort:
         """Adapter state repository (write session)."""
+
+    @property
+    @abstractmethod
+    def dlq(self) -> DLQPort:
+        """Dead letter queue repository."""
 
     async def __aenter__(self) -> UnitOfWork:
         return self

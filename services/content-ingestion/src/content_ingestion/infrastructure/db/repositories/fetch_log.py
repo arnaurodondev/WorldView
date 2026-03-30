@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 import common.ids
 import common.time
@@ -51,3 +51,12 @@ class FetchLogRepository:
             select(FetchLogModel.id).where(FetchLogModel.url_hash == url_hash).limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    async def count_by_source_since(self, source_id: UUID, since: datetime) -> int:
+        """Count fetch log entries for a source since a given datetime."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(FetchLogModel)
+            .where(FetchLogModel.source_id == source_id, FetchLogModel.fetched_at >= since)
+        )
+        return result.scalar() or 0

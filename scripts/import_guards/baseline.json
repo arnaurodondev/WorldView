@@ -1,13 +1,6 @@
 {
   "violations": [
     "services/alert/src/alert/infrastructure/cache/watchlist_cache.py:17:IG-MSG-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:21:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:21:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:21:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:21:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:21:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:28:IG-LAYER-002",
-    "services/content-ingestion/src/content_ingestion/api/routes/admin.py:29:IG-LAYER-002",
     "services/content-ingestion/src/content_ingestion/api/routes/dlq.py:10:IG-LAYER-002",
     "services/content-ingestion/src/content_ingestion/api/routes/dlq.py:9:IG-LAYER-002",
     "services/content-ingestion/src/content_ingestion/api/routes/internal.py:13:IG-LAYER-002",

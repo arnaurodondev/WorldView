@@ -22,6 +22,13 @@ class DLQRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def count_failed(self) -> int:
+        """Count DLQ entries in ``failed`` status."""
+        result = await self._session.execute(
+            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+        )
+        return result.scalar() or 0
+
     async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[DeadLetterQueueModel], int]:
         """Return open (failed) DLQ entries with total count."""
         count_result = await self._session.execute(

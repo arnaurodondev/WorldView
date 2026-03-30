@@ -7,6 +7,8 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from content_ingestion.application.ports.unit_of_work import UnitOfWork
+
 # ── Database session ─────────────────────────────────────────────────────────
 
 
@@ -24,6 +26,17 @@ async def get_read_session(request: Request) -> AsyncGenerator[AsyncSession, Non
 
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 ReadSessionDep = Annotated[AsyncSession, Depends(get_read_session)]
+
+
+# ── Unit of Work ────────────────────────────────────────────────────────────
+
+
+def get_uow(request: Request) -> UnitOfWork:
+    """Create a Unit of Work from the app's factory (composition root)."""
+    return request.app.state.uow_factory()  # type: ignore[no-any-return]
+
+
+UoWDep = Annotated[UnitOfWork, Depends(get_uow)]
 
 
 # ── Admin auth ───────────────────────────────────────────────────────────────
