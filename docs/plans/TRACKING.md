@@ -8,6 +8,7 @@
 | Plan ID | Title | PRD | Status | Waves Done/Total | QA | Updated |
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
+| PLAN-0010 | Architecture Hardening — DLQ Use Cases (R25), Security, Platform QA Script | QA-S4S5S6S7S10-001 | approved | 0/6 | — | 2026-03-30 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
