@@ -95,21 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dispatcher = create_dispatcher(settings, session_factory)
     app.state.dispatcher = dispatcher
 
-    # 7. Create instrument event consumer
-    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
-    from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
-
-    consumer_config = ConsumerConfig(
-        bootstrap_servers=settings.kafka_bootstrap_servers,
-        group_id=settings.consumer_group_instrument,
-        topics=[settings.topic_instrument_created, settings.topic_instrument_updated],
-    )
-    consumer = InstrumentEventConsumer(consumer_config, session_factory)
-    app.state.consumer = consumer
-
-    # Start consumer in background (non-blocking)
-    consumer_task = asyncio.create_task(consumer.run())
-    app.state.consumer_task = consumer_task
+    # Note: InstrumentEventConsumer runs as a separate process (portfolio-instrument-consumer).
+    # See services/portfolio/src/portfolio/infrastructure/messaging/consumers/instrument_consumer_main.py
 
     logger.info("portfolio_service_started", service=settings.service_name)  # type: ignore[no-any-return]
 
@@ -117,13 +104,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     logger.info("portfolio_service_stopping", service=settings.service_name)  # type: ignore[no-any-return]
-
-    # Stop consumer
-    consumer.stop()
-    try:
-        await asyncio.wait_for(consumer_task, timeout=10.0)
-    except (TimeoutError, asyncio.CancelledError):
-        consumer_task.cancel()
 
     # Stop dispatcher (if running)
     if hasattr(dispatcher, "stop"):
