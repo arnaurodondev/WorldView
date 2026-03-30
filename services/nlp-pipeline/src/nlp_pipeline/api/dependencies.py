@@ -9,6 +9,9 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
+from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
+
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
 
@@ -51,3 +54,11 @@ async def require_admin_token(
 NlpDbSessionDep = Annotated[AsyncSession, Depends(get_nlp_session)]
 IntelDbSessionDep = Annotated[AsyncSession, Depends(get_intelligence_session)]
 AdminAuthDep = Annotated[None, Depends(require_admin_token)]
+
+
+def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> DLQAdminUseCase:
+    """Build a DLQAdminUseCase for the current request session."""
+    return DLQAdminUseCase(DLQRepository(session))
+
+
+DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
