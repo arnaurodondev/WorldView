@@ -1,7 +1,7 @@
 # PLAN-0009: R25 Layer Violation Remediation — Content Ingestion Service
 
 > **PRD**: N/A (architecture debt — QA-driven)
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-03-30
 > **Updated**: 2026-03-30
 > **Owner**: Arnau Rodon
@@ -153,7 +153,9 @@ admin.py → CreateSourceUseCase (application) → SourcePort (application) ← 
 
 ## Sub-Plan C: ExecuteContentTaskUseCase Refactoring
 
-### Wave C-1: Dependency Injection Restructure
+### Wave C-1: Dependency Injection Restructure ✅
+
+**Status**: **DONE** — 2026-03-30 · 401 tests pass · ruff + mypy clean
 
 | Task | Description | Files |
 |------|-------------|-------|
@@ -167,7 +169,8 @@ admin.py → CreateSourceUseCase (application) → SourcePort (application) ← 
 | T-C-08 | Remove all `content_ingestion.infrastructure.*` imports from `execute_task.py` | `application/use_cases/execute_task.py` |
 | T-C-09 | Update unit tests for the refactored use case | `tests/unit/test_execute_task.py` |
 
-**Validation**: ruff + mypy + all unit tests pass. The use case has zero infrastructure imports.
+**Validation**: [x] ruff + mypy + all 401 unit tests pass. Zero infrastructure imports in the entire application layer.
+**Note**: Constructor changed to keyword-only with 7 injected dependencies: `write_factory`, `settings`, `bronze`, `adapter_state_factory`, `fetch_log_factory`, `outbox_factory`, `adapter_builder`. Worker's `_build_adapter` method encapsulates all adapter client construction + rate limiter setup. Metrics recording moved to worker post-execute.
 
 ---
 

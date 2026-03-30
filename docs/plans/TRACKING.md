@@ -8,7 +8,6 @@
 | Plan ID | Title | PRD | Status | Waves Done/Total | QA | Updated |
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
-| PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | in-progress | 3/4 | — | 2026-03-30 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
@@ -51,6 +50,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0001-E-R1 | S1+S2+S3 Remaining Open Items: UoW commit, TOCTOU dedup, arch violations, topic mismatch, domain layer, auth | QA-CROSS-002 | 2026-03-30 | 6 | 2026-03-30 |
 | PLAN-0007 | PLAN-0001-C QA Fixes: Idempotency, Valkey Hardening, Observability, Deployment Constraints | PLAN-0001-C QA | 2026-03-30 | 2 | — |
 | PLAN-0008 | QA Follow-Up — Standards Enforcement, Architecture Hardening & Production Readiness | PLAN-0001-E-R1 QA | 2026-03-30 | 10 | 2026-03-30 |
+| PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | 2026-03-30 | 4 | — |
 
 ## Conventions
 

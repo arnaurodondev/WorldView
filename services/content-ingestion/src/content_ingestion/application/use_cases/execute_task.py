@@ -5,6 +5,10 @@ mark RUNNING → fetch from external API → write results → mark SUCCEEDED/RE
 
 Session optimization (R24): no database session is held during external API
 calls.  The pattern is read → release → I/O → acquire → write.
+
+All infrastructure dependencies are injected via the constructor (R25):
+repository factories, bronze storage, and adapter builder.  The application
+layer has zero imports from ``content_ingestion.infrastructure``.
 """
 
 from __future__ import annotations
@@ -13,26 +17,25 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from content_ingestion.application.use_cases.fetch_and_write import FetchAndWriteUseCase, FetchSummary
-from content_ingestion.domain.exceptions import AdapterError, ConfigurationError
-from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
-from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
-from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
-from content_ingestion.infrastructure.metrics.prometheus import record_fetch
-from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
-from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
+from content_ingestion.domain.exceptions import ConfigurationError
 from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    import httpx
+    from collections.abc import Awaitable, Callable
+
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from content_ingestion.application.ports.repositories import (
+        AdapterStatePort,
+        BronzeStoragePort,
+        FetchLogPort,
+        OutboxPort,
+        TaskPort,
+    )
+    from content_ingestion.application.ports.source_adapter import SourceAdapterPort
     from content_ingestion.config import Settings
-    from content_ingestion.domain.entities import ContentIngestionTask, FetchResult, Source
-    from content_ingestion.infrastructure.adapters.base import SourceAdapter
-    from content_ingestion.infrastructure.db.repositories.task import TaskRepository
-    from messaging.valkey import ValkeyClient  # type: ignore[import-untyped]
-    from storage.interface import ObjectStorage  # type: ignore[import-untyped]
+    from content_ingestion.domain.entities import ContentIngestionTask, FetchResult, Source, SourceType
 
 logger = get_logger(__name__)
 
@@ -45,7 +48,7 @@ class _FetchOutput:
     """Result of _fetch_from_source — carries all data needed for write phase."""
 
     results: list[FetchResult]
-    adapter: SourceAdapter
+    adapter: SourceAdapterPort
     source: Source
     watermark_date: str
 
@@ -56,26 +59,41 @@ class ExecuteContentTaskUseCase:
     Reuses ``FetchAndWriteUseCase`` unchanged for the write pipeline;
     this use case adds task lifecycle (RUNNING → SUCCEEDED/RETRY/FAILED)
     and session optimization (no session held during external API calls).
+
+    All infrastructure dependencies are injected via the constructor:
+
+    - **Repository factories** (``adapter_state_factory``, ``fetch_log_factory``,
+      ``outbox_factory``): callables that accept a DB session and return
+      the corresponding port implementation.
+    - **bronze**: pre-built ``BronzeStoragePort`` for MinIO writes.
+    - **adapter_builder**: callable that constructs a ``SourceAdapterPort``
+      for a given source type + dedup function, encapsulating all client
+      and rate-limiter construction in the infrastructure layer.
     """
 
     def __init__(
         self,
+        *,
         write_factory: async_sessionmaker[Any],
-        http_client: httpx.AsyncClient,
-        storage: ObjectStorage,
-        valkey: ValkeyClient,
         settings: Settings,
+        bronze: BronzeStoragePort,
+        adapter_state_factory: Callable[[Any], AdapterStatePort],
+        fetch_log_factory: Callable[[Any], FetchLogPort],
+        outbox_factory: Callable[[Any], OutboxPort],
+        adapter_builder: Callable[[SourceType, Callable[[str], Awaitable[bool]]], SourceAdapterPort],
     ) -> None:
         self._write_factory = write_factory
-        self._http_client = http_client
-        self._storage = storage
-        self._valkey = valkey
         self._settings = settings
+        self._bronze = bronze
+        self._adapter_state_factory = adapter_state_factory
+        self._fetch_log_factory = fetch_log_factory
+        self._outbox_factory = outbox_factory
+        self._adapter_builder = adapter_builder
 
     async def execute(
         self,
         task: ContentIngestionTask,
-        task_repo: TaskRepository,
+        task_repo: TaskPort,
     ) -> FetchSummary | None:
         """Execute one task through the full fetch-and-write pipeline.
 
@@ -109,7 +127,7 @@ class ExecuteContentTaskUseCase:
     async def _do_fetch_and_write(
         self,
         task: ContentIngestionTask,
-        task_repo: TaskRepository,
+        task_repo: TaskPort,
     ) -> FetchSummary | None:
         """Inner pipeline: read watermark → fetch → write → update watermark."""
         import common.time as ct_mod
@@ -117,7 +135,7 @@ class ExecuteContentTaskUseCase:
         # 2. Read watermark (separate short session — BP-016: released before I/O)
         watermark_date = ""
         async with self._write_factory() as ro_session:
-            state_repo = AdapterStateRepository(ro_session)
+            state_repo = self._adapter_state_factory(ro_session)
             state = await state_repo.get(task.source_id)
             if state and state.last_watermark:
                 watermark_date = state.last_watermark.strftime("%Y-%m-%d")
@@ -140,12 +158,11 @@ class ExecuteContentTaskUseCase:
                 await task_repo.update_status(task.id, task.status)
                 return None
 
-            fetch_log_repo = FetchLogRepository(session)
-            bronze = MinioBronzeAdapter(self._storage)
-            outbox_repo = OutboxRepository(session)
+            fetch_log_repo = self._fetch_log_factory(session)
+            outbox_repo = self._outbox_factory(session)
             use_case = FetchAndWriteUseCase(
                 adapter=fetch_output.adapter,
-                bronze=bronze,
+                bronze=self._bronze,
                 fetch_log_repo=fetch_log_repo,
                 outbox_repo=outbox_repo,
                 commit_fn=session.commit,
@@ -161,7 +178,7 @@ class ExecuteContentTaskUseCase:
 
             # Update watermark after successful writes
             if summary.fetched > 0:
-                adapter_state_repo = AdapterStateRepository(session)
+                adapter_state_repo = self._adapter_state_factory(session)
                 now = ct_mod.utc_now()
                 await adapter_state_repo.upsert(
                     task.source_id,
@@ -174,14 +191,6 @@ class ExecuteContentTaskUseCase:
         task.succeed()
         await task_repo.update_status(task.id, task.status)
 
-        # Record metrics
-        record_fetch(
-            task.source_name,
-            fetched=summary.fetched,
-            skipped=summary.skipped,
-            failed=summary.failed,
-            duration=summary.duration_seconds,
-        )
         return summary
 
     async def _fetch_from_source(
@@ -191,20 +200,13 @@ class ExecuteContentTaskUseCase:
     ) -> _FetchOutput:
         """Build the adapter for this task's source type and fetch articles.
 
+        Adapter construction is delegated to the injected ``adapter_builder``
+        callable, keeping infrastructure imports out of the application layer.
+
         Returns a ``_FetchOutput`` containing all data the write phase needs.
         """
-        import common.time as ct_mod
         from content_ingestion.domain.entities import Source
-        from content_ingestion.domain.value_objects import TokenBucket
-        from content_ingestion.infrastructure.adapters.eodhd.client import EODHDClient
-        from content_ingestion.infrastructure.adapters.finnhub.client import FinnhubClient
-        from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
-        from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
 
-        now = ct_mod.utc_now()
-        settings = self._settings
-
-        # Build Source entity for the adapter
         source = Source(
             id=task.source_id,
             name=task.source_name,
@@ -213,76 +215,14 @@ class ExecuteContentTaskUseCase:
             config={},
         )
 
-        adapter_cls = ADAPTER_REGISTRY.get(task.source_type)
-        if adapter_cls is None:
-            raise AdapterError(f"No adapter registered for source type {task.source_type!r}")
-
-        # Build rate limiter and client
-        eodhd_rps = settings.eodhd.rate_limit_per_second
-        rate_limiter = TokenBucket(
-            capacity=int(eodhd_rps),
-            tokens=eodhd_rps,
-            refill_rate=eodhd_rps,
-            last_refill=now,
-        )
-
-        client: object
-        source_type_val = task.source_type.value
-        if source_type_val == "eodhd":
-            client = EODHDClient(
-                http_client=self._http_client,
-                api_key=settings.eodhd_api_key,
-                provider_cfg=settings.eodhd,
-            )
-        elif source_type_val == "sec_edgar":
-            client = SECEdgarClient(
-                http_client=self._http_client,
-                user_agent=settings.sec_edgar_user_agent,
-                provider_cfg=settings.sec_edgar,
-            )
-        elif source_type_val == "finnhub":
-            rate_per_second = settings.finnhub.rate_limit_per_minute / 60.0
-            rate_limiter = TokenBucket(
-                capacity=settings.finnhub.rate_limit_per_minute,
-                tokens=float(settings.finnhub.rate_limit_per_minute),
-                refill_rate=rate_per_second,
-                last_refill=now,
-            )
-            client = FinnhubClient(
-                http_client=self._http_client,
-                api_key=settings.finnhub_api_key,
-                provider_cfg=settings.finnhub,
-            )
-        elif source_type_val == "newsapi":
-            client = NewsAPIClient(
-                http_client=self._http_client,
-                api_key=settings.newsapi_key,
-                provider_cfg=settings.newsapi,
-                valkey=self._valkey,
-                daily_limit=settings.newsapi_daily_limit,
-            )
-        else:
-            raise AdapterError(f"Unknown source type: {source_type_val}")
-
         # Build adapter with dedup check via a short-lived session
         async with self._write_factory() as dedup_session:
-            dedup_repo = FetchLogRepository(dedup_session)
-
-            if source_type_val == "newsapi":
-                adapter = adapter_cls(  # type: ignore[call-arg]
-                    client=client,
-                    exists_fn=dedup_repo.exists_by_url_hash,
-                )
-            else:
-                adapter = adapter_cls(  # type: ignore[call-arg]
-                    client=client,
-                    rate_limiter=rate_limiter,
-                    exists_fn=dedup_repo.exists_by_url_hash,
-                )
+            dedup_repo = self._fetch_log_factory(dedup_session)
+            adapter = self._adapter_builder(task.source_type, dedup_repo.exists_by_url_hash)
 
             results = await adapter.fetch(
                 source,
-                is_backfill=task.is_backfill or settings.backfill_enabled,
+                is_backfill=task.is_backfill or self._settings.backfill_enabled,
                 from_date=watermark_date,
             )
 

@@ -21,16 +21,26 @@ import httpx
 from content_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from content_ingestion.application.use_cases.execute_task import ExecuteContentTaskUseCase
 from content_ingestion.config import Settings
+from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
+from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
+from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
 from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from content_ingestion.infrastructure.metrics.prometheus import record_fetch
+from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
+from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
 from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from content_ingestion.domain.entities import ContentIngestionTask
+    from collections.abc import Awaitable, Callable
+
+    from content_ingestion.application.ports.source_adapter import SourceAdapterPort
+    from content_ingestion.domain.entities import ContentIngestionTask, SourceType
 
 logger = get_logger(__name__)
 
@@ -162,19 +172,35 @@ class WorkerProcess:
         Uses a dedicated write session for task status updates so the
         ExecuteContentTaskUseCase can manage its own sessions internally
         (R24 session optimization).
+
+        Infrastructure concerns (metrics recording, adapter client
+        construction) are handled here in the infra layer, keeping the
+        use case free of infrastructure imports (R25).
         """
+        bronze = MinioBronzeAdapter(self._storage)
         use_case = ExecuteContentTaskUseCase(
             write_factory=self._write_factory,
-            http_client=self._http_client,
-            storage=self._storage,
-            valkey=self._valkey,
             settings=self._settings,
+            bronze=bronze,
+            adapter_state_factory=AdapterStateRepository,
+            fetch_log_factory=FetchLogRepository,
+            outbox_factory=OutboxRepository,
+            adapter_builder=self._build_adapter,
         )
         async with self._write_factory() as session:
             task_repo = TaskRepository(session)
             try:
-                await use_case.execute(task, task_repo)
+                summary = await use_case.execute(task, task_repo)
                 await session.commit()
+                # Record metrics in the infrastructure layer (R25 — T-C-05)
+                if summary is not None:
+                    record_fetch(
+                        task.source_name,
+                        fetched=summary.fetched,
+                        skipped=summary.skipped,
+                        failed=summary.failed,
+                        duration=summary.duration_seconds,
+                    )
             except Exception as exc:
                 await session.rollback()
                 logger.error(
@@ -183,6 +209,90 @@ class WorkerProcess:
                     error=str(exc),
                     worker_id=self._worker_id,
                 )
+
+    def _build_adapter(
+        self,
+        source_type: SourceType,
+        exists_fn: Callable[[str], Awaitable[bool]],
+    ) -> SourceAdapterPort:
+        """Build a source adapter for the given type (infrastructure layer).
+
+        Encapsulates client construction, rate-limiter setup, and adapter
+        registry lookup — all infrastructure concerns that the use case
+        delegates here via the ``adapter_builder`` callable (R25).
+        """
+        import common.time as ct_mod
+        from content_ingestion.domain.value_objects import TokenBucket
+        from content_ingestion.infrastructure.adapters.eodhd.client import EODHDClient
+        from content_ingestion.infrastructure.adapters.finnhub.client import FinnhubClient
+        from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
+        from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
+
+        adapter_cls = ADAPTER_REGISTRY.get(source_type)
+        if adapter_cls is None:
+            raise AdapterError(f"No adapter registered for source type {source_type!r}")
+
+        now = ct_mod.utc_now()
+        settings = self._settings
+
+        # Build rate limiter and client
+        eodhd_rps = settings.eodhd.rate_limit_per_second
+        rate_limiter = TokenBucket(
+            capacity=int(eodhd_rps),
+            tokens=eodhd_rps,
+            refill_rate=eodhd_rps,
+            last_refill=now,
+        )
+
+        client: object
+        source_type_val = source_type.value
+        if source_type_val == "eodhd":
+            client = EODHDClient(
+                http_client=self._http_client,
+                api_key=settings.eodhd_api_key,
+                provider_cfg=settings.eodhd,
+            )
+        elif source_type_val == "sec_edgar":
+            client = SECEdgarClient(
+                http_client=self._http_client,
+                user_agent=settings.sec_edgar_user_agent,
+                provider_cfg=settings.sec_edgar,
+            )
+        elif source_type_val == "finnhub":
+            rate_per_second = settings.finnhub.rate_limit_per_minute / 60.0
+            rate_limiter = TokenBucket(
+                capacity=settings.finnhub.rate_limit_per_minute,
+                tokens=float(settings.finnhub.rate_limit_per_minute),
+                refill_rate=rate_per_second,
+                last_refill=now,
+            )
+            client = FinnhubClient(
+                http_client=self._http_client,
+                api_key=settings.finnhub_api_key,
+                provider_cfg=settings.finnhub,
+            )
+        elif source_type_val == "newsapi":
+            client = NewsAPIClient(
+                http_client=self._http_client,
+                api_key=settings.newsapi_key,
+                provider_cfg=settings.newsapi,
+                valkey=self._valkey,
+                daily_limit=settings.newsapi_daily_limit,
+            )
+        else:
+            raise AdapterError(f"Unknown source type: {source_type_val}")
+
+        # Build adapter — newsapi does not use rate_limiter
+        if source_type_val == "newsapi":
+            return adapter_cls(  # type: ignore[call-arg]
+                client=client,
+                exists_fn=exists_fn,
+            )
+        return adapter_cls(  # type: ignore[call-arg]
+            client=client,
+            rate_limiter=rate_limiter,
+            exists_fn=exists_fn,
+        )
 
 
 async def _run_worker() -> None:
