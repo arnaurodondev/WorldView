@@ -51,7 +51,7 @@ def _resolve_timeframe(timeframe_str: str) -> Timeframe:
 # IMPORTANT: literal-path routes must come BEFORE {instrument_id} route
 @router.get("/ohlcv/bulk", response_model=list[OHLCVListResponse])
 async def get_ohlcv_bulk(
-    instrument_ids: Annotated[list[str], Query()] = ...,  # type: ignore[assignment]
+    instrument_ids: Annotated[list[str], Query(max_length=200)] = ...,  # type: ignore[assignment]  # F-SEC-007
     timeframe: str = "1d",
     start: date | None = None,
     end: date | None = None,
