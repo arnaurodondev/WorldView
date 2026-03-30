@@ -10,10 +10,11 @@ Covers:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from alert.api.dependencies import get_dlq_use_case
 from alert.app import create_app
 from alert.config import Settings
 from alert.infrastructure.websocket.manager import ConnectionManager
@@ -150,10 +151,14 @@ class TestDLQAdmin:
     @pytest.mark.unit
     async def test_dlq_list_returns_200_with_valid_token(self) -> None:
         app = _make_app()
-        with patch("alert.api.dlq.DLQRepository") as MockDLQRepo:
-            MockDLQRepo.return_value.list_failed = AsyncMock(return_value=[])
+        mock_uc = AsyncMock()
+        mock_uc.list_failed.return_value = []
+        app.dependency_overrides[get_dlq_use_case] = lambda: mock_uc
+        try:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.get("/admin/dlq", headers={"X-Admin-Token": "test-admin"})
+        finally:
+            app.dependency_overrides.clear()
         assert resp.status_code == 200
         assert resp.json()["entries"] == []
 
@@ -161,12 +166,16 @@ class TestDLQAdmin:
     async def test_dlq_resolve_returns_404_on_missing_entry(self) -> None:
         app = _make_app()
         dlq_id = str(uuid4())
-        with patch("alert.api.dlq.DLQRepository") as MockDLQRepo:
-            MockDLQRepo.return_value.resolve = AsyncMock(return_value=False)
+        mock_uc = AsyncMock()
+        mock_uc.resolve.return_value = False
+        app.dependency_overrides[get_dlq_use_case] = lambda: mock_uc
+        try:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     f"/admin/dlq/{dlq_id}/resolve",
                     json={"note": "fixed"},
                     headers={"X-Admin-Token": "test-admin"},
                 )
+        finally:
+            app.dependency_overrides.clear()
         assert resp.status_code == 404
