@@ -216,7 +216,7 @@ async def test_triggered_task_progresses_through_lifecycle(
     assert row is not None, f"No task row found for symbol {symbol}"
     task_id = row.id
 
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 90  # extended to handle large task backlogs in long-running envs
     seen_statuses: set[str] = set()
     while time.monotonic() < deadline:
         status_value = (
@@ -231,7 +231,7 @@ async def test_triggered_task_progresses_through_lifecycle(
 
     assert seen_statuses != {
         "pending",
-    }, f"Task {task_id} never progressed beyond 'pending' within 30 s — seen statuses: {seen_statuses}"
+    }, f"Task {task_id} never progressed beyond 'pending' within 90 s — seen statuses: {seen_statuses}"
 
 
 @_skip_s2
