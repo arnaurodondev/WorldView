@@ -3510,3 +3510,210 @@ async def test_cross_tenant_holdings_isolation(...):
 - All cross-service tests that import from another service's package MUST use `try/except ImportError: pytest.skip(...)` guards
 - Never use bare top-level service-package imports in `tests/e2e/` files — only inside test functions with the guard
 - Add this pattern to the review checklist for any new cross-service E2E test file
+
+---
+
+## BP-079 — asyncpg `AmbiguousParameterError` when using `IS NULL` on a bound parameter in `text()` query
+
+**Affected areas**: Any service using asyncpg + SQLAlchemy `text()` with optional (`None`-able) parameters
+
+**Symptom**
+
+Test or runtime query fails with:
+
+```
+asyncpg.exceptions.AmbiguousParameterError: could not determine data type of parameter $N
+```
+
+when the query contains a pattern like:
+
+```sql
+AND (:param IS NULL OR col = :param)
+```
+
+**Root Cause**
+
+asyncpg requires every bound parameter to have a deterministic PostgreSQL type. When `$N IS NULL` is the only occurrence of the parameter (or the only usage that asyncpg sees first), it cannot infer the type from the `IS NULL` expression alone. This causes asyncpg to reject the query at the protocol level before execution.
+
+**Fix**
+
+Wrap the parameter in an explicit `CAST` to provide the type hint:
+
+```sql
+-- Before (ambiguous):
+AND (:param IS NULL OR col = :param)
+
+-- After (explicit type):
+AND (CAST(:param AS TEXT) IS NULL OR col = CAST(:param AS TEXT))
+```
+
+Note: PostgreSQL's `::type` cast syntax (e.g., `:param::TEXT`) is NOT supported inside SQLAlchemy `text()` queries with asyncpg — use the ANSI SQL `CAST(:param AS TYPE)` form instead (see BP-076).
+
+**Prevention**
+
+- Every optional filter parameter in a `text()` query that may be `None` MUST use `CAST(:param AS TYPE) IS NULL` instead of bare `:param IS NULL`
+- When writing `text()` queries with asyncpg, verify all parameters have unambiguous types
+
+---
+
+## BP-080 — pytest-asyncio 0.24 loop scope mismatch: `session` loop + function-scoped async fixtures
+
+**Affected areas**: Any service using pytest-asyncio 0.24 with async fixtures
+
+**Symptom**
+
+Test teardown raises:
+
+```
+RuntimeError: Event loop is closed
+```
+
+after all tests pass, causing the overall test run to fail with a non-zero exit code.
+
+**Root Cause**
+
+`asyncio_default_fixture_loop_scope = "session"` with pytest-asyncio 0.24 creates a single event loop shared across the test session. When async generator fixtures have function scope (the default), their teardown (`yield`-after cleanup) executes after the test function completes but may run after the session loop has been torn down, causing `RuntimeError: Event loop is closed`.
+
+This is especially common after changing a fixture from `session`-scoped to `function`-scoped (e.g., to fix a different isolation bug) without updating the pyproject.toml loop scope settings.
+
+**Fix**
+
+Set both loop scope settings to `"function"` in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+```
+
+Each test function then gets its own event loop, and fixture teardown always runs within an active loop.
+
+**Prevention**
+
+- `asyncio_default_fixture_loop_scope` and `asyncio_default_test_loop_scope` must always match the narrowest scope of any async fixture in the test suite
+- Prefer `"function"` scope for both settings unless there is a strong measured performance reason to use `"session"`
+- When adding or changing fixture scopes, verify both pyproject.toml settings remain consistent
+
+---
+
+## BP-081 — httpx `AsyncClient` double-open: `RuntimeError: Cannot open a client instance more than once`
+
+**Affected areas**: Integration/E2E tests using `httpx.AsyncClient` fixtures
+
+**Symptom**
+
+Test fails immediately with:
+
+```
+RuntimeError: Cannot open a client instance more than once
+```
+
+**Root Cause**
+
+An `AsyncClient` instance that was already opened (e.g., by a pytest fixture using `async with AsyncClient(...) as client:`) is used again as a context manager inside a test:
+
+```python
+# Fixture already opens the client:
+@pytest.fixture
+async def integration_client():
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+# Test tries to open it again — WRONG:
+async def test_something(integration_client):
+    async with integration_client as client:  # ← raises RuntimeError
+        resp = await client.get("/endpoint")
+```
+
+**Fix**
+
+Use the pre-opened client directly without wrapping it in `async with`:
+
+```python
+async def test_something(integration_client):
+    resp = await integration_client.get("/endpoint")  # ← correct
+```
+
+**Prevention**
+
+- Never use `async with <fixture_client> as client:` in tests — the fixture already manages the lifecycle
+- Code review checklist: flag any `async with` usage on a variable that was received as a fixture parameter
+
+---
+
+## BP-082 — SQLAlchemy ORM enum column: `ValueError` when seed data uses wrong case
+
+**Affected areas**: Tests that insert rows into tables with `Enum`-typed columns via raw SQL or dict-based inserts
+
+**Symptom**
+
+Test fails with:
+
+```
+ValueError: 'breakout_signal' is not a valid AlertType
+```
+
+when loading ORM rows after seeding the database.
+
+**Root Cause**
+
+SQLAlchemy `Enum` column types backed by Python `StrEnum` (or `enum.Enum`) coerce the stored string back into the enum member on load. If the stored value does not exactly match a member value (including case), the coercion raises `ValueError`. Test seeds using lowercase (`"signal"`) or arbitrary strings (`"breakout_signal"`) that are not valid enum member values cause this error when any code path loads those rows through the ORM.
+
+**Fix**
+
+Always use the exact enum member value (uppercase for `StrEnum` with uppercase values):
+
+```python
+# Wrong:
+alert_type="signal"
+alert_type="breakout_signal"
+
+# Correct:
+alert_type="SIGNAL"
+alert_type="GRAPH_CHANGE"
+```
+
+**Prevention**
+
+- Test seed functions must use enum member values, not arbitrary strings
+- When adding a new enum value, search all test seeds for usages of that column and update them
+- Consider defining seed constants from the actual enum class: `AlertType.SIGNAL.value`
+
+---
+
+## BP-083 — DLQ pagination: `total` field returns page count instead of DB total
+
+**Affected areas**: Any paginated list API endpoint where `total` should reflect the full DB count
+
+**Symptom**
+
+API response returns `total = len(page)` (e.g., `2`) when the actual DB count is larger (e.g., `5`), causing pagination-aware clients or tests to undercount available records.
+
+**Root Cause**
+
+A common mistake when implementing paginated list endpoints:
+
+```python
+entries = await repo.list_failed(limit=limit, offset=offset)
+return DLQListResponse(entries=entries, total=len(entries))  # ← wrong
+```
+
+`len(entries)` is the count of items in the current page, not the total across all pages.
+
+**Fix**
+
+Add a separate `count_failed()` query to the repository and use it for the `total` field:
+
+```python
+entries = await use_case.list_failed(limit=limit, offset=offset)
+total = await use_case.count_failed()
+return DLQListResponse(entries=[...], total=total)
+```
+
+Requires adding `count_failed()` to the port ABC, concrete repository, and use case.
+
+**Prevention**
+
+- All paginated endpoints MUST derive `total` from a `COUNT(*)` query, not `len(page)`
+- Review checklist: when reviewing any paginated list endpoint, verify `total` comes from a separate count query
+- Port ABCs for repositories should include `count_*()` methods alongside `list_*()` methods from the start

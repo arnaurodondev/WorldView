@@ -154,8 +154,7 @@ async def test_pipeline_api_returns_alert_after_fanout(
     result = await fanout.execute(_graph_state_changed_event(entity_id), "graph.state.changed.v1")
     assert result.suppressed is False
 
-    async with integration_client as client:
-        resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+    resp = await integration_client.get(f"/api/v1/alerts/pending?user_id={user_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1

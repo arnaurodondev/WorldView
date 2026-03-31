@@ -38,7 +38,8 @@ async def list_dlq(
 ) -> DLQListResponse:
     """List failed DLQ entries."""
     entries = await use_case.list_failed(limit=limit, offset=offset)
-    return DLQListResponse(entries=[_to_response(e) for e in entries], total=len(entries))
+    total = await use_case.count_failed()
+    return DLQListResponse(entries=[_to_response(e) for e in entries], total=total)
 
 
 @router.get("/{dlq_id}", response_model=DLQEntryResponse)
