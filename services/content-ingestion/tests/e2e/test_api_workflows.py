@@ -83,7 +83,7 @@ async def test_admin_create_source_returns_201(e2e_client, admin_headers):
         json={
             "name": unique_name,
             "source_type": "eodhd",
-            "config": {"symbols": ["AAPL", "MSFT"]},
+            "config": {"exchange": "NASDAQ", "priority": 1},
             "enabled": True,
         },
         headers=admin_headers,

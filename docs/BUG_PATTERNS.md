@@ -75,6 +75,13 @@
 | [BP-063](#bp-063) | Consumer uses JSON deserialization for Avro-encoded messages | `json.loads(raw)` when producer sends Confluent Avro (magic byte + schema ID + avro bytes) — `json.JSONDecodeError` or garbled data | S1 portfolio `InstrumentEventConsumer`; any service consuming from topics produced by `OutboxEventValueSerializer` |
 | [BP-067](#bp-067) | pytest `--strict-markers` + new `e2e` marker not registered | `Failed: 'e2e' not found in markers configuration option` — collection error blocks ALL tests in the service | Any service pyproject.toml adding e2e tests when `--strict-markers` is set but `e2e` is missing from markers list |
 | [BP-068](#bp-068) | `postgres:16-alpine` image missing pgvector extension | `ERROR: could not open extension control file ".../vector.control": No such file or directory` when bootstrapping nlp_db/intelligence_db | Test infrastructure for S6 (nlp-pipeline), S7 (knowledge-graph); any service using `VECTOR(N)` columns |
+| [BP-072](#bp-072) | Scheduler dedupe key drift — `range_end=now` changes every tick | 120K+ task rows accumulate; MinIO OOM from 2 objects per task; ON CONFLICT DO NOTHING never fires | S2 `ScheduleDueTasksUseCase._build_incremental_task`; any scheduler that embeds `utc_now()` in a dedup key |
+| [BP-073](#bp-073) | `has_active_task(variant=None)` bypass for FUNDAMENTALS | Fundamentals tasks created every tick regardless of active status — `dataset_variant IS NULL` never matches `'annual'` | S2 `ScheduleDueTasksUseCase._build_tasks_for_policy`; any has_active guard using nullable dimension columns |
+| [BP-074](#bp-074) | Watermark key collision — scheduler omits `variant` | Scheduler creates watermark with `variant=NULL`; worker creates separate watermark with `variant='annual'` — `is_due` checks stale row | S2 `ScheduleDueTasksUseCase._build_tasks_for_policy` vs `ExecuteTaskUseCase.execute` watermark calls |
+| [BP-075](#bp-075) | Backfill flag match too broad — provider+symbol only | Two OHLCV backfill policies with same provider+symbol but different timeframes both get `backfill_enabled=False` when budget only allows tasks for one — budget-limited policy skips its backfill permanently | S2 `ScheduleDueTasksUseCase.execute` post-enqueue flag flip; any scheduler with multi-dimensional policy dedup |
+| [BP-076](#bp-076) | asyncpg rejects PostgreSQL `::type` cast syntax in `text()` params | `asyncpg.exceptions._base.UnknownPostgresError` or `UndefinedParameter` — SQLAlchemy `text()` does not transform `:name::type` to `$N`; asyncpg receives the raw cast notation and fails | Any service with raw SQL in `text()` using PostgreSQL cast syntax (e.g., `:payload::jsonb`, `:id::uuid`) |
+| [BP-077](#bp-077) | `ON CONFLICT DO NOTHING` missing `index_where=` for partial index | `ProgrammingError: there is no unique or exclusion constraint matching the ON CONFLICT specification` — partial unique index not matched because `index_where` was omitted | Any service using `on_conflict_do_nothing(index_elements=[...])` on a table with a partial unique index |
+| [BP-078](#bp-078) | Cross-service E2E `ImportError` when service package not installed | `ImportError: No module named 'portfolio'` in cross-service test even when the skip marker fires — import inside test function runs before `pytest.skip()` | `tests/e2e/` cross-service test files importing ORM models from individual service packages |
 
 ---
 
@@ -3231,3 +3238,275 @@ The `article_fetch_log.source_id` column was designed for scheduled polling sour
 ### Prevention
 
 When designing tables that track both scheduled and manual events, make FK columns nullable from the start if the FK may not apply to all producers.
+
+## BP-072 — Scheduler dedupe key drift: `range_end=now` changes every tick
+
+**Category**: Scheduler / deduplication
+**Services affected**: market-ingestion (S2)
+**First seen**: 2026-03-31 — investigation into 120K+ task accumulation and MinIO OOM
+
+### Symptom
+
+The `ingestion_tasks` table grows unboundedly (~500+ rows/hour). MinIO runs out of memory from accumulated bronze/canonical objects (2 per task). `ON CONFLICT DO NOTHING` on `(provider, dedupe_key)` never fires for incremental tasks.
+
+### Root Cause
+
+`_build_incremental_task` set `range_end = now` (line 188) and `range_start = now - timedelta(days=1)`. The `_build_dedupe_key` method hashes `f"{range_start}:{range_end}"` into the dedupe key. Since `now` changes every scheduler tick (60s), every tick produces a unique dedupe key, bypassing the ON CONFLICT guard entirely. The `has_active_task` check limits creation rate to ~1 task per 2 ticks per policy, but completed/failed tasks accumulate forever.
+
+### Fix
+
+Truncate `range_start` and `range_end` to UTC-day boundaries (midnight-to-midnight), matching the pattern already used by `TriggerIngestionUseCase`:
+
+```python
+today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+range_start = today
+range_end = today + timedelta(days=1)
+```
+
+Same fix applied to `_build_backfill_tasks` where `end_dt = now` also drifted.
+
+### Prevention
+
+Never embed `utc_now()` in a deduplication key. Truncate to the coarsest stable boundary that still provides correct behaviour (UTC day for daily, UTC hour for hourly). The `TriggerIngestionUseCase` already follows this pattern — scheduler should match.
+
+## BP-073 — `has_active_task(variant=None)` bypass for FUNDAMENTALS tasks
+
+**Category**: Scheduler / active-task guard
+**Services affected**: market-ingestion (S2)
+**First seen**: 2026-03-31
+
+### Symptom
+
+FUNDAMENTALS tasks are created on every scheduler tick regardless of whether a pending/running/retry task already exists for the same symbol. The `has_active_task` guard always returns False for fundamentals.
+
+### Root Cause
+
+The `has_active_task` call in `_build_tasks_for_policy` (line 163) hardcoded `variant=None`. The SQL query generates `dataset_variant IS NULL` as the predicate. But fundamentals tasks are created with `variant="annual"` (via `FundamentalsVariant.ANNUAL.value`), so the predicate never matches any existing fundamentals task row.
+
+### Fix
+
+Derive the variant using the same logic as the task factory (`_derive_variant` helper) and pass it to `has_active_task`. For FUNDAMENTALS → `"annual"`, for OHLCV/QUOTES → `None`.
+
+### Prevention
+
+When a guard query uses dimension columns (variant, exchange, timeframe) that can be NULL, always derive the filter value from the same source that creates the entity being guarded. Add regression tests that verify `has_active_task` call arguments for each dataset type.
+
+## BP-074 — Watermark key collision: scheduler omits `variant` parameter
+
+**Category**: Scheduler / watermark
+**Services affected**: market-ingestion (S2)
+**First seen**: 2026-03-31
+
+### Symptom
+
+The watermark table accumulates duplicate rows for the same logical watermark key — one with `dataset_variant=NULL` (created by scheduler) and one with `dataset_variant='annual'` (created by worker's `execute_task.py`). The scheduler checks the NULL-variant row's `current_bar_ts` to determine if a policy is due, but the worker advances the `'annual'`-variant row, so the scheduler sees a stale (never-advanced) watermark.
+
+### Root Cause
+
+`_build_tasks_for_policy` called `self._uow.watermarks.get_or_create(...)` without passing `variant`. The watermark's natural key includes `dataset_variant` in its ON CONFLICT clause, so omitting variant creates a separate row with `dataset_variant=NULL`.
+
+### Fix
+
+Pass `variant=self._derive_variant(policy)` to `watermarks.get_or_create()` so the scheduler and worker reference the same watermark row.
+
+### Prevention
+
+Watermark `get_or_create` calls must always pass the same key dimensions as the task creation path. The natural key is `(provider, dataset_type, dataset_variant, symbol, exchange, timeframe)` — omitting any dimension creates a separate row.
+
+---
+
+## BP-075 — Backfill flag match too broad: provider+symbol only
+
+**Category**: Scheduler / deduplication
+**Services affected**: market-ingestion (S2)
+**First seen**: 2026-03-31
+
+### Symptom
+
+When two OHLCV backfill policies share the same `provider` and `symbol` but differ in `timeframe` (e.g., `EODHD/AAPL/1d` and `EODHD/AAPL/1h`), and the provider budget is exhausted after only one policy's tasks are enqueued, **both** policies have `backfill_enabled` set to `False`. The budget-limited policy's backfill is permanently lost — it will never retry the historical range.
+
+### Root Cause
+
+The post-enqueue flag flip (lines 93–101 in `schedule_tasks.py`) matched tasks using only `provider + symbol`:
+
+```python
+policy_tasks_enqueued = any(
+    str(t.provider) == str(bp.provider) and t.symbol == bp.symbol
+    for t in final_tasks
+)
+```
+
+When Policy A's tasks (timeframe=1d) survived budget filtering and Policy B's tasks (timeframe=1h) were dropped, the check incorrectly matched Policy A's tasks for Policy B, since both share the same provider+symbol.
+
+### Fix
+
+Include `dataset_type` and `timeframe` in the match condition (FIX-BACKFILL-FLAG):
+
+```python
+policy_tasks_enqueued = any(
+    str(t.provider) == str(bp.provider)
+    and t.symbol == bp.symbol
+    and str(t.dataset_type) == str(bp.dataset_type)
+    and (t.timeframe or "") == (bp.timeframe or "")
+    for t in final_tasks
+)
+```
+
+### Prevention
+
+Post-enqueue flag matching must use all dimensions of the policy's identity. Any scheduler that modifies entity state after budget/cap filtering must match by the full natural key, not a partial projection. Add a regression test with two policies sharing a partial key prefix to verify isolation.
+
+---
+
+## BP-076 — asyncpg rejects PostgreSQL `::type` cast syntax in `text()` params
+
+**Date discovered**: 2026-03-31
+**Service affected**: `alert`, `nlp-pipeline`, `knowledge-graph`, `content-store` (E2E test seeds)
+
+### Symptom
+
+Raw SQL executed via SQLAlchemy `text()` with bound parameters fails at runtime or in tests with:
+
+```
+asyncpg.exceptions._base.UnknownPostgresError
+```
+
+or silently produces wrong results when parameters contain PostgreSQL cast notation like `:payload::jsonb` or `:id::uuid`.
+
+### Root Cause
+
+SQLAlchemy's `text()` constructs intentionally skip the `:name::type` pattern during parameter binding because `::` is the PostgreSQL cast operator. SQLAlchemy avoids mangling it. As a result, asyncpg receives the literal `:name::type` string instead of a positional `$N` placeholder, causing a syntax error or undefined-parameter error at the PostgreSQL driver level.
+
+```python
+# WRONG — asyncpg receives ":payload::jsonb" literally
+await session.execute(
+    text("INSERT INTO dlq (payload) VALUES (:payload::jsonb)"),
+    {"payload": json.dumps(data)},
+)
+
+# CORRECT — use SQL standard CAST syntax
+await session.execute(
+    text("INSERT INTO dlq (payload) VALUES (CAST(:payload AS JSONB))"),
+    {"payload": json.dumps(data)},
+)
+```
+
+The same applies to `::uuid`, `::text`, `::integer`, and all other PostgreSQL cast suffixes.
+
+### Fix
+
+Replace all `:name::type` patterns in SQLAlchemy `text()` statements with `CAST(:name AS TYPE)`.
+
+### Prevention
+
+- Grep new SQL literals for `::` followed by a type name: `grep -rn '::\w\+' services/*/src/`
+- Add a pre-commit check or test that rejects `text("...::\w")` patterns in source files
+- Document this constraint in service `.claude-context.md` files for services with heavy raw SQL
+
+---
+
+## BP-077 — `ON CONFLICT DO NOTHING` missing `index_where=` for partial unique index
+
+**Date discovered**: 2026-03-31
+**Service affected**: `content-ingestion` (`IngestionTaskRepository.create_if_not_exists`)
+
+### Symptom
+
+A repository `upsert` or `insert_ignore` using SQLAlchemy's `on_conflict_do_nothing` fails at runtime with:
+
+```
+sqlalchemy.exc.ProgrammingError: (asyncpg.exceptions.InvalidColumnReferenceError)
+there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
+
+The failure only manifests when `window_start` (or another nullable column) is NOT NULL, because the partial index `WHERE window_start IS NOT NULL` only covers those rows.
+
+### Root Cause
+
+PostgreSQL `ON CONFLICT (col1, col2)` must reference a unique constraint or index **exactly**, including any `WHERE` clause for partial indexes. If the unique index is defined as:
+
+```sql
+CREATE UNIQUE INDEX ix_cit_source_window
+    ON ingestion_tasks (source_id, window_start)
+    WHERE window_start IS NOT NULL;
+```
+
+Then the SQLAlchemy dialect must match the predicate:
+
+```python
+# WRONG — no index_where, PostgreSQL cannot match the partial index
+stmt.on_conflict_do_nothing(index_elements=["source_id", "window_start"])
+
+# CORRECT
+from sqlalchemy import text
+stmt.on_conflict_do_nothing(
+    index_elements=["source_id", "window_start"],
+    index_where=text("window_start IS NOT NULL"),
+)
+```
+
+### Fix
+
+Add `index_where=text("<predicate>")` matching the partial index `WHERE` clause verbatim.
+
+### Prevention
+
+- Whenever a table has partial unique indexes, the corresponding repository `ON CONFLICT` clause must include `index_where=`
+- Add `index_where` to the migration review checklist when `CREATE UNIQUE INDEX ... WHERE` appears
+
+---
+
+## BP-078 — Cross-service E2E `ImportError` when service package not installed
+
+**Date discovered**: 2026-03-31
+**Service affected**: `tests/e2e/test_security_isolation.py`, `tests/e2e/test_market_data_pipeline.py`
+
+### Symptom
+
+Cross-service E2E tests collect and fail with:
+
+```
+ImportError: No module named 'portfolio'
+```
+
+or
+
+```
+ImportError: No module named 'market_ingestion'
+```
+
+even though the test is decorated with a skip marker like:
+
+```python
+@pytest.mark.skipif(not _S1_UP, reason="S1 not reachable")
+async def test_cross_tenant_holdings_isolation(...):
+    from portfolio.infrastructure.db.models.instrument import InstrumentModel
+    ...
+```
+
+The skip marker fires correctly when the service is unreachable, but the import still executes because Python processes the function body before `pytest.skip()` can run within the test function.
+
+### Root Cause
+
+`pytest.mark.skipif` evaluated at collection time prevents the test from being *scheduled*, but when `skipif` evaluates to `False` (service IS reachable) the test body runs, and a service that is reachable over HTTP may still not have its Python package installed in the test runner environment. The import fails with `ImportError` before any assertion.
+
+Additionally, even when `skipif` is `True`, pytest collects the test function and evaluates skip markers; however, imports inside the function body can still surface during collection in some configurations.
+
+### Fix
+
+Wrap all service-package imports inside the test body with a `try/except ImportError` guard:
+
+```python
+async def test_cross_tenant_holdings_isolation(...):
+    try:
+        from portfolio.infrastructure.db.models.instrument import InstrumentModel
+    except ImportError:
+        pytest.skip("portfolio package not installed in cross-service test environment")
+    ...
+```
+
+### Prevention
+
+- All cross-service tests that import from another service's package MUST use `try/except ImportError: pytest.skip(...)` guards
+- Never use bare top-level service-package imports in `tests/e2e/` files — only inside test functions with the guard
+- Add this pattern to the review checklist for any new cross-service E2E test file

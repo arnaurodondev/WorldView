@@ -82,7 +82,7 @@ async def list_signals(
 @router.get("/entities", response_model=EntityListResponse)
 async def search_entities(
     session: NlpDbSessionDep,
-    q: str = Query(default="", max_length=256),
+    q: str = Query(min_length=1, max_length=256),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> EntityListResponse:
@@ -169,6 +169,9 @@ async def get_entity_articles(
 ) -> EntityArticlesResponse:
     """List articles that mention this entity (most recent first)."""
     repo = SqlaSignalsQueryRepo(session)
+    entity = await GetEntityDetailUseCase().execute(repo, entity_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
     items_data, total = await GetEntityArticlesUseCase().execute(repo, entity_id, limit)
     return EntityArticlesResponse(
         entity_id=entity_id,
@@ -202,11 +205,7 @@ async def reprocess_article(
     repo = SqlaSignalsQueryRepo(session)
     found = await ReprocessArticleUseCase().execute(repo, article_id)
     if not found:
-        return ReprocessResponse(
-            article_id=article_id,
-            status="not_found",
-            message="No routing decision found for this article",
-        )
+        raise HTTPException(status_code=404, detail="Article not found")
     return ReprocessResponse(
         article_id=article_id,
         status="queued",

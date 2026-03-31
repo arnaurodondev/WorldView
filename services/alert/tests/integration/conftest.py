@@ -63,7 +63,7 @@ def postgres_container() -> Any:
         yield async_url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def db_session_factory(postgres_container: str) -> Any:
     """Return (session_factory, engine) bound to the testcontainer Postgres."""
     engine = create_async_engine(postgres_container, echo=False)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import common.ids
@@ -105,7 +105,10 @@ class TaskRepository:
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                 )
-                .on_conflict_do_nothing(index_elements=["source_id", "window_start"])
+                .on_conflict_do_nothing(
+                    index_elements=["source_id", "window_start"],
+                    index_where=text("window_start IS NOT NULL"),
+                )
             )
             result = await self._session.execute(stmt)
             inserted += cast("Any", result).rowcount

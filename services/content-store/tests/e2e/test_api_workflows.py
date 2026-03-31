@@ -85,8 +85,8 @@ async def _seed_dlq_row(session: AsyncSession, **overrides: object) -> uuid.UUID
                 INSERT INTO dead_letter_queue
                     (dlq_id, original_event_id, topic, status, error_detail, payload_json)
                 VALUES
-                    (:dlq_id::uuid, :original_event_id::uuid, :topic, :status, :error_detail,
-                     :payload::jsonb)
+                    (:dlq_id, :original_event_id, :topic, :status, :error_detail,
+                     CAST(:payload AS JSONB))
                 """,
             ),
             {**row, "payload": json.dumps(params["payload_json"])},
@@ -98,7 +98,7 @@ async def _seed_dlq_row(session: AsyncSession, **overrides: object) -> uuid.UUID
                 INSERT INTO dead_letter_queue
                     (dlq_id, original_event_id, topic, status, error_detail)
                 VALUES
-                    (:dlq_id::uuid, :original_event_id::uuid, :topic, :status, :error_detail)
+                    (:dlq_id, :original_event_id, :topic, :status, :error_detail)
                 """,
             ),
             row,

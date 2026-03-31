@@ -207,7 +207,7 @@ async def test_entity_graph_with_seeded_entity(
     result = await e2e_db_session.execute(
         text("""
 INSERT INTO canonical_entities (canonical_name, entity_type, ticker, exchange, metadata)
-VALUES (:name, :etype, :ticker, :exchange, :metadata::jsonb)
+VALUES (:name, :etype, :ticker, :exchange, CAST(:metadata AS JSONB))
 RETURNING entity_id
 """),
         {
@@ -282,7 +282,7 @@ async def test_entity_graph_semantic_mode_filter(
     result = await e2e_db_session.execute(
         text("""
 INSERT INTO canonical_entities (canonical_name, entity_type, metadata)
-VALUES (:name, :etype, :metadata::jsonb)
+VALUES (:name, :etype, CAST(:metadata AS JSONB))
 RETURNING entity_id
 """),
         {"name": "SemanticMode Corp", "etype": "COMPANY", "metadata": "{}"},
