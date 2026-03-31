@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -291,3 +292,273 @@ def collect_violations(
     for svc in services:
         all_violations.extend(check_fn(svc))
     return all_violations
+
+
+# ---------------------------------------------------------------------------
+# Process topology helpers (STANDARDS.md §14, RULES.md R22)
+# ---------------------------------------------------------------------------
+
+
+class ProcessType(Enum):
+    """Background process types recognised by the process topology standard."""
+
+    DISPATCHER = "dispatcher"
+    CONSUMER = "consumer"
+    SCHEDULER = "scheduler"
+    WORKER = "worker"
+
+
+# Canonical directory paths relative to the service's pkg_dir.
+CANONICAL_PATHS: dict[ProcessType, str] = {
+    ProcessType.DISPATCHER: "infrastructure/messaging/outbox",
+    ProcessType.CONSUMER: "infrastructure/messaging/consumers",
+    ProcessType.SCHEDULER: "infrastructure/scheduler",
+    ProcessType.WORKER: "infrastructure/workers",
+}
+
+
+@dataclass
+class ProcessEntryPoint:
+    """Represents a discovered background process entry point for a service."""
+
+    service: str
+    process_type: ProcessType
+    class_file: Path | None  # e.g. dispatcher.py / worker.py
+    main_file: Path | None  # e.g. dispatcher_main.py / worker_main.py
+    dir_path: Path  # directory where the files were found
+
+    @property
+    def is_canonical_path(self) -> bool:
+        """True if dir_path matches the canonical path for this process type."""
+        expected = CANONICAL_PATHS[self.process_type]
+        # dir_path is absolute; check whether it ends with the canonical suffix
+        return str(self.dir_path).endswith(expected.replace("/", _SEP))
+
+    @property
+    def missing_main(self) -> bool:
+        """True when a class file exists but the standalone entry point does not."""
+        return self.class_file is not None and self.main_file is None
+
+
+_SEP = "/"
+
+
+def discover_process_entry_points(svc: ServiceInfo) -> list[ProcessEntryPoint]:
+    """Scan a service's infrastructure/ directory for known background process files.
+
+    Recognises:
+    - Dispatchers:  ``messaging/outbox/dispatcher*.py``
+    - Consumers:    ``messaging/consumers/*_consumer*.py``  (canonical)
+                    ``consumer/*_consumer*.py``              (legacy / scaffolded)
+    - Schedulers:   ``scheduler/*.py``  or  ``schedulers/*.py``
+    - Workers:      ``workers/*.py``
+
+    Returns one ``ProcessEntryPoint`` per logical process, pairing the class
+    file with its ``*_main.py`` sibling when found.
+    """
+    infra_dir = svc.pkg_dir / "infrastructure"
+    if not infra_dir.is_dir():
+        return []
+
+    results: list[ProcessEntryPoint] = []
+
+    # --- Dispatchers --------------------------------------------------------
+    for outbox_dir in [
+        infra_dir / "messaging" / "outbox",
+    ]:
+        if not outbox_dir.is_dir():
+            continue
+        class_file = outbox_dir / "dispatcher.py"
+        main_file = outbox_dir / "dispatcher_main.py"
+        results.append(
+            ProcessEntryPoint(
+                service=svc.name,
+                process_type=ProcessType.DISPATCHER,
+                class_file=class_file if class_file.exists() else None,
+                main_file=main_file if main_file.exists() else None,
+                dir_path=outbox_dir,
+            )
+        )
+
+    # --- Consumers ----------------------------------------------------------
+    # Canonical path first, then legacy singular directory
+    consumer_dirs: list[tuple[Path, bool]] = []
+    canonical_consumers = infra_dir / "messaging" / "consumers"
+    if canonical_consumers.is_dir():
+        consumer_dirs.append((canonical_consumers, True))
+    legacy_consumer = infra_dir / "consumer"
+    if legacy_consumer.is_dir():
+        consumer_dirs.append((legacy_consumer, False))
+
+    for consumers_dir, _is_canonical in consumer_dirs:
+        # Group files by base name (strip _main suffix)
+        seen: dict[str, dict[str, Path]] = {}
+        for py_file in sorted(consumers_dir.glob("*.py")):
+            stem = py_file.stem
+            if stem.startswith("_"):
+                continue
+            base = stem.removesuffix("_main")
+            if base not in seen:
+                seen[base] = {}
+            if stem.endswith("_main"):
+                seen[base]["main"] = py_file
+            else:
+                seen[base]["class"] = py_file
+
+        for _base, files in seen.items():
+            results.append(
+                ProcessEntryPoint(
+                    service=svc.name,
+                    process_type=ProcessType.CONSUMER,
+                    class_file=files.get("class"),
+                    main_file=files.get("main"),
+                    dir_path=consumers_dir,
+                )
+            )
+
+    # --- Schedulers ---------------------------------------------------------
+    for sched_dir in [
+        infra_dir / "scheduler",  # canonical (singular)
+        infra_dir / "schedulers",  # legacy (plural)
+    ]:
+        if not sched_dir.is_dir():
+            continue
+        # Look for scheduler.py / scheduler_main.py
+        sched_class: Path | None = None
+        sched_main: Path | None = None
+        for py_file in sched_dir.glob("*.py"):
+            stem = py_file.stem
+            if stem.startswith("_"):
+                continue
+            if stem.endswith("_main"):
+                sched_main = py_file
+            elif stem in ("scheduler", "scheduler_process"):
+                # scheduler_process.py is the stale naming variant
+                sched_class = py_file
+        results.append(
+            ProcessEntryPoint(
+                service=svc.name,
+                process_type=ProcessType.SCHEDULER,
+                class_file=sched_class,
+                main_file=sched_main,
+                dir_path=sched_dir,
+            )
+        )
+
+    # --- Workers ------------------------------------------------------------
+    workers_dir = infra_dir / "workers"
+    if workers_dir.is_dir():
+        class_file = workers_dir / "worker.py"
+        main_file = workers_dir / "worker_main.py"
+        results.append(
+            ProcessEntryPoint(
+                service=svc.name,
+                process_type=ProcessType.WORKER,
+                class_file=class_file if class_file.exists() else None,
+                main_file=main_file if main_file.exists() else None,
+                dir_path=workers_dir,
+            )
+        )
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Lifespan background-task scanner
+# ---------------------------------------------------------------------------
+
+
+class _LifespanCreateTaskScanner(ast.NodeVisitor):
+    """AST visitor that finds asyncio.create_task() calls inside lifespan functions."""
+
+    _LIFESPAN_NAMES = frozenset({"lifespan", "_lifespan", "startup"})
+
+    def __init__(self) -> None:
+        self.violations: list[tuple[int, str]] = []
+        self._in_lifespan: bool = False
+
+    # ------------------------------------------------------------------
+    # Detect lifespan function boundaries
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        is_lifespan = node.name in self._LIFESPAN_NAMES or self._has_asynccontextmanager(node)
+        if is_lifespan:
+            old = self._in_lifespan
+            self._in_lifespan = True
+            self.generic_visit(node)
+            self._in_lifespan = old
+        else:
+            self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        is_lifespan = node.name in self._LIFESPAN_NAMES or self._has_asynccontextmanager(node)
+        if is_lifespan:
+            old = self._in_lifespan
+            self._in_lifespan = True
+            self.generic_visit(node)
+            self._in_lifespan = old
+        else:
+            self.generic_visit(node)
+
+    @staticmethod
+    def _has_asynccontextmanager(node: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name) and dec.id == "asynccontextmanager":
+                return True
+            if isinstance(dec, ast.Attribute) and dec.attr == "asynccontextmanager":
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Detect asyncio.create_task() calls
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self._in_lifespan and self._is_create_task(node):
+            # Try to extract the task name from the first argument
+            task_desc = self._describe_call_arg(node)
+            self.violations.append((node.lineno, task_desc))
+        self.generic_visit(node)
+
+    @staticmethod
+    def _is_create_task(node: ast.Call) -> bool:
+        func = node.func
+        # asyncio.create_task(...)
+        if isinstance(func, ast.Attribute) and func.attr == "create_task":
+            return True
+        # create_task(...)  — after `from asyncio import create_task`
+        if isinstance(func, ast.Name) and func.id == "create_task":
+            return True
+        return False
+
+    @staticmethod
+    def _describe_call_arg(node: ast.Call) -> str:
+        if not node.args:
+            return "create_task(?)"
+        arg = node.args[0]
+        if isinstance(arg, ast.Call):
+            func = arg.func
+            if isinstance(func, ast.Name):
+                return f"create_task({func.id}(...))"
+            if isinstance(func, ast.Attribute):
+                return f"create_task({func.attr}(...))"
+        if isinstance(arg, ast.Name):
+            return f"create_task({arg.id})"
+        return "create_task(?)"
+
+
+def has_background_tasks_in_lifespan(app_py: Path) -> list[tuple[int, str]]:
+    """Return a list of (line_number, description) for every asyncio.create_task()
+    call found inside a lifespan or @asynccontextmanager-decorated function in
+    the given ``app.py`` file.
+
+    Returns an empty list if the file is clean or cannot be parsed.
+    """
+    try:
+        source = app_py.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source, filename=str(app_py))
+    except (SyntaxError, OSError):
+        return []
+
+    scanner = _LifespanCreateTaskScanner()
+    scanner.visit(tree)
+    return scanner.violations

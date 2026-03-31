@@ -73,10 +73,19 @@ services/<service-name>/
 │           │   └── session.py    # Session factory
 │           ├── messaging/        # Kafka, outbox, Avro — ALL Kafka code goes here
 │           │   ├── __init__.py
-│           │   ├── outbox/
-│           │   │   └── dispatcher.py  # BaseOutboxDispatcher subclass
-│           │   ├── consumers/    # BaseKafkaConsumer subclasses (one per topic)
+│           │   ├── outbox/       # Singular — one outbox per service
+│           │   │   ├── dispatcher.py       # BaseOutboxDispatcher subclass
+│           │   │   └── dispatcher_main.py  # Standalone entry point (own process)
+│           │   ├── consumers/    # Plural — one file per consumed topic
+│           │   │   ├── <type>_consumer.py       # BaseKafkaConsumer subclass
+│           │   │   └── <type>_consumer_main.py  # Standalone entry point (own process)
 │           │   └── schemas/      # Avro schema files — *.avsc ONLY, no Python dicts
+│           ├── scheduler/        # Singular — one scheduling concern per service
+│           │   ├── scheduler.py       # Scheduler class (tick-based loop)
+│           │   └── scheduler_main.py  # Standalone entry point (own process)
+│           ├── workers/          # Plural — horizontally scalable work pool
+│           │   ├── worker.py       # Worker class (semaphore-bounded)
+│           │   └── worker_main.py  # Standalone entry point (own process)
 │           └── cache/            # Valkey / Redis wrappers
 │               └── <purpose>_cache.py
 ├── tests/
@@ -127,9 +136,12 @@ For every non-scaffolded service, the messaging subtree is standardized as:
 ```
 src/<package>/infrastructure/messaging/
 ├── __init__.py
-├── outbox/
-│   └── dispatcher.py
-├── consumers/                 # optional if service consumes topics
+├── outbox/                    # singular — one outbox per service
+│   ├── dispatcher.py          # BaseOutboxDispatcher subclass
+│   └── dispatcher_main.py     # standalone entry point (own process)
+├── consumers/                 # plural — optional if service consumes topics
+│   ├── <type>_consumer.py         # BaseKafkaConsumer subclass
+│   └── <type>_consumer_main.py    # standalone entry point (own process)
 ├── schemas/
 ├── mapper.py                  # optional: event -> wire mapping helpers
 └── serialization.py           # optional: serializer factories/helpers
@@ -1627,21 +1639,23 @@ has its own entry point, signal handling, and connection pool sizing.
 | Process | Responsibility | Entry Point Pattern | Concurrency |
 |---------|---------------|--------------------:|-------------|
 | **API** | HTTP request handling (uvicorn) | `python -m <pkg>.app` or `uvicorn <pkg>.app:create_app` | Async — bounded by uvicorn workers |
-| **Scheduler** | Evaluate sources/policies, insert task rows | `python -m <pkg>.infrastructure.schedulers.scheduler` | Single-threaded, tick-based (60s default) |
-| **Worker** | Claim and execute tasks | `python -m <pkg>.infrastructure.workers.worker` | Semaphore-bounded (default 4 concurrent) |
-| **Dispatcher** | Poll outbox, publish to Kafka | `python -m <pkg>.infrastructure.messaging.dispatcher` | Single-threaded poll loop |
+| **Scheduler** | Evaluate sources/policies, insert task rows | `python -m <pkg>.infrastructure.scheduler.scheduler_main` | Single-threaded, tick-based (60s default) |
+| **Worker** | Claim and execute tasks | `python -m <pkg>.infrastructure.workers.worker_main` | Semaphore-bounded (default 4 concurrent) |
+| **Dispatcher** | Poll outbox, publish to Kafka | `python -m <pkg>.infrastructure.messaging.outbox.dispatcher_main` | Single-threaded poll loop |
+| **Consumer** | Process inbound Kafka events | `python -m <pkg>.infrastructure.messaging.consumers.<type>_consumer_main` | Single-threaded per topic |
 
 ### 14.2 Entry Point Pattern
 
 Every process MUST follow this structure:
 
 ```python
-# <pkg>/infrastructure/workers/worker.py
+# <pkg>/infrastructure/workers/worker_main.py  ← standalone entry point
 
 import asyncio
 import signal
 
 from <pkg>.config import Settings
+from <pkg>.infrastructure.workers.worker import Worker
 
 async def _run_worker() -> None:
     settings = Settings()                          # own Settings instance
@@ -1673,15 +1687,15 @@ services:
 
   content-ingestion-scheduler:
     build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
-    command: ["python", "-m", "content_ingestion.infrastructure.schedulers.scheduler"]
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
 
   content-ingestion-worker:
     build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
-    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker"]
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
 
   content-ingestion-dispatcher:
     build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
-    command: ["python", "-m", "content_ingestion.infrastructure.messaging.dispatcher"]
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
 ```
 
 ### 14.4 Pool Size Recommendations
