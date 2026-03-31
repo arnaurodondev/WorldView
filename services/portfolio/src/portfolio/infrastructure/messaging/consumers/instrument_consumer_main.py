@@ -18,7 +18,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from portfolio.config import Settings
-    from portfolio.infrastructure.db.session import create_session_factory
+    from portfolio.infrastructure.db.session import _build_factories
     from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
 
     settings = Settings()  # type: ignore[call-arg]
@@ -41,14 +41,14 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    _engine, session_factory = create_session_factory(settings.database_url)
+    _engine, write_factory, _read_factory = _build_factories(settings)
 
     consumer_config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.consumer_group_instrument,
         topics=[settings.topic_instrument_created, settings.topic_instrument_updated],
     )
-    consumer = InstrumentEventConsumer(consumer_config, session_factory)
+    consumer = InstrumentEventConsumer(consumer_config, write_factory)
 
     try:
         consumer_task = asyncio.create_task(consumer.run())

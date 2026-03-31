@@ -17,7 +17,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 async def main() -> None:
     from portfolio.config import Settings
-    from portfolio.infrastructure.db.session import create_session_factory
+    from portfolio.infrastructure.db.session import _build_factories
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     settings = Settings()  # type: ignore[call-arg]
@@ -40,9 +40,9 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    _engine, session_factory = create_session_factory(settings.database_url)
+    _engine, write_factory, _read_factory = _build_factories(settings)
 
-    dispatcher = create_dispatcher(settings, session_factory)
+    dispatcher = create_dispatcher(settings, write_factory)
 
     try:
         dispatch_task = asyncio.create_task(dispatcher.run())

@@ -21,7 +21,7 @@ from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
 from portfolio.config import Settings
 from portfolio.domain.errors import DomainError
-from portfolio.infrastructure.db.session import create_session_factory
+from portfolio.infrastructure.db.session import _build_factories
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -78,9 +78,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
 
-    # 4. Create DB session factory
-    engine, session_factory = create_session_factory(settings.database_url)
-    app.state.session_factory = session_factory
+    # 4. Create DB session factories (R23 — write + read split)
+    engine, write_factory, read_factory = _build_factories(settings)
+    app.state.session_factory = write_factory  # backward-compat alias
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
     app.state.engine = engine
 
     # 5. Create Valkey client for watchlist reverse-index cache
@@ -92,7 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 6. Create outbox dispatcher
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
-    dispatcher = create_dispatcher(settings, session_factory)
+    dispatcher = create_dispatcher(settings, write_factory)
     app.state.dispatcher = dispatcher
 
     # Note: InstrumentEventConsumer runs as a separate process (portfolio-instrument-consumer).

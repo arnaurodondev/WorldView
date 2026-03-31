@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     port: int = 8001
     debug: bool = False
 
-    # Database
+    # Database (R23 — read/write split)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db"
+    database_url_read: str = ""  # Optional read-replica URL; falls back to database_url when empty
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
