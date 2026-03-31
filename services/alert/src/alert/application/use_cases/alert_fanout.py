@@ -28,10 +28,6 @@ import fastavro  # type: ignore[import-untyped]
 from alert.domain.entities import Alert, OutboxEvent, PendingAlert
 from alert.domain.enums import AlertType
 from alert.domain.errors import DuplicateAlertError
-from alert.infrastructure.db.repositories.alert import AlertRepository
-from alert.infrastructure.db.repositories.dedup import DedupRepository
-from alert.infrastructure.db.repositories.outbox import OutboxRepository
-from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -39,8 +35,27 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from alert.application.ports.repositories import (
+        AlertSaveRepositoryPort,
+        DedupRepositoryPort,
+        OutboxRepositoryPort,
+        PendingAlertRepositoryPort,
+    )
     from alert.infrastructure.cache.watchlist_cache import WatchlistCache
     from alert.infrastructure.websocket.manager import ConnectionManager
+
+    class RepoFactory:
+        """Protocol for constructing repos from a session."""
+
+        def __call__(
+            self, session: AsyncSession
+        ) -> tuple[
+            AlertSaveRepositoryPort,
+            PendingAlertRepositoryPort,
+            DedupRepositoryPort,
+            OutboxRepositoryPort,
+        ]: ...
+
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -178,12 +193,14 @@ class AlertFanoutUseCase:
         session_factory: async_sessionmaker[AsyncSession],
         watchlist_cache: WatchlistCache,
         connection_manager: ConnectionManager,
+        repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
         self._ws = connection_manager
+        self._repo_factory = repo_factory
         self._dedup_window = dedup_window_seconds
         self._alert_delivered_topic = alert_delivered_topic
 
@@ -259,7 +276,7 @@ class AlertFanoutUseCase:
         dedup_key = Alert.compute_dedup_key(entity_uuid, alert_type, event_time, self._dedup_window)
 
         async with self._sf() as session:
-            dedup_repo = DedupRepository(session)
+            alert_repo, pending_repo, dedup_repo, outbox_repo = self._repo_factory(session)
             if await dedup_repo.exists(dedup_key):
                 logger.debug(  # type: ignore[no-any-return]
                     "alert_fanout.dedup_suppressed",
@@ -291,10 +308,6 @@ class AlertFanoutUseCase:
             )
 
             # ── 7. Single transaction: alert + pending rows + outbox ─────────
-            alert_repo = AlertRepository(session)
-            pending_repo = PendingAlertRepository(session)
-            outbox_repo = OutboxRepository(session)
-
             try:
                 await alert_repo.save(alert)
             except DuplicateAlertError:

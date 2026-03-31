@@ -349,7 +349,7 @@ async def run_deep_extraction_block(
                 confidence=confidence,
                 evidence_text=str(event_d.get("description", "")),
                 detected_at=now,
-            )
+            ),
         )
 
     logger.info(

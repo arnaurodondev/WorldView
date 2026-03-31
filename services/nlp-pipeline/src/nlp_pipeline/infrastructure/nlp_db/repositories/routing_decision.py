@@ -40,5 +40,5 @@ class RoutingDecisionRepository:
         await self._session.execute(
             update(RoutingDecisionModel)
             .where(RoutingDecisionModel.doc_id == doc_id)
-            .values(final_routing_tier=final_tier)
+            .values(final_routing_tier=final_tier),
         )

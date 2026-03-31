@@ -53,7 +53,7 @@ class ListSourcesUseCase:
                     source_type=src.source_type,
                     enabled=src.enabled,
                     last_fetch_at=state.last_run_at if state else None,
-                )
+                ),
             )
         logger.info("sources_listed", count=len(items))
         return items

@@ -46,6 +46,11 @@ unfixable = ["F841"]  # don't auto-remove unused variables
 # they appear type-only due to `from __future__ import annotations`.
 "services/*/src/*/domain/entities.py" = ["TCH001"]
 "services/*/src/*/domain/enums.py" = ["TCH001"]
+# Dynamic SQL construction via text(f"...WHERE {where_sql}...") pattern is safe
+# because where_sql is built from trusted string literals (not user input).
+"services/*/src/*/infrastructure/**/repositories/*.py" = ["S608"]
+# Lazy re-exports in pg/__init__.py use __getattr__ + TYPE_CHECKING pattern
+"libs/messaging/src/messaging/pg/__init__.py" = ["TCH004"]
 
 [lint.isort]
 known-first-party = [

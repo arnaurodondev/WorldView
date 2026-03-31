@@ -397,7 +397,6 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -427,7 +426,8 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 await session.commit()
         except Exception:
             logger.exception(  # type: ignore[no-any-return]
-                "dead_letter_write_failed", event_id=failure.event_id
+                "dead_letter_write_failed",
+                event_id=failure.event_id,
             )
 
     async def get_pending_retries(self) -> list[FailureInfo[None]]:
@@ -464,7 +464,7 @@ def _write_section_embeddings(
                 section_id=section_id,
                 embedding=vec,
                 model_id=model_id,
-            )
+            ),
         )
 
 
@@ -481,7 +481,7 @@ def _write_chunk_embeddings(
                 chunk_id=chunk_id,
                 embedding=vec,
                 model_id=model_id,
-            )
+            ),
         )
 
 

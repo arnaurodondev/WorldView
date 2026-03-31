@@ -29,6 +29,7 @@ from knowledge_graph.app import create_app
 from knowledge_graph.config import Settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -78,7 +79,7 @@ def e2e_engine():
     if not _is_db_available():
         pytest.skip(f"PostgreSQL not available at {E2E_DB_URL}")
 
-    engine = create_async_engine(E2E_DB_URL, echo=False, future=True)
+    engine = create_async_engine(E2E_DB_URL, echo=False, future=True, poolclass=NullPool)
     return engine
 
 

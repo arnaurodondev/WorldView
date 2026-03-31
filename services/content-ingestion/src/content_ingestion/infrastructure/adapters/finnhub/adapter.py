@@ -116,7 +116,7 @@ class FinnhubAdapter(SourceAdapter):
                         content_type="application/json",
                         published_at=_parse_published_at(article),
                         is_backfill=is_backfill,
-                    )
+                    ),
                 )
 
         # Fetch transcripts
@@ -170,7 +170,7 @@ class FinnhubAdapter(SourceAdapter):
                             content_type="application/json",
                             published_at=None,
                             is_backfill=is_backfill,
-                        )
+                        ),
                     )
 
         logger.info("finnhub_fetch_complete", symbol=symbol, new=len(results))

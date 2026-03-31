@@ -232,7 +232,7 @@ class RecordTransactionUseCase:
                 if existing is not None:
                     return RecordTransactionResult(transaction=existing)
             raise IdempotencyConflictError(
-                f"Concurrent idempotency conflict on key {cmd.idempotency_key!r}; " "retry the request."
+                f"Concurrent idempotency conflict on key {cmd.idempotency_key!r}; retry the request."
             ) from exc
 
         log = logger.bind(

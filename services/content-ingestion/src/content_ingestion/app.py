@@ -80,14 +80,14 @@ async def _metrics_poller(session_factory: object, interval: int) -> None:
         try:
             async with session_factory() as session:  # type: ignore[operator]
                 outbox_result = await session.execute(
-                    select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending")
+                    select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending"),
                 )
                 s4_outbox_pending_total.set(outbox_result.scalar() or 0)
 
                 dlq_result = await session.execute(
                     select(func.count())
                     .select_from(DeadLetterQueueModel)
-                    .where(DeadLetterQueueModel.status == "failed")
+                    .where(DeadLetterQueueModel.status == "failed"),
                 )
                 s4_dlq_total.set(dlq_result.scalar() or 0)
         except Exception:
@@ -154,7 +154,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 7. Metrics poller (lightweight — OK in API process)
     metrics_task: asyncio.Task[None] = asyncio.create_task(
-        _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds)
+        _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds),
     )
 
     log.info("service_started", service=settings.service_name)

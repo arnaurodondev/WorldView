@@ -61,7 +61,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX idx_chunks_section ON chunks (section_id)")
 
     # 4. chunk_embeddings — vector(1024) with HNSW partial index
-    #    HNSW predicate: embedding_status = 'ready' AND (expires_at IS NULL OR expires_at > now())
+    #    HNSW predicate: embedding_status = 'ready' (expires_at filter applied at query time — now() is not IMMUTABLE)
     op.execute("""
         CREATE TABLE chunk_embeddings (
             embedding_id     UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -78,7 +78,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE INDEX idx_chunk_emb_hnsw ON chunk_embeddings
             USING hnsw (embedding vector_cosine_ops)
-            WHERE embedding_status = 'ready' AND (expires_at IS NULL OR expires_at > now())
+            WHERE embedding_status = 'ready'
     """)
     op.execute("CREATE INDEX idx_chunk_emb_pending ON chunk_embeddings (created_at) WHERE embedding_status = 'pending'")
     op.execute("CREATE INDEX idx_chunk_emb_expires ON chunk_embeddings (expires_at) WHERE expires_at IS NOT NULL")
@@ -98,7 +98,6 @@ def upgrade() -> None:
     op.execute("""
         CREATE INDEX idx_section_emb_hnsw ON section_embeddings
             USING hnsw (embedding vector_cosine_ops)
-            WHERE (expires_at IS NULL OR expires_at > now())
     """)
 
     # 6. entity_mentions (references sections; resolution_stage set by Block 9)

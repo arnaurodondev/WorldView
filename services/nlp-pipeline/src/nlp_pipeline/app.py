@@ -77,7 +77,9 @@ async def _supervised_dispatcher(dispatcher: NLPPipelineOutboxDispatcher, app: F
             failures += 1
             delay = min(5 * (2**failures), 300)
             logger.exception(  # type: ignore[no-any-return]
-                "dispatcher_crashed", restart_delay=delay, failures=failures
+                "dispatcher_crashed",
+                restart_delay=delay,
+                failures=failures,
             )
             app.state.dispatcher_healthy = False
             await asyncio.sleep(delay)

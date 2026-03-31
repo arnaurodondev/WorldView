@@ -230,7 +230,7 @@ async def run_embeddings_block(
                     section_id=section.section_id,
                     error_detail="section embedding failed",
                     created_at=now,
-                )
+                ),
             )
 
         # ── Chunk splitting ───────────────────────────────────────────────
@@ -258,7 +258,7 @@ async def run_embeddings_block(
                         section_id=chunk.section_id,
                         error_detail="chunk embedding failed",
                         created_at=now,
-                    )
+                    ),
                 )
 
     return all_chunks, chunk_embeddings, section_embeddings, pending_failures

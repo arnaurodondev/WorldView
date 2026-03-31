@@ -43,7 +43,7 @@ class OutboxRepository:
             .where(OutboxEventModel.status == "pending")
             .order_by(OutboxEventModel.created_at)
             .limit(batch_size)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True),
         )
         return list(result.scalars().all())
 
@@ -54,7 +54,7 @@ class OutboxRepository:
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.event_id == event_id)
-            .values(status="dispatched", dispatched_at=datetime.now(tz=UTC))
+            .values(status="dispatched", dispatched_at=datetime.now(tz=UTC)),
         )
 
     async def mark_failed(self, event_id: UUID) -> None:
@@ -65,5 +65,5 @@ class OutboxRepository:
                 status="failed",
                 failed_at=datetime.now(tz=UTC),
                 retry_count=OutboxEventModel.retry_count + 1,
-            )
+            ),
         )

@@ -30,7 +30,7 @@ def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or addr.is_loopback
         or addr.is_multicast
         or addr.is_link_local
-        or (isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK)
+        or (isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK),
     )
 
 

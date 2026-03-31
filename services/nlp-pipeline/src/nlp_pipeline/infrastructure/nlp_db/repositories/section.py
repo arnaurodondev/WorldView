@@ -45,7 +45,7 @@ class SectionRepository:
 
     async def get_by_doc(self, doc_id: UUID) -> list[SectionModel]:
         result = await self._session.execute(
-            select(SectionModel).where(SectionModel.doc_id == doc_id).order_by(SectionModel.section_index)
+            select(SectionModel).where(SectionModel.doc_id == doc_id).order_by(SectionModel.section_index),
         )
         return list(result.scalars().all())
 

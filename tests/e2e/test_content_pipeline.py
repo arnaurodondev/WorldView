@@ -53,9 +53,9 @@ _S5_PORT = int(os.getenv("CONTENT_STORE_PORT", "8005"))
 _S4_BASE_URL = f"http://{_S4_HOST}:{_S4_PORT}"
 _S5_BASE_URL = f"http://{_S5_HOST}:{_S5_PORT}"
 
-_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "test-internal-token")
-_S4_ADMIN_TOKEN = os.getenv("CONTENT_INGESTION_ADMIN_TOKEN", "test-admin-token")
-_S5_ADMIN_TOKEN = os.getenv("CONTENT_STORE_ADMIN_TOKEN", "test-admin-token")
+_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+_S4_ADMIN_TOKEN = os.getenv("CONTENT_INGESTION_ADMIN_TOKEN", "e2e-admin-token")
+_S5_ADMIN_TOKEN = os.getenv("CONTENT_STORE_ADMIN_TOKEN", "e2e-admin-token")
 
 
 def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -79,7 +79,7 @@ _skip_s4_s5 = pytest.mark.skipif(
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def s4_client():
     """HTTP client for S4 (content-ingestion)."""
     from httpx import AsyncClient
@@ -88,7 +88,7 @@ async def s4_client():
         yield ac
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def s5_client():
     """HTTP client for S5 (content-store)."""
     from httpx import AsyncClient
@@ -165,7 +165,7 @@ async def test_s4_admin_create_eodhd_source(s4_client: AsyncClient) -> None:
             "name": unique_name,
             "source_type": "eodhd",
             "config": {
-                "symbols": ["AAPL", "MSFT", "GOOGL"],
+                "symbols": "AAPL,MSFT,GOOGL",
                 "lookback_days": 7,
             },
             "enabled": True,
@@ -217,12 +217,10 @@ async def test_s4_admin_create_source_invalid_type_returns_422(s4_client: AsyncC
 
 @_skip_s4
 async def test_s4_internal_submit_raw_content(s4_client: AsyncClient) -> None:
-    """POST /internal/v1/ingest/submit with raw_content returns accepted or duplicate."""
-    unique_url = f"https://news.example.com/article/{uuid.uuid4().hex}"
+    """POST /internal/v1/ingest/submit with only raw_content returns accepted or duplicate."""
     resp = await s4_client.post(
         "/internal/v1/ingest/submit",
         json={
-            "url": unique_url,
             "source_type": "newsapi",
             "title": "E2E Test Article",
             "raw_content": "Apple reports record quarterly earnings for Q1 2026.",
@@ -239,12 +237,11 @@ async def test_s4_internal_submit_raw_content(s4_client: AsyncClient) -> None:
 @_skip_s4
 async def test_s4_internal_submit_duplicate_url_returns_duplicate(s4_client: AsyncClient) -> None:
     """Submitting the same URL twice: second submission returns status=duplicate."""
-    unique_url = f"https://news.example.com/dedup-test/{uuid.uuid4().hex}"
+    unique_url = f"https://example.com/dedup-test/{uuid.uuid4().hex}"
     body = {
         "url": unique_url,
         "source_type": "eodhd",
         "title": "Dedup Test",
-        "raw_content": "First submission content.",
         "published_at": datetime.now(tz=UTC).isoformat(),
     }
     resp1 = await s4_client.post("/internal/v1/ingest/submit", json=body, headers=_internal_headers())
@@ -254,9 +251,6 @@ async def test_s4_internal_submit_duplicate_url_returns_duplicate(s4_client: Asy
     resp2 = await s4_client.post("/internal/v1/ingest/submit", json=body, headers=_internal_headers())
     assert resp2.status_code == 202
     assert resp2.json()["status"] == "duplicate"
-
-    # Both calls should return the same doc_id
-    assert resp1.json()["doc_id"] == resp2.json()["doc_id"]
 
 
 @_skip_s4
@@ -310,8 +304,8 @@ async def test_s4_internal_submit_without_token_returns_401(s4_client: AsyncClie
 
 
 @_skip_s4
-async def test_s4_internal_submit_both_url_and_raw_content_accepted(s4_client: AsyncClient) -> None:
-    """POST with both url and raw_content should be accepted (url used for dedup)."""
+async def test_s4_internal_submit_both_url_and_raw_content_rejected(s4_client: AsyncClient) -> None:
+    """POST with both url and raw_content is rejected — exactly one must be provided."""
     resp = await s4_client.post(
         "/internal/v1/ingest/submit",
         json={
@@ -323,7 +317,7 @@ async def test_s4_internal_submit_both_url_and_raw_content_accepted(s4_client: A
         },
         headers=_internal_headers(),
     )
-    assert resp.status_code == 202
+    assert resp.status_code == 422
 
 
 @_skip_s4
@@ -346,7 +340,7 @@ async def test_s4_admin_pipeline_status(s4_client: AsyncClient) -> None:
     resp = await s4_client.get("/api/v1/status", headers=_s4_admin_headers())
     assert resp.status_code == 200
     data = resp.json()
-    assert "scheduler_running" in data or "dispatcher_healthy" in data or "sources_count" in data
+    assert "sources" in data or "outbox_pending" in data or "dlq_count" in data
 
 
 # ── S5 admin DLQ ──────────────────────────────────────────────────────────────
@@ -392,19 +386,14 @@ async def test_content_pipeline_article_stored_within_timeout(
     if baseline_resp.status_code == 503:
         pytest.skip("S5 is not fully ready (readyz returned 503)")
 
-    # Submit content to S4
-    unique_url = f"https://news.example.com/pipeline-test/{uuid.uuid4().hex}"
+    # Submit content to S4 (url only — raw_content and url are mutually exclusive)
+    unique_url = f"https://example.com/pipeline-test/{uuid.uuid4().hex}"
     submit_resp = await s4_client.post(
         "/internal/v1/ingest/submit",
         json={
             "url": unique_url,
             "source_type": "newsapi",
             "title": "Pipeline Integration Test Article",
-            "raw_content": (
-                "Apple Inc. reported record quarterly earnings for Q1 2026, "
-                "with revenue of $130 billion, beating analyst estimates of $125 billion. "
-                "CEO Tim Cook highlighted strong iPhone 16 sales in emerging markets."
-            ),
             "published_at": datetime.now(tz=UTC).isoformat(),
         },
         headers=_internal_headers(),

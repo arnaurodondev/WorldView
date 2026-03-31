@@ -47,12 +47,12 @@ class ChunkRepository:
 
     async def get_by_doc(self, doc_id: UUID) -> list[ChunkModel]:
         result = await self._session.execute(
-            select(ChunkModel).where(ChunkModel.doc_id == doc_id).order_by(ChunkModel.chunk_index)
+            select(ChunkModel).where(ChunkModel.doc_id == doc_id).order_by(ChunkModel.chunk_index),
         )
         return list(result.scalars().all())
 
     async def get_by_section(self, section_id: UUID) -> list[ChunkModel]:
         result = await self._session.execute(
-            select(ChunkModel).where(ChunkModel.section_id == section_id).order_by(ChunkModel.chunk_index)
+            select(ChunkModel).where(ChunkModel.section_id == section_id).order_by(ChunkModel.chunk_index),
         )
         return list(result.scalars().all())

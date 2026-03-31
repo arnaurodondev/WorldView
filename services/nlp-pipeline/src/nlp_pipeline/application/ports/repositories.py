@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -58,3 +58,69 @@ class DLQRepositoryPort(ABC):
 
     @abstractmethod
     async def commit(self) -> None: ...
+
+
+# ── Signals query port ───────────────────────────────────────────────────────
+
+
+class SignalsQueryPort(ABC):
+    """Port for signals/entity/article read-model queries (API layer).
+
+    Abstracts ORM model access so that use cases in the application layer
+    never import from infrastructure.
+    """
+
+    @abstractmethod
+    async def list_signal_events(
+        self,
+        limit: int,
+        offset: int,
+        doc_id: UUID | None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return outbox events for the signal topic, with total count."""
+        ...
+
+    @abstractmethod
+    async def search_entity_mentions(
+        self,
+        q: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return entity mentions matching substring, with total count."""
+        ...
+
+    @abstractmethod
+    async def get_entity_detail(self, entity_id: UUID) -> dict[str, Any] | None:
+        """Return aggregated entity mention stats for a given entity_id."""
+        ...
+
+    @abstractmethod
+    async def get_entity_articles(
+        self,
+        entity_id: UUID,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return articles that mention a given entity, with total count."""
+        ...
+
+    @abstractmethod
+    async def vector_search_sections(self, limit: int) -> list[dict[str, Any]]:
+        """Return sections for vector search (keyword fallback)."""
+        ...
+
+    @abstractmethod
+    async def find_routing_decision(self, doc_id: UUID) -> bool:
+        """Return True if a routing decision exists for the given doc_id."""
+        ...
+
+    @abstractmethod
+    async def insert_outbox_event(
+        self,
+        event_id: UUID,
+        topic: str,
+        partition_key: str,
+        payload_avro: bytes,
+    ) -> None:
+        """Insert an outbox event and commit."""
+        ...

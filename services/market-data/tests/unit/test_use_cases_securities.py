@@ -114,6 +114,6 @@ async def test_list_securities_no_filter_calls_list() -> None:
     uow = _make_uow()
     uow.securities_read.list = AsyncMock(return_value=([_make_security()], 1))
     uc = ListSecuritiesUseCase(uow)
-    items, total = await uc.execute(limit=50, offset=0)
+    _items, total = await uc.execute(limit=50, offset=0)
     assert total == 1
     uow.securities_read.list.assert_awaited_once_with(limit=50, offset=0)

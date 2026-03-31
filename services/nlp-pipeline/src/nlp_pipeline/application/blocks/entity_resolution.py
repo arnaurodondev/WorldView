@@ -75,7 +75,7 @@ async def _stage1_exact(
             is_winner=entity_id is not None,
             candidate_entity_id=entity_id,
             metadata={"method": "exact_alias"},
-        )
+        ),
     )
     if entity_id:
         return entity_id, CONFIDENCE_EXACT
@@ -102,7 +102,7 @@ async def _stage2_ticker_isin(
             is_winner=entity_id is not None,
             candidate_entity_id=entity_id,
             metadata={"method": "ticker_isin", "ticker": ticker, "isin": isin},
-        )
+        ),
     )
     if entity_id:
         return entity_id, CONFIDENCE_TICKER_ISIN
@@ -126,7 +126,7 @@ async def _stage3_fuzzy(
                 is_winner=False,
                 candidate_entity_id=None,
                 metadata={"method": "fuzzy_trigram", "candidates": 0},
-            )
+            ),
         )
         return None, 0.0
 
@@ -140,7 +140,7 @@ async def _stage3_fuzzy(
             is_winner=True,
             candidate_entity_id=best_entity_id,
             metadata={"method": "fuzzy_trigram", "similarity": best_sim, "candidates": len(candidates)},
-        )
+        ),
     )
     return best_entity_id, composite
 
@@ -174,7 +174,7 @@ async def _stage4_ann(
                 is_winner=False,
                 candidate_entity_id=None,
                 metadata={"method": "ann_hnsw", "error": "embedding_failed"},
-            )
+            ),
         )
         return None, 0.0
 
@@ -187,7 +187,7 @@ async def _stage4_ann(
                 is_winner=False,
                 candidate_entity_id=None,
                 metadata={"method": "ann_hnsw", "error": "no_embedding"},
-            )
+            ),
         )
         return None, 0.0
 
@@ -207,7 +207,7 @@ async def _stage4_ann(
                 is_winner=False,
                 candidate_entity_id=None,
                 metadata={"method": "ann_hnsw", "candidates": 0},
-            )
+            ),
         )
         return None, 0.0
 
@@ -227,7 +227,7 @@ async def _stage4_ann(
                     is_winner=False,
                     candidate_entity_id=best_entity_id,
                     metadata={"method": "ann_hnsw", "margin": margin, "rejected": "insufficient_margin"},
-                )
+                ),
             )
             return None, composite
 
@@ -239,7 +239,7 @@ async def _stage4_ann(
             is_winner=True,
             candidate_entity_id=best_entity_id,
             metadata={"method": "ann_hnsw", "distance": best_dist},
-        )
+        ),
     )
     return best_entity_id, composite
 

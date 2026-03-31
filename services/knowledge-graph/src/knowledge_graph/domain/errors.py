@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 
-class KnowledgeGraphError(Exception):
-    """Base error for all S7 domain exceptions."""
+class DomainError(Exception):
+    """Base error for all S7 domain exceptions (R21 canonical name)."""
+
+
+class KnowledgeGraphError(DomainError):
+    """Descriptive alias for S7 errors, extends DomainError."""
 
 
 # ---------------------------------------------------------------------------

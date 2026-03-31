@@ -48,7 +48,7 @@ class NewsParagraphSectioner:
                     char_end=end,
                     text=stripped,
                     section_type="body",
-                )
+                ),
             )
             idx += 1
         return sections
@@ -83,7 +83,7 @@ class SECEdgarSectioner:
                     text=content,
                     section_type="heading",
                     title=match.group(1).strip(),
-                )
+                ),
             )
         return sections
 
@@ -116,7 +116,7 @@ class FinnhubTranscriptSectioner:
                     text=content,
                     section_type="speaker_turn",
                     speaker=speaker_name,
-                )
+                ),
             )
         return sections
 
@@ -141,7 +141,7 @@ class SyntheticSectioner:
                 char_end=len(text),
                 text=stripped,
                 section_type="body",
-            )
+            ),
         ]
 
 

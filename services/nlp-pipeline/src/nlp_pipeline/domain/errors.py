@@ -16,8 +16,8 @@ class DomainError(Exception):
         return f"[{self.error_code}] {self.message}"
 
 
-# Descriptive alias preserved for readability within this service
-NLPDomainError = DomainError
+class NLPDomainError(DomainError):
+    """Descriptive alias for NLP pipeline errors, extends DomainError."""
 
 
 # ── Processing errors ─────────────────────────────────────────────────────────

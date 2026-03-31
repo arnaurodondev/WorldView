@@ -28,7 +28,7 @@ class CanonicalEntityRepository:
         result = await self._session.execute(
             text(
                 "SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange "
-                "FROM canonical_entities WHERE entity_id = :entity_id"
+                "FROM canonical_entities WHERE entity_id = :entity_id",
             ),
             {"entity_id": str(entity_id)},
         )
@@ -63,7 +63,7 @@ class CanonicalEntityRepository:
                 "(entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata, "
                 "created_at, updated_at) "
                 "VALUES (:entity_id, :canonical_name, :entity_type, :isin, :ticker, :exchange, "
-                ":metadata::jsonb, :created_at, :updated_at)"
+                ":metadata::jsonb, :created_at, :updated_at)",
             ),
             {
                 "entity_id": str(entity_id),

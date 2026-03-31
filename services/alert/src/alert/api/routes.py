@@ -18,6 +18,8 @@ from alert.application.use_cases.pending_alerts import (
     AcknowledgeAlertUseCase,
     GetPendingAlertsUseCase,
 )
+from alert.infrastructure.db.repositories.alert import AlertRepository
+from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -42,7 +44,9 @@ async def get_pending_alerts(
     current deployment the caller passes it as a query parameter (S9
     API gateway will inject it from the auth token).
     """
-    pairs = await GetPendingAlertsUseCase().execute(session, user_id, limit=limit, offset=offset)
+    pending_repo = PendingAlertRepository(session)
+    alert_repo = AlertRepository(session)
+    pairs = await GetPendingAlertsUseCase().execute(pending_repo, alert_repo, user_id, limit=limit, offset=offset)  # type: ignore[arg-type]
 
     alert_responses = [
         PendingAlertResponse(
@@ -80,7 +84,8 @@ async def acknowledge_alert(
     Returns 200 on success.  Returns 404 — not 403 — when the alert
     does not exist OR belongs to a different user (avoids user enumeration).
     """
-    updated = await AcknowledgeAlertUseCase().execute(session, user_id, alert_id)
+    pending_repo = PendingAlertRepository(session)
+    updated = await AcknowledgeAlertUseCase().execute(pending_repo, user_id, alert_id)  # type: ignore[arg-type]
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")
     await session.commit()

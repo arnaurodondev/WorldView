@@ -144,12 +144,24 @@ async def integration_app(
 ) -> Any:
     """FastAPI app with test DB, fake Valkey, and S1 stub wired in."""
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.dedup import DedupRepository
+    from alert.infrastructure.db.repositories.outbox import OutboxRepository
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
     from alert.infrastructure.outbox.dispatcher import AlertOutboxDispatcher
     from alert.infrastructure.websocket.manager import ConnectionManager
 
     app = create_app(integration_settings)
 
     factory, engine = db_session_factory
+
+    def _repo_factory(session):
+        return (
+            AlertRepository(session),
+            PendingAlertRepository(session),
+            DedupRepository(session),
+            OutboxRepository(session),
+        )
 
     # Override app state directly (bypass lifespan for test speed)
     app.state.session_factory = factory
@@ -166,6 +178,7 @@ async def integration_app(
         session_factory=factory,
         watchlist_cache=app.state.watchlist_cache,
         connection_manager=app.state.ws_manager,
+        repo_factory=_repo_factory,
         dedup_window_seconds=integration_settings.alert_dedup_window_seconds,
         alert_delivered_topic=integration_settings.kafka_topic_alert_delivered,
     )

@@ -44,21 +44,11 @@ typecheck:
 # ── Unit tests ────────────────────────────────────────────────────────────────
 
 test-unit:
-ifdef SERVICE
-	cd services/$(SERVICE) && python -m pytest tests/ \
-	  -m "not integration and not e2e and not live" \
-	  --ignore tests/integration --ignore tests/e2e --ignore tests/live \
-	  --tb=short -q
-else
 	@./scripts/test-libs.sh
-	@for svc_dir in services/*/; do \
-	  svc=$$(basename "$$svc_dir"); \
-	  echo "=== $$svc ==="; \
-	  (cd "$$svc_dir" && python -m pytest tests/ \
-	    -m "not integration and not e2e and not live" \
-	    --ignore tests/integration --ignore tests/e2e --ignore tests/live \
-	    --tb=short -q) || exit 1; \
-	done
+ifdef SERVICE
+	@./scripts/run-unit-tests.sh services/$(SERVICE)
+else
+	@./scripts/run-unit-tests.sh
 endif
 
 # ── E2E tests ─────────────────────────────────────────────────────────────────

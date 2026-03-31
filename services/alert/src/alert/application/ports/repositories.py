@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from alert.domain.entities import DeadLetterEntry
+    from alert.domain.entities import Alert, DeadLetterEntry, OutboxEvent, PendingAlert
 
 
 class DLQRepositoryPort(ABC):
@@ -29,3 +29,44 @@ class DLQRepositoryPort(ABC):
 
     @abstractmethod
     async def commit(self) -> None: ...
+
+
+class AlertRepositoryPort(ABC):
+    """Port for alert reads."""
+
+    @abstractmethod
+    async def get_by_id(self, alert_id: UUID) -> Alert | None: ...
+
+
+class PendingAlertRepositoryPort(ABC):
+    """Port for pending alert operations."""
+
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID, limit: int = 50, offset: int = 0) -> list[PendingAlert]: ...
+
+    @abstractmethod
+    async def acknowledge(self, user_id: UUID, alert_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def save(self, pending: PendingAlert) -> None: ...
+
+
+class DedupRepositoryPort(ABC):
+    """Port for dedup key lookups."""
+
+    @abstractmethod
+    async def exists(self, dedup_key: str) -> bool: ...
+
+
+class OutboxRepositoryPort(ABC):
+    """Port for outbox event appends."""
+
+    @abstractmethod
+    async def append(self, event: OutboxEvent) -> None: ...
+
+
+class AlertSaveRepositoryPort(ABC):
+    """Port for alert saves (includes dedup_key unique constraint)."""
+
+    @abstractmethod
+    async def save(self, alert: Alert) -> None: ...

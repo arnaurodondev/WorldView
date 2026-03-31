@@ -26,7 +26,7 @@ class AdapterStateRepository:
 
     async def get(self, source_id: UUID) -> SourceAdapterStateModel | None:
         result = await self._session.execute(
-            select(SourceAdapterStateModel).where(SourceAdapterStateModel.source_id == source_id)
+            select(SourceAdapterStateModel).where(SourceAdapterStateModel.source_id == source_id),
         )
         return cast("SourceAdapterStateModel | None", result.scalar_one_or_none())
 

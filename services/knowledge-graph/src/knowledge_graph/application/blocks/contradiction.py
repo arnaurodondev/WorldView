@@ -20,18 +20,18 @@ from typing import TYPE_CHECKING
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
+from knowledge_graph.application.ports.repositories import (
     TOPIC_CONTRADICTION,
 )
 
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
-        ContradictionRepository,
+    from knowledge_graph.application.ports.repositories import (
+        ContradictionRepositoryPort as ContradictionRepository,
     )
-    from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
-        OutboxRepository,
+    from knowledge_graph.application.ports.repositories import (
+        OutboxRepositoryPort as OutboxRepository,
     )
 
 

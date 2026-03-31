@@ -61,7 +61,7 @@ class FetchLogModel(Base):
     __tablename__ = "article_fetch_log"
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    source_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False)
+    source_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     url_hash: Mapped[str] = mapped_column(Text, nullable=False)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)

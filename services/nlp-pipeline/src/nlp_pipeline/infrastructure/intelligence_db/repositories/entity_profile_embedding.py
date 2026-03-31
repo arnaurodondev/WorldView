@@ -42,7 +42,7 @@ class EntityProfileEmbeddingRepository:
                 "WHERE view_type = :view_type "
                 "AND embedding IS NOT NULL "
                 "ORDER BY distance ASC "
-                "LIMIT :top_k"
+                "LIMIT :top_k",
             ),
             {
                 "query_vec": str(query_embedding),

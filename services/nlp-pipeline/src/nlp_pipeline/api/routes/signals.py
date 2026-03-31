@@ -37,6 +37,7 @@ from nlp_pipeline.application.use_cases.signals import (
     SearchEntitiesUseCase,
     VectorSearchUseCase,
 )
+from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["nlp"])
@@ -54,7 +55,8 @@ async def list_signals(
     doc_id: UUID | None = Query(default=None),
 ) -> SignalListResponse:
     """List high-confidence financial signals (from outbox_events)."""
-    items, total = await ListSignalsUseCase().execute(session, limit, offset, doc_id)
+    repo = SqlaSignalsQueryRepo(session)
+    items, total = await ListSignalsUseCase().execute(repo, limit, offset, doc_id)
     return SignalListResponse(
         items=[
             SignalResponse(
@@ -85,7 +87,8 @@ async def search_entities(
     offset: int = Query(default=0, ge=0),
 ) -> EntityListResponse:
     """Search entities by mention text (case-insensitive substring)."""
-    items, total = await SearchEntitiesUseCase().execute(session, q, limit, offset)
+    repo = SqlaSignalsQueryRepo(session)
+    items, total = await SearchEntitiesUseCase().execute(repo, q, limit, offset)
     return EntityListResponse(
         items=[
             EntitySearchResponse(
@@ -115,7 +118,8 @@ async def vector_search(
     Returns section snippets ranked by cosine similarity to the query embedding.
     The embedding is computed via the app-scoped embedding client at runtime.
     """
-    hits_data = await VectorSearchUseCase().execute(session, body.limit)
+    repo = SqlaSignalsQueryRepo(session)
+    hits_data = await VectorSearchUseCase().execute(repo, body.limit)
     return VectorSearchResponse(
         query=body.query,
         hits=[
@@ -139,7 +143,8 @@ async def get_entity(
     session: NlpDbSessionDep,
 ) -> EntityDetailResponse:
     """Retrieve entity detail with resolution counts."""
-    data = await GetEntityDetailUseCase().execute(session, entity_id)
+    repo = SqlaSignalsQueryRepo(session)
+    data = await GetEntityDetailUseCase().execute(repo, entity_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Entity not found")
 
@@ -163,7 +168,8 @@ async def get_entity_articles(
     limit: int = Query(default=20, ge=1, le=200),
 ) -> EntityArticlesResponse:
     """List articles that mention this entity (most recent first)."""
-    items_data, total = await GetEntityArticlesUseCase().execute(session, entity_id, limit)
+    repo = SqlaSignalsQueryRepo(session)
+    items_data, total = await GetEntityArticlesUseCase().execute(repo, entity_id, limit)
     return EntityArticlesResponse(
         entity_id=entity_id,
         items=[
@@ -193,7 +199,8 @@ async def reprocess_article(
     The event will trigger the outbox dispatcher which republishes to the
     consumer group for re-ingestion.  This is a best-effort admin operation.
     """
-    found = await ReprocessArticleUseCase().execute(session, article_id)
+    repo = SqlaSignalsQueryRepo(session)
+    found = await ReprocessArticleUseCase().execute(repo, article_id)
     if not found:
         return ReprocessResponse(
             article_id=article_id,

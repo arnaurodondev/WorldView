@@ -101,7 +101,7 @@ class NewsAPIAdapter(SourceAdapter):
                     content_type="application/json",
                     published_at=published_at,
                     is_backfill=is_backfill,
-                )
+                ),
             )
 
         logger.info("newsapi_fetch_complete", total_api=len(articles), new=len(results))

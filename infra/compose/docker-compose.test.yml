@@ -13,10 +13,10 @@
 #   portfolio-test          — Postgres + Kafka + Schema Registry + portfolio migrate + portfolio API + portfolio dispatcher
 #   market-ingestion-test   — Postgres + MinIO + Kafka + Schema Registry + market-ingestion migrate + market-ingestion API + scheduler + worker + dispatcher
 #   market-data-test        — TimescaleDB + Valkey + MinIO + Kafka + Schema Registry + market-data migrate + market-data API + market-data dispatcher
-#   content-ingestion-test  — Postgres + MinIO + Valkey + Kafka + Schema Registry + content-ingestion migrate
-#   content-store-test      — Postgres(pgvector) + MinIO + Valkey + Kafka + Schema Registry (ASGI e2e; no Dockerfile)
-#   intelligence-test       — Postgres(pgvector) + MinIO + Valkey + Kafka + intelligence-migrations + Schema Registry
-#   alert-test              — Postgres(pgvector) + Valkey + Kafka + Schema Registry (ASGI e2e; no Dockerfile)
+#   content-ingestion-test  — Postgres + MinIO + Valkey + Kafka + Schema Registry + content-ingestion migrate + API + dispatcher
+#   content-store-test      — Postgres(pgvector) + MinIO + Valkey + Kafka + Schema Registry + content-store migrate + API
+#   intelligence-test       — Postgres(pgvector) + MinIO + Valkey + Kafka + intelligence-migrations + nlp-pipeline migrate + nlp-pipeline API + knowledge-graph API + Schema Registry
+#   alert-test              — Postgres(pgvector) + Valkey + Kafka + Schema Registry + alert migrate + alert API
 #   dev-tools               — infra + developer UIs (Kafka UI, pgAdmin)
 #   all                     — starts every service in this compose file
 #
@@ -146,6 +146,8 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # Limit JVM heap to avoid OOM in resource-constrained Docker Desktop environments
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
@@ -484,19 +486,109 @@ services:
   # ── Content Ingestion (S4) ─────────────────────────────────────────────────
   content-ingestion-migrate:
     build:
-      context: ../../services/content-ingestion
-      dockerfile: Dockerfile
-      target: base
+      context: ../..
+      dockerfile: services/content-ingestion/Dockerfile
     profiles: [content-ingestion-test, all]
-    command: ["python", "-m", "alembic", "upgrade", "head"]
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/content_ingestion_db
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
     restart: "no"
 
-  # ── Intelligence Migrations (S6 nlp_db DDL + intelligence_db DDL) ─────────────
+  content-ingestion:
+    build:
+      context: ../..
+      dockerfile: services/content-ingestion/Dockerfile
+    profiles: [content-ingestion-test, all]
+    depends_on:
+      content-ingestion-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    ports:
+      - "8004:8004"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  content-ingestion-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/content-ingestion/Dockerfile
+    profiles: [content-ingestion-test, all]
+    depends_on:
+      content-ingestion-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── Content Store (S5) ─────────────────────────────────────────────────────
+  content-store-migrate:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [content-store-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  content-store:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [content-store-test, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    ports:
+      - "8005:8005"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ── Intelligence Migrations (intelligence_db DDL) ─────────────────────────
   # DDL owner for intelligence_db (pgvector, relations, entities, embeddings).
   # S6 (nlp-pipeline) and S7 (knowledge-graph) set ALEMBIC_ENABLED=false and
   # consume from this DB; they do NOT own DDL.
@@ -512,6 +604,117 @@ services:
         condition: service_healthy
     # entrypoint.sh: 1) alembic upgrade head 2) run seed SQL 3) populate embeddings (non-blocking)
     restart: "no"
+
+  # ── NLP Pipeline (S6) ──────────────────────────────────────────────────────
+  nlp-pipeline-migrate:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  nlp-pipeline:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    ports:
+      - "8006:8006"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+
+  # ── Knowledge Graph (S7) ───────────────────────────────────────────────────
+  # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
+  knowledge-graph:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    ports:
+      - "8007:8007"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+
+  # ── Alert (S10) ────────────────────────────────────────────────────────────
+  alert-migrate:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  alert:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    ports:
+      - "8010:8010"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
 volumes:
   pgadmin_data:

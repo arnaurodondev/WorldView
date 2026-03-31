@@ -30,6 +30,12 @@ from knowledge_graph.application.use_cases.graph_query import (
     GetGraphStatsUseCase,
     ListRelationsUseCase,
 )
+from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+    CanonicalEntityRepository,
+)
+from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+    RelationRepository,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["graph"])
@@ -96,8 +102,11 @@ async def get_entity_graph(
     """
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        entity_repo = CanonicalEntityRepository(session)
+        relation_repo = RelationRepository(session)
         entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
-            session,
+            entity_repo=entity_repo,  # type: ignore[arg-type]
+            relation_repo=relation_repo,  # type: ignore[arg-type]
             entity_id=entity_id,
             min_confidence=min_confidence,
             semantic_mode=semantic_mode,
@@ -131,8 +140,9 @@ async def list_relations(
     """Paginated, filtered relation list."""
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        relation_repo = RelationRepository(session)
         rows, total = await ListRelationsUseCase().execute(
-            session,
+            relation_repo=relation_repo,  # type: ignore[arg-type]
             subject_entity_id=subject_entity_id,
             object_entity_id=object_entity_id,
             canonical_type=canonical_type,
@@ -158,7 +168,8 @@ async def get_graph_stats(request: Request) -> GraphStatsResponse:
     """Return aggregate knowledge graph statistics."""
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        stats = await GetGraphStatsUseCase().execute(session)
+        relation_repo = RelationRepository(session)
+        stats = await GetGraphStatsUseCase().execute(relation_repo=relation_repo)  # type: ignore[arg-type]
 
     return GraphStatsResponse(
         entity_count=int(stats["entity_count"]),  # type: ignore[call-overload]

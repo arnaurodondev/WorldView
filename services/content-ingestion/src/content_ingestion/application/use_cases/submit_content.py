@@ -73,7 +73,7 @@ class SubmitContentUseCase:
             await self._uow.fetch_logs.create(
                 url=url,
                 url_hash=url_hash,
-                source_id=doc_id,
+                source_id=None,  # manual/webhook submissions have no registered source
                 http_status=200,
                 byte_size=len(raw_bytes),
                 fetched_at=now,
