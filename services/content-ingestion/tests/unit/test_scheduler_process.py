@@ -31,10 +31,10 @@ def _make_settings() -> MagicMock:
 
 
 class TestSchedulerProcessTick:
-    @patch("content_ingestion.infrastructure.scheduler.scheduler_process._build_factories")
-    @patch("content_ingestion.infrastructure.scheduler.scheduler_process.ScheduleDueSourcesUseCase")
+    @patch("content_ingestion.infrastructure.scheduler.scheduler_main._build_factories")
+    @patch("content_ingestion.infrastructure.scheduler.scheduler_main.ScheduleDueSourcesUseCase")
     async def test_tick_calls_use_case_and_logs(self, mock_uc_cls: MagicMock, mock_build: MagicMock) -> None:
-        from content_ingestion.infrastructure.scheduler.scheduler_process import SchedulerProcess
+        from content_ingestion.infrastructure.scheduler.scheduler_main import SchedulerProcess
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
@@ -53,9 +53,9 @@ class TestSchedulerProcessTick:
 
 
 class TestSchedulerProcessStop:
-    @patch("content_ingestion.infrastructure.scheduler.scheduler_process._build_factories")
+    @patch("content_ingestion.infrastructure.scheduler.scheduler_main._build_factories")
     async def test_stop_causes_run_to_exit(self, mock_build: MagicMock) -> None:
-        from content_ingestion.infrastructure.scheduler.scheduler_process import SchedulerProcess
+        from content_ingestion.infrastructure.scheduler.scheduler_main import SchedulerProcess
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
@@ -82,10 +82,10 @@ class TestSchedulerProcessStop:
 
 
 class TestSchedulerProcessTickError:
-    @patch("content_ingestion.infrastructure.scheduler.scheduler_process._build_factories")
-    @patch("content_ingestion.infrastructure.scheduler.scheduler_process.ScheduleDueSourcesUseCase")
+    @patch("content_ingestion.infrastructure.scheduler.scheduler_main._build_factories")
+    @patch("content_ingestion.infrastructure.scheduler.scheduler_main.ScheduleDueSourcesUseCase")
     async def test_tick_error_does_not_crash_process(self, mock_uc_cls: MagicMock, mock_build: MagicMock) -> None:
-        from content_ingestion.infrastructure.scheduler.scheduler_process import SchedulerProcess
+        from content_ingestion.infrastructure.scheduler.scheduler_main import SchedulerProcess
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()

@@ -326,7 +326,7 @@ services:
     environment:
       MARKET_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS: "2.0"
       MARKET_INGESTION_SCHEDULER_MAX_TASKS_PER_TICK: "0"
-    command: ["python", "-m", "market_ingestion.infrastructure.schedulers.scheduler"]
+    command: ["python", "-m", "market_ingestion.infrastructure.scheduler.scheduler_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s

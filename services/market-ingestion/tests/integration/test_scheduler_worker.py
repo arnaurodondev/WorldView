@@ -47,7 +47,7 @@ async def test_scheduler_tick_with_no_policies_completes():
 @pytest.mark.asyncio
 async def test_scheduler_process_tick_interval_respected():
     """Scheduler respects tick interval; multiple ticks are spread over time."""
-    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
+    from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
 
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
@@ -57,10 +57,10 @@ async def test_scheduler_process_tick_interval_respected():
 
     with (
         patch(
-            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
+            "market_ingestion.infrastructure.scheduler.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_uc,
+        patch("market_ingestion.infrastructure.scheduler.scheduler.ScheduleDueTasksUseCase") as mock_uc,
     ):
         mock_result = MagicMock()
         mock_result.tasks_enqueued = 0

@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all infra-up infra-down qa
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down qa
 
 # ── Default target ────────────────────────────────────────────────────────────
 
@@ -8,6 +8,7 @@ help:
 	@echo "  make lint            Ruff check + format check (no infra)"
 	@echo "  make typecheck       mypy for all services and libs"
 	@echo "  make test-unit       All unit + contract tests (no infra)"
+	@echo "  make test-arch       Architecture/standards compliance tests"
 	@echo "  make test-all        Full platform: lint + unit + integration + e2e"
 	@echo "  make infra-up        Start test Docker Compose stack (--profile all)"
 	@echo "  make infra-down      Stop test Docker Compose stack"
@@ -77,3 +78,8 @@ infra-down:
 # ── CI gate ───────────────────────────────────────────────────────────────────
 
 qa: lint typecheck test-unit
+
+# ── Architecture tests ─────────────────────────────────────────────────────
+
+test-arch:
+	python -m pytest tests/architecture/ -v --tb=short

@@ -55,19 +55,14 @@ from tests.architecture._utils import (
 #   TOPO-STALE-OUTBOX      — infrastructure/outbox/ co-exists with messaging/outbox/ (stale)
 
 TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
-    # --- S2: market-ingestion — fix in PLAN-0011 Wave B-1 / B-2 ---
-    ("market-ingestion", "TOPO-DIR-SCHEDULER"): "Rename schedulers/ → scheduler/ in Wave B-1",
-    ("market-ingestion", "TOPO-MAIN-SCHEDULER"): "Add scheduler_main.py in Wave B-1",
+    # --- S2: market-ingestion — remaining fixes in PLAN-0011 Wave B-2 ---
     ("market-ingestion", "TOPO-MAIN-WORKER"): "Add worker_main.py in Wave B-2",
     # --- S3: market-data — fix in PLAN-0011 Wave B-2 ---
     ("market-data", "TOPO-MAIN-CONSUMER"): "Add consumer_main.py files in Wave B-2",
     ("market-data", "TOPO-LIFESPAN"): "Move consumers/dispatcher to standalone processes in Wave B-2",
-    # --- S4: content-ingestion — fix in PLAN-0011 Wave B-1 / B-2 ---
-    ("content-ingestion", "TOPO-MAIN-SCHEDULER"): "Rename scheduler_process.py → scheduler_main.py in Wave B-1",
+    # --- S4: content-ingestion — remaining fixes in PLAN-0011 Wave B-2 ---
     ("content-ingestion", "TOPO-MAIN-WORKER"): "Add worker_main.py in Wave B-2",
     ("content-ingestion", "TOPO-LIFESPAN"): "Move metrics poller to dedicated process in Wave B-2",
-    ("content-ingestion", "TOPO-DIR-OUTBOX"): "Remove stale infrastructure/outbox/ in Wave B-1 (T-B-1-03)",
-    ("content-ingestion", "TOPO-STALE-OUTBOX"): "Remove stale infrastructure/outbox/ in Wave B-1 (T-B-1-03)",
     # --- S5: content-store — fix in PLAN-0011 Wave C-1 ---
     # Note: TOPO-MAIN-DISPATCHER not needed — scanner only checks canonical messaging/outbox/;
     # content-store's dispatcher is in legacy infrastructure/outbox/ (covered by TOPO-DIR-OUTBOX).

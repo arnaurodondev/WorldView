@@ -1,22 +1,24 @@
-"""Scheduler process entrypoint for market-ingestion.
+"""Scheduler process class for market-ingestion.
 
 Runs on a configurable interval and calls ``ScheduleDueTasksUseCase``
 on each tick to enqueue tasks for all enabled polling policies.
 
-Usage (standalone)::
+Use ``scheduler_main.py`` as the standalone entry point::
 
-    python -m market_ingestion.infrastructure.schedulers.scheduler
+    python -m market_ingestion.infrastructure.scheduler.scheduler_main
 """
 
 from __future__ import annotations
 
 import asyncio
-import signal
 from contextlib import suppress
+from typing import TYPE_CHECKING
 
 from market_ingestion.application.use_cases.schedule_tasks import ScheduleDueTasksUseCase
-from market_ingestion.config import Settings
 from market_ingestion.infrastructure.db.session import _build_factories
+
+if TYPE_CHECKING:
+    from market_ingestion.config import Settings
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -82,24 +84,3 @@ class SchedulerProcess:
             )
         except Exception as exc:
             logger.error("scheduler_tick_error", error=str(exc))
-
-
-async def _run_scheduler() -> None:
-    """Async entry-point; installs signal handlers for graceful shutdown."""
-    settings = Settings()  # type: ignore[call-arg]
-    scheduler = SchedulerProcess(settings=settings)
-
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, scheduler.stop)
-
-    await scheduler.run()
-
-
-def main() -> None:
-    """Synchronous entry-point for ``python -m market_ingestion.infrastructure.schedulers.scheduler``."""
-    asyncio.run(_run_scheduler())
-
-
-if __name__ == "__main__":
-    main()
