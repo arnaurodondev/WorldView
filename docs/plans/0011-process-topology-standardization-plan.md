@@ -3,7 +3,7 @@
 **PRD**: N/A (Standards enforcement initiative)
 **Status**: in-progress
 **Created**: 2026-03-31
-**Updated**: 2026-03-31 (Wave A-2 complete)
+**Updated**: 2026-03-31 (Waves A-3 + B-1 complete)
 **Author**: Claude (plan generation)
 
 ---
@@ -101,13 +101,13 @@ Sub-Plan C (Scaffolded Services) — can start after A-2 + B-1
 | T-A-2-02 | Create `test_process_topology.py` — no-lifespan-embedding | A-2 | done | T-A-1-03 |
 | T-A-2-03 | Create `test_process_topology.py` — directory naming | A-2 | done | T-A-1-03 |
 | T-A-2-04 | Add baseline mechanism for scaffolded service violations | A-2 | done | T-A-2-01 |
-| T-A-3-01 | Create `test_compose_alignment.py` — entry points ↔ compose | A-3 | pending | T-A-2-01 |
-| T-A-3-02 | Enhance `test_outbox_dispatcher_contracts.py` — canonical path check | A-3 | pending | T-A-1-01 |
-| T-A-3-03 | Add `make test-arch` target to Makefile | A-3 | pending | none |
-| T-B-1-01 | S2: rename `schedulers/` → `scheduler/`, update imports | B-1 | pending | T-A-1-01 |
-| T-B-1-02 | S4: rename `scheduler_process.py` → `scheduler_main.py`, update imports | B-1 | pending | T-A-1-01 |
-| T-B-1-03 | S4: remove stale `infrastructure/outbox/` directory | B-1 | pending | none |
-| T-B-1-04 | S2 + S4: run ruff + mypy + unit tests | B-1 | pending | T-B-1-01, T-B-1-02 |
+| T-A-3-01 | Create `test_compose_alignment.py` — entry points ↔ compose | A-3 | done | T-A-2-01 |
+| T-A-3-02 | Enhance `test_outbox_dispatcher_contracts.py` — canonical path check | A-3 | done | T-A-1-01 |
+| T-A-3-03 | Add `make test-arch` target to Makefile | A-3 | done | none |
+| T-B-1-01 | S2: rename `schedulers/` → `scheduler/`, update imports | B-1 | done | T-A-1-01 |
+| T-B-1-02 | S4: rename `scheduler_process.py` → `scheduler_main.py`, update imports | B-1 | done | T-A-1-01 |
+| T-B-1-03 | S4: remove stale `infrastructure/outbox/` directory | B-1 | done | none |
+| T-B-1-04 | S2 + S4: run ruff + mypy + unit tests | B-1 | done | T-B-1-01, T-B-1-02 |
 | T-B-2-01 | Fix `docker-compose.yml` stale module paths (S1, S2) | B-2 | pending | T-B-1-01 |
 | T-B-2-02 | Add missing S4 scheduler + worker containers to `docker-compose.test.yml` | B-2 | pending | T-B-1-02 |
 | T-B-2-03 | Verify all S1-S4 arch tests pass | B-2 | pending | T-B-2-01, T-B-2-02 |
@@ -430,12 +430,13 @@ TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
 
 ---
 
-### Wave A-3: Compose Alignment Test + Existing Test Enhancements
+### Wave A-3: Compose Alignment Test + Existing Test Enhancements ✅
 
 **Goal**: Add a test that verifies Docker Compose containers exist for every standalone entry point,
 enhance the existing outbox test, and add a `make test-arch` convenience target.
 **Depends on**: Wave A-2
 **Estimated effort**: 30–45 min
+**Status**: **DONE** — 2026-03-31 · 4 new tests pass (98 total arch) · ruff + mypy clean
 **Architecture layer**: test + config
 
 #### T-A-3-01: Create `test_compose_alignment.py`
@@ -476,9 +477,9 @@ A new architecture test module that parses `docker-compose.test.yml` and verifie
 - Baseline scaffolded services (missing compose containers expected until Sub-Plan C)
 
 **Acceptance criteria**:
-- [ ] 3 tests in `TestComposeAlignment`
-- [ ] Stale `docker-compose.yml` paths flagged (will be fixed in Wave B-2)
-- [ ] Mature service entry points all have compose containers in test compose
+- [x] 3 tests in `TestComposeAlignment`
+- [x] Stale `docker-compose.yml` paths flagged (will be fixed in Wave B-2)
+- [x] Mature service entry points all have compose containers in test compose
 
 ---
 
@@ -502,9 +503,9 @@ canonical path (`infrastructure/messaging/outbox/`) not legacy locations.
 - Minimum test count: 1
 
 **Acceptance criteria**:
-- [ ] New test added to existing `TestDispatcherContracts` class
-- [ ] S5–S10 `infrastructure/outbox/dispatcher.py` flagged (baselined)
-- [ ] S1–S4 pass (already at canonical path)
+- [x] New test added to existing `TestDispatcherContracts` class
+- [x] S5–S10 `infrastructure/outbox/dispatcher.py` flagged (baselined)
+- [x] S1–S4 pass (already at canonical path)
 
 ---
 
@@ -528,9 +529,9 @@ test-arch:
 Also update the `help` target to include this new command and add `test-arch` to the `.PHONY` list.
 
 **Acceptance criteria**:
-- [ ] `make test-arch` runs all architecture tests successfully
-- [ ] `make help` lists the new target
-- [ ] `.PHONY` includes `test-arch`
+- [x] `make test-arch` runs all architecture tests successfully
+- [x] `make help` lists the new target
+- [x] `.PHONY` includes `test-arch`
 
 #### Pre-read (agent must read before starting)
 - `infra/compose/docker-compose.test.yml` — compose services to parse
@@ -539,11 +540,11 @@ Also update the `help` target to include this new command and add `test-arch` to
 - `Makefile` — add new target
 
 #### Validation Gate
-- [ ] ruff check passes on new and modified test files
-- [ ] mypy passes on `tests/architecture/`
-- [ ] All new tests pass — minimum 4 new tests
-- [ ] `make test-arch` succeeds
-- [ ] All existing architecture tests still pass
+- [x] ruff check passes on new and modified test files
+- [x] mypy passes on `tests/architecture/`
+- [x] All new tests pass — minimum 4 new tests (4 added)
+- [x] `make test-arch` succeeds
+- [x] All existing architecture tests still pass (94 total)
 
 #### Regression Guardrails
 - BP-023: Ensure `uvx ruff format` sync before committing
@@ -552,12 +553,13 @@ Also update the `help` target to include this new command and add `test-arch` to
 
 ## Sub-Plan B: Mature Service Standardization (S1–S4)
 
-### Wave B-1: Directory Renames & Entry Point Fixes (S2 + S4)
+### Wave B-1: Directory Renames & Entry Point Fixes (S2 + S4) ✅
 
 **Goal**: Fix the two directory naming inconsistencies in mature services: S2's `schedulers/` → `scheduler/`
 and S4's `scheduler_process.py` → `scheduler_main.py`. Clean up S4's stale `infrastructure/outbox/` dir.
 **Depends on**: Wave A-1 (standards documented)
 **Estimated effort**: 30–45 min
+**Status**: **DONE** — 2026-03-31 · 411 content-ingestion unit tests pass + 11 market-ingestion unit tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 #### T-B-1-01: S2 market-ingestion — rename `schedulers/` → `scheduler/`
@@ -586,10 +588,10 @@ from STANDARDS.md §1.1. Update all import paths across the service.
 - `infra/compose/docker-compose.test.yml` line 329 — module path reference
 
 **Acceptance criteria**:
-- [ ] `infrastructure/schedulers/` no longer exists
-- [ ] `infrastructure/scheduler/` exists with same files
-- [ ] All imports updated (`infrastructure.schedulers` → `infrastructure.scheduler`)
-- [ ] No broken imports (ruff + mypy clean)
+- [x] `infrastructure/schedulers/` no longer exists
+- [x] `infrastructure/scheduler/` exists with same files
+- [x] All imports updated (`infrastructure.schedulers` → `infrastructure.scheduler`)
+- [x] No broken imports (ruff + mypy clean)
 
 ---
 
@@ -619,10 +621,10 @@ singular (`scheduler/`) which is correct. Only the filename needs changing.
 - `services/content-ingestion/tests/` — any test importing `scheduler_process`
 
 **Acceptance criteria**:
-- [ ] `scheduler_process.py` no longer exists
-- [ ] `scheduler_main.py` exists with same content
-- [ ] All references updated
-- [ ] Docker Compose uses `content_ingestion.infrastructure.scheduler.scheduler_main`
+- [x] `scheduler_process.py` no longer exists
+- [x] `scheduler_main.py` exists with same content
+- [x] All references updated
+- [x] Docker Compose uses `content_ingestion.infrastructure.scheduler.scheduler_main`
 
 ---
 
@@ -644,9 +646,9 @@ Remove the stale directory.
 3. Verify no imports reference `content_ingestion.infrastructure.outbox`
 
 **Acceptance criteria**:
-- [ ] `infrastructure/outbox/` directory removed
-- [ ] No broken imports
-- [ ] `infrastructure/messaging/outbox/` still exists and is untouched
+- [x] `infrastructure/outbox/` directory removed
+- [x] No broken imports
+- [x] `infrastructure/messaging/outbox/` still exists and is untouched
 
 ---
 
@@ -661,12 +663,12 @@ Remove the stale directory.
 Run ruff, mypy, and unit tests for both services to confirm the renames didn't break anything.
 
 **Acceptance criteria**:
-- [ ] `uvx ruff check services/market-ingestion/src/ services/market-ingestion/tests/` — clean
-- [ ] `uvx ruff check services/content-ingestion/src/ services/content-ingestion/tests/` — clean
-- [ ] `mypy services/market-ingestion/src/ --config-file services/market-ingestion/mypy.ini` — clean
-- [ ] `mypy services/content-ingestion/src/ --config-file services/content-ingestion/mypy.ini` — clean
-- [ ] `python -m pytest services/market-ingestion/tests/unit/ -v` — all pass
-- [ ] `python -m pytest services/content-ingestion/tests/unit/ -v` — all pass
+- [x] `uvx ruff check services/market-ingestion/src/ services/market-ingestion/tests/` — clean
+- [x] `uvx ruff check services/content-ingestion/src/ services/content-ingestion/tests/` — clean
+- [x] `mypy services/market-ingestion/src/ --config-file services/market-ingestion/mypy.ini` — clean
+- [x] `mypy services/content-ingestion/src/ --config-file services/content-ingestion/mypy.ini` — clean
+- [x] `python -m pytest services/market-ingestion/tests/unit/ -v` — all pass
+- [x] `python -m pytest services/content-ingestion/tests/unit/ -v` — all pass
 
 #### Pre-read (agent must read before starting)
 - `services/market-ingestion/src/market_ingestion/infrastructure/schedulers/scheduler.py` — file to rename
@@ -674,10 +676,10 @@ Run ruff, mypy, and unit tests for both services to confirm the renames didn't b
 - `services/content-ingestion/src/content_ingestion/infrastructure/outbox/` — verify stale
 
 #### Validation Gate
-- [ ] ruff + mypy clean for both S2 and S4
-- [ ] Unit tests pass for both services
-- [ ] `make test-arch` passes (new topology tests pass for S2 + S4)
-- [ ] No regression in existing tests
+- [x] ruff + mypy clean for both S2 and S4
+- [x] Unit tests pass for both services
+- [x] `make test-arch` passes (new topology tests pass for S2 + S4)
+- [x] No regression in existing tests
 
 #### Regression Guardrails
 - BP-023: Ensure `uvx ruff format` sync before committing

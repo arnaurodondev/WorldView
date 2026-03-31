@@ -5,7 +5,7 @@ on each tick to enqueue tasks for all enabled sources.
 
 Usage (standalone)::
 
-    python -m content_ingestion.infrastructure.scheduler.scheduler_process
+    python -m content_ingestion.infrastructure.scheduler.scheduler_main
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ async def _run_scheduler() -> None:
 
 
 def main() -> None:
-    """Synchronous entry-point for ``python -m content_ingestion.infrastructure.scheduler.scheduler_process``."""
+    """Synchronous entry-point for ``python -m content_ingestion.infrastructure.scheduler.scheduler_main``."""
     asyncio.run(_run_scheduler())
 
 

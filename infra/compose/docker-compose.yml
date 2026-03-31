@@ -515,7 +515,7 @@ services:
       context: ../../services/content-ingestion
       dockerfile: Dockerfile
     profiles: [infra, all]
-    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_process"]
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
