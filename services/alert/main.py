@@ -27,7 +27,7 @@ from observability import configure_logging, get_logger  # type: ignore[import-u
 
 async def _run_intelligence_consumer(settings: Settings, app_state: object) -> None:
     """Run IntelligenceConsumer until stop signal."""
-    from alert.infrastructure.consumer.intelligence_consumer import IntelligenceConsumer
+    from alert.infrastructure.messaging.consumers.intelligence_consumer import IntelligenceConsumer
 
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
@@ -49,7 +49,7 @@ async def _run_intelligence_consumer(settings: Settings, app_state: object) -> N
 
 async def _run_watchlist_consumer(settings: Settings, app_state: object) -> None:
     """Run WatchlistConsumer until stop signal."""
-    from alert.infrastructure.consumer.watchlist_consumer import WatchlistConsumer
+    from alert.infrastructure.messaging.consumers.watchlist_consumer import WatchlistConsumer
 
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 

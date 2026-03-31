@@ -883,5 +883,74 @@ services:
       start_period: 30s
       retries: 5
 
+  alert-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  alert-intelligence-consumer:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  alert-watchlist-consumer:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
 volumes:
   pgadmin_data:

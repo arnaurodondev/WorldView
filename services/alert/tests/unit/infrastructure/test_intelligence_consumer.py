@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from alert.application.use_cases.alert_fanout import FanoutResult
-from alert.infrastructure.consumer.intelligence_consumer import IntelligenceConsumer
+from alert.infrastructure.messaging.consumers.intelligence_consumer import IntelligenceConsumer
 from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]

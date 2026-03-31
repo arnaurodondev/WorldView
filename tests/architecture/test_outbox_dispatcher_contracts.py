@@ -37,7 +37,6 @@ _CANONICAL_PATH_BASELINE: dict[str, str] = {
     "market-ingestion": "Dispatcher class at infrastructure/messaging/dispatcher.py — migrate in follow-up plan",
     # Scaffolded services: dispatcher at infrastructure/outbox/ — fix in PLAN-0011 Sub-Plan C
     "knowledge-graph": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-3",
-    "alert": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-4",
 }
 
 # Baseline — services whose dispatchers intentionally do NOT extend BaseOutboxDispatcher.
@@ -46,6 +45,9 @@ _INHERITANCE_BASELINE: dict[str, str] = {
     # nlp-pipeline: dispatcher stores pre-serialized bytes (not dict payloads),
     # which is incompatible with BaseOutboxDispatcher's lease-based protocol.
     "nlp-pipeline": "Custom dispatcher — stores pre-serialized Avro bytes, not dict payloads",
+    # alert: custom dispatcher stores pre-serialized Avro bytes in payload_avro column,
+    # uses raw Confluent Producer — incompatible with BaseOutboxDispatcher's lease-based protocol.
+    "alert": "Custom dispatcher — stores pre-serialized Avro bytes, not dict payloads",
 }
 
 
