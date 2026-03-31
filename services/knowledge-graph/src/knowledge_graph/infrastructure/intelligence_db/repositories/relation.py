@@ -261,6 +261,9 @@ WHERE relation_id = :relation_id
 
         Uses a fully parameterised query — no f-strings, no dynamic SQL construction.
         """
+        # Use CAST(:semantic_mode AS TEXT) to avoid asyncpg AmbiguousParameterError
+        # when semantic_mode=None — asyncpg cannot infer the type of $N from
+        # "$N IS NULL" alone; explicit CAST provides the type hint (BP-069).
         result = await self._session.execute(
             text("""
 SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
@@ -270,7 +273,7 @@ SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
 FROM relations r
 WHERE (r.subject_entity_id = :entity_id OR r.object_entity_id = :entity_id)
   AND (r.confidence IS NULL OR r.confidence >= :min_confidence)
-  AND (:semantic_mode IS NULL OR r.semantic_mode = :semantic_mode)
+  AND (CAST(:semantic_mode AS TEXT) IS NULL OR r.semantic_mode = CAST(:semantic_mode AS TEXT))
 ORDER BY r.latest_evidence_at DESC
 LIMIT :limit
 """),

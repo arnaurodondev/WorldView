@@ -24,6 +24,10 @@ class DLQAdminUseCase:
         """List failed DLQ entries."""
         return await self._repo.list_failed(limit=limit, offset=offset)
 
+    async def count_failed(self) -> int:
+        """Return total count of failed DLQ entries."""
+        return await self._repo.count_failed()
+
     async def get_by_id(self, dlq_id: UUID) -> DeadLetterEntry | None:
         """Fetch a single DLQ entry by ID, or None if not found."""
         return await self._repo.get_by_id(dlq_id)

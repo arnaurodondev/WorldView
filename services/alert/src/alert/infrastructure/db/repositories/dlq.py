@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from alert.application.ports.repositories import DLQRepositoryPort
 from alert.domain.entities import DeadLetterEntry
@@ -52,6 +52,15 @@ class DLQRepository(DLQRepositoryPort):
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._to_entity(r) for r in rows]
+
+    async def count_failed(self) -> int:
+        """Return total count of failed DLQ entries."""
+        stmt = (
+            select(func.count())
+            .select_from(DeadLetterQueueModel)
+            .where(DeadLetterQueueModel.status == DLQStatus.FAILED)
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
 
     async def get_by_id(self, dlq_id: UUID) -> DeadLetterEntry | None:
         """Fetch a single DLQ entry by primary key."""

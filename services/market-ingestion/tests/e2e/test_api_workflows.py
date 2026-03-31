@@ -89,8 +89,8 @@ async def test_trigger_single_symbol_creates_task(e2e_client: AsyncClient, e2e_d
 
 async def test_trigger_multiple_symbols(e2e_client: AsyncClient) -> None:
     """POST /api/v1/ingest/trigger with multiple symbols creates N tasks."""
-    ts = int(time.time())
-    symbols = [f"E2E_MULTI_{ts}_A", f"E2E_MULTI_{ts}_B", f"E2E_MULTI_{ts}_C"]
+    ts = int(time.time()) % 10000
+    symbols = [f"E2MUL{ts:04d}A", f"E2MUL{ts:04d}B", f"E2MUL{ts:04d}C"]
 
     resp = await e2e_client.post(
         "/api/v1/ingest/trigger",
@@ -210,7 +210,7 @@ async def test_backfill_exceeds_max_chunks_returns_422(e2e_client: AsyncClient) 
 
 async def test_backfill_idempotent(e2e_client: AsyncClient) -> None:
     """Same backfill request twice: second call has tasks_created=0."""
-    symbol = f"E2E_BFIDEM_{int(time.time())}"
+    symbol = f"E2BFID{int(time.time()) % 10000:04d}"
     payload = {
         "provider": "eodhd",
         "symbol": symbol,
@@ -376,7 +376,7 @@ async def test_triggered_task_progresses_out_of_pending(
     from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
     from sqlalchemy import select
 
-    symbol = f"E2E_LIFECYCLE_{int(time.time())}"
+    symbol = f"E2LIFE{int(time.time()) % 10000:04d}"
     resp = await e2e_client.post(
         "/api/v1/ingest/trigger",
         json={

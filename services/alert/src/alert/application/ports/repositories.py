@@ -22,6 +22,9 @@ class DLQRepositoryPort(ABC):
     async def list_failed(self, limit: int = 50, offset: int = 0) -> list[DeadLetterEntry]: ...
 
     @abstractmethod
+    async def count_failed(self) -> int: ...
+
+    @abstractmethod
     async def get_by_id(self, dlq_id: UUID) -> DeadLetterEntry | None: ...
 
     @abstractmethod

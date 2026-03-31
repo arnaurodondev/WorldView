@@ -32,7 +32,7 @@ async def _seed_alert(
     session: AsyncSession,
     *,
     entity_id: uuid.UUID | None = None,
-    alert_type: str = "signal",
+    alert_type: str = "SIGNAL",
     source_topic: str = "nlp.signal.detected.v1",
     dedup_key: str | None = None,
 ) -> uuid.UUID:
@@ -154,7 +154,7 @@ async def test_pending_alerts_returns_seeded_alert(
     user_id = uuid.uuid4()
     entity_id = uuid.uuid4()
 
-    alert_id = await _seed_alert(e2e_db_session, entity_id=entity_id, alert_type="breakout_signal")
+    alert_id = await _seed_alert(e2e_db_session, entity_id=entity_id, alert_type="SIGNAL")
     pending_id = await _seed_pending_alert(e2e_db_session, alert_id, user_id)
 
     resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_id}")
@@ -166,7 +166,7 @@ async def test_pending_alerts_returns_seeded_alert(
     assert alert["pending_id"] == str(pending_id)
     assert alert["alert_id"] == str(alert_id)
     assert alert["entity_id"] == str(entity_id)
-    assert alert["alert_type"] == "breakout_signal"
+    assert alert["alert_type"] == "SIGNAL"
     assert "created_at" in alert
 
 
@@ -178,7 +178,7 @@ async def test_pending_alerts_tenant_isolation(
     user_a = uuid.uuid4()
     user_b = uuid.uuid4()
 
-    alert_id = await _seed_alert(e2e_db_session, alert_type="signal")
+    alert_id = await _seed_alert(e2e_db_session, alert_type="SIGNAL")
     await _seed_pending_alert(e2e_db_session, alert_id, user_a)
 
     resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_b}")
