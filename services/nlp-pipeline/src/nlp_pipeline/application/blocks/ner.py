@@ -176,7 +176,7 @@ async def run_ner_block(
                         confidence=ml_mention.score,
                         char_start=ml_mention.start,
                         char_end=ml_mention.end,
-                    )
+                    ),
                 )
 
             # NMS per section

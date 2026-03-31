@@ -11,6 +11,7 @@ import pytest
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("PORTFOLIO_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("PORTFOLIO_STORAGE_SECRET_KEY", "minioadmin-test")
+os.environ.setdefault("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 from httpx import ASGITransport, AsyncClient
 from portfolio.app import create_app
 

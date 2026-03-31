@@ -30,6 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+# ── Internal service tokens ────────────────────────────────────────────────────
+
+_S1_INTERNAL_TOKEN = os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+
 # ── Service base URLs ──────────────────────────────────────────────────────────
 
 _S1_BASE_URL = os.getenv("PORTFOLIO_E2E_BASE_URL", "http://localhost:8001")
@@ -96,21 +100,21 @@ def skip_if_not_running() -> None:
 # ── Session-scoped HTTP clients ────────────────────────────────────────────────
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def s1_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client for S1 (portfolio service) at localhost:8001."""
     async with AsyncClient(base_url=_S1_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def s2_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client for S2 (market-ingestion service) at localhost:8002."""
     async with AsyncClient(base_url=_S2_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def s3_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client for S3 (market-data service) at localhost:8003."""
     async with AsyncClient(base_url=_S3_BASE_URL, timeout=30.0) as ac:
@@ -152,3 +156,9 @@ async def s1_db_session() -> AsyncGenerator[AsyncSession, None]:
     async with factory() as session:
         yield session
     await engine.dispose()
+
+
+@pytest.fixture
+def s1_internal_headers() -> dict[str, str]:
+    """HTTP headers that satisfy S1 internal auth (X-Internal-Token)."""
+    return {"X-Internal-Token": _S1_INTERNAL_TOKEN}

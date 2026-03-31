@@ -31,7 +31,7 @@ def _is_private_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or addr.is_multicast
         or addr.is_link_local
         # CGNAT shared space — not classified by Python 3.12 builtins
-        or (isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK)
+        or (isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK),
     )
 
 
@@ -116,6 +116,17 @@ class SourceCreateRequest(BaseModel):
     source_type: str = Field(..., min_length=1, max_length=50)
     config: dict[str, str | int | bool] = Field(default_factory=dict)
     enabled: bool = True
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, v: str) -> str:
+        from content_ingestion.domain.entities import SourceType
+
+        allowed = {st.value for st in SourceType}
+        if v not in allowed:
+            msg = f"Invalid source_type '{v}'. Allowed: {', '.join(sorted(allowed))}"
+            raise ValueError(msg)
+        return v
 
 
 class SourceUpdateRequest(BaseModel):

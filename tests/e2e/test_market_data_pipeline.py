@@ -37,6 +37,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 # Set to "true" to skip tests that require a live EODHD key.
 _DEMO_KEY_ONLY = os.getenv("EODHD_DEMO_KEY_ONLY", "true").lower() in ("1", "true", "yes")
 
+_S2_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+_S2_INTERNAL_HEADERS = {"X-Internal-Token": _S2_INTERNAL_TOKEN}
+
 
 # ── Availability guards ────────────────────────────────────────────────────────
 
@@ -125,7 +128,7 @@ async def test_trigger_aapl_creates_exactly_one_task(
     # Use a unique symbol so we don't collide with existing tasks from other tests.
     symbol = f"AAPL_E2E_{int(time.time())}"
 
-    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol))
+    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol), headers=_S2_INTERNAL_HEADERS)
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["tasks_created"] == 1
@@ -154,13 +157,13 @@ async def test_trigger_same_symbol_twice_creates_only_one_task(
     symbol = f"IDEM_{int(time.time())}"
     payload = _trigger_payload(symbol)
 
-    resp1 = await s2_client.post("/api/v1/ingest/trigger", json=payload)
+    resp1 = await s2_client.post("/api/v1/ingest/trigger", json=payload, headers=_S2_INTERNAL_HEADERS)
     assert resp1.status_code == 202
     body1 = resp1.json()
     assert body1["tasks_created"] == 1
     assert body1["tasks_skipped"] == 0
 
-    resp2 = await s2_client.post("/api/v1/ingest/trigger", json=payload)
+    resp2 = await s2_client.post("/api/v1/ingest/trigger", json=payload, headers=_S2_INTERNAL_HEADERS)
     assert resp2.status_code == 202
     body2 = resp2.json()
     assert body2["tasks_created"] == 0
@@ -171,7 +174,7 @@ async def test_trigger_same_symbol_twice_creates_only_one_task(
         select(IngestionTaskModel).where(
             IngestionTaskModel.symbol == symbol,
             IngestionTaskModel.status.in_(["pending", "running", "retry"]),
-        )
+        ),
     )
     active_rows = result.scalars().all()
     assert len(active_rows) == 1, f"Expected exactly 1 active task for {symbol}, found {len(active_rows)}"
@@ -194,7 +197,7 @@ async def test_triggered_task_progresses_through_lifecycle(
     from sqlalchemy import select
 
     symbol = f"LIFECYCLE_{int(time.time())}"
-    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol))
+    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol), headers=_S2_INTERNAL_HEADERS)
     assert resp.status_code == 202, resp.text
     assert resp.json()["tasks_created"] == 1
 
@@ -204,7 +207,7 @@ async def test_triggered_task_progresses_through_lifecycle(
             await s2_db_session.execute(
                 select(IngestionTaskModel)
                 .where(IngestionTaskModel.symbol == symbol)
-                .order_by(IngestionTaskModel.created_at.desc())
+                .order_by(IngestionTaskModel.created_at.desc()),
             )
         )
         .scalars()
@@ -227,7 +230,7 @@ async def test_triggered_task_progresses_through_lifecycle(
         await asyncio.sleep(1.5)
 
     assert seen_statuses != {
-        "pending"
+        "pending",
     }, f"Task {task_id} never progressed beyond 'pending' within 30 s — seen statuses: {seen_statuses}"
 
 
@@ -248,7 +251,7 @@ async def test_eodhd_demo_key_task_lifecycle_observed(
     from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
     from sqlalchemy import select
 
-    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload("AAPL"))
+    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload("AAPL"), headers=_S2_INTERNAL_HEADERS)
     assert resp.status_code == 202, resp.text
     # tasks_created may be 0 if AAPL is already queued; either is fine.
     body = resp.json()
@@ -260,7 +263,7 @@ async def test_eodhd_demo_key_task_lifecycle_observed(
             await s2_db_session.execute(
                 select(IngestionTaskModel)
                 .where(IngestionTaskModel.symbol == "AAPL", IngestionTaskModel.dataset_type == "ohlcv")
-                .order_by(IngestionTaskModel.created_at.desc())
+                .order_by(IngestionTaskModel.created_at.desc()),
             )
         )
         .scalars()
@@ -319,7 +322,7 @@ async def test_s3_instrument_count_after_market_data_event(
     symbol = "MSFT"
 
     # 1. Trigger ingestion on S2.
-    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol))
+    resp = await s2_client.post("/api/v1/ingest/trigger", json=_trigger_payload(symbol), headers=_S2_INTERNAL_HEADERS)
     assert resp.status_code == 202, resp.text
 
     # 2. Wait for S2 task to reach succeeded state (up to 60 s with live key).
@@ -328,7 +331,7 @@ async def test_s3_instrument_count_after_market_data_event(
             await s2_db_session.execute(
                 select(IngestionTaskModel)
                 .where(IngestionTaskModel.symbol == symbol, IngestionTaskModel.dataset_type == "ohlcv")
-                .order_by(IngestionTaskModel.created_at.desc())
+                .order_by(IngestionTaskModel.created_at.desc()),
             )
         )
         .scalars()

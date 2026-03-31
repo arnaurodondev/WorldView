@@ -25,7 +25,7 @@ class FetchLogRepository:
         self,
         url: str,
         url_hash: str,
-        source_id: UUID,
+        source_id: UUID | None,
         http_status: int,
         byte_size: int,
         fetched_at: datetime,
@@ -48,7 +48,7 @@ class FetchLogRepository:
 
     async def exists_by_url_hash(self, url_hash: str) -> bool:
         result = await self._session.execute(
-            select(FetchLogModel.id).where(FetchLogModel.url_hash == url_hash).limit(1)
+            select(FetchLogModel.id).where(FetchLogModel.url_hash == url_hash).limit(1),
         )
         return result.scalar_one_or_none() is not None
 
@@ -57,6 +57,6 @@ class FetchLogRepository:
         result = await self._session.execute(
             select(func.count())
             .select_from(FetchLogModel)
-            .where(FetchLogModel.source_id == source_id, FetchLogModel.fetched_at >= since)
+            .where(FetchLogModel.source_id == source_id, FetchLogModel.fetched_at >= since),
         )
         return result.scalar() or 0

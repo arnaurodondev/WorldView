@@ -235,14 +235,18 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
         event_id = value.get("event_id", "")
         sha256 = value.get("canonical_ref_sha256") or ""
+
+        # Content-hash dedup: check BEFORE inserting so exists_by_content_hash
+        # does not find the record we are about to insert (BP-035 follow-up).
+        if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
+            logger.debug("fundamentals_consumer.skip_unchanged", sha256_prefix=sha256[:8])
+            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+            return
+
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
         is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
         if not is_new:
             logger.debug("fundamentals_consumer.duplicate_event", event_id=str(event_id)[:8])
-            return
-
-        # Content-hash dedup: skip download + DB write when canonical object unchanged.
-        if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
-            logger.debug("fundamentals_consumer.skip_unchanged", sha256_prefix=sha256[:8])
             return
 
         bucket = value["canonical_ref_bucket"]

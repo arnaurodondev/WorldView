@@ -64,7 +64,7 @@ class GetPipelineStatusUseCase:
                         last_fetch_at=state.last_run_at if state else None,
                         articles_fetched_24h=fetched_24h,
                         errors_24h=state.error_count if state else 0,
-                    )
+                    ),
                 )
 
             outbox_pending = await self._uow.outbox.count_pending()

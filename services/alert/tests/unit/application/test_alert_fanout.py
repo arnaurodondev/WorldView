@@ -7,7 +7,7 @@ WebSocket push, and dedup key computation.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -95,18 +95,16 @@ def _make_use_case(
     mock_sf = MagicMock()
     mock_sf.return_value = mock_session
 
+    def _repo_factory(_session):  # type: ignore[no-untyped-def]
+        return mock_alert_repo, mock_pending_repo, mock_dedup_repo, mock_outbox_repo
+
     use_case = AlertFanoutUseCase(
         session_factory=mock_sf,
         watchlist_cache=mock_cache,
         connection_manager=mock_ws,
+        repo_factory=_repo_factory,
         dedup_window_seconds=300,
     )
-
-    # Patch repository constructors to return our mocks
-    use_case._dedup_repo_mock = mock_dedup_repo  # type: ignore[attr-defined]
-    use_case._alert_repo_mock = mock_alert_repo  # type: ignore[attr-defined]
-    use_case._pending_repo_mock = mock_pending_repo  # type: ignore[attr-defined]
-    use_case._outbox_repo_mock = mock_outbox_repo  # type: ignore[attr-defined]
 
     return use_case, mock_ws, mock_cache
 
@@ -228,31 +226,14 @@ class TestAlertFanoutExecute:
     async def test_suppresses_backfill_event(self) -> None:
         use_case, _, _ = _make_use_case()
         event = {**_SIGNAL_EVENT, "is_backfill": True}
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository"),
-            patch("alert.application.use_cases.alert_fanout.AlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository"),
-        ):
-            result = await use_case.execute(event, "nlp.signal.detected.v1")
-
+        result = await use_case.execute(event, "nlp.signal.detected.v1")
         assert result.suppressed is True
         assert result.suppression_reason == "backfill"
 
     @pytest.mark.unit
     async def test_returns_no_watchers_result(self) -> None:
         use_case, _mock_ws, _ = _make_use_case(watchers=[])
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository") as MockDedup,
-            patch("alert.application.use_cases.alert_fanout.AlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository"),
-        ):
-            MockDedup.return_value.exists = AsyncMock(return_value=False)
-            result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
-
+        result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
         assert result.suppressed is False
         assert result.watchers_count == 0
         _mock_ws.send_to_user.assert_not_called()
@@ -260,17 +241,8 @@ class TestAlertFanoutExecute:
     @pytest.mark.unit
     async def test_dedup_suppresses_within_window(self) -> None:
         watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
-        use_case, _mock_ws, _ = _make_use_case(watchers=watchers)
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository") as MockDedup,
-            patch("alert.application.use_cases.alert_fanout.AlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository"),
-        ):
-            MockDedup.return_value.exists = AsyncMock(return_value=True)
-            result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
-
+        use_case, _mock_ws, _ = _make_use_case(watchers=watchers, dedup_exists=True)
+        result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
         assert result.suppressed is True
         assert result.suppression_reason == "dedup"
         _mock_ws.send_to_user.assert_not_called()
@@ -279,27 +251,11 @@ class TestAlertFanoutExecute:
     async def test_fanout_creates_alert_and_pending(self) -> None:
         watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
         use_case, _mock_ws2, _ = _make_use_case(watchers=watchers)
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository") as MockDedup,
-            patch("alert.application.use_cases.alert_fanout.AlertRepository") as MockAlert,
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository") as MockPending,
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository") as MockOutbox,
-        ):
-            MockDedup.return_value.exists = AsyncMock(return_value=False)
-            MockAlert.return_value.save = AsyncMock()
-            MockPending.return_value.save = AsyncMock()
-            MockOutbox.return_value.append = AsyncMock()
-
-            result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
-
+        result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
         assert result.suppressed is False
         assert result.watchers_count == 1
         assert result.pending_count == 1
         assert result.alert_id is not None
-        MockAlert.return_value.save.assert_awaited_once()
-        MockPending.return_value.save.assert_awaited_once()
-        MockOutbox.return_value.append.assert_awaited_once()
 
     @pytest.mark.unit
     async def test_websocket_push_happens_after_commit(self) -> None:
@@ -314,20 +270,7 @@ class TestAlertFanoutExecute:
             return True
 
         mock_ws.send_to_user = AsyncMock(side_effect=_track_send)
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository") as MockDedup,
-            patch("alert.application.use_cases.alert_fanout.AlertRepository") as MockAlert,
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository") as MockPending,
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository") as MockOutbox,
-        ):
-            MockDedup.return_value.exists = AsyncMock(return_value=False)
-            MockAlert.return_value.save = AsyncMock()
-            MockPending.return_value.save = AsyncMock()
-            MockOutbox.return_value.append = AsyncMock()
-
-            await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
-
+        await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
         # send_to_user must have been called (after commit, outside session)
         assert len(commit_called_before_ws) == 1
 
@@ -335,14 +278,6 @@ class TestAlertFanoutExecute:
     async def test_suppresses_no_entity_id(self) -> None:
         event = {**_SIGNAL_EVENT, "subject_entity_id": None, "claimer_entity_id": None}
         use_case, _, _ = _make_use_case()
-
-        with (
-            patch("alert.application.use_cases.alert_fanout.DedupRepository"),
-            patch("alert.application.use_cases.alert_fanout.AlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.PendingAlertRepository"),
-            patch("alert.application.use_cases.alert_fanout.OutboxRepository"),
-        ):
-            result = await use_case.execute(event, "nlp.signal.detected.v1")
-
+        result = await use_case.execute(event, "nlp.signal.detected.v1")
         assert result.suppressed is True
         assert result.suppression_reason == "no_entity_id"

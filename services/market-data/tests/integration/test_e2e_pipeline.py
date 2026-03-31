@@ -16,6 +16,7 @@ Avro dict, bypassing real Kafka/S3 with in-memory stubs.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -57,15 +58,16 @@ _SAMPLE_QUOTE_JSONL = json.dumps(
 ).encode()
 
 
-def _make_event(dataset_type: str, extra: dict | None = None) -> dict:
+def _make_event(dataset_type: str, extra: dict | None = None, event_id: str | None = None) -> dict:
+    _uid = uuid.uuid4().hex
     base = {
-        "event_id": "evt-001",
+        "event_id": event_id or str(uuid.uuid4()),
         "event_type": "market.dataset.fetched",
         "schema_version": 1,
         "occurred_at": datetime.now(tz=UTC).isoformat(),
         "correlation_id": None,
         "causation_id": None,
-        "task_id": "task-001",
+        "task_id": f"task-{_uid}",
         "provider": "polygon",
         "dataset_type": dataset_type,
         "symbol": "AAPL",
@@ -75,13 +77,13 @@ def _make_event(dataset_type: str, extra: dict | None = None) -> dict:
         "range_start": "2024-06-01T00:00:00+00:00",
         "range_end": "2024-06-01T23:59:59+00:00",
         "bronze_ref_bucket": "market-raw",
-        "bronze_ref_key": "raw/polygon/AAPL/2024-06-01.json",
-        "bronze_ref_sha256": "abc123",
+        "bronze_ref_key": f"raw/polygon/AAPL/{_uid}.json",
+        "bronze_ref_sha256": f"bronze_{_uid}",
         "bronze_ref_byte_length": 1024,
         "bronze_ref_mime_type": "application/json",
         "canonical_ref_bucket": "market-canonical",
-        "canonical_ref_key": "canonical/polygon/AAPL/2024-06-01.jsonl",
-        "canonical_ref_sha256": "def456",
+        "canonical_ref_key": f"canonical/polygon/AAPL/{_uid}.jsonl",
+        "canonical_ref_sha256": f"canonical_{_uid}",
         "canonical_ref_byte_length": 512,
         "canonical_ref_mime_type": "application/x-ndjson",
         "canonical_schema_version": 2,

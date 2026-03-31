@@ -44,7 +44,7 @@ EXPECTED_TABLES = [
 
 def test_migration_creates_all_tables(conn: sa.engine.Connection) -> None:
     """All expected tables exist after upgrade head."""
-    result = conn.execute(text("SELECT tablename FROM pg_tables " "WHERE schemaname = 'public' " "ORDER BY tablename"))
+    result = conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"))
     tables = {row[0] for row in result}
     for expected in EXPECTED_TABLES:
         assert expected in tables, f"Missing table: {expected}"
@@ -70,7 +70,7 @@ def test_range_partitions_exist(conn: sa.engine.Connection) -> None:
     """relation_evidence, claims, events each have 36 monthly partitions."""
     for table_prefix in ("relation_evidence", "claims", "events"):
         result = conn.execute(
-            text("SELECT count(*) FROM pg_tables " "WHERE schemaname = 'public' AND tablename LIKE :pattern"),
+            text("SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE :pattern"),
             {"pattern": f"{table_prefix}_%"},
         )
         count = result.scalar()
@@ -189,9 +189,7 @@ def test_pg_trgm_extension_active(conn: sa.engine.Connection) -> None:
 
 def test_hnsw_indexes_exist(conn: sa.engine.Connection) -> None:
     """3 HNSW indexes on entity_embedding_state + 1 on relation_summaries."""
-    result = conn.execute(
-        text("SELECT indexname FROM pg_indexes " "WHERE indexdef LIKE '%hnsw%' " "ORDER BY indexname")
-    )
+    result = conn.execute(text("SELECT indexname FROM pg_indexes WHERE indexdef LIKE '%hnsw%' ORDER BY indexname"))
     indexes = {row[0] for row in result}
     expected = {
         "idx_entity_emb_definition_hnsw",

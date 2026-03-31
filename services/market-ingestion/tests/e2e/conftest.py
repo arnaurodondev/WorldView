@@ -20,6 +20,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -41,7 +42,7 @@ async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture(scope="session")
 def _e2e_engine():
-    return create_async_engine(_DB_URL, echo=False)
+    return create_async_engine(_DB_URL, echo=False, poolclass=NullPool)
 
 
 @pytest.fixture

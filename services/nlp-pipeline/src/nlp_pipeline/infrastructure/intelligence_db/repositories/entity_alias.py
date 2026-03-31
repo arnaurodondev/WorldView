@@ -27,7 +27,7 @@ class EntityAliasRepository:
                 "SELECT entity_id FROM entity_aliases "
                 "WHERE normalized_alias_text = lower(trim(:mention_text)) "
                 "AND alias_type = 'EXACT' AND is_active = true "
-                "LIMIT 1"
+                "LIMIT 1",
             ),
             {"mention_text": mention_text},
         )
@@ -47,7 +47,7 @@ class EntityAliasRepository:
                     "SELECT entity_id FROM canonical_entities "
                     "WHERE ticker = :ticker "
                     "AND (:exchange IS NULL OR exchange = :exchange) "
-                    "LIMIT 1"
+                    "LIMIT 1",
                 ),
                 {"ticker": ticker, "exchange": exchange},
             )
@@ -78,7 +78,7 @@ class EntityAliasRepository:
                 "WHERE similarity(normalized_alias_text, lower(:mention_text)) > :threshold "
                 "AND is_active = true "
                 "ORDER BY sim DESC "
-                "LIMIT :top_k"
+                "LIMIT :top_k",
             ),
             {"mention_text": mention_text, "threshold": threshold, "top_k": top_k},
         )

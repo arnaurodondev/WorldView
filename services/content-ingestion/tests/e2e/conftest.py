@@ -171,10 +171,14 @@ def e2e_app(e2e_session_factory):
     settings.admin_token = E2E_ADMIN_TOKEN
     settings.internal_service_token = E2E_INTERNAL_TOKEN
 
+    from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
+
     app.state.settings = settings
     app.state.session_factory = e2e_session_factory
     app.state.write_factory = e2e_session_factory
     app.state.read_factory = e2e_session_factory
+    app.state.uow_factory = lambda: SqlaUnitOfWork(e2e_session_factory)
+    app.state.read_uow_factory = lambda: SqlaReadOnlyUnitOfWork(e2e_session_factory)
     app.state.trigger_fn = AsyncMock()
     # scheduler is optional — routes call getattr(..., None) before using it
     app.state.scheduler = None

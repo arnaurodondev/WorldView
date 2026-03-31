@@ -1,21 +1,17 @@
 """Query/command use cases for alert pending-alert operations (S10).
 
-All infrastructure imports are encapsulated here so that api/routes.py imports
-only from the application layer (R25 / IG-LAYER-002 compliance).
+Uses port interfaces (ABCs) from application.ports — never imports from
+infrastructure directly (R25 / IG-LAYER-002 compliance).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from alert.infrastructure.db.repositories.alert import AlertRepository
-from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
-
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from sqlalchemy.ext.asyncio import AsyncSession
-
+    from alert.application.ports.repositories import AlertRepositoryPort, PendingAlertRepositoryPort
     from alert.domain.entities import Alert, PendingAlert
 
 
@@ -24,14 +20,12 @@ class GetPendingAlertsUseCase:
 
     async def execute(
         self,
-        session: AsyncSession,
+        pending_repo: PendingAlertRepositoryPort,
+        alert_repo: AlertRepositoryPort,
         user_id: UUID,
         limit: int,
         offset: int,
     ) -> list[tuple[PendingAlert, Alert]]:
-        pending_repo = PendingAlertRepository(session)
-        alert_repo = AlertRepository(session)
-
         pendings = await pending_repo.list_by_user(user_id, limit=limit, offset=offset)
 
         pairs: list[tuple[PendingAlert, Alert]] = []
@@ -52,9 +46,8 @@ class AcknowledgeAlertUseCase:
 
     async def execute(
         self,
-        session: AsyncSession,
+        pending_repo: PendingAlertRepositoryPort,
         user_id: UUID,
         alert_id: UUID,
     ) -> bool:
-        pending_repo = PendingAlertRepository(session)
         return await pending_repo.acknowledge(user_id, alert_id)

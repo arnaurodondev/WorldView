@@ -41,6 +41,6 @@ class MentionResolutionRepository:
         result = await self._session.execute(
             select(MentionResolutionModel)
             .where(MentionResolutionModel.mention_id == mention_id)
-            .order_by(MentionResolutionModel.stage)
+            .order_by(MentionResolutionModel.stage),
         )
         return list(result.scalars().all())

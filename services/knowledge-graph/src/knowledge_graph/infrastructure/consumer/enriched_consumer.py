@@ -169,8 +169,8 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                     subject_entity_id=rel.subject_entity_id,
                     object_entity_id=rel.object_entity_id,
                     source_doc_id=doc_id,
-                    registry_repo=registry_repo,
-                    outbox_repo=outbox_repo,
+                    registry_repo=registry_repo,  # type: ignore[arg-type]
+                    outbox_repo=outbox_repo,  # type: ignore[arg-type]
                     embedding_client=self._embedding_client,
                     distance_threshold=self._canon_threshold,
                     correlation_id=correlation_id,
@@ -216,8 +216,8 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                     polarity=raw_claim.polarity,
                     new_claim_confidence=raw_claim.extraction_confidence,
                     is_backfill=raw_claim.is_backfill,
-                    contradiction_repo=contradiction_repo,
-                    outbox_repo=outbox_repo,
+                    contradiction_repo=contradiction_repo,  # type: ignore[arg-type]
+                    outbox_repo=outbox_repo,  # type: ignore[arg-type]
                     correlation_id=correlation_id,
                 )
 

@@ -78,9 +78,7 @@ def main() -> None:
 
     with engine.connect() as conn:
         rows = conn.execute(
-            text(
-                "SELECT type_id, canonical_type, description " "FROM relation_type_registry " "WHERE embedding IS NULL"
-            )
+            text("SELECT type_id, canonical_type, description FROM relation_type_registry WHERE embedding IS NULL")
         ).fetchall()
 
         if not rows:
@@ -102,7 +100,7 @@ def main() -> None:
                 continue
 
             conn.execute(
-                text("UPDATE relation_type_registry " "SET embedding = :embedding " "WHERE type_id = :type_id"),
+                text("UPDATE relation_type_registry SET embedding = :embedding WHERE type_id = :type_id"),
                 {"embedding": str(embedding), "type_id": type_id},
             )
             updated += 1

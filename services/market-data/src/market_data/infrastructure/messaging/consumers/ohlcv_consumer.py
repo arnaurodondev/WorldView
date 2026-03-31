@@ -144,14 +144,20 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
             raise MalformedDataError("Missing or null event_id in message")
         event_id = str(event_id_raw)
         sha256 = value.get("canonical_ref_sha256") or ""
+
+        # Content-hash dedup: check BEFORE inserting the event so that
+        # exists_by_content_hash does not find the record we are about to insert
+        # (BP-035 follow-up: create_if_not_exists stores sha256 immediately).
+        if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
+            logger.debug("ohlcv_consumer.skip_unchanged", sha256_prefix=sha256[:8])
+            # Still record event_id so repeated deliveries are fast-path deduped.
+            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+            return
+
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
         is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
         if not is_new:
             logger.debug("ohlcv_consumer.duplicate_event", event_id=str(event_id)[:8])
-            return
-
-        # Content-hash dedup: skip download + DB write when canonical object unchanged.
-        if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
-            logger.debug("ohlcv_consumer.skip_unchanged", sha256_prefix=sha256[:8])
             return
 
         bucket = value["canonical_ref_bucket"]

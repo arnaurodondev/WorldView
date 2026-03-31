@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
+from knowledge_graph.application.ports.repositories import (
     TOPIC_GRAPH_STATE_CHANGED,
 )
 

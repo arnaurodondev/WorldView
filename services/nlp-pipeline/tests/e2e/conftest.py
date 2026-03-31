@@ -15,6 +15,8 @@ Prerequisites:
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import os
 import socket
 import urllib.parse
@@ -25,8 +27,10 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from nlp_pipeline.api.routes import dlq, health, signals
+from nlp_pipeline.infrastructure.nlp_db.models import Base
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -42,6 +46,7 @@ _E2E_ADMIN_TOKEN = os.getenv("NLP_PIPELINE_E2E_ADMIN_TOKEN", "e2e-admin-token")
 # ── DB availability probe ─────────────────────────────────────────────────────
 
 _DB_AVAILABLE: bool | None = None
+_tables_created = False
 
 
 def _is_db_available() -> bool:
@@ -72,6 +77,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(skip_marker)
 
 
+# ── DDL bootstrap (session-scoped, called once) ───────────────────────────────
+
+
+def _run_create_tables_in_thread(db_url: str) -> None:
+    """Spin up a fresh event loop in a worker thread to apply DDL.
+
+    Called when the current thread already has a running loop (pytest-asyncio
+    asyncio_mode=auto).
+    """
+
+    async def _apply(engine: AsyncEngine) -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+
+    loop = asyncio.new_event_loop()
+    try:
+        engine = create_async_engine(db_url, echo=False)
+        loop.run_until_complete(_apply(engine))
+    finally:
+        loop.close()
+
+
 # ── Session-scoped engine ─────────────────────────────────────────────────────
 
 
@@ -83,7 +111,21 @@ def e2e_engine():  # type: ignore[return]  # sync session-scoped fixture
     """
     if not _is_db_available():
         pytest.skip(f"PostgreSQL not available at {E2E_DB_URL} — skipping all e2e tests")
-    return create_async_engine(E2E_DB_URL, echo=False, future=True)
+
+    engine = create_async_engine(E2E_DB_URL, echo=False, future=True, poolclass=NullPool)
+
+    # Bootstrap DDL once — use a thread pool to avoid colliding with the running loop
+    global _tables_created
+    if not _tables_created:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run_create_tables_in_thread, E2E_DB_URL)
+                future.result(timeout=30)
+            _tables_created = True
+        except Exception as exc:
+            pytest.skip(f"PostgreSQL DDL failed: {exc}")
+
+    return engine
 
 
 @pytest.fixture(scope="session")
@@ -110,6 +152,9 @@ def e2e_app(e2e_session_factory: async_sessionmaker[AsyncSession]) -> FastAPI:
     app.state.nlp_session_factory = e2e_session_factory
     # Readonly factory → same DB in test (both read and write use the same DB)
     app.state.nlp_readonly_session_factory = e2e_session_factory
+    # intelligence_session_factory: reuse nlp DB in tests (avoids needing a
+    # second DB; health check and IntelDbSessionDep both read from this)
+    app.state.intelligence_session_factory = e2e_session_factory
     app.state.consumer_alive = True
     app.state.dispatcher_healthy = False
     # Valkey: None → health check skips Valkey ping

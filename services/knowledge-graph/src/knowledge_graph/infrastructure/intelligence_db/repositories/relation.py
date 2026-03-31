@@ -315,30 +315,37 @@ LIMIT :limit
         All user-supplied values are bound via named parameters;
         IS NULL checks replace dynamic WHERE clause construction.
         """
-        params: dict[str, object] = {
-            "limit": limit,
-            "offset": offset,
-            "subject_entity_id": str(subject_entity_id) if subject_entity_id else None,
-            "object_entity_id": str(object_entity_id) if object_entity_id else None,
-            "canonical_type": canonical_type,
-            "semantic_mode": semantic_mode,
-            "min_confidence": min_confidence,
-        }
+        # Build WHERE clauses conditionally to avoid asyncpg type-inference errors
+        # when all optional params are None (PostgreSQL can't infer type from NULL alone).
+        where_clauses = ["1=1"]
+        params: dict[str, object] = {"limit": limit, "offset": offset}
 
-        # All user-supplied values are bound via named parameters.
-        # The WHERE conditions use IS NULL checks — no f-strings or dynamic SQL.
+        if subject_entity_id is not None:
+            where_clauses.append("r.subject_entity_id = :subject_entity_id")
+            params["subject_entity_id"] = str(subject_entity_id)
+        if object_entity_id is not None:
+            where_clauses.append("r.object_entity_id = :object_entity_id")
+            params["object_entity_id"] = str(object_entity_id)
+        if canonical_type is not None:
+            where_clauses.append("r.canonical_type = :canonical_type")
+            params["canonical_type"] = canonical_type
+        if semantic_mode is not None:
+            where_clauses.append("r.semantic_mode = :semantic_mode")
+            params["semantic_mode"] = semantic_mode
+        if min_confidence is not None:
+            where_clauses.append("(r.confidence IS NULL OR r.confidence >= :min_confidence)")
+            params["min_confidence"] = min_confidence
+
+        where_sql = " AND ".join(where_clauses)
+
         data_result = await self._session.execute(
-            text("""
+            text(f"""
 SELECT r.relation_id, r.subject_entity_id, r.object_entity_id,
        r.canonical_type, r.semantic_mode, r.decay_class,
        r.confidence, r.confidence_stale,
        r.evidence_count, r.first_evidence_at, r.latest_evidence_at
 FROM relations r
-WHERE (:subject_entity_id IS NULL OR r.subject_entity_id = :subject_entity_id)
-  AND (:object_entity_id  IS NULL OR r.object_entity_id  = :object_entity_id)
-  AND (:canonical_type    IS NULL OR r.canonical_type    = :canonical_type)
-  AND (:semantic_mode     IS NULL OR r.semantic_mode     = :semantic_mode)
-  AND (:min_confidence    IS NULL OR r.confidence IS NULL OR r.confidence >= :min_confidence)
+WHERE {where_sql}
 ORDER BY r.latest_evidence_at DESC
 LIMIT :limit OFFSET :offset
 """),
@@ -347,15 +354,7 @@ LIMIT :limit OFFSET :offset
         rows = data_result.fetchall()
 
         count_result = await self._session.execute(
-            text("""
-SELECT COUNT(*)
-FROM relations r
-WHERE (:subject_entity_id IS NULL OR r.subject_entity_id = :subject_entity_id)
-  AND (:object_entity_id  IS NULL OR r.object_entity_id  = :object_entity_id)
-  AND (:canonical_type    IS NULL OR r.canonical_type    = :canonical_type)
-  AND (:semantic_mode     IS NULL OR r.semantic_mode     = :semantic_mode)
-  AND (:min_confidence    IS NULL OR r.confidence IS NULL OR r.confidence >= :min_confidence)
-"""),
+            text(f"SELECT COUNT(*) FROM relations r WHERE {where_sql}"),
             params,
         )
         total = int(count_result.scalar() or 0)
@@ -392,12 +391,12 @@ SELECT
                                                          AS stale_confidence_count,
     (SELECT COUNT(*) FROM relation_contradiction_links WHERE invalidated_at IS NULL)
                                                          AS contradiction_link_count
-""")
+"""),
         )
         row = result.fetchone()
 
         mode_result = await self._session.execute(
-            text("SELECT semantic_mode, COUNT(*) FROM relations GROUP BY semantic_mode")
+            text("SELECT semantic_mode, COUNT(*) FROM relations GROUP BY semantic_mode"),
         )
         relations_by_mode: dict[str, int] = {r[0]: int(r[1]) for r in mode_result.fetchall()}
 

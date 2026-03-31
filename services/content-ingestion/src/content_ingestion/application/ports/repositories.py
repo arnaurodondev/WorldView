@@ -28,7 +28,7 @@ class FetchLogPort(Protocol):
         *,
         url: str,
         url_hash: str,
-        source_id: UUID,
+        source_id: UUID | None,
         http_status: int,
         byte_size: int,
         fetched_at: datetime,

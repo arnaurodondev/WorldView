@@ -74,7 +74,7 @@ class TaskRepository:
                 window_start=task.window_start,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
-            )
+            ),
         )
 
     async def add_many_idempotent(self, tasks: list[ContentIngestionTask]) -> int:
@@ -164,7 +164,7 @@ class TaskRepository:
         if error_detail is not None:
             values["error_detail"] = error_detail
         await self._session.execute(
-            update(ContentIngestionTaskModel).where(ContentIngestionTaskModel.id == task_id).values(**values)
+            update(ContentIngestionTaskModel).where(ContentIngestionTaskModel.id == task_id).values(**values),
         )
 
     async def has_active_task(self, source_id: UUID) -> bool:

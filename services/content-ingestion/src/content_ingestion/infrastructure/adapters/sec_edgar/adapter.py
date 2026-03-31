@@ -101,7 +101,9 @@ class SECEdgarAdapter(SourceAdapter):
             try:
                 raw_bytes = await self._retry_request(
                     lambda _an=accession_no, _fn=file_name, _cik=cik: self._client.fetch_filing_document(
-                        cik=_cik, accession_no=_an, filename=_fn
+                        cik=_cik,
+                        accession_no=_an,
+                        filename=_fn,
                     ),
                     retry_config=self._retry_config,
                     context=f"sec_edgar:doc:{accession_no}",
@@ -123,7 +125,7 @@ class SECEdgarAdapter(SourceAdapter):
                     content_type="text/html",
                     published_at=published_at,
                     is_backfill=is_backfill,
-                )
+                ),
             )
 
         logger.info("sec_edgar_fetch_complete", total_filings=len(filings), new=len(results))

@@ -59,5 +59,5 @@ class EntityMentionRepository:
                 resolved_entity_id=entity_id,
                 resolution_confidence=confidence,
                 resolution_stage=stage,
-            )
+            ),
         )

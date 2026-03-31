@@ -47,6 +47,6 @@ class DocumentEntityStatsRepository:
 
     async def get(self, doc_id: UUID) -> DocumentEntityStatsModel | None:
         result = await self._session.execute(
-            select(DocumentEntityStatsModel).where(DocumentEntityStatsModel.doc_id == doc_id)
+            select(DocumentEntityStatsModel).where(DocumentEntityStatsModel.doc_id == doc_id),
         )
         return result.scalar_one_or_none()  # type: ignore[no-any-return]

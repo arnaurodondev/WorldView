@@ -23,6 +23,7 @@ dependencies = [
     "messaging",
     "apscheduler[asyncio]>=3.10,<4",
     "prometheus-client>=0.20",
+    "ml-clients",
 ]
 
 [project.optional-dependencies]

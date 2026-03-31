@@ -111,6 +111,18 @@ async def main() -> None:
     await asyncio.sleep(1)  # brief pause for lifespan to complete
 
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.dedup import DedupRepository
+    from alert.infrastructure.db.repositories.outbox import OutboxRepository
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+
+    def _repo_factory(session):  # type: ignore[no-untyped-def]
+        return (
+            AlertRepository(session),
+            PendingAlertRepository(session),
+            DedupRepository(session),
+            OutboxRepository(session),
+        )
 
     session_factory = app.state.session_factory
     watchlist_cache = app.state.watchlist_cache
@@ -120,6 +132,7 @@ async def main() -> None:
         session_factory=session_factory,
         watchlist_cache=watchlist_cache,
         connection_manager=ws_manager,
+        repo_factory=_repo_factory,  # type: ignore[arg-type]
         dedup_window_seconds=settings.alert_dedup_window_seconds,
         alert_delivered_topic=settings.kafka_topic_alert_delivered,
     )

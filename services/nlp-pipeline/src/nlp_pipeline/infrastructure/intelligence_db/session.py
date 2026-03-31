@@ -23,7 +23,7 @@ def _check_alembic_guard() -> None:
         raise IntelligenceDbAlembicError(
             "ALEMBIC_ENABLED=true detected for intelligence_db. "
             "S6 must never run Alembic against intelligence_db — "
-            "DDL is exclusively owned by the intelligence-migrations init container."
+            "DDL is exclusively owned by the intelligence-migrations init container.",
         )
 
 

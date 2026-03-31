@@ -25,14 +25,14 @@ class DLQRepository:
     async def count_failed(self) -> int:
         """Count DLQ entries in ``failed`` status."""
         result = await self._session.execute(
-            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed"),
         )
         return result.scalar() or 0
 
     async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[DeadLetterQueueModel], int]:
         """Return open (failed) DLQ entries with total count."""
         count_result = await self._session.execute(
-            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed"),
         )
         total = count_result.scalar() or 0
 
@@ -41,7 +41,7 @@ class DLQRepository:
             .where(DeadLetterQueueModel.status == "failed")
             .order_by(DeadLetterQueueModel.created_at.desc())
             .limit(limit)
-            .offset(offset)
+            .offset(offset),
         )
         entries = list(result.scalars().all())
         return entries, total
@@ -59,7 +59,7 @@ class DLQRepository:
                 status="resolved",
                 resolved_at=common.time.utc_now(),
                 resolution_note=note,
-            )
+            ),
         )
 
     async def requeue(self, dlq_id: UUID) -> UUID | None:
@@ -81,7 +81,7 @@ class DLQRepository:
                 event_type="content.article.raw.v1",
                 topic=entry.topic,
                 payload=entry.payload_json or {},
-            )
+            ),
         )
 
         # Mark DLQ entry as resolved
@@ -92,6 +92,6 @@ class DLQRepository:
                 status="resolved",
                 resolved_at=common.time.utc_now(),
                 resolution_note="Requeued to outbox",
-            )
+            ),
         )
         return new_event_id

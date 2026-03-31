@@ -3141,3 +3141,93 @@ The init script can then call `CREATE EXTENSION IF NOT EXISTS vector` without er
 ### Affected areas
 
 All test profiles using the shared `postgres` service in `docker-compose.test.yml` when S6 or S7 databases are being initialized. The `pgvector/pgvector:pg16` image is a drop-in replacement and works for all other services too.
+
+## BP-069 — asyncpg AmbiguousParameterError when all optional filter params are None
+
+**Category**: Database / asyncpg
+**Services affected**: knowledge-graph (S7), any service using raw `text()` SQL with optional nullable parameters
+**First seen**: knowledge-graph S7 `list_filtered` relation repository
+
+### Symptom
+
+`asyncpg.exceptions.AmbiguousParameterError: could not determine data type of parameter $1` at runtime when all optional filter parameters are None. The query uses the pattern `(:param IS NULL OR col = :param)` with asyncpg named params.
+
+### Root Cause
+
+PostgreSQL's prepared statement protocol requires each parameter to have a known type before execution. When all values are `None`, the parameter only appears in an `IS NULL` check, which doesn't constrain the type. PostgreSQL can't infer `uuid`, `text`, `float` etc. from `$1 IS NULL` alone.
+
+### Fix
+
+Build WHERE clauses conditionally — skip clauses entirely when the filter value is `None`:
+
+```python
+where_clauses = ["1=1"]
+params: dict[str, object] = {"limit": limit, "offset": offset}
+if subject_id is not None:
+    where_clauses.append("r.subject_id = :subject_id")
+    params["subject_id"] = str(subject_id)
+where_sql = " AND ".join(where_clauses)
+await session.execute(text(f"SELECT * FROM r WHERE {where_sql} LIMIT :limit"), params)  # noqa: S608
+```
+
+This avoids the type-inference problem entirely. Add `# noqa: S608` to suppress the false-positive SQL injection warning (these are static strings, not user input).
+
+### Prevention
+
+Avoid the `(:param IS NULL OR col = :param)` pattern with asyncpg. Always use conditional WHERE construction when parameters may be None.
+
+## BP-070 — SQLAlchemy `func.cast()` and `func.Integer` do not exist
+
+**Category**: SQLAlchemy / ORM
+**Services affected**: nlp-pipeline (S6), any service using SQLAlchemy aggregate functions
+**First seen**: nlp-pipeline S6 `signals_query.py` get_entity_detail
+
+### Symptom
+
+`AttributeError: Neither 'Function' object nor 'Comparator' object has an attribute '_isnull'` at runtime when a repository method uses `func.cast(expr, func.Integer)`.
+
+### Root Cause
+
+`func.cast` is not a standard SQLAlchemy function — it generates a SQL function call `CAST()` but the second argument `func.Integer` doesn't work because `func.Integer` creates a SQL function named "Integer" rather than a type. SQLAlchemy's `func.sum()` then tries to infer the type of the expression and fails.
+
+### Fix
+
+Use the top-level `cast()` and `Integer` from `sqlalchemy`:
+
+```python
+# WRONG
+from sqlalchemy import func
+func.sum(func.cast(expr, func.Integer))
+
+# CORRECT
+from sqlalchemy import Integer, cast, func
+func.sum(cast(expr, Integer))
+```
+
+### Prevention
+
+Never use `func.cast()` or `func.Integer`. Import `cast`, `Integer` (and other types) directly from `sqlalchemy`.
+
+## BP-071 — FK constraint blocks manual/webhook submissions when source_id is NOT NULL
+
+**Category**: Schema / Use Case
+**Services affected**: content-ingestion (S4)
+**First seen**: content-ingestion submit_content use case e2e testing
+
+### Symptom
+
+`sqlalchemy.dialects.postgresql.asyncpg.IntegrityError: ForeignKeyViolationError: insert or update on table "article_fetch_log" violates foreign key constraint` when the internal submit endpoint is called. The `SubmitContentUseCase` passed `doc_id` (the article UUID) as `source_id` into `article_fetch_log`, but `source_id` is a FK to `sources.id`.
+
+### Root Cause
+
+The `article_fetch_log.source_id` column was designed for scheduled polling sources. Manual/webhook submissions via the internal endpoint have no associated source, but the schema required a non-null source FK.
+
+### Fix
+
+1. Migrate `article_fetch_log.source_id` from `NOT NULL` to nullable.
+2. Pass `source_id=None` in `SubmitContentUseCase.execute()`.
+3. Update `FetchLogPort.create()` signature to `source_id: UUID | None`.
+
+### Prevention
+
+When designing tables that track both scheduled and manual events, make FK columns nullable from the start if the FK may not apply to all producers.

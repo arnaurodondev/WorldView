@@ -57,7 +57,7 @@ class NLPPipelineOutboxDispatcher:
                     "bootstrap.servers": self._settings.kafka_bootstrap_servers,
                     "acks": "all",
                     "retries": 3,
-                }
+                },
             )
         return self._producer
 
@@ -157,7 +157,8 @@ class NLPPipelineOutboxDispatcher:
                 count = await self._dispatch_batch()
                 if count:
                     logger.debug(  # type: ignore[no-any-return]
-                        "outbox_dispatch_cycle", dispatched=count
+                        "outbox_dispatch_cycle",
+                        dispatched=count,
                     )
             except Exception:
                 logger.exception("outbox_dispatch_cycle_error")  # type: ignore[no-any-return]

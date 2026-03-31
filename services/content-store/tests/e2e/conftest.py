@@ -33,6 +33,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -113,7 +114,7 @@ def e2e_engine():  # type: ignore[return]  # sync session-scoped fixture
     if not _is_db_available():
         pytest.skip(f"PostgreSQL not available at {_E2E_DB_URL} — skipping all e2e tests")
 
-    engine = create_async_engine(_E2E_DB_URL, echo=False)
+    engine = create_async_engine(_E2E_DB_URL, echo=False, poolclass=NullPool)
 
     # Apply DDL once — use a thread pool to avoid colliding with the running loop
     global _tables_created

@@ -55,7 +55,7 @@ class DLQRepository(DLQRepositoryPort):
     async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[DLQEntryData], int]:
         """Return open (failed) DLQ entries with total count."""
         count_result = await self._session.execute(
-            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed")
+            select(func.count()).select_from(DeadLetterQueueModel).where(DeadLetterQueueModel.status == "failed"),
         )
         total = count_result.scalar() or 0
 
@@ -64,7 +64,7 @@ class DLQRepository(DLQRepositoryPort):
             .where(DeadLetterQueueModel.status == "failed")
             .order_by(DeadLetterQueueModel.created_at.desc())
             .limit(limit)
-            .offset(offset)
+            .offset(offset),
         )
         return [self._to_data(row) for row in result.scalars().all()], total
 
@@ -83,7 +83,7 @@ class DLQRepository(DLQRepositoryPort):
                 partition_key=partition_key,
                 payload_avro=payload_avro,
                 status="pending",
-            )
+            ),
         )
         return new_event_id
 
@@ -96,7 +96,7 @@ class DLQRepository(DLQRepositoryPort):
                 status="resolved",
                 resolved_at=common.time.utc_now(),
                 resolution_note=note or None,
-            )
+            ),
         )
 
     async def commit(self) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
 from content_ingestion.api.dependencies import AdminAuthDep, ReadUoWDep, UoWDep
 from content_ingestion.api.schemas import (
@@ -43,7 +44,7 @@ async def list_sources(
                 last_fetch_at=item.last_fetch_at,
             )
             for item in items
-        ]
+        ],
     )
 
 
@@ -59,12 +60,15 @@ async def create_source(
     on its next tick — no hot-add needed (R22).
     """
     uc = CreateSourceUseCase(uow)
-    result = await uc.execute(
-        name=body.name,
-        source_type=body.source_type,
-        config=body.config,
-        enabled=body.enabled,
-    )
+    try:
+        result = await uc.execute(
+            name=body.name,
+            source_type=body.source_type,
+            config=body.config,
+            enabled=body.enabled,
+        )
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Source with name '{body.name}' already exists")  # noqa: B904
     return SourceResponse(
         id=result.id,
         name=result.name,
