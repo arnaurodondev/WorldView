@@ -44,7 +44,7 @@ async def _seed_alert(
         text("""
             INSERT INTO alerts (alert_id, entity_id, alert_type, source_event_id,
                                 source_topic, payload, dedup_key, created_at)
-            VALUES (:aid, :eid, :atype, :seid, :stopic, :payload::jsonb, :dkey, :now)
+            VALUES (:aid, :eid, :atype, :seid, :stopic, CAST(:payload AS JSONB), :dkey, :now)
         """),
         {
             "aid": str(alert_id),
@@ -329,7 +329,7 @@ async def test_dlq_seeded_entry_visible_to_admin(
     await e2e_db_session.execute(
         text("""
             INSERT INTO dead_letter_queue
-                (dlq_id, original_event_id, topic, payload_bytes, error_detail, status, created_at)
+                (dlq_id, original_event_id, topic, payload_avro, error_detail, status, created_at)
             VALUES (:did, :eid, 'alert.dead-letter.v1', E'\\\\x00'::bytea,
                     'unknown alert_type: INVALID', 'failed', now())
         """),
@@ -356,7 +356,7 @@ async def test_dlq_resolve_note_too_long_returns_422(
     await e2e_db_session.execute(
         text("""
             INSERT INTO dead_letter_queue
-                (dlq_id, original_event_id, topic, payload_bytes, status, created_at)
+                (dlq_id, original_event_id, topic, payload_avro, status, created_at)
             VALUES (:did, :eid, 'test', E'\\\\x00'::bytea, 'failed', now())
         """),
         {"did": str(dlq_id), "eid": str(uuid.uuid4())},
@@ -381,7 +381,7 @@ async def test_dlq_pagination(
         await e2e_db_session.execute(
             text("""
                 INSERT INTO dead_letter_queue
-                    (dlq_id, original_event_id, topic, payload_bytes, status, created_at)
+                    (dlq_id, original_event_id, topic, payload_avro, status, created_at)
                 VALUES (:did, :eid, 'test', E'\\\\x00'::bytea, 'failed', now())
             """),
             {"did": str(uuid.uuid4()), "eid": str(uuid.uuid4())},

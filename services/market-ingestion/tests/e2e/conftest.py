@@ -33,14 +33,14 @@ _DB_URL = os.getenv(
 )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client pointing at the live market-ingestion service on localhost:8002."""
     async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def _e2e_engine():
     return create_async_engine(_DB_URL, echo=False, poolclass=NullPool)
 

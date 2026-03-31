@@ -360,7 +360,7 @@ async def test_dlq_seeded_entry_is_listable(
     await e2e_db_session.execute(
         text("""
             INSERT INTO dead_letter_queue
-                (dlq_id, original_event_id, topic, payload_bytes, error_detail, status, created_at)
+                (dlq_id, original_event_id, topic, payload_avro, error_detail, status, created_at)
             VALUES
                 (:did, :eid, 'nlp.dead-letter.v1', E'\\\\x00'::bytea,
                  'parse error: unexpected null field', 'failed', now())
@@ -391,7 +391,7 @@ async def test_dlq_resolve_seeded_entry(
     await e2e_db_session.execute(
         text("""
             INSERT INTO dead_letter_queue
-                (dlq_id, original_event_id, topic, payload_bytes, error_detail, status, created_at)
+                (dlq_id, original_event_id, topic, payload_avro, error_detail, status, created_at)
             VALUES
                 (:did, :eid, 'nlp.dead-letter.v1', E'\\\\x00'::bytea,
                  'schema mismatch', 'failed', now())
@@ -428,7 +428,7 @@ async def test_dlq_resolution_note_max_length_enforced(
     await e2e_db_session.execute(
         text("""
             INSERT INTO dead_letter_queue
-                (dlq_id, original_event_id, topic, payload_bytes, status, created_at)
+                (dlq_id, original_event_id, topic, payload_avro, status, created_at)
             VALUES (:did, :eid, 'test', E'\\\\x00'::bytea, 'failed', now())
         """),
         {"did": str(dlq_id), "eid": str(uuid.uuid4())},
