@@ -350,7 +350,7 @@ services:
     environment:
       # Short HTTP timeout so the worker fails-fast on EODHD rate-limits in CI
       MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS: "5"
-    command: ["python", "-m", "market_ingestion.infrastructure.workers.worker"]
+    command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 15s
@@ -551,6 +551,46 @@ services:
       retries: 3
       start_period: 5s
 
+  content-ingestion-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/content-ingestion/Dockerfile
+    profiles: [content-ingestion-test, all]
+    depends_on:
+      content-ingestion-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  content-ingestion-worker:
+    build:
+      context: ../..
+      dockerfile: services/content-ingestion/Dockerfile
+    profiles: [content-ingestion-test, all]
+    depends_on:
+      content-ingestion-migrate:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   # ── Content Store (S5) ─────────────────────────────────────────────────────
   content-store-migrate:
     build:
@@ -591,6 +631,56 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 5
+
+  content-store-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [content-store-test, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["python", "-m", "content_store.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  content-store-consumer:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [content-store-test, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["python", "-m", "content_store.infrastructure.messaging.consumers.article_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   # ── Intelligence Migrations (intelligence_db DDL) ─────────────────────────
   # DDL owner for intelligence_db (pgvector, relations, entities, embeddings).
@@ -651,6 +741,79 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 5
+
+  nlp-pipeline-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  nlp-pipeline-article-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init-test:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  nlp-pipeline-watchlist-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   # ── Knowledge Graph (S7) ───────────────────────────────────────────────────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.

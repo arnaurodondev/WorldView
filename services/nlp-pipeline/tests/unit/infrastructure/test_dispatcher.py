@@ -16,7 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nlp_pipeline.infrastructure.outbox.dispatcher import (
+from nlp_pipeline.infrastructure.messaging.outbox.dispatcher import (
     _MAX_DISPATCH_ATTEMPTS,
     NLPPipelineOutboxDispatcher,
 )
@@ -74,11 +74,11 @@ class TestDispatcherEmptyBatch:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.OutboxRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
                 return_value=outbox_repo,
             ),
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.DLQRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
                 return_value=dlq_repo,
             ),
         ):
@@ -110,11 +110,11 @@ class TestDispatcherSuccessfulDelivery:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.OutboxRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
                 return_value=outbox_repo,
             ),
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.DLQRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
                 return_value=dlq_repo,
             ),
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),
@@ -160,11 +160,11 @@ class TestDispatcherFailedDelivery:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.OutboxRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
                 return_value=outbox_repo,
             ),
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.DLQRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
                 return_value=dlq_repo,
             ),
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),
@@ -207,11 +207,11 @@ class TestDispatcherFailedDelivery:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.OutboxRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
                 return_value=outbox_repo,
             ),
             patch(
-                "nlp_pipeline.infrastructure.outbox.dispatcher.DLQRepository",
+                "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.DLQRepository",
                 return_value=dlq_repo,
             ),
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),

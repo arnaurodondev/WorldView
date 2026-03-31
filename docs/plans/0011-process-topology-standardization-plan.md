@@ -3,7 +3,7 @@
 **PRD**: N/A (Standards enforcement initiative)
 **Status**: in-progress
 **Created**: 2026-03-31
-**Updated**: 2026-03-31 (Waves A-3 + B-1 complete)
+**Updated**: 2026-04-01 (Waves C-1 + C-2 + B-2 complete)
 **Author**: Claude (plan generation)
 
 ---
@@ -108,17 +108,17 @@ Sub-Plan C (Scaffolded Services) — can start after A-2 + B-1
 | T-B-1-02 | S4: rename `scheduler_process.py` → `scheduler_main.py`, update imports | B-1 | done | T-A-1-01 |
 | T-B-1-03 | S4: remove stale `infrastructure/outbox/` directory | B-1 | done | none |
 | T-B-1-04 | S2 + S4: run ruff + mypy + unit tests | B-1 | done | T-B-1-01, T-B-1-02 |
-| T-B-2-01 | Fix `docker-compose.yml` stale module paths (S1, S2) | B-2 | pending | T-B-1-01 |
-| T-B-2-02 | Add missing S4 scheduler + worker containers to `docker-compose.test.yml` | B-2 | pending | T-B-1-02 |
-| T-B-2-03 | Verify all S1-S4 arch tests pass | B-2 | pending | T-B-2-01, T-B-2-02 |
-| T-C-1-01 | S5: create `messaging/outbox/dispatcher_main.py` entry point | C-1 | pending | T-A-2-01 |
-| T-C-1-02 | S5: create `messaging/consumers/article_consumer_main.py` entry point | C-1 | pending | T-A-2-01 |
-| T-C-1-03 | S5: remove background tasks from `app.py` lifespan | C-1 | pending | T-C-1-01, T-C-1-02 |
-| T-C-1-04 | S5: add compose containers + validate | C-1 | pending | T-C-1-03 |
-| T-C-2-01 | S6: create `messaging/outbox/dispatcher_main.py` entry point | C-2 | pending | T-A-2-01 |
-| T-C-2-02 | S6: create `messaging/consumers/{article,watchlist}_consumer_main.py` | C-2 | pending | T-A-2-01 |
-| T-C-2-03 | S6: remove background tasks from `app.py` lifespan | C-2 | pending | T-C-2-01, T-C-2-02 |
-| T-C-2-04 | S6: add compose containers + validate | C-2 | pending | T-C-2-03 |
+| T-B-2-01 | Fix `docker-compose.yml` stale module paths (S1, S2) | B-2 | done | T-B-1-01 |
+| T-B-2-02 | Add missing S4 scheduler + worker containers to `docker-compose.test.yml` | B-2 | done | T-B-1-02 |
+| T-B-2-03 | Verify all S1-S4 arch tests pass | B-2 | done | T-B-2-01, T-B-2-02 |
+| T-C-1-01 | S5: create `messaging/outbox/dispatcher_main.py` entry point | C-1 | done | T-A-2-01 |
+| T-C-1-02 | S5: create `messaging/consumers/article_consumer_main.py` entry point | C-1 | done | T-A-2-01 |
+| T-C-1-03 | S5: remove background tasks from `app.py` lifespan | C-1 | done | T-C-1-01, T-C-1-02 |
+| T-C-1-04 | S5: add compose containers + validate | C-1 | done | T-C-1-03 |
+| T-C-2-01 | S6: create `messaging/outbox/dispatcher_main.py` entry point | C-2 | done | T-A-2-01 |
+| T-C-2-02 | S6: create `messaging/consumers/{article,watchlist}_consumer_main.py` | C-2 | done | T-A-2-01 |
+| T-C-2-03 | S6: remove background tasks from `app.py` lifespan | C-2 | done | T-C-2-01, T-C-2-02 |
+| T-C-2-04 | S6: add compose containers + validate | C-2 | done | T-C-2-03 |
 | T-C-3-01 | S7: create `messaging/outbox/dispatcher_main.py` entry point | C-3 | pending | T-A-2-01 |
 | T-C-3-02 | S7: create `messaging/consumers/*_consumer_main.py` entry points | C-3 | pending | T-A-2-01 |
 | T-C-3-03 | S7: create `scheduler/scheduler_main.py` entry point | C-3 | pending | T-A-2-01 |
@@ -687,13 +687,14 @@ Run ruff, mypy, and unit tests for both services to confirm the renames didn't b
 
 ---
 
-### Wave B-2: Docker Compose Fixes & Final Mature Service Cleanup
+### Wave B-2: Docker Compose Fixes & Final Mature Service Cleanup ✅
 
 **Goal**: Fix stale module paths in `docker-compose.yml`, add missing S4 containers to
 `docker-compose.test.yml`, and verify all S1–S4 services pass the new architecture tests.
 **Depends on**: Wave B-1
 **Estimated effort**: 20–30 min
 **Architecture layer**: config
+**Status**: **DONE** — 2026-04-01 · 94 arch tests + 411 content-ingestion unit tests pass · ruff + mypy clean
 
 #### T-B-2-01: Fix `docker-compose.yml` stale module paths
 
@@ -715,8 +716,8 @@ Fix the following stale module paths in the main docker-compose file:
 | `content-ingestion-scheduler` | `content_ingestion.infrastructure.scheduler.scheduler_process` | `content_ingestion.infrastructure.scheduler.scheduler_main` |
 
 **Acceptance criteria**:
-- [ ] All 5 stale paths corrected
-- [ ] Module paths match `docker-compose.test.yml` patterns (which are already correct for S1, S3)
+- [x] All 5 stale paths corrected
+- [x] Module paths match `docker-compose.test.yml` patterns (which are already correct for S1, S3)
 
 ---
 
@@ -747,9 +748,9 @@ containers. Add them following the pattern used by S2 (market-ingestion).
   - Restart: on-failure
 
 **Acceptance criteria**:
-- [ ] Both containers defined in `docker-compose.test.yml`
-- [ ] Profiles match existing S4 containers
-- [ ] Module paths reference correct renamed files from T-B-1-02
+- [x] Both containers defined in `docker-compose.test.yml`
+- [x] Profiles match existing S4 containers
+- [x] Module paths reference correct renamed files from T-B-1-02
 
 ---
 
@@ -764,20 +765,20 @@ containers. Add them following the pattern used by S2 (market-ingestion).
 Run the full architecture test suite and verify zero failures for mature services.
 
 **Acceptance criteria**:
-- [ ] `make test-arch` — all green
-- [ ] `test_process_topology.py` passes for S1, S2, S3, S4
-- [ ] `test_compose_alignment.py` passes for S1, S2, S3, S4
-- [ ] `test_outbox_dispatcher_contracts.py` passes with enhanced canonical path check
-- [ ] Only baselined scaffolded-service violations remain
+- [x] `make test-arch` — all green
+- [x] `test_process_topology.py` passes for S1, S2, S3, S4
+- [x] `test_compose_alignment.py` passes for S1, S2, S3, S4
+- [x] `test_outbox_dispatcher_contracts.py` passes with enhanced canonical path check
+- [x] Only baselined scaffolded-service violations remain
 
 #### Pre-read (agent must read before starting)
 - `infra/compose/docker-compose.yml` lines 228–360 — stale paths
 - `infra/compose/docker-compose.test.yml` lines 488–550 — S4 section
 
 #### Validation Gate
-- [ ] `make test-arch` — all green
-- [ ] `docker compose -f infra/compose/docker-compose.yml config --quiet` — YAML valid
-- [ ] `docker compose -f infra/compose/docker-compose.test.yml config --quiet` — YAML valid
+- [x] `make test-arch` — all green
+- [x] `docker compose -f infra/compose/docker-compose.yml config --quiet` — YAML valid
+- [x] `docker compose -f infra/compose/docker-compose.test.yml config --quiet` — YAML valid
 
 #### Regression Guardrails
 - BP-023: Ensure `uvx ruff format` sync before committing
@@ -827,13 +828,14 @@ For dispatcher entry points specifically, follow the pattern from
 
 ---
 
-### Wave C-1: S5 Content Store — Extract Dispatcher + Consumer
+### Wave C-1: S5 Content Store — Extract Dispatcher + Consumer ✅
 
 **Goal**: Extract `ContentStoreOutboxDispatcher` and `ArticleConsumer` from `app.py` lifespan
 into standalone entry points. Move from `infrastructure/outbox/` and `infrastructure/consumer/`
 to canonical `infrastructure/messaging/outbox/` and `infrastructure/messaging/consumers/` paths.
 **Depends on**: Waves A-2, B-1
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-01 · 241 S5 unit tests pass + 94 arch tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 #### T-C-1-01: Create `messaging/outbox/dispatcher_main.py` for S5
@@ -959,12 +961,13 @@ Add Docker Compose service entries for both standalone processes. Follow the pat
 
 ---
 
-### Wave C-2: S6 NLP Pipeline — Extract Dispatcher + Consumers
+### Wave C-2: S6 NLP Pipeline — Extract Dispatcher + Consumers ✅
 
 **Goal**: Extract `NLPPipelineOutboxDispatcher`, `ArticleProcessingConsumer`, and
 `WatchlistEventConsumer` from `app.py` lifespan. Move to canonical paths under `messaging/`.
 **Depends on**: Waves A-2, B-1
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-01 · 217 S6 unit tests pass + 94 arch tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 #### T-C-2-01: Create `messaging/outbox/dispatcher_main.py` for S6

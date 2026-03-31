@@ -16,7 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from content_store.infrastructure.consumer.article_consumer import (
+from content_store.infrastructure.messaging.consumers.article_consumer import (
     ArticleConsumer,
     ArticleConsumerConfig,
 )
@@ -118,7 +118,9 @@ class TestIsDuplicate:
         """is_duplicate must return False when event not in processed_events."""
         consumer = _make_consumer()
 
-        with patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository") as MockRepo:
+        with patch(
+            "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository"
+        ) as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.is_duplicate.return_value = False
             MockRepo.return_value = mock_repo
@@ -134,7 +136,9 @@ class TestIsDuplicate:
         """is_duplicate must return True when event exists in processed_events."""
         consumer = _make_consumer()
 
-        with patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository") as MockRepo:
+        with patch(
+            "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository"
+        ) as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.is_duplicate.return_value = True
             MockRepo.return_value = mock_repo
@@ -170,7 +174,7 @@ class TestProcessMessage:
         consumer._current_uow.session = AsyncMock()
 
         with patch(
-            "content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase.execute",
+            "content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase.execute",
             new=AsyncMock(return_value=mock_summary),
         ):
             value = {

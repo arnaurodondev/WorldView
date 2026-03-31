@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nlp_pipeline.infrastructure.consumer.article_consumer import (
+from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     ArticleProcessingConsumer,
     _compute_chunk_mention_pairs,
     _enqueue_enriched,
@@ -212,7 +212,7 @@ class TestDeadLetter:
             last_error=RuntimeError("permanent failure"),
         )
 
-        with patch("nlp_pipeline.infrastructure.consumer.article_consumer.DLQRepository") as mock_dlq_cls:
+        with patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer.DLQRepository") as mock_dlq_cls:
             mock_dlq = AsyncMock()
             mock_dlq_cls.return_value = mock_dlq
             await consumer.dead_letter(failure)
@@ -284,21 +284,24 @@ def _make_failing_nlp_session_factory() -> tuple[AsyncMock, MagicMock]:
 
 
 _HALT_PATCHES = (
-    patch("nlp_pipeline.infrastructure.consumer.article_consumer.section_document", return_value=[]),
+    patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer.section_document", return_value=[]),
     patch(
-        "nlp_pipeline.infrastructure.consumer.article_consumer.run_ner_block",
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_ner_block",
         new=AsyncMock(return_value=([], MagicMock())),
     ),
-    patch("nlp_pipeline.infrastructure.consumer.article_consumer.compute_routing_score", return_value=MagicMock()),
     patch(
-        "nlp_pipeline.infrastructure.consumer.article_consumer.apply_suppression_gate",
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.compute_routing_score",
+        return_value=MagicMock(),
+    ),
+    patch(
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.apply_suppression_gate",
         return_value="halt",  # ProcessingPath.HALT is StrEnum("halt")
     ),
     patch(
-        "nlp_pipeline.infrastructure.consumer.article_consumer.run_embeddings_block",
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_embeddings_block",
         new=AsyncMock(return_value=([], [], [], [])),
     ),
-    patch("nlp_pipeline.infrastructure.consumer.article_consumer._enqueue_enriched", new=AsyncMock()),
+    patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_enriched", new=AsyncMock()),
 )
 
 

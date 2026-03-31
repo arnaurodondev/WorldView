@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from content_store.infrastructure.outbox.unit_of_work import SqlAlchemyUnitOfWork
+from content_store.infrastructure.messaging.outbox.unit_of_work import SqlAlchemyUnitOfWork
 from messaging.kafka.dispatcher.base import BaseOutboxDispatcher, DispatcherConfig
 from messaging.kafka.producer import (
     KafkaProducerConfig,

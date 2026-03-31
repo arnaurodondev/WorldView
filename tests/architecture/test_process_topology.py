@@ -55,27 +55,12 @@ from tests.architecture._utils import (
 #   TOPO-STALE-OUTBOX      — infrastructure/outbox/ co-exists with messaging/outbox/ (stale)
 
 TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
-    # --- S2: market-ingestion — remaining fixes in PLAN-0011 Wave B-2 ---
-    ("market-ingestion", "TOPO-MAIN-WORKER"): "Add worker_main.py in Wave B-2",
-    # --- S3: market-data — fix in PLAN-0011 Wave B-2 ---
-    ("market-data", "TOPO-MAIN-CONSUMER"): "Add consumer_main.py files in Wave B-2",
-    ("market-data", "TOPO-LIFESPAN"): "Move consumers/dispatcher to standalone processes in Wave B-2",
-    # --- S4: content-ingestion — remaining fixes in PLAN-0011 Wave B-2 ---
-    ("content-ingestion", "TOPO-MAIN-WORKER"): "Add worker_main.py in Wave B-2",
-    ("content-ingestion", "TOPO-LIFESPAN"): "Move metrics poller to dedicated process in Wave B-2",
-    # --- S5: content-store — fix in PLAN-0011 Wave C-1 ---
-    # Note: TOPO-MAIN-DISPATCHER not needed — scanner only checks canonical messaging/outbox/;
-    # content-store's dispatcher is in legacy infrastructure/outbox/ (covered by TOPO-DIR-OUTBOX).
-    ("content-store", "TOPO-MAIN-CONSUMER"): "Create consumer_main.py files in Wave C-1",
-    ("content-store", "TOPO-LIFESPAN"): "Remove background tasks from lifespan in Wave C-1",
-    ("content-store", "TOPO-DIR-OUTBOX"): "Move outbox to messaging/outbox/ in Wave C-1",
-    ("content-store", "TOPO-DIR-CONSUMER"): "Move consumer to messaging/consumers/ in Wave C-1",
-    # --- S6: nlp-pipeline — fix in PLAN-0011 Wave C-2 ---
-    # Note: TOPO-MAIN-DISPATCHER not needed (same reason as content-store above).
-    ("nlp-pipeline", "TOPO-MAIN-CONSUMER"): "Create consumer_main.py files in Wave C-2",
-    ("nlp-pipeline", "TOPO-LIFESPAN"): "Remove background tasks from lifespan in Wave C-2",
-    ("nlp-pipeline", "TOPO-DIR-OUTBOX"): "Move outbox to messaging/outbox/ in Wave C-2",
-    ("nlp-pipeline", "TOPO-DIR-CONSUMER"): "Move consumer to messaging/consumers/ in Wave C-2",
+    # --- S3: market-data — consumers extracted (Wave B-2); lifespan cleanup deferred ---
+    # TOPO-LIFESPAN: consumers still embedded pending compose containers for standalone processes.
+    (
+        "market-data",
+        "TOPO-LIFESPAN",
+    ): "Remove create_task calls once consumer containers are added to compose (PLAN-0011 post-B-2)",
     # --- S7: knowledge-graph — fix in PLAN-0011 Wave C-3 ---
     # Note: TOPO-MAIN-DISPATCHER not needed (same reason as content-store above).
     ("knowledge-graph", "TOPO-MAIN-CONSUMER"): "Create consumer_main.py files in Wave C-3",

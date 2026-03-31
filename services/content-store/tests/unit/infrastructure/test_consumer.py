@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from content_store.infrastructure.consumer.article_consumer import _parse_raw_event
+from content_store.infrastructure.messaging.consumers.article_consumer import _parse_raw_event
 
 pytestmark = pytest.mark.unit
 

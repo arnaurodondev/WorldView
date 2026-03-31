@@ -88,7 +88,10 @@ class TestLSHOrderingConsumer:
         from contextlib import asynccontextmanager
         from unittest.mock import MagicMock
 
-        from content_store.infrastructure.consumer.article_consumer import ArticleConsumer, ArticleConsumerConfig
+        from content_store.infrastructure.messaging.consumers.article_consumer import (
+            ArticleConsumer,
+            ArticleConsumerConfig,
+        )
 
         # Build a mock config
         config = MagicMock(spec=ArticleConsumerConfig)
@@ -166,15 +169,15 @@ class TestLSHOrderingConsumer:
         # Patch use case execute + is_duplicate + mark_processed
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase.execute",
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase.execute",
                 AsyncMock(return_value=mock_summary),
             )
             mp.setattr(
-                "content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository.is_duplicate",
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.is_duplicate",
                 AsyncMock(return_value=False),
             )
             mp.setattr(
-                "content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository.mark_processed",
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.mark_processed",
                 AsyncMock(return_value=None),
             )
 
