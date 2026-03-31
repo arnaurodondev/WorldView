@@ -242,7 +242,7 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/portfolio/configs/docker.env
-    command: ["python", "-m", "portfolio.messaging.dispatcher_main"]
+    command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
     restart: on-failure
 
   portfolio-instrument-consumer:
@@ -319,7 +319,7 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.scheduler.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
 
   # ── Market ingestion worker ──────────────────────────────────────────────────
@@ -335,7 +335,7 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.worker.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     restart: unless-stopped
 
   # ── Market ingestion outbox dispatcher ───────────────────────────────────────
@@ -355,7 +355,7 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.messaging.dispatcher_main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
     restart: on-failure
 
   # ── Monitoring Stack ────────────────────────────────────────────────────────
@@ -529,7 +529,7 @@ services:
       context: ../../services/content-ingestion
       dockerfile: Dockerfile
     profiles: [infra, all]
-    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker"]
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:

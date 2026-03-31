@@ -6,8 +6,6 @@ worker, outbox dispatcher) run as separate processes (R22).
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -22,7 +20,6 @@ from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
-from content_ingestion.infrastructure.metrics.prometheus import s4_dlq_total, s4_outbox_pending_total
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
@@ -68,31 +65,6 @@ def _normalize_endpoint(endpoint: str) -> str:
     if endpoint.startswith("http://") or endpoint.startswith("https://"):
         return endpoint
     return f"http://{endpoint}"
-
-
-async def _metrics_poller(session_factory: object, interval: int) -> None:
-    """Periodically update outbox/DLQ gauge metrics."""
-    from sqlalchemy import func, select
-
-    from content_ingestion.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
-
-    while True:
-        try:
-            async with session_factory() as session:  # type: ignore[operator]
-                outbox_result = await session.execute(
-                    select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending"),
-                )
-                s4_outbox_pending_total.set(outbox_result.scalar() or 0)
-
-                dlq_result = await session.execute(
-                    select(func.count())
-                    .select_from(DeadLetterQueueModel)
-                    .where(DeadLetterQueueModel.status == "failed"),
-                )
-                s4_dlq_total.set(dlq_result.scalar() or 0)
-        except Exception:
-            logger_mod.debug("metrics_poll_error", exc_info=True)
-        await asyncio.sleep(interval)
 
 
 @asynccontextmanager
@@ -152,19 +124,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.http_client = http_client
 
-    # 7. Metrics poller (lightweight — OK in API process)
-    metrics_task: asyncio.Task[None] = asyncio.create_task(
-        _metrics_poller(session_factory, settings.outbox_metrics_poll_seconds),
-    )
-
     log.info("service_started", service=settings.service_name)
     yield
 
     # Shutdown — clean up API-owned resources only
-    metrics_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await metrics_task
-
     await http_client.aclose()
     await valkey.close()
     await engine.dispose()
