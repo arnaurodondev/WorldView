@@ -23,7 +23,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nlp_pipeline.infrastructure.consumer.article_consumer import ArticleProcessingConsumer
+from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import ArticleProcessingConsumer
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
@@ -178,7 +178,7 @@ def _make_event(doc_id: uuid.UUID | None = None) -> dict[str, Any]:
 
 
 # Module path prefix for patching consumer-imported repositories
-_MOD = "nlp_pipeline.infrastructure.consumer.article_consumer"
+_MOD = "nlp_pipeline.infrastructure.messaging.consumers.article_consumer"
 
 
 def _repo_patches(outbox_mock: Any = None) -> list[Any]:

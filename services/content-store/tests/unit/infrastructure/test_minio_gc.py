@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from content_store.infrastructure.consumer.article_consumer import (
+from content_store.infrastructure.messaging.consumers.article_consumer import (
     ArticleConsumer,
     ArticleConsumerConfig,
 )

@@ -36,10 +36,16 @@ _CANONICAL_PATH_BASELINE: dict[str, str] = {
     # Scheduled for a follow-up cleanup — not in scope for PLAN-0011.
     "market-ingestion": "Dispatcher class at infrastructure/messaging/dispatcher.py — migrate in follow-up plan",
     # Scaffolded services: dispatcher at infrastructure/outbox/ — fix in PLAN-0011 Sub-Plan C
-    "content-store": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-1",
-    "nlp-pipeline": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-2",
     "knowledge-graph": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-3",
     "alert": "Move dispatcher to messaging/outbox/ in PLAN-0011 Wave C-4",
+}
+
+# Baseline — services whose dispatchers intentionally do NOT extend BaseOutboxDispatcher.
+# Key: service_name → reason for the exception.
+_INHERITANCE_BASELINE: dict[str, str] = {
+    # nlp-pipeline: dispatcher stores pre-serialized bytes (not dict payloads),
+    # which is incompatible with BaseOutboxDispatcher's lease-based protocol.
+    "nlp-pipeline": "Custom dispatcher — stores pre-serialized Avro bytes, not dict payloads",
 }
 
 
@@ -93,6 +99,8 @@ class TestDispatcherContracts:
         """Outbox dispatcher classes must inherit from BaseOutboxDispatcher."""
         violations = []
         for svc in discover_mature_services():
+            if svc.name in _INHERITANCE_BASELINE:
+                continue
             for dispatcher_file in _find_dispatcher_files(svc):
                 try:
                     source = dispatcher_file.read_text(encoding="utf-8", errors="replace")

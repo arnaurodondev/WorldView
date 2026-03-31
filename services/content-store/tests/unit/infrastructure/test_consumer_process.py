@@ -17,7 +17,7 @@ import pytest
 from content_store.application.use_cases.process_article import ProcessingSummary
 from content_store.domain.entities import DeduplicationDecision
 from content_store.domain.enums import DedupOutcome
-from content_store.infrastructure.consumer.article_consumer import (
+from content_store.infrastructure.messaging.consumers.article_consumer import (
     ArticleConsumer,
     ArticleConsumerConfig,
 )
@@ -85,8 +85,8 @@ def _make_consumer(
 
 
 class TestProcessMessage:
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_successful_message_commits_session(
         self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock
     ) -> None:
@@ -112,8 +112,8 @@ class TestProcessMessage:
         mock_session.commit.assert_called_once()
         mock_session.rollback.assert_not_called()
 
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_processing_failure_rolls_back_and_raises(
         self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock
     ) -> None:
@@ -135,8 +135,8 @@ class TestProcessMessage:
         mock_session.rollback.assert_called_once()
         mock_session.commit.assert_not_called()
 
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_lsh_index_called_after_commit(self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock) -> None:
         """LSH index must be called AFTER session.commit (CR-3 fix)."""
         lsh_client = AsyncMock()
@@ -172,8 +172,8 @@ class TestProcessMessage:
             "lsh_index"
         ), f"LSH index called BEFORE commit — order: {call_order}"
 
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_each_message_gets_own_session(self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock) -> None:
         """Each _handle_message call opens a new session via session_factory."""
         sessions: list[AsyncMock] = []
@@ -224,8 +224,8 @@ class TestProcessMessage:
         # Verify session isolation: no two messages share the same UoW session
         assert sessions[0] is not sessions[2]  # UoW sessions for msg1 vs msg2
 
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_commit_failure_rolls_back_and_raises(
         self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock
     ) -> None:
@@ -251,8 +251,8 @@ class TestProcessMessage:
 
         mock_session.rollback.assert_called_once()
 
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessArticleUseCase")
-    @patch("content_store.infrastructure.consumer.article_consumer.ProcessedEventsRepository")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase")
+    @patch("content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository")
     async def test_lsh_index_failure_is_best_effort(self, mock_pe_repo_cls: MagicMock, mock_uc_cls: MagicMock) -> None:
         """LSH index failure should not raise — best-effort only."""
         lsh_client = AsyncMock()
