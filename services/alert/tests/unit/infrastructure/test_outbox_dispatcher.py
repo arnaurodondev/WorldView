@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from alert.domain.entities import OutboxEvent
 from alert.domain.enums import OutboxStatus
-from alert.infrastructure.outbox.dispatcher import AlertOutboxDispatcher
+from alert.infrastructure.messaging.outbox.dispatcher import AlertOutboxDispatcher
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
@@ -58,7 +58,7 @@ class TestAlertOutboxDispatcher:
     async def test_empty_batch_does_not_produce(self) -> None:
         dispatcher, _mock_session, _ = _make_dispatcher()
 
-        with patch("alert.infrastructure.outbox.dispatcher.OutboxRepository") as MockRepo:
+        with patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo:
             MockRepo.return_value.fetch_pending = AsyncMock(return_value=[])
 
             await dispatcher._dispatch_batch()
@@ -76,7 +76,7 @@ class TestAlertOutboxDispatcher:
         mock_producer.flush = MagicMock(return_value=0)
 
         with (
-            patch("alert.infrastructure.outbox.dispatcher.OutboxRepository") as MockRepo,
+            patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo,
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),
         ):
             MockRepo.return_value.fetch_pending = AsyncMock(return_value=[event])
@@ -97,7 +97,7 @@ class TestAlertOutboxDispatcher:
         mock_producer.produce = MagicMock(side_effect=RuntimeError("broker down"))
 
         with (
-            patch("alert.infrastructure.outbox.dispatcher.OutboxRepository") as MockRepo,
+            patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo,
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),
         ):
             MockRepo.return_value.fetch_pending = AsyncMock(return_value=[event])
@@ -124,7 +124,7 @@ class TestAlertOutboxDispatcher:
         mock_producer.flush = MagicMock(return_value=0)
 
         with (
-            patch("alert.infrastructure.outbox.dispatcher.OutboxRepository") as MockRepo,
+            patch("alert.infrastructure.messaging.outbox.dispatcher.OutboxRepository") as MockRepo,
             patch.object(dispatcher, "_get_producer", return_value=mock_producer),
         ):
             MockRepo.return_value.fetch_pending = AsyncMock(return_value=[event])

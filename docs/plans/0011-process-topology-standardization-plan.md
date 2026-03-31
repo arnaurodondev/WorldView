@@ -3,7 +3,7 @@
 **PRD**: N/A (Standards enforcement initiative)
 **Status**: in-progress
 **Created**: 2026-03-31
-**Updated**: 2026-04-01 (Waves C-1 + C-2 + B-2 complete)
+**Updated**: 2026-04-01 (Waves C-1 + C-2 + C-4 + B-2 complete)
 **Author**: Claude (plan generation)
 
 ---
@@ -124,10 +124,10 @@ Sub-Plan C (Scaffolded Services) — can start after A-2 + B-1
 | T-C-3-03 | S7: create `scheduler/scheduler_main.py` entry point | C-3 | pending | T-A-2-01 |
 | T-C-3-04 | S7: remove background tasks from `app.py` lifespan | C-3 | pending | T-C-3-01, T-C-3-02, T-C-3-03 |
 | T-C-3-05 | S7: add compose containers + validate | C-3 | pending | T-C-3-04 |
-| T-C-4-01 | S10: create `messaging/outbox/dispatcher_main.py` entry point | C-4 | pending | T-A-2-01 |
-| T-C-4-02 | S10: create `messaging/consumers/*_consumer_main.py` entry points | C-4 | pending | T-A-2-01 |
-| T-C-4-03 | S10: remove background tasks from `app.py` lifespan | C-4 | pending | T-C-4-01, T-C-4-02 |
-| T-C-4-04 | S10: add compose containers + validate | C-4 | pending | T-C-4-03 |
+| T-C-4-01 | S10: create `messaging/outbox/dispatcher_main.py` entry point | C-4 | done | T-A-2-01 |
+| T-C-4-02 | S10: create `messaging/consumers/*_consumer_main.py` entry points | C-4 | done | T-A-2-01 |
+| T-C-4-03 | S10: remove background tasks from `app.py` lifespan | C-4 | done | T-C-4-01, T-C-4-02 |
+| T-C-4-04 | S10: add compose containers + validate | C-4 | done | T-C-4-03 |
 
 ---
 
@@ -1221,12 +1221,13 @@ and consumer containers (may group related consumers into fewer containers).
 
 ---
 
-### Wave C-4: S10 Alert — Extract Dispatcher + Consumers
+### Wave C-4: S10 Alert — Extract Dispatcher + Consumers ✅
 
 **Goal**: Extract `AlertOutboxDispatcher` and consumer classes from S10. S10 is the simplest
 extraction — its dispatcher is instantiated but not actively started as a background task.
 **Depends on**: Waves A-2, B-1
 **Estimated effort**: 30–45 min
+**Status**: **DONE** — 2026-04-01 · 126 unit tests pass · 94 arch tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 #### T-C-4-01: Create `messaging/outbox/dispatcher_main.py` for S10
@@ -1309,10 +1310,10 @@ Add containers: `alert-dispatcher`, `alert-watchlist-consumer`, `alert-intellige
 - `services/alert/src/alert/infrastructure/consumer/*.py`
 
 #### Validation Gate
-- [ ] ruff + mypy clean for S10
-- [ ] S10 unit tests pass
-- [ ] `make test-arch` — S10 violations cleared, baseline now empty
-- [ ] Compose YAML validates
+- [x] ruff + mypy clean for S10
+- [x] S10 unit tests pass (126)
+- [x] `make test-arch` — S10 violations cleared from baselines (94 arch tests pass)
+- [x] Compose YAML validates
 
 ---
 

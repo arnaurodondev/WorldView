@@ -68,11 +68,6 @@ TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
     ("knowledge-graph", "TOPO-LIFESPAN"): "Remove background tasks from lifespan in Wave C-3",
     ("knowledge-graph", "TOPO-DIR-OUTBOX"): "Move outbox to messaging/outbox/ in Wave C-3",
     ("knowledge-graph", "TOPO-DIR-CONSUMER"): "Move consumer to messaging/consumers/ in Wave C-3",
-    # --- S10: alert — fix in PLAN-0011 Wave C-4 ---
-    # Note: TOPO-MAIN-DISPATCHER not needed (same reason as content-store above).
-    ("alert", "TOPO-MAIN-CONSUMER"): "Create consumer_main.py files in Wave C-4",
-    ("alert", "TOPO-DIR-OUTBOX"): "Move outbox to messaging/outbox/ in Wave C-4",
-    ("alert", "TOPO-DIR-CONSUMER"): "Move consumer to messaging/consumers/ in Wave C-4",
 }
 
 # All rule IDs this module uses — used for baseline integrity checks.

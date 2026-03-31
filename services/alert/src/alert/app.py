@@ -76,7 +76,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
-    session_factory = write_factory  # local alias for downstream wiring
 
     # 4. Valkey
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -102,17 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_manager = ConnectionManager()
     app.state.ws_manager = ws_manager
 
-    # 8. Outbox dispatcher
-    from alert.infrastructure.outbox.dispatcher import AlertOutboxDispatcher
-
-    dispatcher = AlertOutboxDispatcher(settings=settings, session_factory=session_factory)
-    app.state.dispatcher = dispatcher
-
     log.info("service_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
 
     # Shutdown
-    dispatcher.stop()
     await s1_client.close()
     await valkey.close()
     await engine.dispose()

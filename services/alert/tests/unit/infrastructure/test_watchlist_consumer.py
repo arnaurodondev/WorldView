@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from alert.infrastructure.consumer.watchlist_consumer import WatchlistConsumer
+from alert.infrastructure.messaging.consumers.watchlist_consumer import WatchlistConsumer
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 

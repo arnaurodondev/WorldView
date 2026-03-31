@@ -148,7 +148,7 @@ async def integration_app(
     from alert.infrastructure.db.repositories.dedup import DedupRepository
     from alert.infrastructure.db.repositories.outbox import OutboxRepository
     from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
-    from alert.infrastructure.outbox.dispatcher import AlertOutboxDispatcher
+    from alert.infrastructure.messaging.outbox.dispatcher import AlertOutboxDispatcher
     from alert.infrastructure.websocket.manager import ConnectionManager
 
     app = create_app(integration_settings)
