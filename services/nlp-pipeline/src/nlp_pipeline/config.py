@@ -25,9 +25,19 @@ class Settings(BaseSettings):
 
     # nlp_db — owned, Alembic enabled
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db"
+    database_url_read: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
 
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
     intelligence_database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+    intelligence_database_url_read: str = ""
+    intelligence_db_pool_size: int = 10
+    intelligence_db_max_overflow: int = 20
+    intelligence_db_pool_size_read: int = 20
+    intelligence_db_max_overflow_read: int = 30
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"

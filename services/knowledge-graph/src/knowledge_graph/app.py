@@ -28,8 +28,7 @@ from knowledge_graph.api import dlq, health, routes
 from knowledge_graph.config import Settings
 from knowledge_graph.domain.errors import KnowledgeGraphError
 from knowledge_graph.infrastructure.intelligence_db.session import (
-    create_intelligence_session_factory,
-    create_readonly_session_factory,
+    _build_factories as _build_intel_factories,
 )
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -100,11 +99,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. intelligence_db session factories (read/write + read-only)
-    engine, session_factory = create_intelligence_session_factory(settings.database_url)
-    _, readonly_factory = create_readonly_session_factory(settings.database_url)
-    app.state.session_factory = session_factory
-    app.state.readonly_session_factory = readonly_factory
+    # 3. intelligence_db session factories — R23 dual factory (write + read)
+    engine, write_factory, read_factory = _build_intel_factories(settings)
+    session_factory = write_factory  # local alias for downstream wiring
+    app.state.session_factory = write_factory
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
+    app.state.readonly_session_factory = read_factory
     app.state.engine = engine
 
     # 4. Admin token (DLQ endpoint auth)

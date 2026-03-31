@@ -68,12 +68,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database
-    from alert.infrastructure.db.session import create_session_factory
+    # 3. Database — R23 dual factory (write + read)
+    from alert.infrastructure.db.session import _build_factories
 
-    engine, session_factory = create_session_factory(settings)
+    engine, write_factory, read_factory = _build_factories(settings)
     app.state.engine = engine
-    app.state.session_factory = session_factory
+    app.state.session_factory = write_factory
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
+    session_factory = write_factory  # local alias for downstream wiring
 
     # 4. Valkey
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]

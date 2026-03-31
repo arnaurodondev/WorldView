@@ -15,7 +15,7 @@ from content_store.api.dlq import router as dlq_router
 from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.consumer.article_consumer import ArticleConsumer, ArticleConsumerConfig
-from content_store.infrastructure.db.session import create_session_factory
+from content_store.infrastructure.db.session import _build_factories
 from content_store.infrastructure.outbox.dispatcher import ContentStoreOutboxDispatcher
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -103,11 +103,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database — returns (engine, factory) so we can dispose on shutdown
-    engine, session_factory = create_session_factory(settings)
+    # 3. Database — returns (engine, write_factory, read_factory) for R23 split
+    engine, write_factory, read_factory = _build_factories(settings)
 
-    app.state.session_factory = session_factory
+    app.state.session_factory = write_factory
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
     app.state.engine = engine
+    session_factory = write_factory  # local alias for downstream wiring
 
     # 5. Object storage
     from storage.factory import build_object_storage  # type: ignore[import-untyped]

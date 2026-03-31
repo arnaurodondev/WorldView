@@ -28,10 +28,10 @@ from nlp_pipeline.api.routes import dlq, health, signals
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
 from nlp_pipeline.infrastructure.intelligence_db.session import (
-    create_intelligence_session_factory,
+    _build_intelligence_factories,
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import s6_ollama_queue_depth_current
-from nlp_pipeline.infrastructure.nlp_db.session import create_session_factory
+from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
 from nlp_pipeline.infrastructure.outbox.dispatcher import NLPPipelineOutboxDispatcher
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -113,13 +113,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database engines
-    nlp_engine, nlp_sf = create_session_factory(settings.database_url)
-    intel_engine, intel_sf = create_intelligence_session_factory(settings.intelligence_database_url)
+    # 3. Database engines — R23 dual factory (write + read) for both DBs
+    nlp_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
+    intel_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
     app.state.nlp_engine = nlp_engine
     app.state.intel_engine = intel_engine
     app.state.nlp_session_factory = nlp_sf
+    app.state.nlp_write_factory = nlp_sf
+    app.state.nlp_read_factory = nlp_read_sf
     app.state.intelligence_session_factory = intel_sf
+    app.state.intel_write_factory = intel_sf
+    app.state.intel_read_factory = intel_read_sf
 
     # 4. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
