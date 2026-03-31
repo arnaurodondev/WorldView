@@ -152,35 +152,7 @@ def _parse_file(path: Path) -> ast.Module | None:
 # ---------------------------------------------------------------------------
 
 R23_BASELINE: dict[tuple[str, str], str] = {
-    # S1: portfolio — DONE (PLAN-0012 Wave B-1)
-    # --- S5: content-store — fix in PLAN-0012 Wave B-2 ---
-    ("content-store", "R23-CONFIG-READ-URL"): "Fix in PLAN-0012 Wave B-2",
-    ("content-store", "R23-CONFIG-POOL-FIELDS"): "Fix in PLAN-0012 Wave B-2",
-    ("content-store", "R23-DUAL-FACTORY"): "Fix in PLAN-0012 Wave B-2",
-    ("content-store", "R23-POOL-PRE-PING"): "Fix in PLAN-0012 Wave B-2",
-    ("content-store", "R23-POOL-SIZE"): "Fix in PLAN-0012 Wave B-2",
-    ("content-store", "R23-POOL-MAX-OVERFLOW"): "Fix in PLAN-0012 Wave B-2",
-    # --- S10: alert — fix in PLAN-0012 Wave B-2 ---
-    ("alert", "R23-CONFIG-READ-URL"): "Fix in PLAN-0012 Wave B-2",
-    ("alert", "R23-CONFIG-POOL-FIELDS"): "Fix in PLAN-0012 Wave B-2",
-    ("alert", "R23-DUAL-FACTORY"): "Fix in PLAN-0012 Wave B-2",
-    ("alert", "R23-POOL-PRE-PING"): "Fix in PLAN-0012 Wave B-2",
-    ("alert", "R23-POOL-SIZE"): "Fix in PLAN-0012 Wave B-2",
-    ("alert", "R23-POOL-MAX-OVERFLOW"): "Fix in PLAN-0012 Wave B-2",
-    # --- S6: nlp-pipeline — fix in PLAN-0012 Wave B-3 ---
-    ("nlp-pipeline", "R23-CONFIG-READ-URL"): "Fix in PLAN-0012 Wave B-3",
-    ("nlp-pipeline", "R23-CONFIG-POOL-FIELDS"): "Fix in PLAN-0012 Wave B-3",
-    ("nlp-pipeline", "R23-DUAL-FACTORY"): "Fix in PLAN-0012 Wave B-3",
-    ("nlp-pipeline", "R23-POOL-PRE-PING"): "Fix in PLAN-0012 Wave B-3",
-    ("nlp-pipeline", "R23-POOL-SIZE"): "Fix in PLAN-0012 Wave B-3",
-    ("nlp-pipeline", "R23-POOL-MAX-OVERFLOW"): "Fix in PLAN-0012 Wave B-3",
-    # --- S7: knowledge-graph — fix in PLAN-0012 Wave B-3 ---
-    ("knowledge-graph", "R23-CONFIG-READ-URL"): "Fix in PLAN-0012 Wave B-3",
-    ("knowledge-graph", "R23-CONFIG-POOL-FIELDS"): "Fix in PLAN-0012 Wave B-3",
-    # knowledge-graph already has dual factory in session.py — no R23-DUAL-FACTORY baseline needed
-    ("knowledge-graph", "R23-POOL-PRE-PING"): "Fix in PLAN-0012 Wave B-3",
-    ("knowledge-graph", "R23-POOL-SIZE"): "Fix in PLAN-0012 Wave B-3",
-    ("knowledge-graph", "R23-POOL-MAX-OVERFLOW"): "Fix in PLAN-0012 Wave B-3",
+    # All services are now R23-compliant (PLAN-0012 Waves A-1, B-1, B-2, B-3).
 }
 
 _KNOWN_RULE_IDS: frozenset[str] = frozenset(

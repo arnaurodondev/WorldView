@@ -1,27 +1,74 @@
-"""Async session factory for alert_db."""
+"""Async session factory for alert_db.
+
+Supports dual-session pattern: separate connections for primary (write)
+and optional read-replica operations (R23).
+"""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from alert.config import Settings
 
 
-def create_session_factory(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
-    """Create an async engine + session factory for alert_db."""
-    engine = create_async_engine(settings.database_url, echo=False)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        bind=engine,
+def _build_factories(
+    settings: Settings,
+) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
+    """Build write + read session factories from *settings*.
+
+    Returns:
+        ``(write_engine, write_factory, read_factory)`` — caller owns the engine
+        for disposal on shutdown.
+    """
+    write_engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
+    write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        bind=write_engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    return engine, factory
+
+    read_url: str = settings.database_url_read or settings.database_url
+    if read_url == settings.database_url:
+        read_factory = write_factory
+    else:
+        read_engine = create_async_engine(
+            read_url,
+            echo=False,
+            pool_pre_ping=True,
+            pool_size=settings.db_pool_size_read,
+            max_overflow=settings.db_max_overflow_read,
+        )
+        read_factory = async_sessionmaker(
+            bind=read_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+
+    return write_engine, write_factory, read_factory
+
+
+def create_session_factory(settings: Settings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    """Create an async engine + session factory for alert_db.
+
+    Thin backward-compatible wrapper over ``_build_factories`` — returns only
+    the write engine and write factory for callers that don't need a read replica.
+    """
+    engine, write_factory, _ = _build_factories(settings)
+    return engine, write_factory
 
 
 @asynccontextmanager

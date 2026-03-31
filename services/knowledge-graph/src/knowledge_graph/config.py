@@ -24,6 +24,11 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+    database_url_read: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
     alembic_enabled: bool = False
 
     # Kafka topics — consumed
