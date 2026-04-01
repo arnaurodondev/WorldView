@@ -3,6 +3,7 @@ name: prd
 description: "Generate a Product Requirements Document through interactive human-agent discussion. Use when starting a new feature, project, or significant change that needs requirements analysis, technical design, and risk assessment before implementation."
 user-invocable: true
 argument-hint: "[feature title or brief description]"
+effort: heavy
 ---
 
 # PRD Generation — Interactive Requirements & Design Workshop

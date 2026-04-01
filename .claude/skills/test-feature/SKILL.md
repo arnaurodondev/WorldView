@@ -3,6 +3,11 @@ name: test-feature
 description: "Design and implement comprehensive tests for a feature or module. Analyzes code to identify test scenarios (happy path, edge cases, error paths, integration), writes tests, and validates coverage. Use to ensure thorough test coverage for new or existing features."
 user-invocable: true
 argument-hint: "[feature name, service, module path, or specific function to test]"
+effort: medium
+paths:
+  - "**/domain/**/*.py"
+  - "**/application/**/*.py"
+  - "**/application/use_cases/**/*.py"
 ---
 
 # Test Feature — Comprehensive Test Design & Implementation

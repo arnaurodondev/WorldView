@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
@@ -229,6 +230,47 @@ class ValkeyClient:
     async def llen(self, key: str) -> int:
         """Return the length of the list stored at *key*."""
         return await self._redis.llen(key)  # type: ignore[no-any-return, misc]
+
+    # ── Pub/sub operations ────────────────────────────────────────────────────
+
+    async def publish(self, channel: str, message: str) -> int:
+        """Publish *message* to *channel*.
+
+        Returns the number of subscribers that received the message.
+
+        Args:
+            channel: Pub/sub channel name.
+            message: Message payload (string; serialise before calling if needed).
+        """
+        return await self._redis.publish(channel, message)  # type: ignore[no-any-return]
+
+    @asynccontextmanager  # type: ignore[misc]
+    async def subscribe(self, *channels: str) -> Any:
+        """Async context manager — subscribe to *channels* and yield the ``PubSub`` object.
+
+        Unsubscribes and closes the ``PubSub`` connection on context exit.
+
+        Args:
+            *channels: One or more channel names to subscribe to.
+
+        Yields:
+            A ``PubSub`` object.  Iterate it with ``async for message in pubsub`` or
+            call ``await pubsub.get_message(ignore_subscribe_messages=True, timeout=…)``.
+
+        Example::
+
+            async with client.subscribe("alert:user-123") as pubsub:
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        handle(message["data"])
+        """
+        pubsub = self._redis.pubsub()
+        await pubsub.subscribe(*channels)
+        try:
+            yield pubsub
+        finally:
+            await pubsub.unsubscribe(*channels)
+            await pubsub.aclose()
 
     # ── Connection management ─────────────────────────────────────────────────
 

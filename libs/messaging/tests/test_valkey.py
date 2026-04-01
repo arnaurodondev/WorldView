@@ -105,6 +105,8 @@ class TestValkeyClientConstruction:
             "rpop",
             "lrange",
             "llen",
+            "publish",
+            "subscribe",
             "ping",
             "close",
         ]

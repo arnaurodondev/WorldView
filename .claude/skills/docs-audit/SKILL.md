@@ -3,6 +3,7 @@ name: docs-audit
 description: "Audit the entire project documentation for completeness, accuracy, and consistency. Finds undocumented code, stale docs, inconsistencies between code and docs, and missing patterns. Produces an actionable report with fixes. Use periodically or after major changes."
 user-invocable: true
 argument-hint: "[optional: 'full' for complete audit, or specific area like 'services' or 'libs']"
+effort: heavy
 ---
 
 # Documentation Audit — Completeness & Consistency Review
