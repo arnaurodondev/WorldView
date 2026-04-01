@@ -1,6 +1,6 @@
 {
   "type": "record",
-  "name": "instrument.created.v1",
+  "name": "InstrumentCreated",
   "namespace": "market_data.events",
   "doc": "Emitted when a new instrument is first seen during data ingestion.",
   "fields": [

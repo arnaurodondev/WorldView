@@ -13,9 +13,9 @@ import pytest
 from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.infrastructure.messaging.outbox.dispatcher import (
     EVENT_TOPIC_MAP,
-    MARKET_EVENTS_V1,
     _event_to_avro_dict,
     _sanitize_payload,
+    event_to_outbox_payload,
 )
 
 pytestmark = pytest.mark.unit
@@ -46,24 +46,44 @@ def _make_dispatcher():
     return dispatcher
 
 
-# ── MD-027 required tests ─────────────────────────────────────────────────────
+# ── QA-016 regression guard ───────────────────────────────────────────────────
 
 
 class TestDispatcherTopicRouting:
-    """Assert correct topic routing for each event type."""
+    """QA-016: Each event type must route to its own dedicated topic.
 
-    def test_dispatcher_routes_instrument_created(self) -> None:
-        """InstrumentCreated must route to market.instrument.created topic."""
-        assert EVENT_TOPIC_MAP["market.instrument.created"] == MARKET_EVENTS_V1
+    Before the fix, both events were incorrectly routed to ``market.events.v1``,
+    causing portfolio (S1) to never receive instrument sync events.
+    """
 
-    def test_dispatcher_routes_instrument_updated(self) -> None:
-        """InstrumentUpdated must route to market.instrument.updated topic."""
-        assert EVENT_TOPIC_MAP["market.instrument.updated"] == MARKET_EVENTS_V1
+    def test_instrument_created_routes_to_own_topic(self) -> None:
+        """InstrumentCreated must route to market.instrument.created (not market.events.v1)."""
+        assert EVENT_TOPIC_MAP["market.instrument.created"] == "market.instrument.created"
+
+    def test_instrument_updated_routes_to_own_topic(self) -> None:
+        """InstrumentUpdated must route to market.instrument.updated (not market.events.v1)."""
+        assert EVENT_TOPIC_MAP["market.instrument.updated"] == "market.instrument.updated"
+
+    def test_no_event_routes_to_market_events_v1(self) -> None:
+        """QA-016 guard: no event type may route to the legacy market.events.v1 topic."""
+        for event_type, topic in EVENT_TOPIC_MAP.items():
+            assert topic != "market.events.v1", (
+                f"Event type '{event_type}' still routes to legacy topic 'market.events.v1' "
+                f"— this causes silent message loss in portfolio (S1). Fix: use dedicated topic."
+            )
 
     def test_all_domain_event_types_have_routes(self) -> None:
         """Every domain event type must have a topic mapping."""
         for event_type in ("market.instrument.created", "market.instrument.updated"):
             assert event_type in EVENT_TOPIC_MAP, f"Missing route for {event_type}"
+
+    def test_each_event_type_routes_to_matching_topic(self) -> None:
+        """Each event type must be the same as its topic name (self-referential routing)."""
+        for event_type, topic in EVENT_TOPIC_MAP.items():
+            assert event_type == topic, (
+                f"event_type '{event_type}' routes to topic '{topic}' — "
+                f"expected self-referential routing (event_type == topic)"
+            )
 
     def test_instrument_created_event_type_field(self) -> None:
         """InstrumentCreated.event_type must match the routing key."""
@@ -139,6 +159,47 @@ class TestAvroSerialization:
         for key, value in avro_dict.items():
             assert not isinstance(value, Decimal), f"Field {key} is still a Decimal"
             assert not isinstance(value, UUID), f"Field {key} is still a UUID"
+
+
+class TestEventToOutboxPayload:
+    """Assert event_to_outbox_payload() produces the correct outbox dict."""
+
+    def test_outbox_payload_sets_entity_id_from_instrument_id(self) -> None:
+        """event_to_outbox_payload must set entity_id = instrument_id (M-017)."""
+        event = InstrumentCreated(instrument_id="inst-abc", symbol="AAPL", exchange="NASDAQ")
+        payload = event_to_outbox_payload(event)
+
+        assert payload["entity_id"] == "inst-abc"
+        assert payload["instrument_id"] == "inst-abc"
+
+    def test_outbox_payload_converts_tuple_to_list(self) -> None:
+        """fields_updated tuple must be converted to list for Avro array compatibility."""
+        event = InstrumentUpdated(
+            instrument_id="inst-xyz",
+            symbol="MSFT",
+            exchange="NASDAQ",
+            has_ohlcv=True,
+            fields_updated=("has_ohlcv",),
+        )
+        payload = event_to_outbox_payload(event)
+
+        assert isinstance(payload["fields_updated"], list)
+        assert payload["fields_updated"] == ["has_ohlcv"]
+
+    def test_outbox_payload_includes_classvars(self) -> None:
+        """event_to_outbox_payload must include event_type and schema_version."""
+        event = InstrumentCreated(instrument_id="x", symbol="AAPL", exchange="NASDAQ")
+        payload = event_to_outbox_payload(event)
+
+        assert payload["event_type"] == "market.instrument.created"
+        assert payload["schema_version"] == 2
+
+    def test_outbox_payload_updated_schema_version(self) -> None:
+        """InstrumentUpdated schema_version must be 1."""
+        event = InstrumentUpdated(instrument_id="x", symbol="AAPL", exchange="NASDAQ")
+        payload = event_to_outbox_payload(event)
+
+        assert payload["schema_version"] == 1
 
 
 class TestDecimalUUIDSerialization:

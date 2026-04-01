@@ -6,11 +6,10 @@ import asyncio
 import os
 from logging.config import fileConfig
 
+from alembic import context
 from alert.config import Settings as _Settings
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
-from alembic import context
 
 config = context.config
 
@@ -22,7 +21,9 @@ if _db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata when models exist
+from alert.infrastructure.db.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

@@ -2,7 +2,48 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class EODHDProviderSettings(BaseModel):
+    """Operational parameters for the EODHD news provider."""
+
+    base_url: str = "https://eodhd.com/api/news"
+    page_size: int = 100
+    rate_limit_per_second: float = 10.0
+
+
+class FinnhubProviderSettings(BaseModel):
+    """Operational parameters for the Finnhub provider."""
+
+    base_url: str = "https://finnhub.io/api/v1"
+    rate_limit_per_minute: int = 55
+
+
+class NewsAPIProviderSettings(BaseModel):
+    """Operational parameters for the NewsAPI.org provider."""
+
+    base_url: str = "https://newsapi.org/v2/everything"
+    page_size: int = 100
+    quota_ttl_seconds: int = 86400
+
+
+class SECEdgarProviderSettings(BaseModel):
+    """Operational parameters for the SEC EDGAR provider."""
+
+    efts_url: str = "https://efts.sec.gov/LATEST/search-index"
+    filing_base_url: str = "https://www.sec.gov/Archives/edgar/data"
+    default_forms: str = "10-K,10-Q,8-K,DEF14A"
+    max_concurrent: int = 8
+
+
+class HTTPClientSettings(BaseModel):
+    """Shared httpx client tuning parameters."""
+
+    timeout_seconds: float = 30.0
+    connect_timeout_seconds: float = 5.0
+    max_retries: int = 3
 
 
 class Settings(BaseSettings):
@@ -20,6 +61,7 @@ class Settings(BaseSettings):
         env_prefix="CONTENT_INGESTION_",
         env_file=".env",
         extra="ignore",
+        env_nested_delimiter="__",
     )
 
     # ── External API keys (no CONTENT_INGESTION_ prefix — shared variables) ──
@@ -30,6 +72,7 @@ class Settings(BaseSettings):
 
     # ── Database ──────────────────────────────────────────────────────────────
     db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
+    db_url_read: str = ""  # Falls back to db_url if empty (R23)
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -45,10 +88,23 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # ── Security ──────────────────────────────────────────────────────────────
-    admin_token: str = ""
+    admin_token: str = ""  # CONTENT_INGESTION_ADMIN_TOKEN — admin/DevOps only
+    # Inter-service token shared across all services (no CONTENT_INGESTION_ prefix)
+    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
 
-    # ── Scheduler / outbox ────────────────────────────────────────────────────
+    # ── Scheduler (process — R22) ────────────────────────────────────────────
     scheduler_interval_seconds: int = 300
+    scheduler_tick_interval_seconds: float = 60.0
+    scheduler_max_tasks_per_tick: int = 100
+
+    # ── Worker (process — R22) ─────────────────────────────────────────────
+    worker_batch_size: int = 5
+    worker_lease_seconds: int = 300
+    worker_idle_sleep_seconds: float = 5.0
+    worker_concurrency: int = 2
+    worker_task_timeout_seconds: float = 120.0
+
+    # ── Outbox / dispatcher ────────────────────────────────────────────────
     outbox_batch_size: int = 100
     outbox_poll_interval_seconds: float = 5.0
     outbox_lease_seconds: int = 30
@@ -68,7 +124,15 @@ class Settings(BaseSettings):
     backfill_sources: str = ""
     backfill_batch_delay_seconds: float = 0.5
 
-    # ── Observability ─────────────────────────────────────────────────────────
+    # ── Provider settings (operational params — overridable via ConfigMap) ───
+    eodhd: EODHDProviderSettings = EODHDProviderSettings()
+    finnhub: FinnhubProviderSettings = FinnhubProviderSettings()
+    newsapi: NewsAPIProviderSettings = NewsAPIProviderSettings()
+    sec_edgar: SECEdgarProviderSettings = SECEdgarProviderSettings()
+    http_client: HTTPClientSettings = HTTPClientSettings()
+
+    # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────
+    service_name: str = "content-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

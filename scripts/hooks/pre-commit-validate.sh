@@ -73,9 +73,29 @@ else
   echo "✓ No typed packages changed — skipping mypy"
 fi
 
-# ─── 3. Run tests for changed services/libs ──────────────────────────────────
+# ─── 3. Import guards on changed service files ───────────────────────────────
 echo ""
-echo "── Step 3/3: pytest (unit tests) ─────────────────────────────"
+echo "── Step 3/4: import guards ─────────────────────────────────────"
+# Only run import guards if any changed file is under services/
+SVC_CHANGED=$(echo "$CHANGED_PY" | grep '^services/' || true)
+if [ -n "$SVC_CHANGED" ]; then
+  # Extract unique service names from changed paths
+  GUARD_SERVICES=$(echo "$SVC_CHANGED" | sed -n 's|^services/\([^/]*\)/.*|\1|p' | sort -u | paste -sd, -)
+  if (cd "$ROOT_DIR" && python3 scripts/import_guards/check_import_guards.py \
+      --strict --baseline scripts/import_guards/baseline.json \
+      --services "$GUARD_SERVICES" 2>&1); then
+    echo "✓ import guards passed"
+  else
+    echo "✗ import guards FAILED — fix violations before committing"
+    FAILED=1
+  fi
+else
+  echo "✓ No service files changed — skipping import guards"
+fi
+
+# ─── 4. Run tests for changed services/libs ──────────────────────────────────
+echo ""
+echo "── Step 4/4: pytest (unit tests) ─────────────────────────────"
 TEST_DIRS=""
 for f in $CHANGED_PY; do
   # Extract test directory: services/<name>/tests or libs/<name>/tests

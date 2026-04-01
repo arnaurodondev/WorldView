@@ -55,7 +55,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         result = await self._session.execute(select(InstrumentModel).limit(limit).offset(offset))
         return [self._to_entity(r) for r in result.scalars()], total
 
-    async def upsert(self, instrument: InstrumentRef) -> None:
+    async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
         stmt = (
             pg_insert(InstrumentModel)
             .values(
@@ -72,13 +72,19 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
             .on_conflict_do_update(
                 index_elements=["symbol", "exchange"],
                 set_={
-                    "name": instrument.name,
-                    "currency": instrument.currency,
-                    "asset_class": instrument.asset_class,
+                    # COALESCE preserves existing metadata when InstrumentUpdated arrives
+                    # without name/currency/asset_class (those fields are only in InstrumentCreated).
+                    # Without COALESCE, an InstrumentUpdated event would overwrite these with NULL.
+                    "name": func.coalesce(instrument.name, InstrumentModel.name),
+                    "currency": func.coalesce(instrument.currency, InstrumentModel.currency),
+                    "asset_class": func.coalesce(instrument.asset_class, InstrumentModel.asset_class),
                     "entity_id": instrument.entity_id,
                     "source_event_id": instrument.source_event_id,
                     "synced_at": instrument.synced_at,
                 },
             )
+            .returning(InstrumentModel)
         )
-        await self._session.execute(stmt)
+        result = await self._session.execute(stmt)
+        row = result.scalar_one()
+        return self._to_entity(row)

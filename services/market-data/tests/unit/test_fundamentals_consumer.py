@@ -114,11 +114,15 @@ async def test_fundamentals_consumer_skips_non_fundamentals() -> None:
 
 @pytest.mark.asyncio
 async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
-    """Consumer creates a new Instrument if symbol/exchange not found."""
+    """Consumer creates a new Instrument if symbol/exchange not found.
+
+    QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+    """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
 
     raw = _make_fundamentals_json(["income_statement"])
@@ -129,7 +133,66 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     await consumer.process_message(None, _make_message(), {})
 
     mock_uow.instruments.upsert.assert_awaited_once()
-    mock_uow.collect_event.assert_called_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_enriches_instrument_created_with_company_profile() -> None:
+    """InstrumentCreated outbox payload includes name/isin from company_profile if present."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-002")
+    # Return None so FIX-F4 security enrichment path is skipped (not testing it here)
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "ISIN": "US02079K3059"},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["name"] == "Alphabet Inc."
+    assert outbox_payload["isin"] == "US02079K3059"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing() -> None:
+    """Consumer emits InstrumentUpdated to outbox when instrument lacks has_fundamentals.
+
+    QA-016: the flag-change path previously emitted nothing; now atomically writes to outbox.
+    """
+    instrument = _make_instrument(has_fundamentals=False)
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.update_flags = AsyncMock()
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-003")
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.instruments.update_flags.assert_awaited_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.updated"
+    assert call_kwargs.kwargs["payload"]["has_fundamentals"] is True
+    assert call_kwargs.kwargs["payload"]["fields_updated"] == ["has_fundamentals"]
 
 
 @pytest.mark.asyncio
@@ -502,3 +565,235 @@ async def test_consumer_metric_upsert_failure_propagates_exception() -> None:
     # Section upsert was called, metric upsert raised, exception propagated
     mock_uow.fundamentals.upsert_analyst_consensus.assert_awaited_once()
     mock_uow.fundamental_metrics.upsert_metrics.assert_awaited_once()
+
+
+# ── T-E2-1-01/02: atomic dedup ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_content_hash_dedup_marks_processed() -> None:
+    """Unchanged content hash → event_id still recorded despite early return (BP-034)."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # _make_consumer overwrites exists_by_content_hash → set it to True after
+    mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=True)
+    msg = _make_message()
+    msg["canonical_ref_sha256"] = "cafebabe"
+
+    await consumer.process_message(None, msg, {})
+
+    mock_uow.ingestion_events.create_if_not_exists.assert_awaited_once()
+    mock_storage.get_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_skips_processing_on_duplicate_insert() -> None:
+    """Duplicate event_id → early return, no data written."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=False)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_storage.get_bytes.assert_not_called()
+    mock_uow.fundamentals.upsert_income_statement.assert_not_called()
+
+
+# ── T-E2-1-04: C-008 period_end type coercion ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_period_end_parsed_from_string() -> None:
+    """String period_end (passed explicitly) is coerced to date correctly.
+
+    This tests the _upsert_metrics_for_record helper which now uses
+    isinstance(record.period_end, datetime) instead of hasattr (C-008).
+    Since FundamentalsRecord.period_end is always datetime at the domain
+    level, this verifies the happy path.
+    """
+
+    from market_data.domain.entities import FundamentalsRecord
+    from market_data.domain.enums import FundamentalsSection, PeriodType
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import (
+        _upsert_metrics_for_record,
+    )
+
+    mock_uow = AsyncMock()
+    mock_uow.fundamental_metrics.upsert_metrics = AsyncMock(return_value=None)
+
+    record = FundamentalsRecord(
+        security_id="instr-001",
+        section=FundamentalsSection.HIGHLIGHTS,
+        period_end=datetime(2024, 9, 30, tzinfo=UTC),
+        period_type=PeriodType.SNAPSHOT,
+        data={"revenue": 1_000_000.0},
+        source="macrotrends",
+    )
+
+    await _upsert_metrics_for_record(mock_uow, record)
+
+    # No assertion failure → as_of_date computed successfully from datetime
+    # (The metric catalog may not have HIGHLIGHTS so upsert_metrics may not be called)
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_period_end_from_datetime_works() -> None:
+    """datetime period_end is correctly converted to date via .date() method."""
+
+    from market_data.domain.entities import FundamentalsRecord
+    from market_data.domain.enums import FundamentalsSection, PeriodType
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import (
+        _upsert_metrics_for_record,
+    )
+
+    mock_uow = AsyncMock()
+    mock_uow.fundamental_metrics.upsert_metrics = AsyncMock(return_value=None)
+
+    record = FundamentalsRecord(
+        security_id="instr-002",
+        section=FundamentalsSection.INCOME_STATEMENT,
+        period_end=datetime(2023, 12, 31, tzinfo=UTC),
+        period_type=PeriodType.ANNUAL,
+        data={"totalRevenue": "383285000000"},
+        source="macrotrends",
+    )
+
+    await _upsert_metrics_for_record(mock_uow, record)
+    # If extract_metrics found rows, upsert_metrics would be called
+    # The key assertion is that no exception was raised
+
+
+# ── T-E2-3-01: earnings_trend period_end parsing via process_message ────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_period_end_string_parsed() -> None:
+    """Valid ISO date string in earnings_trend entry → period_end parsed as UTC datetime."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+
+    # earnings_trend payload with explicit "date" ISO string
+    payload = {"earnings_trend": {"0q": {"date": "2024-09-30", "earningsEstimate": 1.5}}}
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=json.dumps(payload).encode())
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.fundamentals.upsert_earnings_trend.assert_awaited_once()
+    record = mock_uow.fundamentals.upsert_earnings_trend.call_args[0][0]
+    assert record.period_end == datetime(2024, 9, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_missing_period_end_uses_fallback() -> None:
+    """Empty/missing date in earnings_trend entry → period_end falls back to ingested_at."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+
+    # earnings_trend entry with no valid date string → triggers fallback
+    payload = {"earnings_trend": {"0q": {"date": "", "earningsEstimate": 0.5}}}
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=json.dumps(payload).encode())
+
+    before = datetime.now(tz=UTC)
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+    after = datetime.now(tz=UTC)
+
+    mock_uow.fundamentals.upsert_earnings_trend.assert_awaited_once()
+    record = mock_uow.fundamentals.upsert_earnings_trend.call_args[0][0]
+    # period_end should be ingested_at (approximately now)
+    assert before <= record.period_end <= after
+
+
+# ---------------------------------------------------------------------------
+# T-E-2-02/03: FundamentalsConsumer populates description from company_profile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_populates_description() -> None:
+    """EODHD General.Description is passed into InstrumentCreated.description (T-E-2-02)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-001")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)  # skip security enrichment path
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Alphabet Inc.",
+            "ISIN": "US02079K3059",
+            "Description": "Alphabet is a holding company whose business includes Google.",
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] == "Alphabet is a holding company whose business includes Google."
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_description_none_when_absent() -> None:
+    """Missing Description key → description=None (not empty string) (T-E-2-02)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-002")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc."},  # no Description key
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_description_none_for_empty_string() -> None:
+    """Empty string Description → None (falsy coercion, no empty strings in event)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-desc-003")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "Description": ""},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["description"] is None

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
@@ -35,8 +37,8 @@ async def test_commit_calls_on_commit_hook(mock_session_factory: MagicMock) -> N
     async with SqlAlchemyUnitOfWork(mock_session_factory, on_commit=on_commit) as uow:
         await uow.commit()
 
-    # commit() called explicitly inside the block, then __aexit__ calls it again
-    assert len(on_commit_called) >= 1
+    # Option B (QA-006): __aexit__ no longer auto-commits; commit is called exactly once (explicitly).
+    assert len(on_commit_called) == 1
 
 
 @pytest.mark.asyncio
@@ -79,6 +81,25 @@ async def test_exception_triggers_rollback_not_commit(mock_session_factory: Magi
 
 
 @pytest.mark.asyncio
+async def test_aexit_does_not_auto_commit_on_clean_exit(
+    mock_session_factory: MagicMock, mock_session: AsyncMock
+) -> None:
+    """QA-006 regression guard: __aexit__ must NOT auto-commit when no exception is raised.
+
+    Option B: explicit await uow.commit() is the only commit path.
+    If this test fails it means auto-commit was re-introduced, which causes the
+    double-commit side-effect bug (on_commit hook or post-commit notification fired twice).
+    """
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    async with SqlAlchemyUnitOfWork(mock_session_factory):
+        pass  # no explicit commit
+
+    mock_session.commit.assert_not_called()
+    mock_session.close.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_repos_accessible_inside_context(mock_session_factory: MagicMock) -> None:
     from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -91,3 +112,33 @@ async def test_repos_accessible_inside_context(mock_session_factory: MagicMock) 
         assert uow.holdings is not None
         assert uow.outbox is not None
         assert uow.idempotency is not None
+
+
+@pytest.mark.asyncio
+async def test_uow_session_closed_even_if_rollback_fails(
+    mock_session_factory: MagicMock, mock_session: AsyncMock
+) -> None:
+    """Session close runs in finally even if rollback throws (M-007)."""
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    mock_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+
+    with pytest.raises(ValueError, match="original"):
+        async with SqlAlchemyUnitOfWork(mock_session_factory):
+            raise ValueError("original")
+
+    mock_session.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_uow_original_exception_preserved_on_rollback_failure(
+    mock_session_factory: MagicMock, mock_session: AsyncMock
+) -> None:
+    """Original exception is preserved when rollback also fails (M-007)."""
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    mock_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+
+    with pytest.raises(ValueError, match="original"):
+        async with SqlAlchemyUnitOfWork(mock_session_factory):
+            raise ValueError("original")

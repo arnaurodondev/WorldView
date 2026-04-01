@@ -60,9 +60,9 @@ or articles, perform NLP processing, manage portfolios.
 > `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by
 > `/fundamentals/{security_id}`.
 >
-> **Fundamentals path param**: The path parameter is historically named `security_id` in
-> the router code but represents the **instrument UUID** (primary key of the `instruments`
-> table), not the `securities.id`. Fundamentals are stored per instrument, not per security.
+> **Fundamentals path param**: The path parameter is named `instrument_id` and represents
+> the **instrument UUID** (primary key of the `instruments` table), not `securities.id`.
+> Fundamentals are stored per instrument, not per security.
 >
 > `/metrics` is exposed by the `observability.metrics.add_prometheus_middleware` middleware,
 > not a registered router endpoint.
@@ -291,12 +291,14 @@ TimescaleDB chunk exclusion and the DB connection pool handle read performance.
 | `FundamentalsConsumer` | `market-data-fundamentals` | `market.dataset.fetched` | `dataset_type == "FUNDAMENTALS"` |
 
 All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
-1. Implement idempotency via `ingestion_events` table (`is_duplicate` / `mark_processed`).
+1. Implement idempotency via `ingestion_events` table — atomic `create_if_not_exists()` (INSERT … ON CONFLICT DO NOTHING … RETURNING) records the event_id before any processing begins (BP-035). Content-hash dedup skips download when the canonical object is unchanged but still records the event_id.
 2. Fetch the canonical object from MinIO using `canonical_ref_bucket` + `canonical_ref_key`.
 3. Parse records using inline `json.loads()` + `CanonicalXxxBar.from_dict()`.
 4. Upsert records using the UoW's repository (with provider-priority logic for OHLCV).
 5. Upsert the instrument record and update `has_ohlcv / has_quotes / has_fundamentals` flag.
 6. Emit `InstrumentCreated` or `InstrumentUpdated` domain events to the outbox.
+
+**Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
 The UoW is accessed via `self._current_uow` which is set by the base class before
 calling `process_message(event_dict)`.
@@ -491,7 +493,7 @@ Exception
     ├── SecurityNotFoundError
     ├── DuplicateEventError
     ├── IngestionError
-    ├── ParseError          ← also inherits FatalError (messaging lib)
+    ├── ParseError
     └── StaleDataError
 ```
 
@@ -502,11 +504,12 @@ Exception
 | `SecurityNotFoundError` | Lookup for a non-existent security |
 | `DuplicateEventError` | `event_id` already in `ingestion_events` (idempotency guard) |
 | `IngestionError` | Business-rule failure during ingestion (valid payload, invalid context) |
-| `ParseError` | Payload cannot be deserialized — also a `FatalError` so consumer dead-letters immediately |
+| `ParseError` | Payload cannot be deserialized — pure domain exception, no infrastructure dependency |
 | `StaleDataError` | Incoming data has lower provider priority than stored record |
 
-`ParseError` uses multiple inheritance (`MarketDataError, FatalError`) so Kafka consumer
-routing can treat it as `FatalError` without knowing the domain-specific type.
+`ParseError` is a pure domain exception (R12). Consumer infrastructure code that needs
+Kafka dead-lettering should catch `ParseError` and re-raise as `FatalError` from
+`messaging.kafka.consumer.errors`. The existing consumers use `MalformedDataError` directly.
 
 ---
 
@@ -518,7 +521,8 @@ routing can treat it as `FatalError` without knowing the domain-specific type.
    causes silent precision loss.
 
 2. **Raising `IngestionError` for parse failures** — use `ParseError` when data cannot be
-   deserialized. `ParseError` inherits `FatalError` so the consumer dead-letters immediately.
+   deserialized. `ParseError` is a pure domain exception; consumer infrastructure should
+   catch it and re-raise as `FatalError` if immediate dead-lettering is needed.
    `IngestionError` is for business-rule violations where the payload is structurally valid.
 
 3. **Not using the outbox for instrument lifecycle events** — `InstrumentCreated` and

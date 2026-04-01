@@ -147,6 +147,85 @@ correct response to a test failure is always to fix the underlying issue:
 4. Pre-existing test failures encountered during unrelated work must still be fixed or
    explicitly reported — they are not someone else's problem.
 
+### R20: MUST extend `BaseKafkaConsumer` for all Kafka consumers
+**Why**: `BaseKafkaConsumer` enforces idempotency (`is_duplicate` check), DLQ routing,
+retry/fatal error classification, and observability hooks. Rolling a custom consumer
+loop bypasses all these safety nets and creates inconsistent behaviour across services.
+Every class that consumes from a Kafka topic must extend
+`messaging.kafka.consumer.base.BaseKafkaConsumer` and implement its abstract methods.
+Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
+### R25: API layer MUST NOT import from the infrastructure layer
+**Why**: Direct infrastructure imports in API routers couple the HTTP layer to specific
+database drivers, ORM sessions, and repository implementations. This makes the API
+untestable in isolation (requires real DB), prevents adapter substitution, and violates
+hexagonal architecture. The correct call chain is:
+`API router → Use Case (application layer) → Repository port (application layer) ← Infrastructure implementation`
+Every read and write operation in an API router must go through a use case class. Use cases
+receive an already-entered UoW from dependency injection and call repository methods directly.
+Enforced by import guard rule `IG-LAYER-002` in `scripts/import_guards/rules.yaml`.
+Exceptions (e.g. infrastructure cache objects that store API schema types) must be documented
+in `scripts/import_guards/allowlist.yaml` with justification.
+
+### R21: Domain exception base class MUST be named `DomainError`
+**Why**: Architecture tests (`test_domain_error_enforcement.py`) assert that every
+mature service defines a `DomainError(Exception)` class in `domain/errors.py` (or
+`domain/exceptions.py`) and that all other exception classes in that module inherit
+from it. A single canonical name enables cross-service tooling and log parsing without
+service-specific knowledge. Services that want a descriptive alias (e.g.
+`MarketDataError`) must define it as a subclass: `class MarketDataError(DomainError):`.
+
+---
+
+## Infrastructure Rules
+
+### R26: UoW `__aexit__` MUST NOT commit — all commits must be explicit
+**Why**: Auto-commit in `__aexit__` means silent writes on any code path that exits the
+context manager without an explicit `commit()` call. It also makes double-commit bugs
+undetectable (SQLAlchemy silently ignores the second commit on most drivers). This was
+a live bug in market-ingestion `SqlaUnitOfWork` (F-DS-004) that committed empty
+transactions on every read-only call. **Option B standard**: `__aexit__` MUST only roll
+back on exception and close the session in `finally`. Every mutating use case MUST call
+`await uow.commit()` explicitly before returning.
+**Enforcement**: REVIEW_CHECKLIST §UoW. Any concrete `UnitOfWork.__aexit__` that calls
+`commit()` in an `else` or unconditional branch is a BLOCKING review violation. See
+STANDARDS.md §17 for the canonical implementation.
+
+### R22: MUST run each concern as an independent process
+**Why**: Embedding scheduler loops, worker loops, or outbox dispatchers inside the API
+process creates coupling that prevents independent scaling and complicates signal handling.
+Each concern (API, Scheduler, Worker, Dispatcher) MUST have its own entry point
+(`python -m <service>.infrastructure.<component>.<module>`), its own signal handlers
+(SIGINT/SIGTERM), and its own connection pool sizing. The API process MUST NOT start
+background loops in its lifespan. Docker Compose uses the same image with different
+`command` overrides. See STANDARDS.md §14 for implementation patterns.
+
+### R23: MUST support dual database URLs (read/write split)
+**Why**: Read-heavy workloads (dashboards, analytics, health checks) can be offloaded to
+a read replica, reducing contention on the primary. Every service MUST accept two database
+URLs: `DATABASE_URL` (write, required) and `DATABASE_URL_READ` (read, optional). When
+the read URL is not configured, the read factory MUST fall back to the write URL (zero-cost
+compatibility). Read-after-write operations and row-locking queries (`SELECT FOR UPDATE`)
+MUST use the write session. Session factories MUST set `expire_on_commit=False` and
+`pool_pre_ping=True`. See STANDARDS.md §15 for routing rules.
+
+### R24: MUST NOT hold database sessions across external I/O
+**Why**: Holding a database session (and its underlying connection) during HTTP requests,
+MinIO operations, or Kafka publishes wastes pool resources and causes pool exhaustion under
+load. Background processes (workers, schedulers, dispatchers) MUST split operations into
+read → release → I/O → acquire → write phases. API routes using FastAPI `Depends()`
+session-per-request are exempt because they are short-lived. Each process type MUST
+configure pool sizes appropriate to its concurrency profile. See STANDARDS.md §16 for
+patterns and pool size recommendations.
+
+### R27: Read-only use cases MUST depend on `ReadOnlyUnitOfWork`
+**Why**: Use cases that only query data (no mutations) MUST declare their dependency as
+`ReadOnlyUnitOfWork` (not `UnitOfWork`). This ensures they use the read replica session
+(R23 read/write split), preventing accidental writes and distributing read load away from
+the primary. The `ReadOnlyUnitOfWork` has no `commit()` or `rollback()` methods — mypy
+will catch any misuse at type-check time. API route handlers MUST use `ReadUoWDep` for
+read-only endpoints and `UoWDep` for mutating endpoints.
+
 ---
 
 ## Summary Table
@@ -172,3 +251,11 @@ correct response to a test failure is always to fix the underlying issue:
 | R17 | Process | MUST |
 | R18 | Process | MUST |
 | R19 | Testing | MUST NOT |
+| R20 | Architecture | MUST |
+| R21 | Architecture | MUST |
+| R22 | Infrastructure | MUST |
+| R23 | Infrastructure | MUST |
+| R24 | Infrastructure | MUST NOT |
+| R25 | Architecture | MUST NOT |
+| R26 | Infrastructure | MUST NOT |
+| R27 | Architecture | MUST |

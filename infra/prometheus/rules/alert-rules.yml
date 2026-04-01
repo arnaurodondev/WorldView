@@ -1,0 +1,92 @@
+groups:
+  - name: worldview_alerts
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus target {{ $labels.instance }} (job: {{ $labels.job }}) has been unreachable for >1 minute."
+
+      - alert: HighErrorRate
+        expr: job:http_error_ratio:rate5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} error rate >5%"
+          description: "{{ $labels.job }} has a 5xx error ratio of {{ $value | humanizePercentage }} (threshold: 5%) for >5 minutes."
+
+      - alert: CriticalErrorRate
+        expr: job:http_error_ratio:rate5m > 0.20
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} error rate >20%"
+          description: "{{ $labels.job }} has a 5xx error ratio of {{ $value | humanizePercentage }} (threshold: 20%) for >2 minutes."
+
+      - alert: HighP95Latency
+        expr: job:http_duration_p95:rate5m > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} p95 latency >2s"
+          description: "{{ $labels.job }} p95 request latency is {{ $value | humanizeDuration }} (threshold: 2s) for >5 minutes."
+
+      - alert: OutboxBacklog
+        expr: '{__name__=~"s[45]_outbox_pending_total"} > 100'
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox backlog >100 events"
+          description: "{{ $labels.job }} has {{ $value }} pending outbox events (threshold: 100) for >5 minutes."
+
+      - alert: DeadLetterQueueNonEmpty
+        expr: '{__name__=~"s[45]_dlq_total"} > 0'
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DLQ has entries in {{ $labels.job }}"
+          description: "{{ $labels.job }} dead-letter queue has {{ $value }} entries for >2 minutes. Investigate failed event processing."
+
+      - alert: OutboxDispatchErrors
+        expr: job:outbox_errors:rate5m > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} outbox dispatch errors"
+          description: "{{ $labels.job }} outbox dispatch error rate is {{ $value }}/sec (threshold: 0.1/sec) for >5 minutes."
+
+      - alert: HighDedupLatency
+        expr: histogram_quantile(0.95, sum(rate(s5_dedup_duration_seconds_bucket[5m])) by (tier, le)) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "S5 dedup p95 latency >2s (tier: {{ $labels.tier }})"
+          description: "Content Store dedup p95 latency for tier {{ $labels.tier }} is {{ $value | humanizeDuration }} (threshold: 2s) for >5 minutes."
+
+      - alert: LSHIndexFailures
+        expr: rate(s5_lsh_index_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "S5 LSH index failures occurring"
+          description: "Content Store LSH Valkey index is experiencing failures at {{ $value }}/sec for >5 minutes."
+
+      - alert: ContentFetchErrors
+        expr: sum(rate(s4_fetches_total{status="failed"}[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "S4 content fetch failures sustained"
+          description: "Content Ingestion fetch failure rate is {{ $value }}/sec (threshold: 0.5/sec) sustained for >10 minutes."

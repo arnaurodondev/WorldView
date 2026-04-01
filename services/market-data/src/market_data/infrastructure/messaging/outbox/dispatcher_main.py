@@ -46,7 +46,7 @@ class DispatcherProcess:
 
 async def _run_dispatcher() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     process = DispatcherProcess(settings=settings)
 
     loop = asyncio.get_running_loop()

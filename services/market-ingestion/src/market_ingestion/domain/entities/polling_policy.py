@@ -10,7 +10,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from market_ingestion.domain.enums import DatasetType, Provider
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import date, datetime
 
 
 @dataclass
@@ -36,8 +36,9 @@ class PollingPolicy:
     hotness: float = 0.0
     priority: int = 0
     is_enabled: bool = True
+    backfill_enabled: bool = False
     backfill_days: int | None = None
-    backfill_start_date: datetime | None = None
+    backfill_start_date: date | datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
 
     @property

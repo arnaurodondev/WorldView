@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 import httpx
-from fastapi import FastAPI
+import prometheus_client
+import structlog.contextvars
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
@@ -19,7 +23,33 @@ from observability.metrics import add_prometheus_middleware, create_metrics  # t
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle.
+
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        import common.ids
+
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
+        return response
 
 
 @asynccontextmanager
@@ -29,25 +59,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 1. Logging — always first
     configure_logging(
-        service_name="api-gateway",
+        service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
     )
     logger = get_logger("api_gateway.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name="api-gateway")
-    add_prometheus_middleware(app, metrics)
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
-            service_name="api-gateway",
+            service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4. Downstream service clients
+    # 3. Downstream service clients
     timeout = httpx.Timeout(30.0, connect=5.0)
     clients = ServiceClients(
         portfolio=httpx.AsyncClient(base_url=settings.portfolio_url, timeout=timeout),
@@ -72,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.valkey = None
         logger.warning("valkey_unavailable", error=str(exc), detail="rate limiting disabled")
 
-    logger.info("service_started", service="api-gateway")
+    logger.info("service_started", service=settings.service_name)
     yield
 
     # Shutdown
@@ -81,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await client.aclose()
     if valkey is not None:
         await valkey.close()
-    logger.info("service_stopped", service="api-gateway")
+    logger.info("service_stopped", service=settings.service_name)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -95,13 +120,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware (order: last added = outermost)
+    # Middleware — must be registered before app starts (Starlette requirement)
+    # Order: last added = outermost
+    app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
     add_cors(app, settings.cors_origins)
     app.add_middleware(
         AuthMiddleware,
         secret=settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
     )
+
+    # Metrics endpoint
+    @app.get("/metrics")
+    async def metrics_endpoint() -> Response:
+        data = prometheus_client.generate_latest()
+        return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 
     # Routes
     app.include_router(health_router, tags=["health"])

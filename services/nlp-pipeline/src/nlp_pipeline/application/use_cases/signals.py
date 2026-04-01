@@ -1,0 +1,235 @@
+"""Query use cases for the NLP Pipeline REST API (S6).
+
+Uses port interfaces (ABCs) from application.ports — never imports from
+infrastructure directly (R25 / IG-LAYER-002 compliance).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+from datetime import datetime
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.time import utc_now  # type: ignore[import-untyped]
+from observability import get_logger  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from nlp_pipeline.application.ports.repositories import SignalsQueryPort
+
+_log = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+# ── Application-layer result dataclasses ──────────────────────────────────────
+
+
+@dataclasses.dataclass(frozen=True)
+class SignalData:
+    signal_id: UUID
+    doc_id: UUID
+    entity_id: UUID
+    signal_type: str
+    confidence: float
+    evidence_text: str
+    detected_at: datetime
+
+
+@dataclasses.dataclass(frozen=True)
+class EntitySearchData:
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    mention_count: int
+
+
+@dataclasses.dataclass(frozen=True)
+class EntityDetailData:
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    mention_count: int
+    resolved_count: int
+    provisional_count: int
+
+
+@dataclasses.dataclass(frozen=True)
+class EntityArticleData:
+    doc_id: UUID
+    routing_tier: str
+    mention_count: int
+
+
+@dataclasses.dataclass(frozen=True)
+class VectorSearchHitData:
+    doc_id: UUID
+    section_id: UUID
+    score: float
+    snippet: str
+
+
+# ── Use case classes ───────────────────────────────────────────────────────────
+
+
+class ListSignalsUseCase:
+    """List outbox events for the nlp.signal.detected.v1 topic."""
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        limit: int,
+        offset: int,
+        doc_id: UUID | None,
+    ) -> tuple[list[SignalData], int]:
+        rows, total = await repo.list_signal_events(limit=limit, offset=offset, doc_id=doc_id)
+
+        items: list[SignalData] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_avro"])
+                items.append(
+                    SignalData(
+                        signal_id=UUID(payload.get("event_id", str(row["event_id"]))),
+                        doc_id=UUID(payload.get("doc_id", row["partition_key"])),
+                        entity_id=UUID(
+                            str(
+                                payload.get("claimer_entity_id")
+                                or payload.get(
+                                    "subject_entity_id",
+                                    "00000000-0000-0000-0000-000000000000",
+                                ),
+                            ),
+                        ),
+                        signal_type=str(payload.get("claim_type", "unknown")),
+                        confidence=float(payload.get("extraction_confidence", 0.0)),
+                        evidence_text=str(payload.get("claim_id", "")),
+                        detected_at=datetime.fromisoformat(payload["occurred_at"])
+                        if "occurred_at" in payload
+                        else row["created_at"],
+                    ),
+                )
+            except Exception:
+                _log.debug("signals.list_skip_malformed_payload", exc_info=True)
+                continue
+
+        return items, int(total)
+
+
+class SearchEntitiesUseCase:
+    """Search entities by mention text substring."""
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        q: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[EntitySearchData], int]:
+        rows, total = await repo.search_entity_mentions(q=q, limit=limit, offset=offset)
+        return [
+            EntitySearchData(
+                entity_id=UUID(str(row["resolved_entity_id"])),
+                canonical_name=str(row["mention_text"]),
+                entity_type=str(row["mention_class"]),
+                mention_count=int(row["mention_count"]),
+            )
+            for row in rows
+        ], int(total)
+
+
+class GetEntityDetailUseCase:
+    """Retrieve entity detail with mention resolution counts."""
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        entity_id: UUID,
+    ) -> EntityDetailData | None:
+        row = await repo.get_entity_detail(entity_id)
+        if row is None:
+            return None
+
+        total = int(row["total"])
+        resolved = int(row.get("resolved") or 0)
+        return EntityDetailData(
+            entity_id=entity_id,
+            canonical_name=str(row["mention_text"]),
+            entity_type=str(row["mention_class"]),
+            mention_count=total,
+            resolved_count=resolved,
+            provisional_count=total - resolved,
+        )
+
+
+class GetEntityArticlesUseCase:
+    """List articles that mention a given entity."""
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        entity_id: UUID,
+        limit: int,
+    ) -> tuple[list[EntityArticleData], int]:
+        rows, total = await repo.get_entity_articles(entity_id=entity_id, limit=limit)
+        return [
+            EntityArticleData(
+                doc_id=UUID(str(row["doc_id"])),
+                routing_tier=str(row["routing_tier"]),
+                mention_count=int(row["mention_count"]),
+            )
+            for row in rows
+        ], int(total)
+
+
+class VectorSearchUseCase:
+    """Semantic section search (keyword fallback until ML client injected)."""
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        limit: int,
+    ) -> list[VectorSearchHitData]:
+        rows = await repo.vector_search_sections(limit=limit)
+        return [
+            VectorSearchHitData(
+                doc_id=row["doc_id"],
+                section_id=row["section_id"],
+                score=float(row["score"]),
+                snippet=str(row["snippet"]),
+            )
+            for row in rows
+        ]
+
+
+class ReprocessArticleUseCase:
+    """Enqueue a reprocess event for an article.
+
+    Returns True when the article was found and the event was queued,
+    False when no routing decision exists for the article.
+    """
+
+    async def execute(
+        self,
+        repo: SignalsQueryPort,
+        article_id: UUID,
+    ) -> bool:
+        exists = await repo.find_routing_decision(article_id)
+        if not exists:
+            return False
+
+        payload = json.dumps(
+            {
+                "event_id": str(new_uuid7()),
+                "event_type": "nlp.reprocess.requested",
+                "occurred_at": utc_now().isoformat(),
+                "doc_id": str(article_id),
+            },
+        ).encode()
+        await repo.insert_outbox_event(
+            event_id=new_uuid7(),
+            topic="nlp.reprocess.v1",
+            partition_key=str(article_id),
+            payload_avro=payload,
+        )
+        return True

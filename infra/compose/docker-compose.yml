@@ -3,10 +3,13 @@
 # Profiles:
 #   infra        — full infra (Postgres, Kafka, MinIO, Valkey) + all services
 #   lib-test     — minimal infra for lib-level integration tests (MinIO only)
+#   monitoring   — observability stack (Prometheus, Grafana, Loki, Tempo, Alloy, Alertmanager)
 #   all          — starts every service in this compose file
 #
 # Usage:
 #   Full infra:   docker compose -f infra/compose/docker-compose.yml --profile infra up -d
+#   Monitoring:   docker compose -f infra/compose/docker-compose.yml --profile monitoring up -d
+#   Infra + Mon:  docker compose -f infra/compose/docker-compose.yml --profile infra --profile monitoring up -d
 #   Lib tests:    docker compose -f infra/compose/docker-compose.yml --profile lib-test up -d
 #   All:          docker compose -f infra/compose/docker-compose.yml --profile all up -d
 #   Teardown:     docker compose -f infra/compose/docker-compose.yml down -v
@@ -239,7 +242,26 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/portfolio/configs/docker.env
-    command: ["python", "-m", "portfolio.messaging.dispatcher_main"]
+    command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  portfolio-instrument-consumer:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.instrument_consumer_main"]
     restart: on-failure
 
   # ── Market ingestion migrations (one-shot) ──────────────────────────────────
@@ -297,7 +319,7 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.scheduler.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
 
   # ── Market ingestion worker ──────────────────────────────────────────────────
@@ -313,7 +335,7 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.worker.main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     restart: unless-stopped
 
   # ── Market ingestion outbox dispatcher ───────────────────────────────────────
@@ -333,7 +355,205 @@ services:
         condition: service_completed_successfully
     env_file:
       - ../../services/market-ingestion/configs/docker.env
-    command: ["python", "-m", "market_ingestion.messaging.dispatcher_main"]
+    command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  # ── Monitoring Stack ────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    profiles: [monitoring, all]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    profiles: [monitoring, all]
+    command: ["-config.file=/etc/tempo.yml"]
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ../tempo/tempo.yml:/etc/tempo.yml:ro
+      - tempo_data:/var/tempo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  loki:
+    image: grafana/loki:3.5.0
+    profiles: [monitoring, all]
+    command: ["-config.file=/etc/loki/local-config.yml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ../loki/loki-config.yml:/etc/loki/local-config.yml:ro
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: [monitoring, all]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  alloy:
+    image: grafana/alloy:v1.8.3
+    profiles: [monitoring, all]
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --stability.level=generally-available
+    ports:
+      - "12345:12345"
+      - "4317"
+      - "4318"
+    volumes:
+      - ../alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [monitoring, all]
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Content Ingestion (S4) — 4 processes, same image ──────────────────────
+  # API server
+  content-ingestion:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["uvicorn", "content_ingestion.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8004:8000"
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Scheduler process — evaluates sources and creates tasks
+  content-ingestion-scheduler:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Worker process — claims and executes ingestion tasks
+  content-ingestion-worker:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    # Scale: docker compose up --scale content-ingestion-worker=3
+
+  # Outbox dispatcher — publishes events from outbox to Kafka
+  content-ingestion-dispatcher:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    depends_on:
+      content-ingestion:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     restart: on-failure
 
 volumes:
@@ -341,3 +561,9 @@ volumes:
   postgres_data:
   kafka_data:
   valkey_data:
+  prometheus_data:
+  grafana_data:
+  tempo_data:
+  loki_data:
+  alloy_data:
+  alertmanager_data:

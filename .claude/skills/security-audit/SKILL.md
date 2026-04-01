@@ -41,7 +41,7 @@ Based on worldview's architecture, prioritize these threats:
 
 ### 1.3 Load Context
 - Read `RULES.md` rules R13-R15 (security rules)
-- Read `docs/ai-interactions/BUG_PATTERNS.md` for security-related patterns
+- Read `docs/BUG_PATTERNS.md` for security-related patterns
 - Read `.claude/review/heuristics/HIGH_RISK_PATTERNS.md`
 - Read service-specific security notes in `docs/services/<service>.md`
 
@@ -202,13 +202,23 @@ After each audit:
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **If vulnerabilities found**: `/fix-bug` — fix each vulnerability with regression test
+- **If architectural security issue**: `/refactor` — restructure for security
+- **If all clear**: `/review` or `/qa` — proceed with standard quality gates
+- **If design-level concern**: `/prd` — revisit requirements with security constraints
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

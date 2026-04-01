@@ -26,7 +26,7 @@ Design and implement reliable backend services, APIs, event handlers, and domain
 - `libs/storage/**`
 - `libs/observability/**`
 - `libs/ml-clients/**` — if implementing S6 or S7 (mandatory)
-- `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` — if working on S4/S5/S6/S7/S10
+- `docs/specs/0014-PRD-v1-final.md` — if working on S4/S5/S6/S7/S10
 
 ## Responsibilities
 - implement service endpoints and domain workflows following the hexagonal pattern: `api/ → application/use_cases/ → domain/ → infrastructure/`

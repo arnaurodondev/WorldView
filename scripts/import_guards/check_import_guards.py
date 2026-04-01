@@ -39,7 +39,7 @@ def _load_yaml(path: Path) -> Any:
         pass
     # Minimal YAML fallback: only works for simple key-value and list structures.
     # For the real thing, install PyYAML.
-    raise RuntimeError(f"PyYAML is not installed. Install it with: pip install pyyaml\n" f"Cannot load {path}")
+    raise RuntimeError(f"PyYAML is not installed. Install it with: pip install pyyaml\nCannot load {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -71,11 +71,7 @@ class Violation:
         }
 
     def __str__(self) -> str:
-        return (
-            f"  [{self.rule_id}] {self.file}:{self.line}\n"
-            f"    {self.detail}\n"
-            f"    Remediation: {self.remediation}"
-        )
+        return f"  [{self.rule_id}] {self.file}:{self.line}\n    {self.detail}\n    Remediation: {self.remediation}"
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +92,14 @@ class Rule:
     check_calls: list[list[str]] = field(default_factory=list)
     check_print: bool = False
     layer_rule: str | None = None
+    # glob patterns restricting which files this rule applies to (empty = all files)
+    applies_to: list[str] = field(default_factory=list)
+
+    def applies_to_file(self, rel_path: str) -> bool:
+        """Return True if this rule should be checked for the given file path."""
+        if not self.applies_to:
+            return True
+        return any(fnmatch.fnmatch(rel_path, pattern) for pattern in self.applies_to)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Rule:
@@ -104,11 +108,12 @@ class Rule:
             description=d.get("description", ""),
             message=d.get("message", ""),
             remediation=d.get("remediation", ""),
-            forbidden_imports=d.get("forbidden_imports", []),
-            forbidden_from_imports=d.get("forbidden_from_imports", []),
-            check_calls=d.get("check_calls", []),
-            check_print=d.get("check_print", False),
+            forbidden_imports=d.get("forbidden_imports") or [],
+            forbidden_from_imports=d.get("forbidden_from_imports") or [],
+            check_calls=d.get("check_calls") or [],
+            check_print=d.get("check_print") or False,
             layer_rule=d.get("layer_rule"),
+            applies_to=d.get("applies_to") or [],
         )
 
 
@@ -262,6 +267,9 @@ def check_file(
         ):
             continue
 
+        if not rule.applies_to_file(rel_path):
+            continue
+
         if is_allowlisted(rel_path, rule.id, allowlist):
             continue
 
@@ -280,13 +288,21 @@ def check_file(
         # Check forbidden bare imports: `import <module>`
         for line, module in visitor.imports:
             for forbidden in rule.forbidden_imports:
-                if module == forbidden or module.startswith(forbidden + "."):
+                if (
+                    module == forbidden
+                    or module.startswith(forbidden + ".")
+                    or ("*" in forbidden and fnmatch.fnmatch(module, forbidden))
+                ):
                     add(line, f"Forbidden import: `import {module}` (rule {rule.id})")
 
         # Check forbidden from-imports: `from <module> import <name>`
         for line, module, name in visitor.from_imports:
             for forbidden_mod, forbidden_name in rule.forbidden_from_imports:
                 if module == forbidden_mod and (forbidden_name == "*" or name == forbidden_name):
+                    add(line, f"Forbidden import: `from {module} import {name}` (rule {rule.id})")
+            # Also check from-imports against glob patterns in forbidden_imports
+            for forbidden in rule.forbidden_imports:
+                if "*" in forbidden and fnmatch.fnmatch(module, forbidden):
                     add(line, f"Forbidden import: `from {module} import {name}` (rule {rule.id})")
 
         # Check forbidden call patterns: module.method(...)

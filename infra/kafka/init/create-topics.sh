@@ -46,6 +46,11 @@ TOPICS=(
     "relation.type.proposed.v1:4:1"
     "entity.canonical.created.v1:12:1"
     "alert.delivered.v1:12:1"
+    "claim.extracted.v1:12:1"
+    "kg.dead-letter.v1:12:1"
+    "alert.dead-letter.v1:12:1"
+    "nlp.dead-letter.v1:12:1"
+    "content.dead-letter.v1:12:1"
 )
 
 for TOPIC_SPEC in "${TOPICS[@]}"; do

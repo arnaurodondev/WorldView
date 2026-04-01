@@ -329,7 +329,9 @@ async def test_scenario_scheduler_tick_with_symbol_policy_creates_task():
     mock_watermark.current_bar_ts = None
 
     mock_budget = MagicMock()
+    mock_budget.last_refill_at = datetime.now(tz=UTC)
     mock_budget.try_consume = MagicMock(return_value=True)
+    mock_budget.refill = MagicMock()
 
     mock_uow = MagicMock()
     mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
@@ -341,6 +343,7 @@ async def test_scenario_scheduler_tick_with_symbol_policy_creates_task():
     mock_uow.watermarks.get_or_create = AsyncMock(return_value=mock_watermark)
     mock_uow.budgets = MagicMock()
     mock_uow.budgets.get_or_create = AsyncMock(return_value=mock_budget)
+    mock_uow.budgets.get_for_update = AsyncMock(return_value=mock_budget)
     mock_uow.budgets.save = AsyncMock()
     mock_uow.tasks = MagicMock()
     mock_uow.tasks.has_active_task = AsyncMock(return_value=False)

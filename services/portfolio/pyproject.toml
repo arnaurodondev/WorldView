@@ -26,15 +26,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==8.0",
-    "pytest-asyncio>=0.23.4",
+    "pytest-asyncio==0.23.4",
     "pytest-httpx==0.30",
-    "pytest-cov",
+    "pytest-cov==5.0",
     "ruff==0.4",
     "mypy==1.10",
-    "testcontainers[postgres]",
-    "fastavro>=1.9",
-    "aiosqlite>=0.20",
-    "fakeredis[aioredis]>=2.23",
+    "testcontainers[postgres]==4.8",
+    "fastavro==1.9",
+    "aiosqlite==0.20",
+    "fakeredis[aioredis]==2.23",
 ]
 
 [tool.hatch.build.targets.wheel]

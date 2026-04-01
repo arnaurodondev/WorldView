@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "WatchlistCreated",
+  "namespace": "com.worldview.portfolio.events",
+  "doc": "Emitted when a watchlist is created.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "watchlist.created"},
+    {"name": "aggregate_type", "type": "string", "default": "watchlist"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "watchlist_id", "type": "string", "default": ""},
+    {"name": "user_id", "type": "string", "default": ""},
+    {"name": "name", "type": "string", "default": ""}
+  ]
+}

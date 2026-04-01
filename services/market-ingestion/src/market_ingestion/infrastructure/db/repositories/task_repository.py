@@ -18,12 +18,21 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from market_ingestion.domain.value_objects import ObjectRef
-
 
 def _to_domain(row: IngestionTaskModel) -> IngestionTask:
     """Map an ORM row to a domain IngestionTask."""
     result_ref: ObjectRef | None = None
+    if row.result_ref_bucket and row.result_ref_key:
+        from market_ingestion.domain.value_objects import ObjectRef
+
+        result_ref = ObjectRef(
+            bucket=row.result_ref_bucket,
+            key=row.result_ref_key,
+            sha256=row.result_ref_sha256 or "",
+            # byte_length not stored in DB — use 0 as sentinel; field is informational only
+            byte_length=0,
+            mime_type=row.result_ref_mime_type or "",
+        )
     task = IngestionTask(
         id=row.id,
         provider=Provider(row.provider),
@@ -42,6 +51,7 @@ def _to_domain(row: IngestionTaskModel) -> IngestionTask:
         error_message=row.last_error,
         next_attempt_at=row.next_attempt_at,
         result_ref=result_ref,
+        completed_at=row.completed_at,
         created_at=row.created_at,
     )
     return task
@@ -157,6 +167,11 @@ class SqlaTaskRepository(TaskRepository):
                 last_error=task.error_message,
                 locked_by=task.lease_owner,
                 locked_until=task.lease_expires,
+                result_ref_bucket=task.result_ref.bucket if task.result_ref else None,
+                result_ref_key=task.result_ref.key if task.result_ref else None,
+                result_ref_sha256=task.result_ref.sha256 if task.result_ref else None,
+                result_ref_mime_type=task.result_ref.mime_type if task.result_ref else None,
+                completed_at=task.completed_at,
             )
         )
         await self._w.execute(stmt)
@@ -168,7 +183,12 @@ class SqlaTaskRepository(TaskRepository):
         limit: int,
         lease_seconds: int,
     ) -> list[IngestionTask]:
-        """Atomically claim PENDING/RETRY tasks using FOR UPDATE SKIP LOCKED."""
+        """Atomically claim PENDING/RETRY tasks using a CTE + UPDATE … RETURNING.
+
+        A single SQL statement selects candidates (FOR UPDATE SKIP LOCKED) and
+        updates them in one round-trip, closing the race window that existed when
+        SELECT and UPDATE were two separate statements (M-006).
+        """
         now = datetime.now(UTC)
         lease_until = now + timedelta(seconds=lease_seconds)
 
@@ -177,8 +197,8 @@ class SqlaTaskRepository(TaskRepository):
             IngestionTaskStatus.RETRY.value,
         )
 
-        # Select claimable rows with skip-locked
-        subq = (
+        # CTE locks candidate rows; UPDATE operates on the locked set atomically.
+        cte = (
             select(IngestionTaskModel.id)
             .where(
                 IngestionTaskModel.status.in_(claimable_statuses),
@@ -187,16 +207,11 @@ class SqlaTaskRepository(TaskRepository):
             .order_by(IngestionTaskModel.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
+            .cte("candidates")
         )
-        result = await self._w.execute(subq)
-        ids = [row[0] for row in result.fetchall()]
-        if not ids:
-            return []
-
-        # Update claimed rows
         stmt = (
             update(IngestionTaskModel)
-            .where(IngestionTaskModel.id.in_(ids))
+            .where(IngestionTaskModel.id.in_(select(cte.c.id)))
             .values(
                 status=IngestionTaskStatus.RUNNING.value,
                 locked_by=worker_id,

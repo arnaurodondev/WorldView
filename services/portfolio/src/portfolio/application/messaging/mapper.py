@@ -23,14 +23,17 @@ if TYPE_CHECKING:
 
 
 def event_to_envelope_dict(event: DomainEvent) -> dict[str, Any]:
-    """Serialize common envelope fields shared by all domain events."""
+    """Serialize common envelope fields shared by all domain events.
+
+    ``event_id`` and ``occurred_at`` are already strings (D-009 — Avro portability).
+    """
     return {
-        "event_id": str(event.event_id),
+        "event_id": event.event_id,
         "event_type": event.EVENT_TYPE,
         "aggregate_type": event.AGGREGATE_TYPE,
         "aggregate_id": str(event.aggregate_id),
         "tenant_id": str(event.tenant_id),
-        "occurred_at": event.occurred_at.isoformat(),
+        "occurred_at": event.occurred_at,
         "schema_version": event.schema_version,
         "correlation_id": event.correlation_id,
         "causation_id": event.causation_id,

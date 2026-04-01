@@ -32,13 +32,14 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set MARKET_DATA_STORAGE_ACCESS_KEY env var
+    storage_secret_key: str  # Required — set MARKET_DATA_STORAGE_SECRET_KEY env var
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # Observability (STANDARDS.md §5 — mandatory in every service)
+    service_name: str = "market-data"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

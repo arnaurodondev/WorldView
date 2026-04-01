@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
-from market_data.domain.events import InstrumentCreated
+from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.metric_extractor import extract_metrics
+from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -115,11 +116,17 @@ async def _upsert_metrics_for_record(uow: Any, record: FundamentalsRecord) -> No
     Uses the same write session (same transaction) as the section upsert.
     Silently skips sections not in the metric catalog.
     """
+    # C-008: use isinstance instead of hasattr for explicit type coercion
+    as_of_date = (
+        record.period_end.date()
+        if isinstance(record.period_end, datetime)
+        else date.fromisoformat(str(record.period_end))
+    )
     metric_rows = extract_metrics(
         instrument_id=record.security_id,  # domain field maps to instrument_id
         section=record.section,
         period_type=str(record.period_type),
-        as_of_date=record.period_end.date() if hasattr(record.period_end, "date") else record.period_end,
+        as_of_date=as_of_date,
         data=record.data,
         ingested_at=record.ingested_at,
     )
@@ -143,7 +150,6 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._current_uow: UnitOfWork | None = None
-        self._current_content_sha256: str | None = None
 
     # ── abstract implementations ──────────────────────────────────────────────
 
@@ -168,20 +174,19 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         return str(value["event_id"])
 
     async def is_duplicate(self, event_id: str) -> bool:
-        if self._current_uow is not None:
-            return await self._current_uow.ingestion_events.exists(event_id)
-        async with self._uow_factory() as uow:
-            return await uow.ingestion_events.exists(event_id)
+        # Dedup is handled atomically via create_if_not_exists at the start of
+        # process_message (BP-035). Always return False here so the base class
+        # proceeds to process_message regardless.
+        return False
 
     async def mark_processed(self, event_id: str) -> None:
-        assert self._current_uow is not None
-        await self._current_uow.ingestion_events.create(
-            event_id, event_type=_TOPIC, content_sha256=self._current_content_sha256
-        )
-        self._current_content_sha256 = None
+        # No-op: the event_id was already recorded by create_if_not_exists inside
+        # process_message before any data was written.
+        pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
-        assert self._current_uow is not None
+        if self._current_uow is None:
+            raise RuntimeError("store_failure called outside of processing context — this is a programming error")
         payload = {
             "event_id": failure.event_id,
             "topic": failure.topic,
@@ -222,15 +227,27 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
             return
 
         uow = self._current_uow
-        assert uow is not None
+        if uow is None:
+            raise RuntimeError("process_message called without an active unit of work — this is a programming error")
 
-        # Content-hash dedup: skip download + DB write when canonical object unchanged.
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        # Returns True if newly inserted (new event), False if already processed (duplicate).
+        # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
+        event_id = value.get("event_id", "")
         sha256 = value.get("canonical_ref_sha256") or ""
+
+        # Content-hash dedup: check BEFORE inserting so exists_by_content_hash
+        # does not find the record we are about to insert (BP-035 follow-up).
         if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
             logger.debug("fundamentals_consumer.skip_unchanged", sha256_prefix=sha256[:8])
-            self._current_content_sha256 = None
+            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
             return
-        self._current_content_sha256 = sha256 or None
+
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+        if not is_new:
+            logger.debug("fundamentals_consumer.duplicate_event", event_id=str(event_id)[:8])
+            return
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
@@ -252,6 +269,12 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         except Exception as exc:
             raise MalformedDataError(f"Fundamentals parse failed: {exc}") from exc
 
+        # Extract company profile metadata early so InstrumentCreated can carry name/isin/description
+        general = payload.get("company_profile") or {}
+        company_name: str | None = general.get("Name") if isinstance(general, dict) else None
+        company_isin: str | None = general.get("ISIN") if isinstance(general, dict) else None
+        company_description: str | None = general.get("Description") or None if isinstance(general, dict) else None
+
         # Resolve or create instrument
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
         if instrument is None:
@@ -263,22 +286,40 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_fundamentals=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            uow.collect_event(
-                InstrumentCreated(
-                    instrument_id=instrument.id,
-                    security_id=instrument.security_id,
-                    symbol=symbol,
-                    exchange=exchange,
-                )
+            created_event = InstrumentCreated(
+                instrument_id=instrument.id,
+                security_id=instrument.security_id,
+                symbol=symbol,
+                exchange=exchange,
+                name=company_name,
+                isin=company_isin,
+                description=company_description,
+            )
+            await uow.outbox_events.create(
+                event_type=created_event.event_type,
+                topic=EVENT_TOPIC_MAP[created_event.event_type],
+                payload=event_to_outbox_payload(created_event),
             )
         elif not instrument.flags.has_fundamentals:
-            await uow.instruments.update_flags(
-                instrument.id,
-                InstrumentFlags(
-                    has_ohlcv=instrument.flags.has_ohlcv,
-                    has_quotes=instrument.flags.has_quotes,
-                    has_fundamentals=True,
-                ),
+            updated_flags = InstrumentFlags(
+                has_ohlcv=instrument.flags.has_ohlcv,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=True,
+            )
+            await uow.instruments.update_flags(instrument.id, updated_flags)
+            updated_event = InstrumentUpdated(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                has_ohlcv=instrument.flags.has_ohlcv,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=True,
+                fields_updated=("has_fundamentals",),
+            )
+            await uow.outbox_events.create(
+                event_type=updated_event.event_type,
+                topic=EVENT_TOPIC_MAP[updated_event.event_type],
+                payload=event_to_outbox_payload(updated_event),
             )
 
         # instrument.id is used as security_id in FundamentalsRecord
@@ -389,7 +430,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 section_count += 1
 
         # ── FIX-F4: Extract company_profile metadata into instruments table ──
-        general = payload.get("company_profile") or {}
+        # Note: `general` was already extracted above for InstrumentCreated enrichment.
         if general and isinstance(general, dict):
             await uow.instruments.update_metadata(
                 instrument_id,

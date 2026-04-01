@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+
+import pytest
+
+pytestmark = pytest.mark.unit
 
 from portfolio.config import Settings
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -17,6 +17,10 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.startswith("PORTFOLIO_"):
             monkeypatch.delenv(key, raising=False)
+    # storage_access_key / storage_secret_key have no defaults (C-001 security
+    # hardening) — provide explicit values so Settings() can be instantiated.
+    monkeypatch.setenv("PORTFOLIO_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_SECRET_KEY", "test-secret")
     s = Settings(_env_file=None)  # also skip any env file on disk
     assert s.service_name == "portfolio"
     assert s.host == "0.0.0.0"  # noqa: S104
@@ -24,7 +28,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.debug is False
     assert "portfolio_db" in s.database_url
     assert s.kafka_bootstrap_servers == "localhost:9092"
-    assert s.kafka_schema_registry_url == "http://localhost:8081"
+    assert s.schema_registry_url == "http://localhost:8081"
     assert s.kafka_auto_register_schemas is True
     assert s.topic_portfolio_events == "portfolio.events.v1"
     assert s.topic_instrument_created == "market.instrument.created"
@@ -57,7 +61,7 @@ def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.dispatcher_max_attempts == 5
 
 
-def test_kafka_schema_registry_url_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PORTFOLIO_KAFKA_SCHEMA_REGISTRY_URL", "http://registry:8082")
+def test_schema_registry_url_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PORTFOLIO_SCHEMA_REGISTRY_URL", "http://registry:8082")
     s = Settings()
-    assert s.kafka_schema_registry_url == "http://registry:8082"
+    assert s.schema_registry_url == "http://registry:8082"

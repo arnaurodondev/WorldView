@@ -17,10 +17,10 @@ class CanonicalQuote:
 
     symbol: str
     exchange: str
-    bid: float
-    ask: float
-    last: float
-    volume: int
+    bid: float | None
+    ask: float | None
+    last: float | None
+    volume: int | None
     timestamp: datetime
     bid_size: int | None = None
     ask_size: int | None = None
@@ -36,10 +36,10 @@ class CanonicalQuote:
         return cls(
             symbol=d["symbol"],
             exchange=d["exchange"],
-            bid=float(d["bid"]),
-            ask=float(d["ask"]),
-            last=float(d["last"]),
-            volume=int(d["volume"]),
+            bid=float(d["bid"]) if d.get("bid") is not None else None,
+            ask=float(d["ask"]) if d.get("ask") is not None else None,
+            last=float(d["last"]) if d.get("last") is not None else None,
+            volume=int(d["volume"]) if d.get("volume") is not None else None,
             timestamp=(
                 d["timestamp"] if isinstance(d["timestamp"], datetime) else datetime.fromisoformat(str(d["timestamp"]))
             ),

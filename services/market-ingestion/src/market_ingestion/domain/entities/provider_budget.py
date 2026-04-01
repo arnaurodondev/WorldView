@@ -27,12 +27,14 @@ class ProviderBudget:
     burst_capacity: float = 1000.0
     refill_rate: float = 10.0
     tokens: float = 1000.0
+    last_refill_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
     def refill(self, elapsed_seconds: float) -> None:
         """Add tokens based on elapsed time, capped at burst_capacity."""
         self.tokens = min(self.burst_capacity, self.tokens + self.refill_rate * elapsed_seconds)
-        self.updated_at = utc_now()
+        self.last_refill_at = utc_now()
+        self.updated_at = self.last_refill_at
 
     def try_consume(self, n: float = 1.0) -> bool:
         """Try to consume n tokens. Returns True if successful, False if insufficient."""

@@ -225,3 +225,41 @@ def test_internal_events_are_domain_events() -> None:
     assert issubclass(IngestionTaskCompleted, DomainEvent)
     assert issubclass(IngestionTaskScheduled, DomainEvent)
     assert issubclass(MarketDatasetFetched, DomainEvent)
+
+
+# ── T-E1-3-03: row_count 0-vs-None serialization fix (M-024) ─────────────────
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_row_count_zero_serializes_as_zero() -> None:
+    """row_count=0 must serialize as 0, not None (falsy coercion bug fix)."""
+    evt = _make_event(row_count=0)
+    d = evt.to_dict()
+    assert d["row_count"] == 0, f"Expected 0, got {d['row_count']!r}"
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_row_count_none_serializes_as_none() -> None:
+    """row_count=None (default) must serialize as None — 'not counted'."""
+    evt = _make_event()  # row_count defaults to None
+    d = evt.to_dict()
+    assert d["row_count"] is None
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_row_count_roundtrip_zero() -> None:
+    """from_dict with row_count=0 must restore 0, not coerce to default."""
+    evt = _make_event(row_count=0)
+    d = evt.to_dict()
+    restored = MarketDatasetFetched.from_dict(d)
+    assert restored.row_count == 0
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_row_count_roundtrip_none() -> None:
+    """from_dict with row_count=None must restore None."""
+    evt = _make_event()  # row_count=None
+    d = evt.to_dict()
+    assert d["row_count"] is None
+    restored = MarketDatasetFetched.from_dict(d)
+    assert restored.row_count is None

@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "TenantStatusChanged",
+  "namespace": "com.worldview.portfolio.events",
+  "doc": "Emitted when a tenant's status changes.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "tenant.status_changed"},
+    {"name": "aggregate_type", "type": "string", "default": "tenant"},
+    {"name": "aggregate_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null},
+    {"name": "old_status", "type": "string", "default": ""},
+    {"name": "new_status", "type": "string", "default": ""}
+  ]
+}

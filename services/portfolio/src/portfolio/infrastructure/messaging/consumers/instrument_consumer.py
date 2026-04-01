@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
-from common.ids import new_uuid  # type: ignore[import-untyped]
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -14,6 +15,8 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.domain.entities.instrument import InstrumentRef
 
@@ -21,6 +24,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _CONSUMER_GROUP = "portfolio-instrument-sync"
 _TOPICS = ["market.instrument.created", "market.instrument.updated"]
+
+# Canonical Avro schemas at repo root/infra/kafka/schemas/
+# Resolve: consumers/ → messaging/ → infrastructure/ → portfolio/ → src/ → portfolio/ → services/ → repo root
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
 
 
 class InstrumentEventConsumer(BaseKafkaConsumer[None]):
@@ -35,7 +42,9 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     async def get_unit_of_work(self) -> UnitOfWorkProtocol:
         from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
-        return cast("UnitOfWorkProtocol", SqlAlchemyUnitOfWork(self._session_factory))
+        uow = cast("UnitOfWorkProtocol", SqlAlchemyUnitOfWork(self._session_factory))
+        self._current_uow = uow  # required by BaseKafkaConsumer._handle_message pattern
+        return uow
 
     # ── Core message processing ───────────────────────────────────────────────
 
@@ -45,22 +54,62 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
         value: dict[str, Any],
         headers: dict[str, str],
     ) -> None:
-        """Upsert an InstrumentRef from the deserialized Kafka message value."""
+        """Upsert an InstrumentRef from the deserialized Kafka message value.
+
+        Uses _current_uow set by BaseKafkaConsumer._handle_message (no nested UoW).
+        Dedup is handled atomically via INSERT … ON CONFLICT DO NOTHING RETURNING
+        inside the same transaction as the upsert (BP-035). is_duplicate() always
+        returns False; mark_processed() is a no-op. Base class calls commit() after
+        this method returns — do NOT call uow.commit() here.
+        """
+        uow = self._current_uow
+        if uow is None:
+            raise RuntimeError("process_message called outside _handle_message context — programming error")
+
+        # T-C-2-02: Reject messages without event_id as fatal (MalformedDataError).
+        # Missing event_id makes atomic idempotency impossible — dead-letter the message.
+        raw_event_id = value.get("event_id", "")
+        if not raw_event_id:
+            raise MalformedDataError("Missing or null event_id in instrument event — cannot perform idempotency check")
+        try:
+            event_uid = UUID(str(raw_event_id))
+        except ValueError as exc:
+            raise MalformedDataError(f"Invalid event_id format in instrument event: {raw_event_id!r}") from exc
+
         raw_entity_id = value.get("entity_id")
-        entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
+        try:
+            entity_id: UUID | None = UUID(raw_entity_id) if raw_entity_id else None
+        except ValueError:
+            logger.warning("instrument_consumer_invalid_entity_id", raw=raw_entity_id)  # type: ignore[no-any-return]
+            entity_id = None
+
+        # Use entity_id as the stable portfolio-internal instrument ID when available
+        # so replaying the same event always produces the same InstrumentRef.id (M-017).
+        instrument_id = entity_id if entity_id is not None else new_uuid7()
+
+        # Atomic dedup: INSERT idempotency record and upsert instrument in the
+        # same transaction. If event_uid is already recorded, skip silently.
+        is_new = await uow.idempotency.create_if_not_exists(event_uid)  # type: ignore[attr-defined]
+        if not is_new:
+            logger.debug(  # type: ignore[no-any-return]
+                "instrument_consumer_duplicate_event",
+                event_id=str(event_uid)[:8],
+            )
+            return
+
         instrument = InstrumentRef(
-            id=new_uuid(),
+            id=instrument_id,
             symbol=value.get("symbol", ""),
             exchange=value.get("exchange", ""),
             name=value.get("name"),
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),
             entity_id=entity_id,
-            source_event_id=UUID(value["event_id"]) if "event_id" in value else new_uuid(),
+            source_event_id=event_uid,
             synced_at=utc_now(),
         )
-        async with await self.get_unit_of_work() as uow:
-            await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
+        await uow.instruments.upsert(instrument)  # type: ignore[attr-defined]
+        # Note: commit() is called by BaseKafkaConsumer._handle_message after this returns.
 
         logger.info(  # type: ignore[no-any-return]
             "instrument_ref_upserted",
@@ -78,22 +127,11 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     # ── Idempotency ───────────────────────────────────────────────────────────
 
     async def is_duplicate(self, event_id: str) -> bool:
-        """Return True if event_id has already been processed."""
-        try:
-            uid = UUID(event_id)
-        except ValueError:
-            return False
-        async with await self.get_unit_of_work() as uow:
-            return await uow.idempotency.exists(uid)  # type: ignore[attr-defined,no-any-return]
+        """Always return False — dedup is handled atomically in process_message (BP-035)."""
+        return False
 
     async def mark_processed(self, event_id: str) -> None:
-        """Record event_id as successfully processed."""
-        try:
-            uid = UUID(event_id)
-        except ValueError:
-            return
-        async with await self.get_unit_of_work() as uow:
-            await uow.idempotency.record(uid)  # type: ignore[attr-defined]
+        """No-op — dedup record was already inserted atomically in process_message (BP-035)."""
 
     # ── Failure tracking (no-op — failures are logged only) ──────────────────
 
@@ -127,11 +165,22 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
-        """Deserialize raw bytes as JSON (instruments use JSON, not Avro)."""
-        return json.loads(raw)  # type: ignore[no-any-return]
+        """Deserialize Avro bytes, falling back to JSON if no schema or deserialization fails."""
+        if schema_path:
+            try:
+                return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
+            except Exception:
+                logger.debug(  # type: ignore[no-any-return]
+                    "instrument_consumer_avro_deserialize_failed_falling_back_to_json",
+                    schema_path=schema_path,
+                )
+        return cast("dict[str, Any]", json.loads(raw))
 
     def get_schema_path(self, topic: str) -> str | None:
-        return None
+        """Return the canonical Avro schema path for the given topic, or None."""
+        schema_file = f"{topic}.avsc"
+        path = _SCHEMA_DIR / schema_file
+        return str(path) if path.exists() else None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))

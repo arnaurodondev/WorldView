@@ -26,11 +26,11 @@ class StorageSettings(BaseSettings):
     endpoint: str = "http://localhost:7480"
     """S3-compatible endpoint URL.  Leave empty to use AWS S3's default endpoint."""
 
-    access_key: str = "minioadmin"
-    """AWS access key ID / MinIO access key."""
+    access_key: str
+    """AWS access key ID / MinIO access key. Required — set STORAGE_ACCESS_KEY env var."""
 
-    secret_key: str = "minioadmin"
-    """AWS secret access key / MinIO secret key."""
+    secret_key: str
+    """AWS secret access key / MinIO secret key. Required — set STORAGE_SECRET_KEY env var."""
 
     region: str = "us-east-1"
     """AWS region or MinIO region identifier."""

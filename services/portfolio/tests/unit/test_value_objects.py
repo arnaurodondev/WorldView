@@ -7,6 +7,8 @@ from decimal import Decimal
 import pytest
 from portfolio.domain.value_objects import InstrumentKey, Money, Quantity
 
+pytestmark = pytest.mark.unit
+
 # ── Money ─────────────────────────────────────────────────────────────────────
 
 

@@ -14,12 +14,13 @@ from logging.config import fileConfig
 
 from alembic import context
 from nlp_pipeline.config import Settings as _Settings
+from nlp_pipeline.infrastructure.nlp_db.models import Base
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 config = context.config
 
-# DB URL resolution: ALEMBIC_URL → NLP_PIPELINE_DATABASE_URL → alembic.ini fallback
+# DB URL resolution: ALEMBIC_URL → NLP_PIPELINE_DATABASE_URL → alembic.ini fallback (BP-006)
 _db_url = os.environ.get("ALEMBIC_URL") or _Settings().database_url
 if _db_url:
     config.set_main_option("sqlalchemy.url", _db_url)
@@ -27,7 +28,8 @@ if _db_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None  # TODO: import Base.metadata
+# Wire target_metadata so Alembic can autogenerate migrations (BP-008)
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
@@ -37,7 +39,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection):  # type: ignore[no-untyped-def]
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()

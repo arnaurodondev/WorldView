@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 
 from portfolio.application.ports.cache import WatchlistCachePort
 from portfolio.application.ports.unit_of_work import UnitOfWork
-from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 
 async def get_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
     """Yield a SqlAlchemyUnitOfWork bound to the app's session factory."""
+    # Lazy import avoids loading the infrastructure layer at module import time (M-012).
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
     session_factory = request.app.state.session_factory
     async with SqlAlchemyUnitOfWork(session_factory) as uow:
         yield uow
@@ -37,7 +40,7 @@ async def verify_internal_token(
 ) -> None:
     """Validate X-Internal-Token against the configured service token."""
     expected = request.app.state.settings.internal_service_token
-    if not expected or not x_internal_token or x_internal_token != expected:
+    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing internal token")
 
 

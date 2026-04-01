@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,12 +23,17 @@ class Settings(BaseSettings):
     port: int = 8001
     debug: bool = False
 
-    # Database
+    # Database (R23 — read/write split)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db"
+    database_url_read: str = ""  # Optional read-replica URL; falls back to database_url when empty
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_schema_registry_url: str = "http://localhost:8081"
+    schema_registry_url: str = "http://localhost:8081"
     kafka_schema_registry_basic_auth: str = ""
     kafka_auto_register_schemas: bool = True
 
@@ -47,8 +54,8 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set PORTFOLIO_STORAGE_ACCESS_KEY env var
+    storage_secret_key: str  # Required — set PORTFOLIO_STORAGE_SECRET_KEY env var
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
@@ -62,3 +69,20 @@ class Settings(BaseSettings):
     log_json: bool = True
     log_format: str = "json"
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_missing_internal_token(self) -> Settings:
+        """Warn at startup if internal_service_token is unset (F-SEC-001).
+
+        Uses structlog so the warning is captured by the structured log pipeline
+        in production log aggregators.
+        """
+        if not self.internal_service_token:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_internal_service_token",
+                message=(
+                    "PORTFOLIO_INTERNAL_SERVICE_TOKEN is not set — all internal API endpoints "
+                    "will return 401. Set this env var before deploying to production."
+                ),
+            )
+        return self

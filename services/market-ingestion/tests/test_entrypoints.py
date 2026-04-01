@@ -38,11 +38,11 @@ def _make_settings(**overrides) -> MagicMock:
 @pytest.mark.asyncio
 async def test_scheduler_stops_immediately_when_stop_called():
     """SchedulerProcess.run() exits as soon as stop() is called."""
-    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
+    from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
 
     settings = _make_settings()
     with patch(
-        "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
+        "market_ingestion.infrastructure.scheduler.scheduler._build_factories",
         return_value=(MagicMock(), MagicMock()),
     ):
         scheduler = SchedulerProcess(settings=settings, tick_interval_seconds=60.0)
@@ -57,13 +57,13 @@ async def test_scheduler_stops_immediately_when_stop_called():
 @pytest.mark.asyncio
 async def test_scheduler_calls_tick_once_before_stop():
     """SchedulerProcess runs one tick then stops."""
-    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
+    from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
 
     settings = _make_settings()
     call_count = 0
 
     with patch(
-        "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
+        "market_ingestion.infrastructure.scheduler.scheduler._build_factories",
         return_value=(MagicMock(), MagicMock()),
     ):
         scheduler = SchedulerProcess(settings=settings, tick_interval_seconds=0.01)
@@ -82,7 +82,7 @@ async def test_scheduler_calls_tick_once_before_stop():
 @pytest.mark.asyncio
 async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
     """SchedulerProcess._tick() calls ScheduleDueTasksUseCase.execute()."""
-    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
+    from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
 
     settings = _make_settings()
     mock_result = MagicMock()
@@ -92,10 +92,10 @@ async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
 
     with (
         patch(
-            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
+            "market_ingestion.infrastructure.scheduler.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
+        patch("market_ingestion.infrastructure.scheduler.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
     ):
         mock_instance = mock_use_case.return_value
         mock_instance.execute = AsyncMock(return_value=mock_result)
@@ -109,16 +109,16 @@ async def test_scheduler_tick_uses_schedule_due_tasks_use_case():
 @pytest.mark.asyncio
 async def test_scheduler_tick_error_does_not_crash():
     """SchedulerProcess._tick() swallows exceptions to keep the loop running."""
-    from market_ingestion.infrastructure.schedulers.scheduler import SchedulerProcess
+    from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
 
     settings = _make_settings()
 
     with (
         patch(
-            "market_ingestion.infrastructure.schedulers.scheduler._build_factories",
+            "market_ingestion.infrastructure.scheduler.scheduler._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.infrastructure.schedulers.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
+        patch("market_ingestion.infrastructure.scheduler.scheduler.ScheduleDueTasksUseCase") as mock_use_case,
     ):
         mock_instance = mock_use_case.return_value
         mock_instance.execute = AsyncMock(side_effect=RuntimeError("db gone"))

@@ -1,19 +1,23 @@
 """Domain error hierarchy for the market-data service.
 
 All errors inherit from ``MarketDataError`` so callers can catch the entire
-domain at once.  ``ParseError`` additionally inherits from ``FatalError``
-(messaging lib) so that Kafka consumer error-routing code treats parse
-failures as non-retryable dead-letter candidates without needing to know
-about the domain-specific type.
+domain at once.  The domain layer has zero infrastructure imports (R12).
+
+Consumer infrastructure code that needs to dead-letter parse failures should
+catch ``ParseError`` and re-raise as ``messaging.kafka.consumer.errors.FatalError``.
+In practice, the existing consumers raise ``MalformedDataError`` directly for
+parse failures, so no mapping is currently required.
 """
 
 from __future__ import annotations
 
-from messaging import FatalError  # type: ignore[import-untyped]
+
+class DomainError(Exception):
+    """Base exception for all market-data domain errors (R21 canonical name)."""
 
 
-class MarketDataError(Exception):
-    """Base exception for all market-data domain errors."""
+class MarketDataError(DomainError):
+    """Descriptive alias preserved for readability within this service."""
 
 
 class InstrumentNotFoundError(MarketDataError):
@@ -40,12 +44,12 @@ class IngestionError(MarketDataError):
     """
 
 
-class ParseError(MarketDataError, FatalError):
+class ParseError(MarketDataError):
     """Raised when an ingested payload cannot be parsed into canonical form.
 
-    Inherits from both ``MarketDataError`` (domain hierarchy) and
-    ``FatalError`` (messaging lib) so the Kafka consumer dead-letters the
-    message immediately without scheduling a retry.
+    Pure domain exception — no dependency on infrastructure libs (R12).
+    Consumer infrastructure code that needs Kafka dead-lettering should catch
+    this and re-raise as ``FatalError`` from ``messaging.kafka.consumer.errors``.
     """
 
 

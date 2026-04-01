@@ -153,9 +153,7 @@ CREATE TABLE entity_aliases (
 CREATE UNIQUE INDEX uidx_entity_aliases_normalized ON entity_aliases (normalized_alias_text)
     WHERE alias_type = 'EXACT' AND is_active = true
 """)
-    op.execute(
-        "CREATE INDEX idx_entity_aliases_trgm ON entity_aliases " "USING gin (normalized_alias_text gin_trgm_ops)"
-    )
+    op.execute("CREATE INDEX idx_entity_aliases_trgm ON entity_aliases USING gin (normalized_alias_text gin_trgm_ops)")
     op.execute("CREATE INDEX idx_entity_aliases_entity ON entity_aliases (entity_id)")
 
     # entity_embedding_state: multi-view embeddings (definition, narrative, fundamentals_ohlcv)
@@ -190,7 +188,7 @@ CREATE INDEX idx_entity_emb_fstate_hnsw ON entity_embedding_state
 """)
     op.execute("""
 CREATE INDEX idx_entity_emb_refresh_due ON entity_embedding_state (next_refresh_at)
-    WHERE next_refresh_at IS NOT NULL AND next_refresh_at < now()
+    WHERE next_refresh_at IS NOT NULL
 """)
 
     # -------------------------------------------------------------------------
@@ -304,12 +302,9 @@ CREATE TABLE relations_p{i} PARTITION OF relations
 """)
 
     op.execute(
-        "CREATE UNIQUE INDEX uidx_relations_triple "
-        "ON relations (subject_entity_id, canonical_type, object_entity_id)"
+        "CREATE UNIQUE INDEX uidx_relations_triple ON relations (subject_entity_id, canonical_type, object_entity_id)"
     )
-    op.execute(
-        "CREATE INDEX idx_relations_subject " "ON relations (subject_entity_id, canonical_type, confidence DESC)"
-    )
+    op.execute("CREATE INDEX idx_relations_subject ON relations (subject_entity_id, canonical_type, confidence DESC)")
     op.execute("CREATE INDEX idx_relations_object ON relations (object_entity_id, canonical_type)")
     op.execute("""
 CREATE INDEX idx_relations_stale_confidence ON relations (decay_class, latest_evidence_at DESC)
@@ -357,9 +352,7 @@ CREATE TABLE relation_evidence_raw (
 CREATE INDEX idx_raw_evidence_unprocessed ON relation_evidence_raw (extracted_at)
     WHERE processed = false AND entity_provisional = false
 """)
-    op.execute(
-        "CREATE INDEX idx_raw_evidence_subject " "ON relation_evidence_raw (subject_entity_id, extracted_at DESC)"
-    )
+    op.execute("CREATE INDEX idx_raw_evidence_subject ON relation_evidence_raw (subject_entity_id, extracted_at DESC)")
     op.execute("""
 CREATE INDEX idx_raw_evidence_partition_unprocessed
     ON relation_evidence_raw (partition_key, extracted_at)
@@ -376,7 +369,7 @@ CREATE INDEX idx_raw_evidence_provisional ON relation_evidence_raw (provisional_
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relation_evidence (
-    evidence_id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    evidence_id           UUID        NOT NULL DEFAULT gen_random_uuid(),
     relation_id           UUID        NOT NULL,
     doc_id                UUID        NOT NULL,
     chunk_id              UUID,
@@ -386,7 +379,8 @@ CREATE TABLE relation_evidence (
     source_weight         FLOAT       NOT NULL DEFAULT 1.0,
     evidence_date         TIMESTAMPTZ NOT NULL,
     claim_id              UUID,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (evidence_id, evidence_date)
 ) PARTITION BY RANGE (evidence_date)
 """)
 
@@ -400,9 +394,9 @@ CREATE TABLE relation_evidence (
                 f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_year}-{next_month:02d}-01')"
             )
 
-    op.execute("CREATE INDEX idx_rel_evidence_relation " "ON relation_evidence (relation_id, evidence_date DESC)")
+    op.execute("CREATE INDEX idx_rel_evidence_relation ON relation_evidence (relation_id, evidence_date DESC)")
     op.execute("CREATE INDEX idx_rel_evidence_doc ON relation_evidence (doc_id)")
-    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id) " "WHERE claim_id IS NOT NULL")
+    op.execute("CREATE INDEX idx_rel_evidence_claim ON relation_evidence (claim_id) WHERE claim_id IS NOT NULL")
 
     # -------------------------------------------------------------------------
     # Block J -- relation_contradiction_links
@@ -420,7 +414,7 @@ CREATE TABLE relation_contradiction_links (
     UNIQUE (relation_evidence_id, claim_id)
 )
 """)
-    op.execute("CREATE INDEX idx_contra_links_evidence " "ON relation_contradiction_links (relation_evidence_id)")
+    op.execute("CREATE INDEX idx_contra_links_evidence ON relation_contradiction_links (relation_evidence_id)")
     op.execute("CREATE INDEX idx_contra_links_claim ON relation_contradiction_links (claim_id)")
     op.execute("""
 CREATE INDEX idx_contra_links_active ON relation_contradiction_links (detected_at DESC)
@@ -450,7 +444,7 @@ CREATE TABLE relation_summaries (
 CREATE UNIQUE INDEX uidx_relation_summaries_current ON relation_summaries (relation_id)
     WHERE is_current = true
 """)
-    op.execute("CREATE INDEX idx_relation_summaries_relation " "ON relation_summaries (relation_id, generated_at DESC)")
+    op.execute("CREATE INDEX idx_relation_summaries_relation ON relation_summaries (relation_id, generated_at DESC)")
     op.execute("""
 CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
     USING hnsw (summary_embedding vector_cosine_ops)
@@ -463,7 +457,7 @@ CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE claims (
-    claim_id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    claim_id              UUID        NOT NULL DEFAULT gen_random_uuid(),
     doc_id                UUID        NOT NULL,
     chunk_id              UUID,
     claimer_entity_id     UUID,
@@ -473,7 +467,8 @@ CREATE TABLE claims (
     claim_text            TEXT         NOT NULL,
     extraction_confidence FLOAT        NOT NULL,
     is_backfill           BOOLEAN      NOT NULL DEFAULT false,
-    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (claim_id, created_at)
 ) PARTITION BY RANGE (created_at)
 """)
     for year in range(2024, 2027):
@@ -501,14 +496,15 @@ CREATE INDEX idx_claims_by_claimer ON claims
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE events (
-    event_id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id              UUID        NOT NULL DEFAULT gen_random_uuid(),
     doc_id                UUID        NOT NULL,
     subject_entity_id     UUID,
     event_type            VARCHAR(100) NOT NULL,
     event_date            TIMESTAMPTZ,
     event_text            TEXT,
     extraction_confidence FLOAT        NOT NULL,
-    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (event_id, created_at)
 ) PARTITION BY RANGE (created_at)
 """)
     for year in range(2024, 2027):
@@ -575,9 +571,7 @@ CREATE TABLE provisional_entity_queue (
     UNIQUE (normalized_surface, mention_class)
 )
 """)
-    op.execute(
-        "CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at) " "WHERE status = 'pending'"
-    )
+    op.execute("CREATE INDEX idx_provisional_pending ON provisional_entity_queue (created_at) WHERE status = 'pending'")
 
     # -------------------------------------------------------------------------
     # Block P -- outbox_events + dead_letter_queue
@@ -595,7 +589,7 @@ CREATE TABLE outbox_events (
     failed_at      TIMESTAMPTZ
 )
 """)
-    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at) " "WHERE status = 'pending'")
+    op.execute("CREATE INDEX idx_outbox_intel_pending ON outbox_events (created_at) WHERE status = 'pending'")
 
     op.execute("""
 CREATE TABLE dead_letter_queue (

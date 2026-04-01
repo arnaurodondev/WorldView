@@ -18,7 +18,7 @@ Bug description: `$ARGUMENTS`
 ## Step 1 — Context & Pattern Check
 
 ### 1.1 Read Bug Patterns
-Read `docs/ai-interactions/BUG_PATTERNS.md` thoroughly. Check if this bug matches or is related to any existing pattern (BP-001 through BP-XXX).
+Read `docs/BUG_PATTERNS.md` thoroughly. Check if this bug matches or is related to any existing pattern (BP-001 through BP-XXX).
 
 If a match is found:
 - Read the full pattern entry
@@ -118,7 +118,7 @@ Is this bug an instance of a general class of bugs that could recur? Ask:
 - Would knowing about this pattern help catch similar bugs in code review?
 
 ### 5.2 Write the Pattern Entry
-If it's a new pattern, append to `docs/ai-interactions/BUG_PATTERNS.md`:
+If it's a new pattern, append to `docs/BUG_PATTERNS.md`:
 
 ```markdown
 ### BP-<NNN>: <Pattern Name>
@@ -191,13 +191,23 @@ Provide a summary:
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **Primary next step**: `/test-feature` — add regression tests to prevent recurrence
+- **If root cause is unclear**: `/investigate` — deeper multi-hypothesis investigation
+- **If fix touched multiple files**: `/review` — structured review of the fix
+- **If fix is security-related**: `/security-audit` — verify the fix is complete
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

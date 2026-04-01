@@ -25,8 +25,12 @@
 9. [Error Handling](#9-error-handling)
 10. [Testing Conventions](#10-testing-conventions)
 11. [Anti-Patterns — What NOT To Do](#11-anti-patterns--what-not-to-do)
-12. [Platform Rules (R1–R18)](#12-platform-rules-r1r18)
+12. [Platform Rules (R1–R24)](#12-platform-rules-r1r24)
 13. [Automated Enforcement — CI Gates](#13-automated-enforcement--ci-gates)
+14. [Process Topology Standard](#14-process-topology-standard)
+15. [Read/Write Database Session Pattern](#15-readwrite-database-session-pattern)
+16. [Session Optimization](#16-session-optimization)
+17. [Unit of Work — Explicit Commit Pattern](#17-unit-of-work--explicit-commit-pattern)
 
 ---
 
@@ -69,10 +73,19 @@ services/<service-name>/
 │           │   └── session.py    # Session factory
 │           ├── messaging/        # Kafka, outbox, Avro — ALL Kafka code goes here
 │           │   ├── __init__.py
-│           │   ├── outbox/
-│           │   │   └── dispatcher.py  # BaseOutboxDispatcher subclass
-│           │   ├── consumers/    # BaseKafkaConsumer subclasses (one per topic)
+│           │   ├── outbox/       # Singular — one outbox per service
+│           │   │   ├── dispatcher.py       # BaseOutboxDispatcher subclass
+│           │   │   └── dispatcher_main.py  # Standalone entry point (own process)
+│           │   ├── consumers/    # Plural — one file per consumed topic
+│           │   │   ├── <type>_consumer.py       # BaseKafkaConsumer subclass
+│           │   │   └── <type>_consumer_main.py  # Standalone entry point (own process)
 │           │   └── schemas/      # Avro schema files — *.avsc ONLY, no Python dicts
+│           ├── scheduler/        # Singular — one scheduling concern per service
+│           │   ├── scheduler.py       # Scheduler class (tick-based loop)
+│           │   └── scheduler_main.py  # Standalone entry point (own process)
+│           ├── workers/          # Plural — horizontally scalable work pool
+│           │   ├── worker.py       # Worker class (semaphore-bounded)
+│           │   └── worker_main.py  # Standalone entry point (own process)
 │           └── cache/            # Valkey / Redis wrappers
 │               └── <purpose>_cache.py
 ├── tests/
@@ -123,9 +136,12 @@ For every non-scaffolded service, the messaging subtree is standardized as:
 ```
 src/<package>/infrastructure/messaging/
 ├── __init__.py
-├── outbox/
-│   └── dispatcher.py
-├── consumers/                 # optional if service consumes topics
+├── outbox/                    # singular — one outbox per service
+│   ├── dispatcher.py          # BaseOutboxDispatcher subclass
+│   └── dispatcher_main.py     # standalone entry point (own process)
+├── consumers/                 # plural — optional if service consumes topics
+│   ├── <type>_consumer.py         # BaseKafkaConsumer subclass
+│   └── <type>_consumer_main.py    # standalone entry point (own process)
 ├── schemas/
 ├── mapper.py                  # optional: event -> wire mapping helpers
 └── serialization.py           # optional: serializer factories/helpers
@@ -220,6 +236,26 @@ def store_document(doc_id: UUID, key: str) -> None: ...
 | `MinIOKey` | `str` | MinIO object key string |
 | `TopicName` | `str` | Kafka topic name |
 | `EventId` | `UUID` | Outbox / domain event identifier |
+
+### 2.4 Shared Enums — Placement Rules
+
+Some enums are shared across multiple services. Use the correct canonical location:
+
+| Enum | Location | Used By | Purpose |
+|------|----------|---------|---------|
+| `OutboxStatus` | `messaging.enums` | S1, S2, S4, S5+ | Outbox event lifecycle (PENDING → PROCESSING → DELIVERED \| FAILED → DEAD_LETTER) |
+| `ContentSourceType` | `contracts.enums` | S4, S5 | Content source discriminator in Avro events |
+
+**Decision criteria for new shared enums:**
+1. **3+ services need it** with identical semantics → shared lib
+2. **Cross-service event discriminator** (producer sets, consumer reads) → `libs/contracts/enums.py`
+3. **Infrastructure lifecycle** (outbox, consumer, dispatcher states) → `libs/messaging/enums.py`
+4. **Service-local domain logic** (even if names overlap) → keep in `domain/enums.py`
+
+**Re-export pattern** — services re-export shared enums from `domain/enums.py` to preserve internal import paths:
+```python
+from messaging.enums import OutboxStatus as OutboxStatus  # re-export
+```
 
 ---
 
@@ -461,6 +497,67 @@ class ArticleRawConsumer(BaseKafkaConsumer):
 - `RetryableError` — transient failures (DB unavailable, network timeout): automatic backoff + retry.
 - `FatalError` — permanent failures (schema mismatch, invalid payload): immediate dead-letter, no retry.
 
+### 3.8 Outbox Design Rules
+
+New services implementing the outbox pattern MUST follow these rules:
+
+**R-OUTBOX-1: Canonical column names** — Use protocol-standard names: `id` (UUID), `event_type`, `topic`, `payload` (JSONB), `status`, `attempts`, `leased_until`, `lease_owner`, `created_at`, `dispatched_at`.
+
+**R-OUTBOX-2: Canonical status values** — Import `OutboxStatus` from `messaging.enums`: PENDING → PROCESSING → DELIVERED | FAILED → DEAD_LETTER. Services MAY add service-specific statuses but MUST support the canonical 5.
+
+**R-OUTBOX-3: DLQ population** — If a service defines a `dead_letter_queue` table, `move_to_dead_letter()` MUST insert a row into it (not just change the outbox status). If no DLQ table exists, changing the outbox status to `dead_letter` is sufficient.
+
+**R-OUTBOX-4: Payload format** — Outbox payload SHOULD be stored as JSONB for debuggability. Services that need binary Avro payloads MUST document the reason.
+
+**R-OUTBOX-5: ID type** — Outbox event IDs MUST use UUIDv7 (`common.ids.new_uuid7()`).
+
+### 3.9 Kafka Consumer Standard (R20)
+
+Every Kafka consumer in a service **must** extend `BaseKafkaConsumer` from
+`messaging.kafka.consumer.base`. Direct use of `confluent_kafka.Consumer` is forbidden
+in service code.
+
+```python
+# ✅ CORRECT
+# services/my-service/src/my_service/infrastructure/consumer/my_consumer.py
+from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
+from messaging.kafka.consumer.errors import FatalError, RetryableError
+
+class MyConsumer(BaseKafkaConsumer[None]):
+    def __init__(self, config: ConsumerConfig, ...) -> None:
+        super().__init__(config)
+        ...
+
+    def is_duplicate(self, event_id: str) -> bool:
+        # Check processed_events table
+        ...
+
+    def get_unit_of_work(self) -> ...:
+        ...
+
+    async def process_message(self, msg: Any) -> None:
+        # Business logic — do NOT call commit here
+        ...
+
+# ❌ FORBIDDEN
+from confluent_kafka import Consumer  # direct consumer import
+consumer = Consumer({"bootstrap.servers": "..."})
+```
+
+**Required abstract methods** (all must be implemented):
+- `is_duplicate(event_id)` — idempotency check before processing
+- `get_unit_of_work()` — returns UoW for the message
+- `process_message(msg)` — business logic
+
+**`_handle_message` override rule**: When overriding `_handle_message` for post-commit
+side effects (e.g., LSH indexing after DB commit), always:
+1. Set `self._current_uow = None` and any summary fields at the top of the override
+2. Call `await super()._handle_message(msg)` inside a try-except
+3. Perform post-commit work (e.g., cache writes) outside the try block, only on success
+4. On exception, run compensating deletes (MinIO GC) before re-raising
+
+Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
 ---
 
 ## 4. libs/storage — Object Storage (MinIO)
@@ -536,57 +633,271 @@ except StorageError as exc:
     raise
 ```
 
+### 4.4 MinIO Compensating Delete (GC on DB rollback)
+
+When a service writes to MinIO **before** the DB transaction commits, it must implement
+a compensating delete if the commit fails. This prevents orphaned MinIO objects that
+consume storage and cannot be garbage-collected.
+
+**Pattern: track pending keys, delete on failure**
+
+```python
+# In use cases or consumers that write to MinIO then commit the DB:
+pending_minio_keys: list[str] = []
+
+try:
+    key = await storage_port.put_object(...)
+    pending_minio_keys.append(key)  # track before DB commit
+
+    await db_repo.create(...)          # DB write
+    await outbox.append(...)           # outbox write
+    await commit()                     # commit — success
+    pending_minio_keys = []            # committed: no longer orphaned
+
+except Exception:
+    # Rollback DB session first
+    await rollback()
+    # Then GC all MinIO objects written in this failed batch
+    for key in pending_minio_keys:
+        try:
+            await storage_port.delete_object(key)
+        except Exception:
+            logger.warning("minio_gc_delete_failed", key=key)  # best-effort
+    raise
+```
+
+**Rules**:
+- The `BronzeStoragePort` and `SilverStoragePort` ABCs must include `delete_object(key: str) -> None`
+- GC failures MUST be logged as `WARNING` but MUST NOT mask the original exception
+- GC is **best-effort** — callers should never depend on GC succeeding
+- The storage lib's `ObjectStorage.delete(bucket, key)` raises `ObjectNotFoundError` on missing keys;
+  wrap in `try/except` to handle race conditions
+
+**Affected services**: S4 (bronze MinIO after fetch), S5 (silver MinIO after article processing)
+
+Enforced by:
+- `services/content-ingestion/tests/unit/application/test_minio_gc.py`
+- `services/content-store/tests/unit/infrastructure/test_minio_gc.py`
+
 ---
 
-## 5. libs/observability — Logging, Metrics, Tracing, Health
+## 5. libs/observability — Canonical Observability Pattern
 
 **Package**: `observability` · **Path**: `libs/observability/`
 **Full API reference**: `docs/libs/observability.md`
+**Gold-standard reference**: `services/content-ingestion/src/content_ingestion/app.py`
 
-### 5.1 Logging — configure in lifespan, before anything else
+> Every service MUST follow this exact pattern. No exceptions, no try/except wrappers around
+> observability init, no defensive `getattr`. If observability fails to initialize, the service
+> should crash loudly at startup — not silently degrade.
+
+### 5.1 Mandatory config fields
+
+Every service's `config.py` MUST include these four fields:
 
 ```python
-# services/my-service/src/my_service/app.py
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from observability.logging import configure_logging, get_logger
-from my_service.config import Settings
+# services/{service}/src/{service}/config.py
+class Settings(BaseSettings):
+    # ... other fields ...
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-
-    # ① Configure logging FIRST — before any other initialisation
-    configure_logging(
-        service_name="my-service",
-        level=settings.log_level,       # e.g. "INFO"
-        json=settings.log_json,         # True in production, False in dev
-    )
-    logger = get_logger("my_service.app")
-    logger.info("service_starting", version="1.0.0")
-
-    # ② Wire other infrastructure …
-    yield
-
-    logger.info("service_stopped")
-
-
-def create_app() -> FastAPI:
-    return FastAPI(title="My Service", lifespan=lifespan)
+    # ── Observability (STANDARDS.md §5.1 — mandatory in every service) ──
+    service_name: str = "service-name"   # kebab-case, matches Docker service name
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""
 ```
 
-**Getting a logger in any module**:
+### 5.2 Observability init — split between `create_app()` and `lifespan`
+
+Starlette forbids `app.add_middleware()` after the application has started. Therefore:
+- **Middleware registration** (`add_prometheus_middleware`, `add_otel_middleware`, `RequestIdMiddleware`) → `create_app()`
+- **Configuration** (`configure_logging`, `configure_tracing`) → `lifespan()` (runs at startup, before traffic)
+
+```python
+# services/{service}/src/{service}/app.py
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
+from fastapi import FastAPI
+from observability import configure_logging, get_logger          # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing    # type: ignore[import-untyped]
+
+from {service}.config import Settings
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings: Settings = app.state.settings
+
+    # 1. LOGGING — always first, before any other code logs anything
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    log = get_logger("{service}.app")
+
+    # 2. TRACING config — conditional on otlp_endpoint (middleware already in create_app)
+    if settings.otlp_endpoint:
+        configure_tracing(
+            service_name=settings.service_name,
+            otlp_endpoint=settings.otlp_endpoint,
+        )
+
+    # 3+ Other infrastructure (DB, Valkey, storage, Kafka, etc.)
+    log.info("service_started", service=settings.service_name)
+    yield
+    log.info("service_stopped", service=settings.service_name)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+    app = FastAPI(title="service-name", lifespan=lifespan)
+    app.state.settings = settings
+
+    # Middleware — MUST be registered in create_app, before app starts
+    app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
+
+    # ... include routers ...
+    return app
+```
+
+**Critical rules**:
+- `configure_logging()` is ALWAYS first in lifespan — before any `get_logger()` call
+- `create_metrics()` + `add_prometheus_middleware(app, metrics)` — in `create_app()`, BOTH args required
+- `add_otel_middleware(app)` — always registered in `create_app()` (safe even without tracing config)
+- `configure_tracing()` uses `otlp_endpoint=` parameter (NOT `endpoint=`) — in `lifespan()`
+- Direct `settings.otlp_endpoint` access — NO `getattr` defensive coding
+- NO try/except around observability init — let startup crash on failure
+- Starlette constraint: NEVER call `app.add_middleware()` inside `lifespan()` — it will raise `RuntimeError`
+
+### 5.3 Request-ID middleware (in `create_app()`, mandatory)
+
+Every service MUST propagate `X-Request-ID` through the request lifecycle and bind it to the
+structlog context. Register the middleware in `create_app()`:
+
+```python
+import re
+import structlog.contextvars
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request, Response
+
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle.
+
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        import common.ids
+
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
+        return response
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    app = FastAPI(title="service-name", lifespan=lifespan)
+    app.state.settings = settings or Settings()
+    app.add_middleware(RequestIdMiddleware)
+    # ... include routers ...
+    return app
+```
+
+**Rules**:
+- Use `BaseHTTPMiddleware` class pattern, NOT inline `@app.middleware("http")` decorator
+- **Validate** incoming `X-Request-ID`: only `[a-zA-Z0-9-]`, max 64 chars — prevents log injection and header manipulation
+- Generate ULID (not UUID) for missing or invalid request IDs: `common.ids.new_ulid()`
+- Clear contextvars after response to prevent cross-request leakage
+
+### 5.4 Health endpoints — real checks, not stubs
+
+All services MUST implement three endpoints in a dedicated route file
+(`services/{service}/src/{service}/api/routes/health.py`):
+
+| Endpoint | Purpose | Response |
+|----------|---------|----------|
+| `GET /healthz` | Liveness probe | Always `{"status": "ok"}` (200) |
+| `GET /readyz` | Readiness probe | Probes DB, Valkey, storage; 503 if degraded |
+| `GET /metrics` | Prometheus scrape | `prometheus_client.generate_latest()` |
+
+```python
+import json
+import prometheus_client
+from fastapi import APIRouter, Request, Response
+from sqlalchemy import text
+from observability import get_logger  # type: ignore[import-untyped]
+
+router = APIRouter()
+_log = get_logger(__name__)  # type: ignore[no-any-return]
+
+@router.get("/healthz")
+async def healthz() -> dict:
+    """Liveness probe — returns 200 if process is running."""
+    return {"status": "ok"}
+
+@router.get("/readyz")
+async def readyz(request: Request) -> Response:
+    """Readiness probe — returns 200 only when all dependencies are reachable."""
+    checks: dict[str, str] = {}
+    ok = True
+
+    # Database check
+    try:
+        async with request.app.state.session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception:
+        _log.warning("readyz_database_check_failed", exc_info=True)
+        checks["database"] = "error"
+        ok = False
+
+    # Add Valkey, MinIO, etc. checks per service
+    status_code = 200 if ok else 503
+    return Response(
+        content=json.dumps({"status": "ok" if ok else "degraded", **checks}),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    data = prometheus_client.generate_latest()
+    return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
+```
+
+### 5.5 Getting a logger in any module
+
 ```python
 # ✅ CORRECT — use observability wrapper
-from observability.logging import get_logger
-logger = get_logger(__name__)
+from observability import get_logger  # type: ignore[import-untyped]
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ❌ FORBIDDEN — bypasses centralized configuration
 import structlog
-logger = structlog.get_logger(__name__)   # wrong — use observability.logging
+logger = structlog.get_logger(__name__)   # wrong — use observability
 
 import logging
-logger = logging.getLogger(__name__)      # wrong — use observability.logging
+logger = logging.getLogger(__name__)      # wrong — use observability
 ```
 
 **Structured log fields**:
@@ -595,130 +906,40 @@ logger = logging.getLogger(__name__)      # wrong — use observability.logging
 - Never interpolate variables into the message string: `logger.info(f"fetched {n} articles")` →
   `logger.info("articles_fetched", count=n)`
 
-### 5.2 Metrics — create and register in lifespan
+### 5.6 Custom metrics (optional, per-service)
 
-```python
-# ✅ CORRECT
-from observability.metrics import create_metrics, add_prometheus_middleware
+Custom metrics live in `services/{service}/src/{service}/infrastructure/metrics/prometheus.py`.
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-    configure_logging(...)
+**Naming convention**:
+- Counter: `{s_code}_{subsystem}_{action}_total` → `s4_fetcher_articles_fetched_total`
+- Histogram: `{s_code}_{subsystem}_{thing}_duration_seconds` → `s5_dedup_duration_seconds`
+- Gauge: `{s_code}_{subsystem}_{thing}` → `s4_outbox_pending_events`
+- Labels: lowercase `snake_case` keys: `source_type`, `status`, `error_class`
 
-    metrics = create_metrics(service_name="my-service")
-    add_prometheus_middleware(app, metrics)
+**Gauge polling**: background task in lifespan, 30s default interval (see S4 `_metrics_poller`).
 
-    # Expose /metrics endpoint automatically via middleware
-    yield
+### 5.7 Docker env vars (mandatory in every `configs/docker.env`)
+
+```env
+{PREFIX}_LOG_LEVEL=INFO
+{PREFIX}_LOG_JSON=true
+{PREFIX}_OTLP_ENDPOINT=
 ```
 
-**Custom metrics naming**:
-- Counter: `{service}_{subsystem}_{action}_total` → `s4_fetcher_articles_fetched_total`
-- Histogram: `{service}_{subsystem}_{thing}_duration_seconds` → `s6_nlp_block_duration_seconds`
-- Gauge: `{service}_{subsystem}_{thing}` → `s4_outbox_pending_events`
-- Labels: use lowercase `snake_case` keys: `source_type`, `status`, `error_class`
+Where `{PREFIX}` matches the service's `env_prefix` (e.g., `CONTENT_INGESTION_`, `PORTFOLIO_`).
 
-### 5.3 Tracing (OpenTelemetry)
+### 5.8 pyproject.toml (mandatory dependency)
 
-```python
-from observability.tracing import configure_tracing, add_otel_middleware
+Every service MUST declare `observability` as an explicit dependency:
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = Settings()
-    configure_logging(...)
-    metrics = create_metrics(...)
-    add_prometheus_middleware(app, metrics)
-
-    if settings.otlp_endpoint:
-        configure_tracing(
-            service_name="my-service",
-            otlp_endpoint=settings.otlp_endpoint,
-        )
-        add_otel_middleware(app)
-
-    yield
+```toml
+dependencies = [
+    # ... other deps ...
+    "observability",
+]
 ```
 
-### 5.4 Health endpoints — real checks, not stubs
-
-All services **must** implement `/healthz` (liveness) and `/readyz` (readiness) with **actual
-dependency checks**. Stub implementations that always return 200 are forbidden in non-stub
-services.
-
-```python
-# services/my-service/src/my_service/api/routes/health.py
-from fastapi import APIRouter, Response
-from sqlalchemy.ext.asyncio import AsyncSession
-from messaging.valkey import ValkeyClient
-
-router = APIRouter()
-
-@router.get("/healthz")
-async def healthz() -> dict:
-    """Liveness probe — returns 200 if process is running."""
-    return {"status": "ok"}
-
-@router.get("/readyz")
-async def readyz(
-    session: AsyncSession = Depends(get_db_session),
-    valkey: ValkeyClient = Depends(get_valkey_client),
-) -> Response:
-    """Readiness probe — returns 200 only when all dependencies are reachable."""
-    checks: dict[str, str] = {}
-    ok = True
-
-    # Database check
-    try:
-        await session.execute(text("SELECT 1"))
-        checks["database"] = "ok"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
-        ok = False
-
-    # Valkey check
-    try:
-        await valkey.ping()
-        checks["valkey"] = "ok"
-    except Exception as exc:
-        checks["valkey"] = f"error: {exc}"
-        ok = False
-
-    # Kafka check (producer/consumer liveness)
-    checks["kafka"] = "ok"  # replaced with real check per service
-
-    status = 200 if ok else 503
-    return Response(content=json.dumps({"status": "ok" if ok else "degraded", **checks}),
-                    status_code=status, media_type="application/json")
-```
-
-### 5.5 Request ID middleware
-
-Every service **must** propagate `X-Request-ID` through the request lifecycle and bind it to the
-structlog context:
-
-```python
-# services/my-service/src/my_service/app.py
-import structlog.contextvars
-from common.ids import new_ulid
-from starlette.middleware.base import BaseHTTPMiddleware
-from observability.logging import get_logger
-
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        request_id = request.headers.get("X-Request-ID") or new_ulid()
-        structlog.contextvars.bind_contextvars(request_id=request_id)
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        structlog.contextvars.clear_contextvars()
-        return response
-
-def create_app() -> FastAPI:
-    app = FastAPI(lifespan=lifespan)
-    app.add_middleware(RequestIdMiddleware)
-    return app
-```
+Direct `prometheus-client` or `structlog` imports are only needed if custom metrics use them directly.
 
 ---
 
@@ -963,15 +1184,22 @@ Every service **must** define these fields in its `Settings` class:
 
 ## 9. Error Handling
 
-### 9.1 Domain exception hierarchy
+### 9.1 Domain exception hierarchy (R21)
 
-Every service **must** define a domain exception base class in `domain/exceptions.py`:
+Every service **must** define `DomainError` as the root exception in
+`domain/errors.py` (preferred) or `domain/exceptions.py`:
 
 ```python
-# services/my-service/src/my_service/domain/exceptions.py
-class MyServiceError(Exception):
-    """Base class for all my-service domain errors."""
-    pass
+# services/my-service/src/my_service/domain/errors.py
+class DomainError(Exception):
+    """Base exception for all my-service domain errors (R21 canonical name)."""
+
+
+# Optional descriptive alias — define as a SUBCLASS, not an assignment alias,
+# so that architecture tests can trace the inheritance chain via AST.
+class MyServiceError(DomainError):
+    """Descriptive alias preserved for readability within this service."""
+
 
 class EntityNotFoundError(MyServiceError):
     def __init__(self, entity_type: str, entity_id: Any) -> None:
@@ -986,6 +1214,14 @@ class ConfigurationError(MyServiceError):
     """Raised when required configuration is missing or invalid."""
     pass
 ```
+
+**Why the class-based alias matters**: Architecture tests use AST analysis to verify
+that all exception classes inherit from `DomainError`. A simple assignment
+`MyServiceError = DomainError` is invisible to AST class-def scanning and causes
+subclasses like `EntityNotFoundError(MyServiceError)` to fail the check.
+Always use `class MyServiceError(DomainError): ...`.
+
+Enforced by `tests/architecture/test_domain_error_enforcement.py`.
 
 ### 9.2 HTTP status mapping — `api/error_mapping.py`
 
@@ -1078,6 +1314,7 @@ The following patterns are **explicitly forbidden** and constitute review blocke
 | Health endpoints returning `{"status": "ok"}` without checks | Hides dependency failures | Real DB/Kafka/Valkey checks |
 | Route logic in `app.py` | Violates single-responsibility | Routes in `api/routes/` |
 | Infrastructure imports in domain layer | Breaks hexagonal architecture | Use ports/protocols |
+| `else: await self.commit()` in `__aexit__` | Silent writes on every clean context exit; double-commit undetectable (R26) | Option B: `__aexit__` only rolls back on exception; every mutating use case calls `await uow.commit()` explicitly — see §17 |
 | `from __future__ import annotations` missing | Lazy evaluation needed for `TYPE_CHECKING` pattern | Add to every file using `if TYPE_CHECKING` |
 | `print()` statements | Not structured, not queryable | `logger.info(...)` with keyword args |
 
@@ -1118,7 +1355,7 @@ Use this checklist in every PR that adds or modifies a service:
 
 ---
 
-## 12. Platform Rules (R1–R18)
+## 12. Platform Rules (R1–R24)
 
 These rules apply to every contributor (human and AI agent). They are non-negotiable.
 
@@ -1221,6 +1458,14 @@ Each microservice adds operational overhead. The decision must be deliberate and
 | R16 | Process | MUST NOT |
 | R17 | Process | MUST |
 | R18 | Process | MUST |
+| R19 | Testing | MUST NOT |
+| R20 | Architecture | MUST |
+| R21 | Architecture | MUST |
+| R22 | Infrastructure | MUST |
+| R23 | Infrastructure | MUST |
+| R24 | Infrastructure | MUST NOT |
+| R25 | Architecture | MUST NOT |
+| R26 | Infrastructure | MUST NOT |
 
 ---
 
@@ -1378,3 +1623,383 @@ allowlist:
     path: "services/*/tests/**/*.py"
     reason: "Test factories may use uuid.uuid4() for stub data"
 ```
+
+---
+
+## 14. Process Topology Standard
+
+> **Rules**: R22 (process separation)
+> **Reference implementation**: `services/market-ingestion/`
+
+Services with background processing MUST be decomposed into independent processes. Each process
+has its own entry point, signal handling, and connection pool sizing.
+
+### 14.1 Process Types
+
+| Process | Responsibility | Entry Point Pattern | Concurrency |
+|---------|---------------|--------------------:|-------------|
+| **API** | HTTP request handling (uvicorn) | `python -m <pkg>.app` or `uvicorn <pkg>.app:create_app` | Async — bounded by uvicorn workers |
+| **Scheduler** | Evaluate sources/policies, insert task rows | `python -m <pkg>.infrastructure.scheduler.scheduler_main` | Single-threaded, tick-based (60s default) |
+| **Worker** | Claim and execute tasks | `python -m <pkg>.infrastructure.workers.worker_main` | Semaphore-bounded (default 4 concurrent) |
+| **Dispatcher** | Poll outbox, publish to Kafka | `python -m <pkg>.infrastructure.messaging.outbox.dispatcher_main` | Single-threaded poll loop |
+| **Consumer** | Process inbound Kafka events | `python -m <pkg>.infrastructure.messaging.consumers.<type>_consumer_main` | Single-threaded per topic |
+
+### 14.2 Entry Point Pattern
+
+Every process MUST follow this structure:
+
+```python
+# <pkg>/infrastructure/workers/worker_main.py  ← standalone entry point
+
+import asyncio
+import signal
+
+from <pkg>.config import Settings
+from <pkg>.infrastructure.workers.worker import Worker
+
+async def _run_worker() -> None:
+    settings = Settings()                          # own Settings instance
+    write_factory, read_factory = _build_factories(settings)  # own session factories
+    worker = Worker(write_factory, read_factory, settings)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, worker.stop)  # graceful shutdown
+
+    await worker.run()                             # blocks until stop_event
+
+def main() -> None:
+    asyncio.run(_run_worker())
+
+if __name__ == "__main__":
+    main()
+```
+
+### 14.3 Docker Compose Pattern
+
+Same Dockerfile, different `command` overrides:
+
+```yaml
+services:
+  content-ingestion-api:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["uvicorn", "content_ingestion.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+
+  content-ingestion-scheduler:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
+
+  content-ingestion-worker:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.workers.worker_main"]
+
+  content-ingestion-dispatcher:
+    build: { context: ., dockerfile: services/content-ingestion/Dockerfile }
+    command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+```
+
+### 14.4 Pool Size Recommendations
+
+| Process Type | `pool_size` | `max_overflow` | `pool_pre_ping` | Rationale |
+|-------------|------------|---------------|----------------|-----------|
+| API server | 10 | 20 | Yes | Concurrent HTTP requests |
+| Scheduler | 3 | 5 | Yes | Low concurrency, periodic ticks |
+| Worker | 5 | 10 | Yes | Bounded by semaphore concurrency |
+| Dispatcher | 3 | 5 | Yes | Single-threaded poll loop |
+
+### 14.5 Signal Handling
+
+Every process MUST:
+1. Register handlers for `SIGINT` and `SIGTERM`
+2. Set a stop event (`asyncio.Event`) on signal receipt
+3. Complete in-flight work before exiting (graceful drain)
+4. Return exit code 0 on clean shutdown
+
+```python
+loop = asyncio.get_running_loop()
+for sig in (signal.SIGINT, signal.SIGTERM):
+    loop.add_signal_handler(sig, worker.stop)
+```
+
+---
+
+## 15. Read/Write Database Session Pattern
+
+> **Rules**: R23 (read/write split)
+> **Reference implementation**: `services/market-ingestion/src/market_ingestion/infrastructure/db/session.py`
+
+### 15.1 Dual Factory Function
+
+Every service with database access MUST provide a factory that returns both a write and read
+session factory:
+
+```python
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+def _build_factories(
+    settings: Settings,
+) -> tuple[async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
+    """Build write and read session factories.
+
+    When DATABASE_URL_READ is not set, read factory falls back to write factory.
+    """
+    write_engine = create_async_engine(
+        str(settings.db_url),
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_pre_ping=True,
+    )
+    write_factory = async_sessionmaker(write_engine, expire_on_commit=False)
+
+    if settings.db_url_read:
+        read_engine = create_async_engine(
+            str(settings.db_url_read),
+            pool_size=settings.db_pool_size_read,
+            max_overflow=settings.db_max_overflow_read,
+            pool_pre_ping=True,
+        )
+        read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
+    else:
+        read_factory = write_factory  # zero-cost fallback
+
+    return write_factory, read_factory
+```
+
+### 15.2 Configuration
+
+```python
+class Settings(BaseSettings):
+    db_url: PostgresDsn                        # write (required)
+    db_url_read: PostgresDsn | None = None     # read (optional, falls back to db_url)
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
+```
+
+### 15.3 Read/Write Routing Rules
+
+| Operation | Write Session | Read Session |
+|-----------|:---:|:---:|
+| `SELECT` before `INSERT`/`UPDATE` (dedup checks) | **Yes** | No — stale reads cause duplicates |
+| Task claiming (`SELECT FOR UPDATE SKIP LOCKED`) | **Yes** | No — requires row locks |
+| List/dashboard/analytics queries | No | **Yes** |
+| Watermark reads before fetch cycle | Either | **Yes** (staleness acceptable) |
+| Health checks / status endpoints | No | **Yes** |
+| Read immediately after write in same request | **Yes** | No — replication lag |
+
+### 15.4 Anti-Pattern: Read-After-Write on Replica
+
+```python
+# WRONG — read may return stale data due to replication lag
+async with write_factory() as ws:
+    ws.add(entity)
+    await ws.commit()
+
+async with read_factory() as rs:
+    result = await rs.get(Entity, entity.id)  # may be None!
+```
+
+```python
+# CORRECT — use write session for read-after-write
+async with write_factory() as ws:
+    ws.add(entity)
+    await ws.commit()
+    result = await ws.get(Entity, entity.id)  # consistent
+```
+
+---
+
+## 16. Session Optimization
+
+> **Rules**: R24 (session optimization)
+
+### 16.1 Anti-Pattern: Session Held Across External I/O
+
+```python
+# WRONG — connection held idle during HTTP call (BP-057)
+async with session_factory() as session:
+    data = await repo.get(id)              # uses connection
+    result = await http_client.post(...)   # connection held idle!
+    await repo.save(result)                # uses connection again
+    await session.commit()
+```
+
+### 16.2 Correct Pattern: Split Read/IO/Write Phases
+
+```python
+# CORRECT — release connection before I/O
+async with read_factory() as ro:
+    data = await repo.get(id)              # read phase
+
+result = await http_client.post(...)       # I/O phase (no session)
+
+async with write_factory() as rw:
+    await repo.save(result)                # write phase
+    await rw.commit()
+```
+
+### 16.3 Session Lifecycle by Process Type
+
+| Process | Session Lifecycle | Notes |
+|---------|------------------|-------|
+| **API routes** | Session-per-request via `Depends()` | Acceptable — requests are short-lived (ms). Optimize only if profiling shows contention. |
+| **Workers** | Fresh UoW per phase: claim → release → execute → release → write → release | Each external I/O call happens outside a session context. |
+| **Scheduler** | One short UoW per tick: evaluate → insert tasks → commit | Tick completes in ms; no external I/O during session. |
+| **Dispatcher** | One short UoW per poll batch: claim outbox rows → commit → publish to Kafka → mark published → commit | Kafka publish happens between two separate UoW scopes. |
+
+### 16.4 PgBouncer — Production Recommendation
+
+PgBouncer is **not required for development** (single developer, limited load) but is
+**recommended for production** deployments:
+
+- Transaction-mode pooling reduces total connections to PostgreSQL
+- Especially beneficial when multiple process types (API + scheduler + worker + dispatcher) share a database
+- All services already support independent database URLs, making PgBouncer a drop-in addition
+
+For the thesis project, tuning pool sizes per process type (§14.4) delivers 90% of
+PgBouncer's connection-saving benefit without operational overhead.
+
+### 16.5 Managed Database Readiness
+
+All services MUST support independent database URLs (`db_url` setting). This ensures:
+- Seamless migration from shared Postgres container to managed RDS/Cloud SQL
+- Each service can point to its own database instance without code changes
+- Read replicas can be added per-service via `db_url_read`
+
+---
+
+## 17. Unit of Work — Explicit Commit Pattern
+
+> **Rules**: R26 (UoW must not auto-commit in `__aexit__`)
+> **Reference implementations**: `services/portfolio/src/portfolio/infrastructure/db/unit_of_work.py`,
+> `services/market-data/src/market_data/infrastructure/db/unit_of_work.py`
+
+### 17.1 The Standard: Option B (Explicit-Commit Only)
+
+The **Option B** pattern is the **cross-service standard** for all `UnitOfWork` concrete
+implementations. It has two invariants:
+
+1. `__aexit__` **NEVER commits** — it only rolls back on exception and closes the session.
+2. Every mutating use case **MUST call `await uow.commit()` explicitly** before returning.
+
+```python
+# ✅ CORRECT — Option B (cross-service standard)
+class SqlaUnitOfWork(AbstractUnitOfWork):
+    async def __aenter__(self) -> "SqlaUnitOfWork":
+        self._session = self._session_factory()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        try:
+            if exc_type is not None:
+                await self.rollback()
+        except Exception:
+            pass  # swallow rollback failure — session close in finally is the real cleanup
+        finally:
+            await self._session.close()
+
+    async def commit(self) -> None:
+        await self._session.commit()
+        await self._drain_post_commit_hooks()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
+```
+
+Every mutating use case wraps its work and calls `commit()` explicitly:
+
+```python
+# ✅ CORRECT — use case calls commit explicitly
+async def execute(self, cmd: CreateFoo) -> Foo:
+    async with await self._uow_factory() as uow:
+        entity = Foo(...)
+        await uow.foos.add(entity)
+        await uow.commit()           # ← explicit; __aexit__ never commits
+        return entity
+```
+
+### 17.2 Anti-Pattern: Option A (Auto-Commit in `__aexit__`)
+
+```python
+# ❌ WRONG — Option A (R26 violation, BLOCKING review finding)
+async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    try:
+        if exc_type is not None:
+            await self.rollback()
+        else:
+            await self.commit()   # FORBIDDEN — auto-commits silently on clean exit
+    except Exception:
+        pass
+    finally:
+        await self._session.close()
+```
+
+**Why this is dangerous**:
+- Read-only use cases that open a UoW and do not call `commit()` will auto-commit an empty
+  transaction — wasting DB resources and potentially flushing dirty state from ORM identity map.
+- Use cases that raise after partial writes still execute rollback correctly, but read-only
+  paths that never call `commit()` silently commit.
+- Double-commit bugs are invisible: the second `session.commit()` call is a no-op in most
+  drivers (SQLAlchemy AsyncSession silently succeeds on a clean session).
+
+**Audit command**:
+```bash
+grep -rn "else.*commit\|__aexit__.*commit" services/*/src/*/infrastructure/db/unit_of_work.py
+```
+Any match is a R26 violation.
+
+### 17.3 Post-Commit Hooks
+
+Post-commit hooks (e.g., cache invalidation, metrics emission) run AFTER the database
+transaction commits. They are drained inside `commit()` — NOT inside `__aexit__`.
+
+```python
+# ✅ CORRECT — hooks drained inside commit(), not __aexit__()
+async def commit(self) -> None:
+    await self._session.commit()
+    await self._drain_post_commit_hooks()  # runs only on explicit commit
+
+async def _drain_post_commit_hooks(self) -> None:
+    while self._post_commit_hooks:
+        hook = self._post_commit_hooks.pop(0)
+        try:
+            await hook
+        except Exception:
+            logger.warning("post_commit_hook_failed", exc_info=True)
+            # hook failure must NOT propagate — committed message must not be dead-lettered
+```
+
+If a post-commit hook raises, **log and continue** — a successfully-committed message must
+never be dead-lettered because a cache flush failed.
+
+### 17.4 Dispatch UoW (Outbox-Only Pattern)
+
+For services where the UoW wraps an outbox repository (e.g., content-ingestion outbox
+dispatcher), the correct pattern delegates session lifecycle to the session context manager:
+
+```python
+# ✅ CORRECT — Dispatch UoW delegates to session lifecycle
+async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    if exc_type is not None:
+        await self._session.rollback()
+    await self._session.close()
+```
+
+This pattern is correct for outbox-only UoWs because `session.close()` without `commit()`
+closes without committing — consistent with Option B.
+
+### 17.5 Compliance Checklist
+
+Before merging any service with a `UnitOfWork` implementation:
+- [ ] `__aexit__` has **no** `else: await self.commit()` branch (R26)
+- [ ] `__aexit__` has a `finally` block that calls `session.close()` on all paths
+- [ ] Every mutating use case calls `await uow.commit()` before returning
+- [ ] Read-only use cases do NOT call `commit()` (no phantom commits)
+- [ ] Post-commit hooks run inside `commit()`, not `__aexit__()`
+- [ ] Hook failures are caught and logged — never propagated to the base consumer

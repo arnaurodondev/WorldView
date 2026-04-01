@@ -13,6 +13,7 @@ from contracts.canonical.ingestion import (
 from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.canonical.quotes import CanonicalQuote
 from contracts.canonical.sentiment import CanonicalSentiment
+from contracts.enums import ContentSourceType, IngestionTaskStatus
 from contracts.parsing import (
     parse_ohlcv_from_json,
     parse_ohlcv_from_jsonl,
@@ -59,6 +60,8 @@ __all__ = [
     "CanonicalSignalEvent",
     "CanonicalStoredArticleEvent",
     "CanonicalWatchlistEvent",
+    "ContentSourceType",
+    "IngestionTaskStatus",
     "parse_ohlcv_from_json",
     "parse_ohlcv_from_jsonl",
     "parse_ohlcv_from_parquet",

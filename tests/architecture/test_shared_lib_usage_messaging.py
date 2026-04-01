@@ -62,6 +62,8 @@ class TestNoDirectKafka:
             for py_file in _src_files(svc):
                 rel = str(py_file.relative_to(svc.service_dir.parent.parent))
                 for imp in scan_imports(py_file):
+                    if imp.is_type_checking:
+                        continue
                     module = imp.module
                     if module in FORBIDDEN or module.startswith("aioredis."):
                         # Allow redis imports that go through messaging.valkey

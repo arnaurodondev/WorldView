@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import InstrumentRepository
@@ -46,6 +46,11 @@ class PgInstrumentRepository(InstrumentRepository):
             currency_code=row.currency_code,
         )
 
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        """Escape LIKE metacharacters to prevent injection via wildcard expansion."""
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     # ── queries ────────────────────────────────────────────────────────────────
 
     async def find_by_symbol_exchange(self, symbol: str, exchange: str) -> Instrument | None:
@@ -78,11 +83,12 @@ class PgInstrumentRepository(InstrumentRepository):
 
         conditions = []
         if query:
-            pattern = f"%{query}%"
+            escaped = self._escape_like(query)
+            pattern = f"%{escaped}%"
             conditions.append(
                 or_(
-                    InstrumentModel.symbol.ilike(pattern),
-                    InstrumentModel.exchange.ilike(pattern),
+                    InstrumentModel.symbol.ilike(pattern, escape="\\"),
+                    InstrumentModel.exchange.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
@@ -115,11 +121,12 @@ class PgInstrumentRepository(InstrumentRepository):
 
         conditions = []
         if query:
-            pattern = f"%{query}%"
+            escaped = self._escape_like(query)
+            pattern = f"%{escaped}%"
             conditions.append(
                 or_(
-                    InstrumentModel.symbol.ilike(pattern),
-                    InstrumentModel.exchange.ilike(pattern),
+                    InstrumentModel.symbol.ilike(pattern, escape="\\"),
+                    InstrumentModel.exchange.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
@@ -168,13 +175,14 @@ class PgInstrumentRepository(InstrumentRepository):
     async def update_flags(self, id: str, flags: InstrumentFlags) -> None:  # noqa: A002
         from sqlalchemy import update
 
+        # Use atomic OR-merge so concurrent consumers never clear each other's flags.
         await self._session.execute(
             update(InstrumentModel)
             .where(InstrumentModel.id == id)
             .values(
-                has_ohlcv=flags.has_ohlcv,
-                has_quotes=flags.has_quotes,
-                has_fundamentals=flags.has_fundamentals,
+                has_ohlcv=case((flags.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),  # type: ignore[arg-type]
+                has_quotes=case((flags.has_quotes, True), else_=InstrumentModel.has_quotes),  # type: ignore[arg-type]
+                has_fundamentals=case((flags.has_fundamentals, True), else_=InstrumentModel.has_fundamentals),  # type: ignore[arg-type]
             )
         )
 

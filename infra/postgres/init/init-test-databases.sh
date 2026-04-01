@@ -6,7 +6,18 @@ set -euo pipefail
 
 echo "=== Creating test databases ==="
 
-for DB in portfolio_db ingestion_db; do
+ALL_DBS=(
+    portfolio_db
+    ingestion_db
+    content_ingestion_db
+    content_ingestion_test_db
+    content_store_db
+    nlp_db
+    alert_db
+    intelligence_db
+)
+
+for DB in "${ALL_DBS[@]}"; do
     echo "Creating database: $DB"
     psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
         SELECT 'CREATE DATABASE $DB'
@@ -15,10 +26,18 @@ for DB in portfolio_db ingestion_db; do
 EOSQL
 done
 
-for DB in portfolio_db ingestion_db; do
+for DB in "${ALL_DBS[@]}"; do
     echo "Enabling uuid-ossp in: $DB"
     psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$DB" <<-EOSQL
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+EOSQL
+done
+
+# pgvector required for NLP embeddings (section_embeddings, chunk_embeddings VECTOR(1024))
+for DB in nlp_db intelligence_db; do
+    echo "Enabling pgvector in: $DB"
+    psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$DB" <<-EOSQL
+        CREATE EXTENSION IF NOT EXISTS vector;
 EOSQL
 done
 

@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, Any, cast
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
-from market_data.domain.events import InstrumentCreated
+from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
+from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -55,9 +56,6 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._current_uow: UnitOfWork | None = None
-        # Holds the canonical SHA-256 for the current message so mark_processed
-        # can store it alongside the event_id.
-        self._current_content_sha256: str | None = None
 
     # ── abstract implementations ──────────────────────────────────────────────
 
@@ -82,20 +80,19 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         return str(value["event_id"])
 
     async def is_duplicate(self, event_id: str) -> bool:
-        if self._current_uow is not None:
-            return await self._current_uow.ingestion_events.exists(event_id)
-        async with self._uow_factory() as uow:
-            return await uow.ingestion_events.exists(event_id)
+        # Dedup is handled atomically via create_if_not_exists at the start of
+        # process_message (BP-035). Always return False here so the base class
+        # proceeds to process_message regardless.
+        return False
 
     async def mark_processed(self, event_id: str) -> None:
-        assert self._current_uow is not None
-        await self._current_uow.ingestion_events.create(
-            event_id, event_type=_TOPIC, content_sha256=self._current_content_sha256
-        )
-        self._current_content_sha256 = None
+        # No-op: the event_id was already recorded by create_if_not_exists inside
+        # process_message before any data was written.
+        pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
-        assert self._current_uow is not None
+        if self._current_uow is None:
+            raise RuntimeError("store_failure called outside of processing context — this is a programming error")
         payload = {
             "event_id": failure.event_id,
             "topic": failure.topic,
@@ -136,15 +133,32 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
             return
 
         uow = self._current_uow
-        assert uow is not None
+        if uow is None:
+            raise RuntimeError("process_message called without an active unit of work — this is a programming error")
 
-        # Content-hash dedup: skip download + DB write when canonical object unchanged.
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        # Returns True if newly inserted (new event), False if already processed (duplicate).
+        # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
+        event_id_raw = value.get("event_id")
+        if not event_id_raw:
+            raise MalformedDataError("Missing or null event_id in message")
+        event_id = str(event_id_raw)
         sha256 = value.get("canonical_ref_sha256") or ""
+
+        # Content-hash dedup: check BEFORE inserting the event so that
+        # exists_by_content_hash does not find the record we are about to insert
+        # (BP-035 follow-up: create_if_not_exists stores sha256 immediately).
         if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
             logger.debug("ohlcv_consumer.skip_unchanged", sha256_prefix=sha256[:8])
-            self._current_content_sha256 = None
+            # Still record event_id so repeated deliveries are fast-path deduped.
+            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
             return
-        self._current_content_sha256 = sha256 or None
+
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+        if not is_new:
+            logger.debug("ohlcv_consumer.duplicate_event", event_id=str(event_id)[:8])
+            return
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
@@ -185,22 +199,37 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_ohlcv=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            uow.collect_event(
-                InstrumentCreated(
-                    instrument_id=instrument.id,
-                    security_id=instrument.security_id,
-                    symbol=symbol,
-                    exchange=exchange,
-                )
+            created_event = InstrumentCreated(
+                instrument_id=instrument.id,
+                security_id=instrument.security_id,
+                symbol=symbol,
+                exchange=exchange,
+            )
+            await uow.outbox_events.create(
+                event_type=created_event.event_type,
+                topic=EVENT_TOPIC_MAP[created_event.event_type],
+                payload=event_to_outbox_payload(created_event),
             )
         elif not instrument.flags.has_ohlcv:
-            await uow.instruments.update_flags(
-                instrument.id,
-                InstrumentFlags(
-                    has_ohlcv=True,
-                    has_quotes=instrument.flags.has_quotes,
-                    has_fundamentals=instrument.flags.has_fundamentals,
-                ),
+            updated_flags = InstrumentFlags(
+                has_ohlcv=True,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=instrument.flags.has_fundamentals,
+            )
+            await uow.instruments.update_flags(instrument.id, updated_flags)
+            updated_event = InstrumentUpdated(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                has_ohlcv=True,
+                has_quotes=instrument.flags.has_quotes,
+                has_fundamentals=instrument.flags.has_fundamentals,
+                fields_updated=("has_ohlcv",),
+            )
+            await uow.outbox_events.create(
+                event_type=updated_event.event_type,
+                topic=EVENT_TOPIC_MAP[updated_event.event_type],
+                payload=event_to_outbox_payload(updated_event),
             )
 
         # Resolve timeframe

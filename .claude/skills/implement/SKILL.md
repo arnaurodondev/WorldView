@@ -39,6 +39,7 @@ Step 10: Commit                → Stage scoped files, conventional commit
 2. Find the specific wave and extract:
    - Task list with IDs, descriptions, file scopes, acceptance criteria
    - **Entity definitions, logic descriptions, and test specifications** from each task
+   - **Task dependencies**: Check each task's `depends_on` field — skip any task whose dependencies are not DONE
    - Pre-read file list
    - Validation gate requirements
    - Regression guardrails (BP-XXX references)
@@ -58,7 +59,7 @@ Step 10: Commit                → Stage scoped files, conventional commit
 ### Always read:
 1. `RULES.md` — hard rules
 2. `services/<service>/.claude-context.md` — per-service context (if exists)
-3. `docs/ai-interactions/BUG_PATTERNS.md` — scan for applicable patterns; note BP-XXX IDs
+3. `docs/BUG_PATTERNS.md` — scan for applicable patterns; note BP-XXX IDs
 4. Relevant `docs/libs/<lib>.md` if touching shared libraries
 5. Existing test files in the service to understand test patterns and conventions
 6. `.claude/review/` — skim relevant checklists and protocols for later self-review
@@ -73,11 +74,23 @@ Step 10: Commit                → Stage scoped files, conventional commit
 
 Announce your scope to the user before proceeding.
 
+**GATE 1 — Scope Confirmation**: Present the scope summary (write_paths, test_commands, PRD sections, downstream_tests) to the user. Wait for explicit confirmation before proceeding to Step 2. If the user adjusts scope, update all lists before continuing.
+
 ---
 
 ## Step 2 — Implementation
 
 For each task in the wave (in dependency order):
+
+### 2.0 Parallel Execution (Optional — for independent tasks)
+
+When a wave contains tasks that touch **different services** and have `depends_on: none` (or all dependencies satisfied), consider parallel execution:
+
+- Use `Agent` tool with `isolation: "worktree"` to spawn independent implementation agents per task
+- Each worktree agent receives: the task spec, pre-read list, and validation gate requirements
+- Worktree results are automatically merged back when complete
+- **Only parallelize when tasks have zero file overlap** — if two tasks modify the same file, execute sequentially
+- After all parallel agents complete, run the full validation gate on the merged result
 
 ### 2.1 Pre-Implementation Check
 - Re-read the specific files you'll modify
@@ -135,6 +148,8 @@ When modifying **Avro schemas, database schemas, API contracts, or shared librar
 
 This prevents the failure pattern where a schema change passes local validation but breaks CI because downstream alignment tests were not in scope.
 
+5. **DDL alignment coverage rule** → When adding or fixing DDL alignment tests for one table in a service, audit ALL tables in that service and add missing tests. A partial coverage gap defeats the purpose of the guard. Run `grep "class Test.*DDLAlignment" tests/` to see current coverage.
+
 ---
 
 ## Step 3 — Test Design & Writing
@@ -180,17 +195,30 @@ ruff format --check <changed_files>
 # 3. Type check on changed packages
 mypy <changed_packages>/src --config-file mypy.ini
 
-# 4. Unit tests for affected services/libs
+# 4. Import guards on changed services (catches forbidden patterns like uuid4(), logging.getLogger(), print())
+python3 scripts/import_guards/check_import_guards.py --strict \
+  --baseline scripts/import_guards/baseline.json \
+  --services <changed_service_names>
+
+# 5. Unit tests for affected services/libs
 python -m pytest <service>/tests -m "unit" -v
 
-# 5. Integration tests (if infra is running and tests exist)
+# 6. Integration tests (if infra is running and tests exist)
 python -m pytest <service>/tests -m "integration" -v
 
-# 6. Architecture tests (if service structure changed)
+# 7. Architecture tests (if service structure changed)
 python -m pytest tests/architecture -v
 ```
 
 **If any check fails**: Fix immediately and re-run. Do NOT proceed to Step 5 with failures. Maximum 2 fix attempts per issue before escalating to the user.
+
+### 4.2 Blocking I/O Check (Async Services)
+
+When the changed service is async (FastAPI), scan all Pydantic validators for blocking I/O:
+```bash
+grep -n "socket\.\|requests\.\|open(" services/<service>/src/**/*schemas*.py services/<service>/src/**/*validators*.py
+```
+Any `socket.getaddrinfo`, `requests.get`, or `open()` call inside a `@field_validator` / `@model_validator` is a **blocking I/O violation** (HR-019). Move the I/O to the async route handler using `asyncio.to_thread`.
 
 ### 4.1 Test Failure Policy (R19 — Non-Negotiable)
 
@@ -218,12 +246,14 @@ Invoke a security analysis on the changes:
    - Authentication/authorization checks on new endpoints
    - OWASP Top 10 relevance
 
-2. Cross-reference with `docs/ai-interactions/BUG_PATTERNS.md` security-related patterns
+2. Cross-reference with `docs/BUG_PATTERNS.md` security-related patterns
 
 3. If any security issues found:
    - Fix them immediately
    - Re-run validation gate (Step 4)
    - Document the fix
+
+**GATE 2 — Security Confirmation**: If the security review produced any CRITICAL or BLOCKING findings, present them to the user before entering the fix loop. Summarize each finding and ask: "Apply these fixes?" Wait for confirmation before proceeding.
 
 ---
 
@@ -276,9 +306,13 @@ Maximum 3 iterations. If issues persist after 3 loops, report to the user with:
 - What remains unresolved
 - Proposed resolution
 
+**GATE 3 — Scope Drift Check**: If the fix loop iterated 2+ times, summarize what changed relative to the original scope from Gate 1. Present the delta to the user and ask: "Scope has shifted — review changes before documentation?" Wait for confirmation before proceeding to Step 8.
+
 ---
 
-## Step 8 — Documentation Update
+## Step 8 — Documentation Update (MANDATORY)
+
+Documentation updates are **not optional**. Every behavior change, new entity, new endpoint, new event, or configuration change MUST be reflected in documentation before committing. Skipping this step violates Hard Rule 15.
 
 Check and update all affected documentation:
 
@@ -294,12 +328,17 @@ Check and update all affected documentation:
 - If new env vars added → update `services/<service>/configs/dev.local.env.example`
 - If new Docker services → update `docker-compose.yml` and `docs/workflows/local-dev.md`
 
-### 8.4 Architecture
-- If new Avro schema → update `infra/kafka/schemas/` and `docs/MASTER_PLAN.md` if significant
+### 8.4 Architecture & Master Plan
+- If new Avro schema → update `infra/kafka/schemas/` and reference in `docs/MASTER_PLAN.md` if it introduces a new topic
 - If new service interaction → update `docs/architecture/diagrams.md`
+- **If this is the last wave of a plan that completes a service** → update `docs/MASTER_PLAN.md`:
+  - Service catalog table: change status from `🔄 In-progress` to `✅ Mature`
+  - Phase roadmap milestones: mark the service's milestone as `✅`
+  - Blocking prerequisites: mark any resolved prerequisites as `✅`
+  - Bump the version and date in the MASTER_PLAN header
 
 ### 8.5 Bug Patterns
-- If you discovered a new failure pattern → add it to `docs/ai-interactions/BUG_PATTERNS.md`
+- If you discovered a new failure pattern → add it to `docs/BUG_PATTERNS.md`
 
 ### 8.6 Per-Service Context
 - Update `services/<service>/.claude-context.md` if the service gained new endpoints, topics, or entities
@@ -340,10 +379,33 @@ PRD: <PRD reference if applicable>
 
 Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`
 
-### 10.3 Update Tracking
+### 10.3 Update Tracking (MANDATORY — Non-Negotiable)
+
+This step is **blocking**. The commit MUST include tracking updates. A wave is NOT complete until tracking is updated.
+
 If implementing a plan wave:
-1. Update `docs/plans/<NNNN>-*-plan.md`: Mark completed tasks and wave
-2. Update `docs/plans/TRACKING.md`: Update wave status
+
+1. **Update the plan file** (`docs/plans/<NNNN>-*-plan.md`):
+   - Add `✅` to the wave heading (e.g., `### Wave A-1: Title ✅`)
+   - Add a `**Status**: **DONE** — YYYY-MM-DD · N tests pass · ruff + mypy clean` line after the estimated effort
+   - Check all validation gate items as `[x]`
+   - If this is the first wave started, update frontmatter `status: draft` → `status: in-progress`
+   - If this is the last wave, update frontmatter `status: in-progress` → `status: completed`
+   - Update frontmatter `updated:` date to today
+
+2. **Update `docs/plans/TRACKING.md`**:
+   - **READ TRACKING.md first** — verify the plan exists in the table. If missing, add it.
+   - Increment the `Waves Done/Total` column (e.g., `1/8` → `2/8`)
+   - Update the `Updated` column to today's date
+   - **Verify plan IDs match** between the tracking table and the plan file's `id:` frontmatter field
+   - If all waves are done, move the plan from "Active Plans" to "Completed Plans" (add `QA` column as `—`)
+   - If the plan was never in the Active table (e.g., created by another session), add it now
+
+3. **Verify consistency**: The plan ID in `TRACKING.md` MUST match the `id:` field in the plan file's frontmatter. If they differ, fix the tracking file (the plan file is authoritative).
+
+4. **Post-commit verification**: After committing, re-read `TRACKING.md` and confirm the update is present. If a hook or parallel session reverted your change, re-apply and commit again.
+
+**Failure to update tracking is equivalent to not completing the wave.** Include these files in the commit.
 
 ---
 
@@ -372,11 +434,23 @@ At any point, if you are blocked for >2 attempts on the same issue:
 - [ ] Integration tests pass (or N/A)
 - [ ] Security review completed — no blocking issues
 - [ ] Code review completed — no blocking issues
-- [ ] Documentation updated
+- [ ] Documentation updated (service docs, lib docs, config examples, `.claude-context.md`)
 - [ ] Bug patterns updated (if applicable)
-- [ ] Tracking updated
-- [ ] Commit created with conventional message
+- [ ] Plan file updated (wave heading ✅, status line, validation checkboxes, frontmatter)
+- [ ] `docs/plans/TRACKING.md` updated (wave count, date, plan ID verified)
+- [ ] `docs/MASTER_PLAN.md` updated (if last wave completing a service: status, milestones, prerequisites, version)
+- [ ] Commit created with conventional message (includes tracking + doc files)
 
+
+---
+
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **Primary next step**: `/review` — if not already run as part of the pipeline (Step 6)
+- **If more waves remain**: `/implement <PLAN-ID> Wave <next-wave>` — continue with the next wave
+- **If all waves done**: `/qa` — run full quality assurance pass before PR
+- **If tests feel thin**: `/test-feature` — add comprehensive test coverage for the implemented feature
 
 ---
 
@@ -386,7 +460,7 @@ Before completing this skill, check if any of these documents should be updated 
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

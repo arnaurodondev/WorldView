@@ -10,12 +10,16 @@ pytestmark = pytest.mark.unit
 
 
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
-    """Settings loads with sane defaults (no env vars required)."""
+    """Settings loads with sane defaults (storage credentials must be provided)."""
     # Remove any MARKET_INGESTION_* process env vars so we test pure field defaults,
     # not whatever dev.local.env injected via `make test-all`.
     for key in list(os.environ):
         if key.startswith("MARKET_INGESTION_"):
             monkeypatch.delenv(key, raising=False)
+    # storage_access_key / storage_secret_key have no defaults (C-001 security
+    # hardening) — provide explicit values so Settings() can be instantiated.
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("MARKET_INGESTION_STORAGE_SECRET_KEY", "test-secret")
 
     from market_ingestion.config import Settings
 
@@ -25,6 +29,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.debug is False
     assert "postgresql" in s.database_url
     assert s.eodhd_api_key == "demo"
+    assert s.eodhd_base_url == "https://eodhd.com/api"
     assert s.storage_bucket == "market-ingestion"
     assert s.bronze_bucket == "market-bronze"
     assert s.canonical_bucket == "market-canonical"
@@ -35,9 +40,11 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.worker_concurrency == 4
     assert s.dispatcher_batch_size == 50
     assert s.dispatcher_poll_interval_seconds == 1.0
+    assert s.dispatcher_lease_seconds == 60
     assert s.dispatcher_max_attempts == 5
     assert s.otlp_endpoint == ""
     assert s.log_level == "INFO"
+    assert s.internal_service_token == ""
 
 
 def test_settings_env_prefix(monkeypatch):
@@ -132,3 +139,21 @@ def test_settings_provider_keys_optional():
     assert s.finnhub_api_key == ""
     assert s.polygon_api_key == ""
     assert s.alpha_vantage_api_key == ""
+
+
+def test_settings_eodhd_base_url_default():
+    """eodhd_base_url defaults to production EODHD endpoint."""
+    from market_ingestion.config import Settings
+
+    s = Settings()
+    assert s.eodhd_base_url == "https://eodhd.com/api"
+
+
+def test_settings_eodhd_base_url_from_env(monkeypatch):
+    """MARKET_INGESTION_EODHD_BASE_URL overrides the base URL without image rebuild."""
+    monkeypatch.setenv("MARKET_INGESTION_EODHD_BASE_URL", "https://staging.eodhd.example.com/api")
+
+    from market_ingestion.config import Settings
+
+    s = Settings()
+    assert s.eodhd_base_url == "https://staging.eodhd.example.com/api"

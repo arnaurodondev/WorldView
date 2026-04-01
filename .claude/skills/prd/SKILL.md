@@ -21,16 +21,17 @@ Feature title or description: `$ARGUMENTS`
 
 Before engaging the user, read these files silently to build your understanding:
 
-1. `docs/MASTER_PLAN.md` — system architecture, service catalog, data lifecycle
-2. `RULES.md` — hard rules that constrain all designs
-3. `AGENTS.md` — coding standards and architecture patterns
+1. `docs/PRODUCT_CONTEXT.md` — product vision, target users, journeys, constraints (read this FIRST)
+2. `docs/MASTER_PLAN.md` — system architecture, service catalog, data lifecycle
+3. `RULES.md` — hard rules that constrain all designs
+4. `AGENTS.md` — coding standards and architecture patterns
 4. `docs/STANDARDS.md` — engineering standards, DDD patterns
-5. `docs/ai-interactions/BUG_PATTERNS.md` — known failure patterns to design around
+5. `docs/BUG_PATTERNS.md` — known failure patterns to design around
 6. Identify which services are likely affected and read their docs: `docs/services/<service>.md`
 7. Read per-service context: `services/<service>/.claude-context.md`
 8. Check existing specs: `docs/specs/` — avoid duplicating or contradicting existing PRDs
 9. Check existing ADRs: `docs/architecture/decisions/` — respect existing architectural decisions
-10. Read `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` as a **reference example** of the detail level expected
+
 
 ## Phase 1 — Requirements Discovery (Interactive)
 
@@ -227,13 +228,22 @@ After saving the PRD, automatically invoke the `/plan` skill to generate the ini
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **Primary next step**: `/plan` — break this PRD into implementation waves
+- **If scope is unclear**: Continue `/prd` discussion to refine requirements
+- **If security-sensitive**: `/security-audit` on the design before planning
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

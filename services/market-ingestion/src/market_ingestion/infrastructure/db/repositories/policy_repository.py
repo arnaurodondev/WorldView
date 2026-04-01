@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from market_ingestion.application.ports.repositories import PollingPolicyRepository
 from market_ingestion.domain.entities.polling_policy import PollingPolicy
@@ -27,7 +27,9 @@ def _to_domain(row: PollingPolicyModel) -> PollingPolicy:
         k=row.adaptive_k,
         priority=row.priority,
         is_enabled=row.enabled,
+        backfill_enabled=row.backfill_enabled,
         backfill_days=row.backfill_chunk_days,
+        backfill_start_date=row.backfill_start_date,
         created_at=row.created_at,
     )
 
@@ -65,19 +67,26 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
         """Find the most specific matching policy (most-specific-wins).
 
         Tries symbol-specific first, then wildcard (symbol IS NULL).
+        For exchange, timeframe, and variant: a NULL column value acts as a
+        wildcard that matches any incoming value; a non-NULL column value must
+        match exactly.
         """
         for sym in (symbol, None):
-            stmt = (
-                select(PollingPolicyModel)
-                .where(
-                    PollingPolicyModel.provider == provider.value,
-                    PollingPolicyModel.dataset_type == dataset_type.value,
-                    PollingPolicyModel.enabled.is_(True),
-                    PollingPolicyModel.symbol == sym,
+            filters = [
+                PollingPolicyModel.provider == provider.value,
+                PollingPolicyModel.dataset_type == dataset_type.value,
+                PollingPolicyModel.enabled.is_(True),
+                PollingPolicyModel.symbol == sym,
+            ]
+            if exchange is not None:
+                filters.append(or_(PollingPolicyModel.exchange == exchange, PollingPolicyModel.exchange.is_(None)))
+            if timeframe is not None:
+                filters.append(or_(PollingPolicyModel.timeframe == timeframe, PollingPolicyModel.timeframe.is_(None)))
+            if variant is not None:
+                filters.append(
+                    or_(PollingPolicyModel.dataset_variant == variant, PollingPolicyModel.dataset_variant.is_(None))
                 )
-                .order_by(PollingPolicyModel.priority.desc())
-                .limit(1)
-            )
+            stmt = select(PollingPolicyModel).where(*filters).order_by(PollingPolicyModel.priority.desc()).limit(1)
             row = (await self._r.execute(stmt)).scalar_one_or_none()
             if row is not None:
                 return _to_domain(row)
@@ -95,6 +104,8 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
             adaptive_k=policy.k,
             priority=policy.priority,
             enabled=policy.is_enabled,
+            backfill_enabled=policy.backfill_enabled,
+            backfill_start_date=policy.backfill_start_date,
             backfill_chunk_days=policy.backfill_days,
             created_at=policy.created_at,
         )
@@ -109,6 +120,9 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
                 priority=policy.priority,
                 base_interval_sec=int(policy.base_interval_seconds),
                 adaptive_k=policy.k,
+                backfill_enabled=policy.backfill_enabled,
+                backfill_start_date=policy.backfill_start_date,
+                backfill_chunk_days=policy.backfill_days,
             )
         )
         await self._w.execute(stmt)

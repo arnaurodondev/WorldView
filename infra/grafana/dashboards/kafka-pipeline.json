@@ -1,0 +1,267 @@
+{
+  "uid": "worldview-kafka-pipeline",
+  "title": "Worldview — Kafka Pipeline",
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "topic",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values({__name__=~\".+_kafka_messages_consumed_total\"}, topic)",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2
+      },
+      {
+        "name": "consumer_group",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values({__name__=~\".+_kafka_messages_consumed_total\"}, consumer_group)",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Pipeline Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Total Events Produced/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(job:kafka_produced:rate5m)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Total Events Consumed/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(job_topic:kafka_consumed:rate5m)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Production-Consumption Delta",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(job:kafka_produced:rate5m) - sum(job_topic:kafka_consumed:rate5m)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 100 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Market Data Pipeline",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Market Pipeline Flow",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=\"market.dataset.fetched\"}[5m])) by (job)",
+          "legendFormat": "{{job}} produced",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\", topic=\"market.dataset.fetched\"}[5m])) by (job, consumer_group)",
+          "legendFormat": "{{job}} {{consumer_group}} consumed",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Instrument Events",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=~\"market.instrument.*\"}[5m])) by (topic)",
+          "legendFormat": "produced {{topic}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\", topic=~\"market.instrument.*\"}[5m])) by (job, consumer_group)",
+          "legendFormat": "{{job}} consumed",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Content Pipeline",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Content Raw \u2192 Stored Flow",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=\"content.article.raw.v1\"}[5m])) by (job)",
+          "legendFormat": "{{job}} raw produced",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\", topic=\"content.article.raw.v1\"}[5m])) by (job)",
+          "legendFormat": "{{job}} raw consumed",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=\"content.article.stored.v1\"}[5m])) by (job)",
+          "legendFormat": "{{job}} stored produced",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "NLP Pipeline Input",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\", topic=\"content.article.stored.v1\"}[5m])) by (consumer_group)",
+          "legendFormat": "{{consumer_group}} consumed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=~\"nlp\\\\..*\"}[5m])) by (topic)",
+          "legendFormat": "produced {{topic}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Consumer Groups",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumption by Consumer Group",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 21 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\"}[5m])) by (consumer_group)",
+          "legendFormat": "{{consumer_group}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Production by Service",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Production by Service & Topic",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 31 },
+      "targets": [
+        {
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\"}[5m])) by (job, topic)",
+          "legendFormat": "{{job}} \u2014 {{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

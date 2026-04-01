@@ -18,6 +18,7 @@ Workflows covered:
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,9 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+_AUTH_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
 
 
 # ── Health probes ─────────────────────────────────────────────────────────────
@@ -65,6 +69,7 @@ async def test_trigger_single_symbol_creates_task(e2e_client: AsyncClient, e2e_d
             "dataset_type": "ohlcv",
             "timeframe": "1d",
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
@@ -84,8 +89,8 @@ async def test_trigger_single_symbol_creates_task(e2e_client: AsyncClient, e2e_d
 
 async def test_trigger_multiple_symbols(e2e_client: AsyncClient) -> None:
     """POST /api/v1/ingest/trigger with multiple symbols creates N tasks."""
-    ts = int(time.time())
-    symbols = [f"E2E_MULTI_{ts}_A", f"E2E_MULTI_{ts}_B", f"E2E_MULTI_{ts}_C"]
+    ts = int(time.time()) % 10000
+    symbols = [f"E2MUL{ts:04d}A", f"E2MUL{ts:04d}B", f"E2MUL{ts:04d}C"]
 
     resp = await e2e_client.post(
         "/api/v1/ingest/trigger",
@@ -95,6 +100,7 @@ async def test_trigger_multiple_symbols(e2e_client: AsyncClient) -> None:
             "dataset_type": "ohlcv",
             "timeframe": "1d",
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
@@ -111,11 +117,11 @@ async def test_trigger_idempotent(e2e_client: AsyncClient) -> None:
         "timeframe": "1d",
     }
 
-    resp1 = await e2e_client.post("/api/v1/ingest/trigger", json=payload)
+    resp1 = await e2e_client.post("/api/v1/ingest/trigger", json=payload, headers=_AUTH_HEADERS)
     assert resp1.status_code == 202
     assert resp1.json()["tasks_created"] == 1
 
-    resp2 = await e2e_client.post("/api/v1/ingest/trigger", json=payload)
+    resp2 = await e2e_client.post("/api/v1/ingest/trigger", json=payload, headers=_AUTH_HEADERS)
     assert resp2.status_code == 202
     body2 = resp2.json()
     # Idempotent: same dedupe key → skip (tasks_created=0, tasks_skipped=1)
@@ -133,6 +139,7 @@ async def test_trigger_invalid_provider_returns_422(e2e_client: AsyncClient) -> 
             "dataset_type": "ohlcv",
             "timeframe": "1d",
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 422, resp.text
 
@@ -154,6 +161,7 @@ async def test_backfill_90_days_produces_3_chunks(e2e_client: AsyncClient) -> No
             "timeframe": "1d",
             "chunk_days": 30,
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
@@ -175,6 +183,7 @@ async def test_backfill_single_day_one_chunk(e2e_client: AsyncClient) -> None:
             "timeframe": "1d",
             "chunk_days": 30,
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     body = resp.json()
@@ -194,13 +203,14 @@ async def test_backfill_exceeds_max_chunks_returns_422(e2e_client: AsyncClient) 
             "timeframe": "1d",
             "chunk_days": 30,
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 422, resp.text
 
 
 async def test_backfill_idempotent(e2e_client: AsyncClient) -> None:
     """Same backfill request twice: second call has tasks_created=0."""
-    symbol = f"E2E_BFIDEM_{int(time.time())}"
+    symbol = f"E2BFID{int(time.time()) % 10000:04d}"
     payload = {
         "provider": "eodhd",
         "symbol": symbol,
@@ -210,11 +220,11 @@ async def test_backfill_idempotent(e2e_client: AsyncClient) -> None:
         "chunk_days": 30,
     }
 
-    resp1 = await e2e_client.post("/api/v1/ingest/backfill", json=payload)
+    resp1 = await e2e_client.post("/api/v1/ingest/backfill", json=payload, headers=_AUTH_HEADERS)
     assert resp1.status_code == 202
     assert resp1.json()["tasks_created"] == 1
 
-    resp2 = await e2e_client.post("/api/v1/ingest/backfill", json=payload)
+    resp2 = await e2e_client.post("/api/v1/ingest/backfill", json=payload, headers=_AUTH_HEADERS)
     assert resp2.status_code == 202
     assert resp2.json()["tasks_created"] == 0
 
@@ -250,6 +260,7 @@ async def test_trigger_then_status_reflects_pending_task(e2e_client: AsyncClient
     resp = await e2e_client.post(
         "/api/v1/ingest/trigger",
         json={"provider": "eodhd", "symbols": [symbol], "dataset_type": "ohlcv", "timeframe": "1d"},
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202
 
@@ -277,6 +288,7 @@ async def test_trigger_full_async_pipeline_reaches_terminal_states(
             "dataset_type": "ohlcv",
             "timeframe": "1d",
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     assert resp.json()["tasks_created"] == 1
@@ -364,7 +376,7 @@ async def test_triggered_task_progresses_out_of_pending(
     from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
     from sqlalchemy import select
 
-    symbol = f"E2E_LIFECYCLE_{int(time.time())}"
+    symbol = f"E2LIFE{int(time.time()) % 10000:04d}"
     resp = await e2e_client.post(
         "/api/v1/ingest/trigger",
         json={
@@ -373,6 +385,7 @@ async def test_triggered_task_progresses_out_of_pending(
             "dataset_type": "ohlcv",
             "timeframe": "1d",
         },
+        headers=_AUTH_HEADERS,
     )
     assert resp.status_code == 202, resp.text
     assert resp.json()["tasks_created"] == 1

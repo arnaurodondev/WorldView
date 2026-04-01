@@ -94,6 +94,7 @@ def test_fundamentals_variant_membership_exhaustive() -> None:
 @pytest.mark.unit
 def test_ingestion_task_status_values() -> None:
     assert IngestionTaskStatus.PENDING == "pending"
+    assert IngestionTaskStatus.CLAIMED == "claimed"
     assert IngestionTaskStatus.RUNNING == "running"
     assert IngestionTaskStatus.SUCCEEDED == "succeeded"
     assert IngestionTaskStatus.RETRY == "retry"
@@ -103,7 +104,7 @@ def test_ingestion_task_status_values() -> None:
 @pytest.mark.unit
 def test_ingestion_task_status_membership_exhaustive() -> None:
     members = {s.value for s in IngestionTaskStatus}
-    assert members == {"pending", "running", "succeeded", "retry", "failed"}
+    assert members == {"pending", "claimed", "running", "succeeded", "retry", "failed"}
 
 
 @pytest.mark.unit

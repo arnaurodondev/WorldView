@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Wave D-4 complete — REST API + health/metrics/DLQ + integration tests · Service feature-complete
 
 ---
 
@@ -24,14 +24,27 @@ and performs read/write operations only.
 
 ## API Surface
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (intelligence_db) | — |
-| GET | `/metrics` | Prometheus | — |
-| GET | `/api/v1/entities/{id}/graph` | KG neighborhood (query: depth, limit) | medium |
-| GET | `/api/v1/relations` | Query relations (entity_id, relation_type, active_only) | medium |
-| GET | `/api/v1/graph/stats` | Graph statistics (node/edge counts, confidence distribution) | slow |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/healthz` | — | Liveness — always 200 |
+| GET | `/readyz` | — | Readiness — SELECT 1 on intelligence_db; 503 if degraded |
+| GET | `/metrics` | — | Prometheus text format |
+| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200) |
+| GET | `/api/v1/relations` | — | Paginated filtered relation list; query params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
+| GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |
+| GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
+| GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
+| POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |
+
+### `summary_authority` Field
+
+All relation responses include `summary_authority` computed at query time (NOT a cached column):
+
+```
+summary_authority = confidence * log1p(evidence_count)
+```
+
+Returns `0.0` when confidence is `null` (stale/unknown).
 
 ---
 
@@ -42,6 +55,7 @@ and performs read/write operations only.
 | Topic | Consumer Group | Purpose |
 |-------|---------------|---------|
 | `nlp.article.enriched.v1` | `kg-service-group` | Ingest extracted entities/relations (at-least-once; commit after DB write) |
+| `entity.canonical.created.v1` | `kg-entity-group` | Unblock `relation_evidence_raw` rows with `entity_provisional=true` |
 
 ### Produced
 
@@ -50,7 +64,7 @@ and performs read/write operations only.
 | `graph.state.changed.v1` | `GraphStateChangedV1` | `primary_entity_id` | Outbox in `intelligence_db` |
 | `intelligence.contradiction.v1` | `ContradictionDetectedV1` | `subject_entity_id` | Outbox in `intelligence_db` |
 | `relation.type.proposed.v1` | `RelationTypeProposedV1` | `proposed_type` | Outbox in `intelligence_db` |
-| `entity.dirtied.v1` | `EntityDirtiedV1` | `entity_id` | Outbox in `intelligence_db` (triggers embedding refresh in S6) |
+| `entity.dirtied.v1` | `EntityDirtiedV1` | `entity_id` | **Direct produce** (compacted topic — bypasses outbox; triggers embedding refresh in S6) |
 
 ---
 
@@ -63,15 +77,68 @@ and performs read/write operations only.
 | 13 | **Derived-Semantics Workers** | Async (APScheduler) | Aggregation worker, confidence recomputation per decay_class, contradiction detection (subject-based), relation summary generation (Ollama), embedding refresh |
 | 14 | **Shadow Migration Worker** | Async (scheduled) | Sync active `RELATION_STATE` relations to Apache AGE graph for Cypher query experiments; not on critical path |
 
-### Block 13 — Async Worker Cadences
+### Block 13 — Async Worker Cadences (Wave D-3)
 
-| Worker | Interval | Batch Size | Notes |
-|--------|----------|------------|-------|
-| Aggregation (`relation_evidence_raw` → `relations`) | 300s | 500 rows | Upserts aggregate relation confidence |
-| Confidence recomputation | per `decay_class` schedule | — | Decays confidence based on evidence age |
-| Contradiction detection | 30s | 100 claims | Subject-based; emits `intelligence.contradiction.v1` |
-| Relation summary generation | 3600s | — | Generates narrative summaries via Ollama; embeds summaries |
-| Embedding refresh | On `entity.dirtied.v1` | — | Refreshes `entity_profile_embeddings` in `nlp_db` |
+| ID | Worker | Interval | Batch | Notes |
+|----|--------|----------|-------|-------|
+| 13A | `ConfidenceWorker` | 15 min | 8 partitions | Processes unprocessed `relation_evidence_raw` grouped by `partition_key`; 4-step confidence formula; marks processed |
+| 13B | `ContradictionBatchWorker` | 30 min | 100 claims | Subject-based scan via `DISTINCT ON`; inserts `contradictions` rows idempotently (ON CONFLICT DO NOTHING) |
+| 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence_hash change detection (skip LLM if unchanged); LLM extraction via FallbackChainClient |
+| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'` |
+| 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
+| 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
+| 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | LLM extraction for provisional entities; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
+| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL` |
+| 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS + prune >24 months |
+| 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent CREATE IF NOT EXISTS for yearly partitions |
+
+### Multi-View Embedding Architecture (`entity_embedding_state`)
+
+Each entity has exactly **3 rows** in `entity_embedding_state` (one per `view_type`):
+
+| `view_type` | Source Text | Refresh Cadence | Worker |
+|-------------|-------------|-----------------|--------|
+| `definition` | Company description / canonical text | 90-day + event-triggered | 13D-1 + consumer 13D-4/5 |
+| `narrative` | Deterministic template (claims + contradictions) | 7-day | 13D-2 |
+| `fundamentals_ohlcv` | Financial metrics narrative via `build_fundamentals_narrative()` | 30-day | 13D-3 |
+
+Key invariants:
+- SHA-256 change detection on all views: unchanged text never triggers re-embed
+- `entity_embedding_state.source_hash` stores hex digest for comparison
+- LLM alias collision check: `EntityAliasRepository.find_by_normalized_and_type()` — reject alias if it maps to a different entity
+
+### Consumers (Wave D-3)
+
+| ID | Consumer | Group | Topic | Action |
+|----|----------|-------|-------|--------|
+| 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed |
+| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed |
+
+### LLM Fallback Chain (`infrastructure/llm/fallback_chain.py`)
+
+`FallbackChainClient` provides embedding + extraction with automatic fallback:
+1. **Ollama** — 3 retries (30s / 60s / 120s delays)
+2. **Gemini Flash Lite** — 2 retries on Ollama failure
+3. **NULL** — both exhausted; logged to `llm_usage_log` with `success=False`
+
+All calls (including Ollama $0 calls) logged to `llm_usage_log` with provider, model, tokens, cost, latency.
+
+### Outbox Dispatcher (`infrastructure/outbox/dispatcher.py`)
+
+Polls `intelligence_db.outbox_events FOR UPDATE SKIP LOCKED`. Allowed topics:
+- `graph.state.changed.v1`
+- `intelligence.contradiction.v1`
+- `relation.type.proposed.v1`
+
+`entity.dirtied.v1` must NOT appear in outbox (direct produce only — compacted topic). If found: WARNING logged + mark_dispatched (not re-deliverable). Unknown topic: `mark_failed`.
+
+### External REST Dependency (Wave D-3)
+
+`FundamentalsRefreshWorker` calls `market-data` service REST:
+```
+GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
+```
+`MARKET_DATA_BASE_URL` defaults to `http://market-data:8003`. S3/HTTP failure = skip entity (retry next 30-day cycle).
 
 ---
 
@@ -111,8 +178,104 @@ and performs read/write operations only.
 | `RELATION_CANONICALIZATION_THRESHOLD` | `0.35` | Max cosine distance for ANN soft-mapping |
 | `ALEMBIC_ENABLED` | `false` | Must remain false (intelligence_db DDL is external) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
+| `MARKET_DATA_BASE_URL` | `http://market-data:8003` | REST endpoint for fundamentals + OHLCV data (13D-3 worker) |
+| `GEMINI_API_KEY` | — | Gemini Flash Lite fallback for embedding/extraction |
+| `KNOWLEDGE_GRAPH_LOG_LEVEL` | `INFO` | Log verbosity |
+| `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | JSON structured log output |
+| `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | — | OTel OTLP gRPC endpoint (optional) |
+| `KNOWLEDGE_GRAPH_ADMIN_TOKEN` | — | X-Admin-Token for DLQ admin endpoints (empty = auth disabled) |
+| `DISPATCHER_POLL_INTERVAL_S` | `5.0` | Outbox dispatcher poll cadence |
+| `DISPATCHER_BATCH_SIZE` | `100` | Outbox events per poll cycle |
 
 ---
+
+## Hot Path Implementation (Wave D-2)
+
+### Co-Topology Architecture
+
+`KnowledgeGraphScheduler` (`infrastructure/scheduler/scheduler.py`) starts in the FastAPI lifespan:
+- **`AsyncIOScheduler`** (APScheduler) with 8 job slots running in the same asyncio event loop
+- **`EnrichedArticleConsumer`** task (`asyncio.create_task`) for `nlp.article.enriched.v1`
+- Graceful SIGTERM: `scheduler.shutdown(wait=False)` → cancel consumer task with `contextlib.suppress(CancelledError)`
+
+### Block 11: Canonicalization (`application/blocks/canonicalization.py`)
+
+3-step pipeline per PRD §6.7:
+1. **Exact match** → `registry_repo.find_exact(raw_type)` → returns full registry row
+2. **ANN soft-map** → `embedding_client.embed(raw_type)` → `registry_repo.find_by_embedding(embedding, distance_threshold=0.35)` (cosine)
+3. **Propose** → emit `relation.type.proposed.v1` via outbox as JSON bytes; return `canonical_type=None` WITHOUT raising
+
+`EmbeddingClientProtocol` is duck-typed locally (no ml-clients runtime dependency — Python version boundary).
+
+### Block 12a: Graph Materialization (`application/blocks/graph_write.py`)
+
+Per enriched message:
+1. Advisory lock + upsert `relations` (subject/type/object natural key) — skipped when `canonical_type=None`
+2. INSERT `relation_evidence_raw` — **`partition_key` is STORED; never in INSERT**
+3. INSERT `events` + `event_entities` (ON CONFLICT DO NOTHING)
+4. INSERT `claims` (ON CONFLICT DO NOTHING)
+5. Produce `entity.dirtied.v1` **directly** (compacted topic, key=entity_id bytes)
+6. Emit `graph.state.changed.v1` via outbox
+
+Rows with `entity_provisional=true` are staged but skipped by aggregation worker until resolved.
+
+### Block 12b: Contradiction Detection (`application/blocks/contradiction.py`)
+
+- Query `claims` with **opposite** polarity on same `(subject_entity_id, claim_type)` within 90-day window
+- Both claims must be non-neutral (`positive` ↔ `negative`)
+- strength = `min(new_confidence, opposing_confidence)`
+- Writes `relation_contradiction_links` + emits `intelligence.contradiction.v1` via outbox
+
+### Consumers (Wave D-2)
+
+| File | Consumer Class | Group | Handles |
+|------|---------------|-------|---------|
+| `infrastructure/consumer/enriched_consumer.py` | `EnrichedArticleConsumer` | `kg-service-group` | Block 11→12a→12b pipeline; Valkey dedup (24h TTL); `_NoOpUoW` (manages own session) |
+| `infrastructure/consumer/entity_consumer.py` | `EntityCreatedConsumer` | `kg-entity-group` | UPDATE `relation_evidence_raw SET entity_provisional=false` for resolved provisional entities |
+
+---
+
+## Domain Models (Wave D-1)
+
+| Class | Location | Notes |
+|-------|----------|-------|
+| `Relation` | `domain/models.py` | Frozen DC; maps to `relations` table (hash-partitioned ×8) |
+| `RelationEvidence` | `domain/models.py` | Frozen DC; `is_backfill` flag for historical loads |
+| `RelationSummary` | `domain/models.py` | LLM-generated; `evidence_hash` for change-detection skip |
+| `ContradictionLink` | `domain/models.py` | Row in `relation_contradiction_links`; no cached temporal weight |
+| `Contradiction` | `domain/models.py` | Event aggregate: subject-based, opposite+non-neutral polarities |
+| `ConfidenceComponents` | `domain/models.py` | 4-step result; call `.validate()` to assert bounds |
+| `SemanticMode` | `domain/enums.py` | `RELATION_STATE` \| `TEMPORAL_CLAIM` (exactly 2 values) |
+| `DecayClass` | `domain/enums.py` | `STANDARD` \| `TEMPORAL` — formula meta-class |
+| `RelationType` | `domain/enums.py` | 8 well-known types; full registry in DB |
+
+## Confidence Formula (PRD §10.1)
+
+```
+Support        = sum(w_i * source_weight_i) / sum(w_i)
+                 where w_i = exp(-alpha * days_since(evidence_date))
+Corroboration  = min(distinct_qualifying_sources * 0.05, 0.20)
+                 qualifying = temporal_weight >= 0.1
+Contradiction  = min(sum(top-3 decayed link strengths), 0.60)
+Final          = clamp(support + corroboration - contradiction, 0.0, 1.0)
+```
+
+**Decay alpha selection**:
+- `RELATION_STATE` → uses the relation's `decay_alpha` from `decay_class_config` row
+- `TEMPORAL_CLAIM` → always uses `0.02310` (30-day half-life, regardless of decay_class)
+
+`ConfidenceComponents.validate()` asserts: final ∈ [0,1], corroboration ≤ 0.20, contradiction ≤ 0.60.
+
+## DB Topology
+
+S7 uses **two session factories** for `intelligence_db` (no Alembic — DDL owned by `intelligence-migrations`):
+
+| Factory | Usage |
+|---------|-------|
+| `create_intelligence_session_factory` | Read/write — hot path writes, worker updates |
+| `create_readonly_session_factory` | Read-only — query endpoints, aggregation reads |
+
+**Critical constraint**: `partition_key` is a `GENERATED ALWAYS AS STORED` column in `relations` and `relation_evidence_raw` — **never included in INSERT statements**.
 
 ## Internal Modules
 

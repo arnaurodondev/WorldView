@@ -1,6 +1,6 @@
 # Portfolio Service
 
-> **Owner**: Portfolio domain · **Database**: `portfolio_db` · **Port**: 8000
+> **Owner**: Portfolio domain · **Database**: `portfolio_db` · **Port**: 8001
 > **Status**: Existing (migrated from `platform_repo/apps/backend-portfolio`)
 
 ---

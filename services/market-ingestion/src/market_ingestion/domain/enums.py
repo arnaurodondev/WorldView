@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from contracts.enums import (
+    IngestionTaskStatus as IngestionTaskStatus,  # type: ignore[import-untyped]  # — canonical re-export
+)
+from messaging.enums import OutboxStatus as OutboxStatus  # — canonical re-export
+
 
 class Provider(StrEnum):
     EODHD = "eodhd"
@@ -28,22 +33,6 @@ class DatasetType(StrEnum):
 class FundamentalsVariant(StrEnum):
     ANNUAL = "annual"
     QUARTERLY = "quarterly"
-
-
-class IngestionTaskStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    RETRY = "retry"
-    FAILED = "failed"
-
-
-class OutboxStatus(StrEnum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    DELIVERED = "delivered"
-    FAILED = "failed"
-    DEAD_LETTER = "dead_letter"
 
 
 class BackfillStatus(StrEnum):

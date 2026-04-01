@@ -1,19 +1,26 @@
-"""FastAPI application factory — content-ingestion service (S4)."""
+"""FastAPI application factory — content-ingestion service (S4).
+
+The API process handles HTTP requests only.  Background concerns (scheduler,
+worker, outbox dispatcher) run as separate processes (R22).
+"""
 
 from __future__ import annotations
 
-import asyncio
+import re
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import structlog.contextvars  # context binding only — logger via observability.get_logger
+import httpx
+import structlog.contextvars
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from content_ingestion.api.routes import health
+from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
-from content_ingestion.infrastructure.db.session import create_session_factory
-from content_ingestion.infrastructure.messaging.outbox.dispatcher import ContentIngestionOutboxDispatcher
+from content_ingestion.infrastructure.db.session import _build_factories
+from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
+from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -24,9 +31,18 @@ from storage.settings import StorageSettings  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+logger_mod = get_logger("content_ingestion.app")  # type: ignore[no-any-return]
+
+
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Propagate X-Request-ID through the request lifecycle."""
+    """Propagate X-Request-ID through the request lifecycle.
+
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
 
     async def dispatch(
         self,
@@ -35,7 +51,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         import common.ids
 
-        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = str(request_id)
@@ -52,39 +69,38 @@ def _normalize_endpoint(endpoint: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    settings = Settings()
-    app.state.settings = settings
+    settings: Settings = app.state.settings
 
     # 1. Logging — always first
     configure_logging(
-        service_name="content-ingestion",
+        service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
     )
-    logger = get_logger("content_ingestion.app")
+    log = get_logger("content_ingestion.app")
 
-    # 2. Metrics
-    metrics = create_metrics(service_name="content-ingestion")
-    add_prometheus_middleware(app, metrics)
-    app.state.metrics = metrics
-
-    # 3. Tracing (optional)
+    # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
-            service_name="content-ingestion",
+            service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
-        add_otel_middleware(app)
 
-    # 4. Database
-    session_factory = create_session_factory(settings)
+    # 3. Database — dual session factory (R23: read/write split)
+    engine, write_factory, read_factory = _build_factories(settings)
+    session_factory = write_factory  # backward compat alias
+    app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.write_factory = write_factory
+    app.state.read_factory = read_factory
+    app.state.uow_factory = lambda: SqlaUnitOfWork(write_factory, read_factory)
+    app.state.read_uow_factory = lambda: SqlaReadOnlyUnitOfWork(read_factory)
 
-    # 5. Valkey
+    # 4. Valkey
     valkey = create_valkey_client_from_url(settings.valkey_url)
     app.state.valkey = valkey
 
-    # 6. Object storage (bronze tier)
+    # 5. Object storage (bronze tier)
     storage_settings = StorageSettings(
         endpoint=_normalize_endpoint(settings.minio_endpoint),
         access_key=settings.minio_access_key,
@@ -92,35 +108,88 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         use_ssl=settings.minio_secure,
         default_bucket=settings.minio_bucket,
     )
-    storage = build_object_storage(
-        settings=storage_settings,
-    )
+    storage = build_object_storage(settings=storage_settings)
     app.state.storage = storage
+    app.state.bronze_storage = MinioBronzeAdapter(storage)
 
-    # 7. Outbox dispatcher (background task)
-    dispatcher = ContentIngestionOutboxDispatcher(
-        settings=settings,
-        session_factory=session_factory,
+    # 6. HTTP client with SSRF-safe transport (DNS rebinding prevention — BP-024)
+    from content_ingestion.infrastructure.http.ssrf_transport import SSRFSafeTransport
+
+    http_client = httpx.AsyncClient(
+        transport=SSRFSafeTransport(),
+        timeout=httpx.Timeout(
+            settings.http_client.timeout_seconds,
+            connect=settings.http_client.connect_timeout_seconds,
+        ),
     )
-    dispatch_task: asyncio.Task[Any] = asyncio.create_task(dispatcher.run())
-    app.state.dispatcher = dispatcher
+    app.state.http_client = http_client
 
-    logger.info("service_started", service="content-ingestion")
+    log.info("service_started", service=settings.service_name)
     yield
 
-    dispatcher.stop()
-    await dispatch_task
+    # Shutdown — clean up API-owned resources only
+    await http_client.aclose()
     await valkey.close()
-    logger.info("service_stopped", service="content-ingestion")
+    await engine.dispose()
+    log.info("service_stopped", service=settings.service_name)
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
+def _register_exception_handlers(app: FastAPI) -> None:
+    """Map domain exceptions to appropriate HTTP status codes."""
+    from content_ingestion.domain.exceptions import AdapterError, ConfigurationError, QuotaExhaustedError, StorageError
+
+    @app.exception_handler(AdapterError)
+    async def _adapter_error(_request: Request, exc: AdapterError) -> JSONResponse:
+        logger_mod.error("adapter_error", error=str(exc))
+        return JSONResponse(status_code=502, content={"error": "bad_gateway", "detail": "Upstream source error"})
+
+    @app.exception_handler(QuotaExhaustedError)
+    async def _quota_error(_request: Request, exc: QuotaExhaustedError) -> JSONResponse:
+        logger_mod.warning("quota_exhausted", error=str(exc))
+        return JSONResponse(status_code=429, content={"error": "too_many_requests", "detail": "Quota exhausted"})
+
+    @app.exception_handler(ConfigurationError)
+    async def _config_error(_request: Request, exc: ConfigurationError) -> JSONResponse:
+        logger_mod.error("configuration_error", error=str(exc))
+        return JSONResponse(status_code=500, content={"error": "internal_error", "detail": "Service misconfiguration"})
+
+    @app.exception_handler(StorageError)
+    async def _storage_error(_request: Request, exc: StorageError) -> JSONResponse:
+        logger_mod.error("storage_error", error=str(exc))
+        return JSONResponse(status_code=503, content={"error": "service_unavailable", "detail": "Storage unavailable"})
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
+        logger_mod.exception("unhandled_error", error=str(exc))
+        return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        settings: Optional pre-built settings (for testing). Created automatically if None.
+    """
     app = FastAPI(
         title="content-ingestion",
         version="2025.6.0",
         lifespan=lifespan,
     )
+    settings = settings or Settings()
+    app.state.settings = settings
+
+    # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
+
+    # Domain exception handlers
+    _register_exception_handlers(app)
+
     app.include_router(health.router, tags=["health"])
+    app.include_router(admin.router)
+    app.include_router(dlq.router)
+    app.include_router(internal.router)
     return app

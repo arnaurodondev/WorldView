@@ -9,18 +9,25 @@ On ``commit()``:
   2. The optional ``outbox_notifier`` callable is invoked with the list of
      accumulated domain events (for immediate outbox dispatch).
   3. ``collected_events`` is cleared.
+  4. Post-commit hooks are run with independent error isolation — hook errors
+     are logged as warnings and do NOT propagate (F-DS-015).
 
 On ``__aexit__`` with an unhandled exception:
-  - The write session is rolled back before re-raising.
+  - Rollback is attempted; any rollback error is suppressed.
+  - Sessions are always closed in the ``finally`` block (F-DS-006).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from market_data.application.ports.uow import UnitOfWork
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
+from market_data.infrastructure.db.repositories.fundamental_metrics_read_repo import PgFundamentalMetricsQueryRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
+from market_data.infrastructure.db.repositories.fundamentals_read_repo import PgFundamentalsReadRepository
 from market_data.infrastructure.db.repositories.fundamentals_repo import PgFundamentalsRepository
 from market_data.infrastructure.db.repositories.ingestion_event_repo import PgIngestionEventRepository
 from market_data.infrastructure.db.repositories.instrument_repo import PgInstrumentRepository
@@ -29,13 +36,17 @@ from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutbo
 from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
 
+logger = structlog.get_logger(__name__)
+
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from market_data.application.ports.repositories import (
         FailedTaskRepository,
+        FundamentalMetricsQueryRepository,
+        FundamentalsReadRepository,
         FundamentalsRepository,
         IngestionEventRepository,
         InstrumentRepository,
@@ -72,6 +83,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._write_session: AsyncSession | None = None
         self._read_session: AsyncSession | None = None
         self._events: list[DomainEvent] = []
+        self._post_commit_hooks: list[Coroutine[Any, Any, None]] = []
 
         # Lazily initialised repository instances
         self._securities: PgSecurityRepository | None = None
@@ -92,27 +104,47 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if exc_type is not None:
-            await self.rollback()
-        if self._write_session:
-            await self._write_session.close()
-        if self._read_session and self._read_session is not self._write_session:
-            await self._read_session.close()
+        # F-DS-006: rollback errors must not prevent session cleanup.
+        try:
+            if exc_type is not None:
+                await self.rollback()
+        except Exception as exc:
+            logger.warning("uow_rollback_failed", error=str(exc))
+        finally:
+            if self._write_session:
+                await self._write_session.close()
+            if self._read_session and self._read_session is not self._write_session:
+                await self._read_session.close()
 
     # ── transaction ────────────────────────────────────────────────────────────
 
     async def commit(self) -> None:
-        """Commit the write session then notify the outbox dispatcher."""
+        """Commit the write session, notify the outbox dispatcher, then run post-commit hooks."""
         if self._write_session:
             await self._write_session.commit()
         events = list(self._events)
         self._events.clear()
         if events and self._outbox_notifier is not None:
             await self._outbox_notifier(events)
+        # F-DS-015: run each hook in isolation so a cache/side-effect failure
+        # does not propagate out of commit() and dead-letter the Kafka message.
+        hooks = self._post_commit_hooks[:]
+        self._post_commit_hooks.clear()
+        for hook in hooks:
+            try:
+                await hook
+            except Exception as exc:
+                logger.warning("post_commit_hook_failed", error=str(exc))
 
     async def rollback(self) -> None:
         if self._write_session:
             await self._write_session.rollback()
+
+    # ── post-commit hooks ────────────────────────────────────────────────────
+
+    def schedule_post_commit(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Schedule a coroutine to run after the next successful commit (M-005)."""
+        self._post_commit_hooks.append(coro)
 
     # ── event accumulation ────────────────────────────────────────────────────
 
@@ -233,3 +265,13 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def quotes_read(self) -> QuoteRepository:
         """Quote repository bound to the read (replica) session."""
         return PgQuoteRepository(self._read())
+
+    @property
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+        return PgFundamentalsReadRepository(self._read())
+
+    @property
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
+        return PgFundamentalMetricsQueryRepository(self._read())

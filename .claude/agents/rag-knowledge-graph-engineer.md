@@ -17,7 +17,7 @@ Design, implement, and maintain the intelligence layer: graph materialization (S
 - `AGENTS.md`
 - `RULES.md`
 - `docs/MASTER_PLAN.md`
-- `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` — §3 (hybrid retrieval contract), §5 (Blocks 11–14), §6.4 (intelligence_db schema), §10 (confidence management)
+- `docs/specs/0014-PRD-v1-final.md` — §3 (hybrid retrieval contract), §5 (Blocks 11–14), §6.4 (intelligence_db schema), §10 (confidence management)
 - `docs/services/knowledge-graph.md`
 - `docs/services/nlp-pipeline.md`
 - `docs/services/rag-chat.md`

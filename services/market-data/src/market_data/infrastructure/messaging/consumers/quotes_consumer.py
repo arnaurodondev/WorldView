@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.quotes import CanonicalQuote  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, Quote, Security
-from market_data.domain.events import InstrumentCreated
+from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -56,7 +57,6 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         self._valkey_client = valkey_client
         self._quote_cache: QuoteCache | None = None
         self._current_uow: UnitOfWork | None = None
-        self._current_content_sha256: str | None = None
 
         # Build QuoteCache lazily if we have a valkey client
         if valkey_client is not None:
@@ -87,20 +87,19 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         return str(value["event_id"])
 
     async def is_duplicate(self, event_id: str) -> bool:
-        if self._current_uow is not None:
-            return await self._current_uow.ingestion_events.exists(event_id)
-        async with self._uow_factory() as uow:
-            return await uow.ingestion_events.exists(event_id)
+        # Dedup is handled atomically via create_if_not_exists at the start of
+        # process_message (BP-035). Always return False here so the base class
+        # proceeds to process_message regardless.
+        return False
 
     async def mark_processed(self, event_id: str) -> None:
-        assert self._current_uow is not None
-        await self._current_uow.ingestion_events.create(
-            event_id, event_type=_TOPIC, content_sha256=self._current_content_sha256
-        )
-        self._current_content_sha256 = None
+        # No-op: the event_id was already recorded by create_if_not_exists inside
+        # process_message before any data was written.
+        pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
-        assert self._current_uow is not None
+        if self._current_uow is None:
+            raise RuntimeError("store_failure called outside of processing context — this is a programming error")
         payload = {
             "event_id": failure.event_id,
             "topic": failure.topic,
@@ -141,15 +140,27 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
             return
 
         uow = self._current_uow
-        assert uow is not None
+        if uow is None:
+            raise RuntimeError("process_message called without an active unit of work — this is a programming error")
 
-        # Content-hash dedup: skip download + DB write when canonical object unchanged.
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        # Returns True if newly inserted (new event), False if already processed (duplicate).
+        # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
+        event_id = value.get("event_id", "")
         sha256 = value.get("canonical_ref_sha256") or ""
+
+        # Content-hash dedup: check BEFORE inserting so exists_by_content_hash
+        # does not find the record we are about to insert (BP-035 follow-up).
         if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
             logger.debug("quotes_consumer.skip_unchanged", sha256_prefix=sha256[:8])
-            self._current_content_sha256 = None
+            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
             return
-        self._current_content_sha256 = sha256 or None
+
+        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
+        is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+        if not is_new:
+            logger.debug("quotes_consumer.duplicate_event", event_id=str(event_id)[:8])
+            return
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
@@ -181,30 +192,45 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_quotes=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            uow.collect_event(
-                InstrumentCreated(
-                    instrument_id=instrument.id,
-                    security_id=instrument.security_id,
-                    symbol=symbol,
-                    exchange=exchange,
-                )
+            created_event = InstrumentCreated(
+                instrument_id=instrument.id,
+                security_id=instrument.security_id,
+                symbol=symbol,
+                exchange=exchange,
+            )
+            await uow.outbox_events.create(
+                event_type=created_event.event_type,
+                topic=EVENT_TOPIC_MAP[created_event.event_type],
+                payload=event_to_outbox_payload(created_event),
             )
         elif not instrument.flags.has_quotes:
-            await uow.instruments.update_flags(
-                instrument.id,
-                InstrumentFlags(
-                    has_ohlcv=instrument.flags.has_ohlcv,
-                    has_quotes=True,
-                    has_fundamentals=instrument.flags.has_fundamentals,
-                ),
+            updated_flags = InstrumentFlags(
+                has_ohlcv=instrument.flags.has_ohlcv,
+                has_quotes=True,
+                has_fundamentals=instrument.flags.has_fundamentals,
+            )
+            await uow.instruments.update_flags(instrument.id, updated_flags)
+            updated_event = InstrumentUpdated(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                has_ohlcv=instrument.flags.has_ohlcv,
+                has_quotes=True,
+                has_fundamentals=instrument.flags.has_fundamentals,
+                fields_updated=("has_quotes",),
+            )
+            await uow.outbox_events.create(
+                event_type=updated_event.event_type,
+                topic=EVENT_TOPIC_MAP[updated_event.event_type],
+                payload=event_to_outbox_payload(updated_event),
             )
 
-        # Map canonical → domain entity
+        # Map canonical → domain entity; preserve NULL values (D-004)
         quote = Quote(
             instrument_id=instrument.id,
-            bid=Decimal(str(canonical.bid)),
-            ask=Decimal(str(canonical.ask)),
-            last=Decimal(str(canonical.last)),
+            bid=Decimal(str(canonical.bid)) if canonical.bid is not None else None,
+            ask=Decimal(str(canonical.ask)) if canonical.ask is not None else None,
+            last=Decimal(str(canonical.last)) if canonical.last is not None else None,
             volume=canonical.volume,
             timestamp=(
                 canonical.timestamp
@@ -217,9 +243,11 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         # Upsert into DB
         await uow.quotes.upsert(quote)
 
-        # Invalidate Valkey cache after DB write
+        # Schedule cache invalidation to run AFTER the transaction commits (M-005).
+        # Invalidating before commit risks a read between invalidation and commit
+        # caching stale data into Valkey until TTL expiry.
         if self._quote_cache is not None:
-            await self._quote_cache.invalidate(instrument.id)
+            uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
 
         logger.info(
             "quotes_consumer.materialized",

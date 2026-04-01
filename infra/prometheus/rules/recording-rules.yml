@@ -1,0 +1,39 @@
+groups:
+  - name: worldview_red
+    interval: 30s
+    rules:
+      - record: job:http_requests:rate5m
+        expr: sum(rate({__name__=~".+_requests_total"}[5m])) by (job)
+
+      - record: job:http_errors:rate5m
+        expr: sum(rate({__name__=~".+_requests_total", status=~"5.."}[5m])) by (job)
+
+      - record: job:http_error_ratio:rate5m
+        expr: job:http_errors:rate5m / job:http_requests:rate5m
+
+      - record: job_path:http_requests:rate5m
+        expr: sum(rate({__name__=~".+_requests_total"}[5m])) by (job, path, method)
+
+      - record: job:http_duration_p50:rate5m
+        expr: histogram_quantile(0.50, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+
+      - record: job:http_duration_p95:rate5m
+        expr: histogram_quantile(0.95, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+
+      - record: job:http_duration_p99:rate5m
+        expr: histogram_quantile(0.99, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+
+  - name: worldview_kafka
+    interval: 30s
+    rules:
+      - record: job_topic:kafka_consumed:rate5m
+        expr: sum(rate({__name__=~".+_kafka_messages_consumed_total"}[5m])) by (job, topic, consumer_group)
+
+      - record: job:kafka_produced:rate5m
+        expr: sum(rate({__name__=~".+_kafka_messages_produced_total"}[5m])) by (job, topic)
+
+      - record: job:outbox_dispatched:rate5m
+        expr: sum(rate({__name__=~".+_outbox_dispatched_total"}[5m])) by (job)
+
+      - record: job:outbox_errors:rate5m
+        expr: sum(rate({__name__=~".+_outbox_dispatch_errors_total"}[5m])) by (job)
