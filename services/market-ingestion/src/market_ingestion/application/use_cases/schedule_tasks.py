@@ -91,10 +91,15 @@ class ScheduleDueTasksUseCase:
             # Only flip backfill_enabled=False for policies whose backfill tasks
             # were actually enqueued (i.e. survived budget/cap filtering).
             for bp in backfill_policies:
-                # Re-derive the task IDs for this policy to check overlap.
-                # Any task whose provider matches means the policy got at least one slot.
+                # FIX-BACKFILL-FLAG: Match on provider+symbol+dataset_type+timeframe so
+                # two OHLCV policies sharing the same provider/symbol but differing only
+                # in timeframe cannot steal each other's flag flip (BP-075).
                 policy_tasks_enqueued = any(
-                    str(t.provider) == str(bp.provider) and t.symbol == bp.symbol for t in final_tasks
+                    str(t.provider) == str(bp.provider)
+                    and t.symbol == bp.symbol
+                    and str(t.dataset_type) == str(bp.dataset_type)
+                    and (t.timeframe or "") == (bp.timeframe or "")
+                    for t in final_tasks
                 )
                 if policy_tasks_enqueued:
                     bp.backfill_enabled = False
@@ -135,12 +140,18 @@ class ScheduleDueTasksUseCase:
                 logger.debug("scheduler_skip_wildcard_policy", policy_id=policy.id)
                 continue
 
+            # FIX-WM: Pass variant so the watermark key matches the one
+            # used by execute_task.py (which passes task.variant).  Without
+            # this, FUNDAMENTALS tasks create a separate watermark row during
+            # execution and the scheduler checks a stale variant=NULL row.
+            task_variant = self._derive_variant(policy)
             watermark = await self._uow.watermarks.get_or_create(
                 provider=str(policy.provider),
                 dataset_type=str(policy.dataset_type),
                 symbol=symbol,
                 exchange=policy.exchange,
                 timeframe=policy.timeframe,
+                variant=task_variant,
             )
 
             if policy.backfill_enabled and policy.backfill_start_date is not None:
@@ -154,13 +165,16 @@ class ScheduleDueTasksUseCase:
             else:
                 # Incremental mode — schedule if due and no active task exists
                 if policy.is_due(watermark.current_bar_ts):
+                    # FIX-VARIANT: task_variant (computed above for watermark)
+                    # must also be passed to has_active_task so fundamentals
+                    # tasks (variant="annual") are detected as active.
                     already_queued = await self._uow.tasks.has_active_task(
                         provider=policy.provider,
                         dataset_type=policy.dataset_type,
                         symbol=symbol,
                         exchange=policy.exchange,
                         timeframe=policy.timeframe,
-                        variant=None,
+                        variant=task_variant,
                     )
                     if already_queued:
                         logger.debug(
@@ -176,6 +190,15 @@ class ScheduleDueTasksUseCase:
 
         return tasks
 
+    @staticmethod
+    def _derive_variant(policy: PollingPolicy) -> str | None:
+        """Return the task variant for a policy (matches factory method logic)."""
+        if policy.dataset_type == DatasetType.FUNDAMENTALS:
+            from market_ingestion.domain.enums import FundamentalsVariant
+
+            return FundamentalsVariant.ANNUAL.value
+        return None
+
     def _build_incremental_task(
         self,
         policy: PollingPolicy,
@@ -185,8 +208,13 @@ class ScheduleDueTasksUseCase:
         """Create one incremental task for a due policy."""
         from datetime import timedelta
 
-        range_end = now
-        range_start = now - timedelta(days=1)
+        # FIX-DEDUP: Truncate to UTC-day boundaries so the dedupe_key stays
+        # stable across all scheduler ticks within the same day.  Without this,
+        # range_end = now produces a different SHA-256 hash every tick and
+        # ON CONFLICT DO NOTHING never fires, causing unbounded task growth.
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        range_start = today
+        range_end = today + timedelta(days=1)
         date_range = DateRange(start=range_start, end=range_end)
 
         if policy.dataset_type == DatasetType.OHLCV:
@@ -216,6 +244,11 @@ class ScheduleDueTasksUseCase:
                 date_range=date_range,
                 exchange=policy.exchange,
             )
+        logger.debug(
+            "scheduler_unsupported_dataset_type",
+            dataset_type=str(policy.dataset_type),
+            symbol=symbol,
+        )
         return None
 
     def _build_backfill_tasks(
@@ -237,7 +270,10 @@ class ScheduleDueTasksUseCase:
             policy.backfill_start_date.day,
             tzinfo=UTC,
         )
-        end_dt = now
+        # FIX-BACKFILL: Truncate end to UTC midnight so the last chunk always
+        # produces the same dedupe_key within a given day.  Without this,
+        # end_dt = now drifts every tick and the last chunk bypasses dedup.
+        end_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         tasks: list[IngestionTask] = []
         current = start_dt

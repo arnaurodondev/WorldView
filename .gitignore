@@ -61,6 +61,3 @@ pgdata/
 *.pem
 *.key
 secrets/
-
-# Local attached source folder
-src/
