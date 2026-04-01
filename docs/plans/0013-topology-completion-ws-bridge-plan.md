@@ -308,11 +308,12 @@ Note for `enriched_consumer_main`: it creates an `OllamaEmbeddingAdapter` using 
 
 ---
 
-### Wave B-3: Entrypoint Tests — S10 alert
+### Wave B-3: Entrypoint Tests — S10 alert ✅
 
 **Goal**: Add `test_entrypoints.py` for alert (2 consumers + dispatcher).
 **Depends on**: Wave B-2
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-01 · 7 alert unit tests pass (133 total) · ruff + mypy clean
 
 #### Tasks
 
@@ -341,8 +342,8 @@ Important: after Wave C-2 lands, `intelligence_consumer_main` will use a `Valkey
 | `test_dispatcher_main_stop` | dispatcher.stop() delegated | unit |
 
 **Acceptance criteria**:
-- [ ] ≥7 test functions
-- [ ] `python -m pytest services/alert/tests/ -m unit -v` passes
+- [x] ≥7 test functions
+- [x] `python -m pytest services/alert/tests/ -m unit -v` passes
 
 ---
 
