@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,11 +32,14 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set MARKET_INGESTION_STORAGE_ACCESS_KEY env var
+    storage_secret_key: str  # Required — set MARKET_INGESTION_STORAGE_SECRET_KEY env var
     storage_bucket: str = "market-ingestion"
     bronze_bucket: str = "market-bronze"
     canonical_bucket: str = "market-canonical"
+
+    # Provider base URLs (operational — overridable without image rebuild)
+    eodhd_base_url: str = "https://eodhd.com/api"
 
     # Provider API keys
     eodhd_api_key: str = "demo"
@@ -58,9 +63,46 @@ class Settings(BaseSettings):
     # Dispatcher
     dispatcher_batch_size: int = 50
     dispatcher_poll_interval_seconds: float = 1.0
+    # Lease >=30 s — typical Kafka publish <5 s; 6x safety margin prevents
+    # concurrent dispatchers from re-claiming a stalled record.
+    dispatcher_lease_seconds: int = 60
     dispatcher_max_attempts: int = 5
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # Internal service-to-service auth (QA-018)
+    internal_service_token: str = ""
+
+    # Observability (STANDARDS.md §5 — mandatory in every service)
+    service_name: str = "market-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_missing_internal_token(self) -> Settings:
+        """Warn at startup if internal_service_token is unset (QA-018).
+
+        Uses structlog so the warning is captured by the structured log pipeline
+        in production log aggregators (F-SEC-001).
+        """
+        if not self.internal_service_token:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_internal_service_token",
+                message=(
+                    "MARKET_INGESTION_INTERNAL_SERVICE_TOKEN is not set — all mutating API "
+                    "endpoints (POST /trigger, POST /backfill) will return 401. "
+                    "Set this env var before deploying to production."
+                ),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_demo_eodhd_key(self) -> Settings:
+        if self.eodhd_api_key == "demo":
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "demo_eodhd_api_key",
+                message=(
+                    "EODHD API key is 'demo' — limited to demo endpoints only. "
+                    "Set MARKET_INGESTION_EODHD_API_KEY for production use."
+                ),
+            )
+        return self

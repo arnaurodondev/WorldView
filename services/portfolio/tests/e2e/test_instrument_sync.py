@@ -35,6 +35,7 @@ _DB_URL = os.getenv(
 async def test_instrument_consumer_upserts_instrument(e2e_db_session: AsyncSession) -> None:
     """InstrumentEventConsumer.process_message() upserts an InstrumentRef row."""
     from portfolio.infrastructure.db.session import create_session_factory
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
     from portfolio.infrastructure.messaging.consumers.instrument_consumer import InstrumentEventConsumer
     from sqlalchemy import select
 
@@ -53,18 +54,21 @@ async def test_instrument_consumer_upserts_instrument(e2e_db_session: AsyncSessi
     symbol = f"E2E_{event_id[:6].upper()}"
     exchange = "NASDAQ"
 
-    await consumer.process_message(
-        key=symbol,
-        value={
-            "event_id": event_id,
-            "symbol": symbol,
-            "exchange": exchange,
-            "name": "E2E Test Corp",
-            "currency": "USD",
-            "asset_class": "equity",
-        },
-        headers={},
-    )
+    async with SqlAlchemyUnitOfWork(session_factory) as uow:
+        consumer._current_uow = uow  # type: ignore[attr-defined]
+        await consumer.process_message(
+            key=symbol,
+            value={
+                "event_id": event_id,
+                "symbol": symbol,
+                "exchange": exchange,
+                "name": "E2E Test Corp",
+                "currency": "USD",
+                "asset_class": "equity",
+            },
+            headers={},
+        )
+        await uow.commit()
 
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
 
@@ -88,6 +92,8 @@ async def test_instrument_consumer_idempotent(e2e_db_session: AsyncSession) -> N
 
     engine, session_factory = create_session_factory(_DB_URL)
 
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
     config = ConsumerConfig(
         bootstrap_servers="localhost:9092",
         group_id="e2e-test-idem",
@@ -101,8 +107,15 @@ async def test_instrument_consumer_idempotent(e2e_db_session: AsyncSession) -> N
     payload = {"event_id": event_id, "symbol": symbol, "exchange": exchange}
 
     # Process the same event twice
-    await consumer.process_message(key=symbol, value=payload, headers={})
-    await consumer.process_message(key=symbol, value=payload, headers={})
+    async with SqlAlchemyUnitOfWork(session_factory) as uow:
+        consumer._current_uow = uow  # type: ignore[attr-defined]
+        await consumer.process_message(key=symbol, value=payload, headers={})
+        await uow.commit()
+
+    async with SqlAlchemyUnitOfWork(session_factory) as uow:
+        consumer._current_uow = uow  # type: ignore[attr-defined]
+        await consumer.process_message(key=symbol, value=payload, headers={})
+        await uow.commit()
 
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 import common.ids
 import common.time
@@ -47,7 +47,7 @@ class OutboxRepository:
             )
             .order_by(OutboxEventModel.created_at)
             .limit(batch_size)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True),
         )
         records = list(result.scalars().all())
         for record in records:
@@ -66,7 +66,7 @@ class OutboxRepository:
                 dispatched_at=common.time.utc_now(),
                 lease_owner=None,
                 leased_until=None,
-            )
+            ),
         )
 
     async def increment_attempts(self, record_id: UUID) -> None:
@@ -78,15 +78,40 @@ class OutboxRepository:
                 status="pending",
                 lease_owner=None,
                 leased_until=None,
-            )
+            ),
         )
 
-    async def move_to_dead_letter(self, record_id: UUID) -> None:
+    async def move_to_dead_letter(self, record_id: UUID, error_detail: str = "") -> None:
+        # Fetch the outbox record to copy its payload into the DLQ
+        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == record_id))
+        record = result.scalar_one_or_none()
+
+        if record is not None:
+            from content_ingestion.infrastructure.db.models import DeadLetterQueueModel
+
+            self._session.add(
+                DeadLetterQueueModel(
+                    dlq_id=common.ids.new_uuid7(),
+                    original_event_id=record.id,
+                    topic=record.topic,
+                    payload_avro=b"",  # Avro serialization may have failed
+                    payload_json=record.payload,
+                    error_detail=error_detail or None,
+                ),
+            )
+
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="dead_letter", lease_owner=None, leased_until=None)
+            .values(status="dead_letter", lease_owner=None, leased_until=None),
         )
+
+    async def count_pending(self) -> int:
+        """Count outbox events in ``pending`` status."""
+        result = await self._session.execute(
+            select(func.count()).select_from(OutboxEventModel).where(OutboxEventModel.status == "pending"),
+        )
+        return result.scalar() or 0
 
     # ── Service-specific helpers ──────────────────────────────────────────────
 
@@ -107,5 +132,5 @@ class OutboxRepository:
                 event_type=event_type,
                 topic=topic,
                 payload=payload,
-            )
+            ),
         )

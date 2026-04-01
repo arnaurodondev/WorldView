@@ -49,3 +49,19 @@ class PgIngestionEventRepository(IngestionEventRepository):
             .on_conflict_do_nothing(constraint="uq_ingestion_events_event_id")
         )
         await self._session.execute(stmt)
+
+    async def create_if_not_exists(
+        self,
+        event_id: str,
+        event_type: str | None = None,
+        content_sha256: str | None = None,
+    ) -> bool:
+        """Atomically insert the event; return True if new, False if duplicate."""
+        stmt = (
+            insert(IngestionEventModel)
+            .values(event_id=event_id, event_type=event_type, content_sha256=content_sha256)
+            .on_conflict_do_nothing(constraint="uq_ingestion_events_event_id")
+            .returning(IngestionEventModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None

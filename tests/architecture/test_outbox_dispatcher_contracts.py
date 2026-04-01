@@ -14,6 +14,7 @@ Per docs/STANDARDS.md §3 and docs/libs/messaging.md.
 from __future__ import annotations
 
 import ast
+import warnings
 from pathlib import Path
 
 from tests.architecture._utils import (
@@ -22,6 +23,33 @@ from tests.architecture._utils import (
     assert_no_violations,
     discover_mature_services,
 )
+
+# ---------------------------------------------------------------------------
+# Baseline — dispatcher.py at non-canonical paths awaiting migration
+# ---------------------------------------------------------------------------
+# Key: service_name → reason
+#
+# Remove an entry once the dispatcher is moved to infrastructure/messaging/outbox/.
+_CANONICAL_PATH_BASELINE: dict[str, str] = {
+    # market-ingestion: dispatcher class lives at infrastructure/messaging/dispatcher.py
+    # (not inside outbox/).  Moving it requires updating dispatcher_main.py imports.
+    # Scheduled for a follow-up cleanup — not in scope for PLAN-0011.
+    "market-ingestion": "Dispatcher class at infrastructure/messaging/dispatcher.py — migrate in follow-up plan",
+}
+
+# Baseline — services whose dispatchers intentionally do NOT extend BaseOutboxDispatcher.
+# Key: service_name → reason for the exception.
+_INHERITANCE_BASELINE: dict[str, str] = {
+    # nlp-pipeline: dispatcher stores pre-serialized bytes (not dict payloads),
+    # which is incompatible with BaseOutboxDispatcher's lease-based protocol.
+    "nlp-pipeline": "Custom dispatcher — stores pre-serialized Avro bytes, not dict payloads",
+    # alert: custom dispatcher stores pre-serialized Avro bytes in payload_avro column,
+    # uses raw Confluent Producer — incompatible with BaseOutboxDispatcher's lease-based protocol.
+    "alert": "Custom dispatcher — stores pre-serialized Avro bytes, not dict payloads",
+    # knowledge-graph: OutboxDispatcher uses raw Confluent Producer with pre-serialized payload_avro
+    # bytes — incompatible with BaseOutboxDispatcher's generic lease-based protocol.
+    "knowledge-graph": "Custom dispatcher — uses raw Confluent Producer with pre-serialized Avro bytes",
+}
 
 
 def _find_dispatcher_files(svc: ServiceInfo) -> list[Path]:
@@ -74,6 +102,8 @@ class TestDispatcherContracts:
         """Outbox dispatcher classes must inherit from BaseOutboxDispatcher."""
         violations = []
         for svc in discover_mature_services():
+            if svc.name in _INHERITANCE_BASELINE:
+                continue
             for dispatcher_file in _find_dispatcher_files(svc):
                 try:
                     source = dispatcher_file.read_text(encoding="utf-8", errors="replace")
@@ -123,6 +153,50 @@ class TestDispatcherContracts:
                         )
                     )
         assert_no_violations(violations, rule="AVRO-FILE-ONLY")
+
+    def test_dispatcher_at_canonical_path(self) -> None:
+        """Dispatcher files must live under infrastructure/messaging/outbox/ (STANDARDS.md §1.1).
+
+        Uses ``_CANONICAL_PATH_BASELINE`` to allow known non-canonical placements
+        in services undergoing migration.  Baselined violations emit warnings only.
+        """
+        violations = []
+        warned: set[str] = set()
+        for svc in discover_mature_services():
+            # Non-canonical locations: infrastructure/outbox/ or infrastructure/messaging/ (flat)
+            legacy_locations = [
+                svc.pkg_dir / "infrastructure" / "outbox" / "dispatcher.py",
+                svc.pkg_dir / "infrastructure" / "messaging" / "dispatcher.py",
+                svc.pkg_dir / "messaging" / "dispatcher.py",
+            ]
+            for legacy in legacy_locations:
+                if not legacy.exists():
+                    continue
+                rel = str(legacy.relative_to(svc.service_dir.parent.parent))
+                if svc.name in _CANONICAL_PATH_BASELINE:
+                    if svc.name not in warned:
+                        warnings.warn(
+                            f"[OUTBOX-CANONICAL-PATH baseline] {svc.name}: "
+                            f"dispatcher.py at non-canonical path {rel}. "
+                            f"Reason: {_CANONICAL_PATH_BASELINE[svc.name]}",
+                            stacklevel=2,
+                        )
+                        warned.add(svc.name)
+                else:
+                    violations.append(
+                        ArchViolation(
+                            service=svc.name,
+                            file=rel,
+                            line=0,
+                            rule="OUTBOX-CANONICAL-PATH",
+                            detail=(
+                                f"dispatcher.py found at non-canonical path: {rel}. "
+                                "Expected location: infrastructure/messaging/outbox/dispatcher.py "
+                                "(per STANDARDS.md §1.1)."
+                            ),
+                        )
+                    )
+        assert_no_violations(violations, rule="OUTBOX-CANONICAL-PATH")
 
     def test_dispatcher_main_exists_for_outbox_services(self) -> None:
         """Services with an outbox dispatcher must have a dispatcher_main.py entry point."""

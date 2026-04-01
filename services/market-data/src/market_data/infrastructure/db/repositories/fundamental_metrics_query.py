@@ -9,11 +9,11 @@ read (replica) session.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, select
 
+from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 
@@ -22,35 +22,6 @@ if TYPE_CHECKING:
     from decimal import Decimal
 
     from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@dataclass(frozen=True, slots=True)
-class MetricDataPoint:
-    """A single timeseries data point."""
-
-    as_of_date: date
-    value_numeric: Decimal | None
-    value_text: str | None
-    period_type: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ScreenFilter:
-    """A single metric filter for screening."""
-
-    metric: str
-    min_value: float | None = None
-    max_value: float | None = None
-    period_type: str | None = None
-    sector: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ScreenResult:
-    """One instrument matching the screen criteria."""
-
-    instrument_id: str
-    metrics: dict[str, Decimal | None]
 
 
 async def query_timeseries(

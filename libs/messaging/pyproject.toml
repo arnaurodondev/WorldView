@@ -8,22 +8,26 @@ version = "2025.6.0"
 description = "Kafka producer/consumer, Avro serialization, outbox dispatcher, Valkey client"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "confluent-kafka==2.4.0",
-    "fastavro==1.9.4",
-    "redis==5.0.0",
-    "requests>=2.31",
-    "structlog>=24.0",
+    "confluent-kafka>=2.4,<3",
+    "fastavro>=1.9,<2",
+    "redis>=5.0,<6",
+    "requests>=2.31,<3",
+    "structlog>=25.0,<26",
     "observability",
 ]
 
 [project.optional-dependencies]
+pg = [
+    "sqlalchemy>=2.0,<3",
+]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "ruff>=0.4",
-    "mypy>=1.10",
+    "pytest>=8.0,<9",
+    "pytest-asyncio>=0.23,<1",
+    "ruff>=0.4,<1",
+    "mypy>=1.10,<2",
     "observability",
-    "fakeredis[aioredis]>=2.23",
+    "fakeredis[aioredis]>=2.23,<3",
+    "sqlalchemy>=2.0,<3",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -23,6 +23,22 @@ worldview/
 └── .github/         # CI workflows
 ```
 
+## 1b. Tool Usage (Claude Code Agents)
+
+**NEVER use Bash commands when a dedicated tool exists.** This repository path contains spaces (`Final Thesis`), which causes issues with shell escaping. Use built-in tools instead:
+
+| Task | Use This | NOT This |
+|------|----------|----------|
+| Find files by pattern | `Glob` tool | `find`, `ls` |
+| Search file contents | `Grep` tool | `grep`, `rg` |
+| Read file contents | `Read` tool | `cat`, `head`, `tail` |
+| Edit files | `Edit` tool | `sed`, `awk` |
+| Create files | `Write` tool | `echo >`, `cat <<EOF` |
+
+Only use Bash for commands that have no dedicated tool equivalent (e.g., `pytest`, `ruff`, `mypy`, `git`, `docker compose`).
+
+---
+
 ## 2. Coding Standards
 
 ### Python
@@ -81,7 +97,7 @@ src/<service>/
 - [ ] Check `docs/architecture/decisions/` for ADRs that may constrain your design
 - [ ] Search for existing patterns in `libs/` before creating new utilities
 - [ ] Verify the Avro schemas in `infra/kafka/schemas/` if your change involves events
-- [ ] **Read `docs/ai-interactions/BUG_PATTERNS.md`** — scan the index for categories
+- [ ] **Read `docs/BUG_PATTERNS.md`** — scan the index for categories
       matching your task. If any pattern applies, read the full entry before writing code.
 - [ ] Define a task-scoped `write_paths` list and avoid edits outside it
 - [ ] Define task-scoped validation commands (targeted pytest + changed-path ruff + changed-package mypy)

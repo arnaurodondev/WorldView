@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel
@@ -12,6 +13,9 @@ if TYPE_CHECKING:
 
     from httpx import AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession
+
+_INTERNAL_TOKEN = os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+_INTERNAL_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
 
 
 class OutboxAssertions:
@@ -36,7 +40,7 @@ class OutboxAssertions:
 
 async def make_tenant(client: AsyncClient, name: str = "Test Tenant") -> dict[str, Any]:
     """POST /api/v1/tenants and return the response JSON."""
-    resp = await client.post("/api/v1/tenants", json={"name": name})
+    resp = await client.post("/api/v1/tenants", json={"name": name}, headers=_INTERNAL_HEADERS)
     assert resp.status_code == 201, f"create_tenant failed: {resp.text}"
     return resp.json()
 

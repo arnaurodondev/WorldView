@@ -1,0 +1,1075 @@
+{
+  "aggregates": {
+    "by_layer": [
+      {
+        "collected_tests": 35,
+        "duration_sec": 3,
+        "failed_tests": 0,
+        "layer": "architecture",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 0,
+        "suites_total": 1
+      },
+      {
+        "collected_tests": 20,
+        "duration_sec": 2,
+        "failed_tests": 0,
+        "layer": "contract",
+        "suites_failed": 0,
+        "suites_passed": 3,
+        "suites_skipped": 8,
+        "suites_total": 11
+      },
+      {
+        "collected_tests": 269,
+        "duration_sec": 170,
+        "failed_tests": 24,
+        "layer": "e2e",
+        "suites_failed": 3,
+        "suites_passed": 6,
+        "suites_skipped": 3,
+        "suites_total": 12
+      },
+      {
+        "collected_tests": 0,
+        "duration_sec": 100,
+        "failed_tests": 0,
+        "layer": "infra",
+        "suites_failed": 0,
+        "suites_passed": 2,
+        "suites_skipped": 0,
+        "suites_total": 2
+      },
+      {
+        "collected_tests": 207,
+        "duration_sec": 36,
+        "failed_tests": 1,
+        "layer": "integration",
+        "suites_failed": 1,
+        "suites_passed": 7,
+        "suites_skipped": 3,
+        "suites_total": 11
+      },
+      {
+        "collected_tests": 0,
+        "duration_sec": 7,
+        "failed_tests": 0,
+        "layer": "libs",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 0,
+        "suites_total": 1
+      },
+      {
+        "collected_tests": 2213,
+        "duration_sec": 22,
+        "failed_tests": 0,
+        "layer": "unit",
+        "suites_failed": 0,
+        "suites_passed": 10,
+        "suites_skipped": 1,
+        "suites_total": 11
+      }
+    ],
+    "by_service": [
+      {
+        "collected_tests": 168,
+        "duration_sec": 10,
+        "failed_tests": 2,
+        "service": "alert",
+        "suites_failed": 2,
+        "suites_passed": 2,
+        "suites_skipped": 0,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 12,
+        "duration_sec": 0,
+        "failed_tests": 0,
+        "service": "api-gateway",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 3,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 35,
+        "duration_sec": 3,
+        "failed_tests": 0,
+        "service": "architecture",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 0,
+        "suites_total": 1
+      },
+      {
+        "collected_tests": 0,
+        "duration_sec": 100,
+        "failed_tests": 0,
+        "service": "compose",
+        "suites_failed": 0,
+        "suites_passed": 2,
+        "suites_skipped": 0,
+        "suites_total": 2
+      },
+      {
+        "collected_tests": 465,
+        "duration_sec": 5,
+        "failed_tests": 0,
+        "service": "content-ingestion",
+        "suites_failed": 0,
+        "suites_passed": 3,
+        "suites_skipped": 1,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 275,
+        "duration_sec": 4,
+        "failed_tests": 0,
+        "service": "content-store",
+        "suites_failed": 0,
+        "suites_passed": 3,
+        "suites_skipped": 1,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 97,
+        "duration_sec": 124,
+        "failed_tests": 21,
+        "service": "cross-service",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 0,
+        "suites_total": 1
+      },
+      {
+        "collected_tests": 0,
+        "duration_sec": 1,
+        "failed_tests": 0,
+        "service": "intelligence-migrations",
+        "suites_failed": 0,
+        "suites_passed": 0,
+        "suites_skipped": 4,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 219,
+        "duration_sec": 8,
+        "failed_tests": 1,
+        "service": "knowledge-graph",
+        "suites_failed": 1,
+        "suites_passed": 2,
+        "suites_skipped": 1,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 0,
+        "duration_sec": 7,
+        "failed_tests": 0,
+        "service": "libs",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 0,
+        "suites_total": 1
+      },
+      {
+        "collected_tests": 429,
+        "duration_sec": 39,
+        "failed_tests": 0,
+        "service": "market-data",
+        "suites_failed": 0,
+        "suites_passed": 3,
+        "suites_skipped": 1,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 428,
+        "duration_sec": 24,
+        "failed_tests": 1,
+        "service": "market-ingestion",
+        "suites_failed": 1,
+        "suites_passed": 3,
+        "suites_skipped": 0,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 255,
+        "duration_sec": 5,
+        "failed_tests": 0,
+        "service": "nlp-pipeline",
+        "suites_failed": 0,
+        "suites_passed": 3,
+        "suites_skipped": 1,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 359,
+        "duration_sec": 9,
+        "failed_tests": 0,
+        "service": "portfolio",
+        "suites_failed": 0,
+        "suites_passed": 4,
+        "suites_skipped": 0,
+        "suites_total": 4
+      },
+      {
+        "collected_tests": 2,
+        "duration_sec": 1,
+        "failed_tests": 0,
+        "service": "rag-chat",
+        "suites_failed": 0,
+        "suites_passed": 1,
+        "suites_skipped": 3,
+        "suites_total": 4
+      }
+    ],
+    "execution": {
+      "collected_in_passed_or_failed_suites": 2744,
+      "collected_in_skipped_suites": 0,
+      "collected_tests": 2744,
+      "failed_tests": 25
+    },
+    "failed_tests_by_suite": {
+      "alert:e2e": 1,
+      "alert:integration": 1,
+      "cross-service:e2e": 21,
+      "knowledge-graph:e2e": 1,
+      "market-ingestion:e2e": 1
+    }
+  },
+  "counts": {
+    "failed_tests": 25,
+    "suites_failed": 4,
+    "suites_passed": 30,
+    "suites_skipped": 15,
+    "total_collected_tests": 2744
+  },
+  "failed_tests": [
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_integration.log",
+      "name": "tests.integration.test_s7_s10_pipeline::test_pipeline_api_returns_alert_after_fanout",
+      "reason": "RuntimeError: Cannot open a client instance more than once.",
+      "suite": "alert:integration",
+      "trace": "integration_app = <fastapi.applications.FastAPI object at 0x113136000>\nintegration_client = <httpx.AsyncClient object at 0x1131481d0>\ndb_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x113148bf0>\nhttpserver = <HTTPServer host=localhost port=52213>\n    @pytest.mark.integration\n    async def test_pipeline_api_returns_alert_after_fanout(\n        integration_app: Any,\n        integration_client: Any,\n        db_session: Any,\n        httpserver: Any,\n    ) -> None:\n        \"\"\"M7: after fan-out, GET /api/v1/alerts/pending returns the alert for the user.\"\"\"\n        entity_id = str(uuid4())\n        user_id = str(uuid4())\n        watchlist_id = str(uuid4())\n        httpserver.expect_request(\n            f\"/internal/v1/watchlists/by-entity/{entity_id}\",\n            method=\"GET\",\n        ).respond_with_json(\n            {\n                \"entity_id\": entity_id,\n                \"watchers\": [{\"user_id\": user_id, \"watchlist_id\": watchlist_id, \"alert_types\": []}],\n            }\n        )\n        fanout: AlertFanoutUseCase = integration_app.state.fanout_use_case"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.integration.test_websocket::test_ws_stream_endpoint_connects",
+      "reason": "RuntimeError: Cannot open a client instance more than once.",
+      "suite": "cross-service:e2e",
+      "trace": "integration_client = <httpx.AsyncClient object at 0x113163860>\n    @pytest.mark.integration\n    async def test_ws_stream_endpoint_connects(\n        integration_client: Any,\n    ) -> None:\n        \"\"\"WebSocket /api/v1/alerts/stream accepts a connection.\"\"\"\n        user_id = str(uuid4())\n>       async with integration_client as client:\ntests/integration/test_websocket.py:128:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <httpx.AsyncClient object at 0x113163860>\n    async def __aenter__(self: U) -> U:\n        if self._state != ClientState.UNOPENED:\n            msg = {\n                ClientState.OPENED: \"Cannot open a client instance more than once.\",\n                ClientState.CLOSED: (\n                    \"Cannot reopen a client instance, once it has been closed.\"\n                ),\n            }[self._state]\n>           raise RuntimeError(msg)\nE           RuntimeError: Cannot open a client instance more than once.\n.venv/lib/python3.12/site-packages/httpx/_client.py:2031: RuntimeError"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_pending_alerts_returns_seeded_alert",
+      "reason": "ValueError: 'breakout_signal' is not a valid AlertType",
+      "suite": "alert:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x10b433cb0>\ne2e_db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x10b4abe00>\n    async def test_pending_alerts_returns_seeded_alert(\n        e2e_client: AsyncClient,\n        e2e_db_session: AsyncSession,\n    ) -> None:\n        \"\"\"GET /api/v1/alerts/pending returns seeded pending alert for the correct user.\"\"\"\n        user_id = uuid.uuid4()\n        entity_id = uuid.uuid4()\n        alert_id = await _seed_alert(e2e_db_session, entity_id=entity_id, alert_type=\"breakout_signal\")\n        pending_id = await _seed_pending_alert(e2e_db_session, alert_id, user_id)\n>       resp = await e2e_client.get(f\"/api/v1/alerts/pending?user_id={user_id}\")\ntests/e2e/test_api_workflows.py:160:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <httpx.AsyncClient object at 0x10b433cb0>\nurl = '/api/v1/alerts/pending?user_id=485568a6-0a29-49e2-a908-60fbedc3fd76'\n    async def get(\n        self,\n        url: URLTypes,\n        *,\n        params: QueryParamTypes | None = None,\n        headers: HeaderTypes | None = None,\n        cookies: CookieTypes | None = None,\n        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,\n        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_pending_alerts_pagination_offset_and_limit",
+      "reason": "ValueError: 'signal' is not a valid AlertType",
+      "suite": "cross-service:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x10b0cbcb0>\ne2e_db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x10b33ee10>\n    async def test_pending_alerts_pagination_offset_and_limit(\n        e2e_client: AsyncClient,\n        e2e_db_session: AsyncSession,\n    ) -> None:\n        \"\"\"Pagination: limit=1 returns only first alert; offset=1 skips it.\"\"\"\n        user_id = uuid.uuid4()\n        entity_id1 = uuid.uuid4()\n        entity_id2 = uuid.uuid4()\n        alert_id1 = await _seed_alert(\n            e2e_db_session,\n            entity_id=entity_id1,\n            dedup_key=f\"key:{uuid.uuid4().hex}\",\n        )\n        alert_id2 = await _seed_alert(\n            e2e_db_session,\n            entity_id=entity_id2,\n            dedup_key=f\"key:{uuid.uuid4().hex}\",\n        )\n        await _seed_pending_alert(e2e_db_session, alert_id1, user_id)\n        await _seed_pending_alert(e2e_db_session, alert_id2, user_id)\n>       resp = await e2e_client.get(f\"/api/v1/alerts/pending?user_id={user_id}&limit=1\")\ntests/e2e/test_api_workflows.py:213:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_dlq_pagination",
+      "reason": "assert 2 == 5",
+      "suite": "cross-service:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x10bcd6bd0>\ne2e_db_session = <sqlalchemy.ext.asyncio.session.AsyncSession object at 0x10bad0b00>\nadmin_headers = {'X-Admin-Token': 'e2e-admin-token'}\n    async def test_dlq_pagination(\n        e2e_client: AsyncClient,\n        e2e_db_session: AsyncSession,\n        admin_headers: dict[str, str],\n    ) -> None:\n        \"\"\"DLQ list endpoint respects limit/offset pagination.\"\"\"\n        for _ in range(5):\n            await e2e_db_session.execute(\n                text(\"\"\"\n                    INSERT INTO dead_letter_queue\n                        (dlq_id, original_event_id, topic, payload_avro, status, created_at)\n                    VALUES (:did, :eid, 'test', E'\\\\\\\\x00'::bytea, 'failed', now())\n                \"\"\"),\n                {\"did\": str(uuid.uuid4()), \"eid\": str(uuid.uuid4())},\n            )\n        await e2e_db_session.commit()\n        resp = await e2e_client.get(\"/admin/dlq?limit=2\", headers=admin_headers)\n        assert resp.status_code == 200\n        data = resp.json()\n        assert len(data[\"entries\"]) == 2\n>       assert data[\"total\"] == 5\nE       assert 2 == 5"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/knowledge-graph_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_entity_graph_with_seeded_entity",
+      "reason": "sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.AmbiguousParameterError'>: could not determine data type of parameter $3\n[SQL: \nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\n       r.canonical_type, r.semantic_mode, r.decay_class,\n       r.confidence, r.confidence_stale,\n       r.evidence_count, r.first_evidence_at, r.latest_evidence_at\nFROM relations r\nWHERE (r.subject_entity_id = $1 OR r.object_entity_id = $1)\n  AND (r.confidence IS NULL OR r.confidence >= $2)\n  AND ($3 IS NULL OR r.semantic_mode = $3)\nORDER BY r.latest_evidence_at DESC\nLIMIT $4\n]\n[parameters: ('a37f0c11-2183-49e3-8fae-fa8e24dfdcac', 0.0, None, 50)]\n(Background on this error at: https://sqlalche.me/e/20/f405)",
+      "suite": "knowledge-graph:e2e",
+      "trace": "self = <sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_cursor object at 0x10b1c7b80>\noperation = '\\nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\\n       r.canonical_type, r.semantic_mode, r.decay_c...ULL OR r.confidence >= $2)\\n  AND ($3 IS NULL OR r.semantic_mode = $3)\\nORDER BY r.latest_evidence_at DESC\\nLIMIT $4\\n'\nparameters = ('a37f0c11-2183-49e3-8fae-fa8e24dfdcac', 0.0, None, 50)\n    async def _prepare_and_execute(self, operation, parameters):\n        adapt_connection = self._adapt_connection\n        async with adapt_connection._execute_mutex:\n            if not adapt_connection._started:\n                await adapt_connection._start_transaction()\n            if parameters is None:\n                parameters = ()\n            try:\n>               prepared_stmt, attributes = await adapt_connection._prepare(\n                    operation, self._invalidate_schema_cache_asof\n                )\n.venv/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:458:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <AdaptedConnection <asyncpg.connection.Connection object at 0x10b0ef4c0>>\noperation = '\\nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\\n       r.canonical_type, r.semantic_mode, r.decay_c...ULL OR r.confidence >= $2)\\n  AND ($3 IS NULL OR r.semantic_mode = $3)\\nORDER BY r.latest_evidence_at DESC\\nLIMIT $4\\n'\ninvalidate_timestamp = 0\n    async def _prepare(self, operation, invalidate_timestamp):\n        await self._check_type_cache_invalidation(invalidate_timestamp)\n        cache = self._prepared_statement_cache\n        if cache is None:\n            prepared_stmt = await self._connection.prepare(operation)\n            attributes = prepared_stmt.get_attributes()"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_entity_graph_semantic_mode_filter",
+      "reason": "sqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.AmbiguousParameterError'>: could not determine data type of parameter $3\n[SQL: \nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\n       r.canonical_type, r.semantic_mode, r.decay_class,\n       r.confidence, r.confidence_stale,\n       r.evidence_count, r.first_evidence_at, r.latest_evidence_at\nFROM relations r\nWHERE (r.subject_entity_id = $1 OR r.object_entity_id = $1)\n  AND (r.confidence IS NULL OR r.confidence >= $2)\n  AND ($3 IS NULL OR r.semantic_mode = $3)\nORDER BY r.latest_evidence_at DESC\nLIMIT $4\n]\n[parameters: ('27689585-d5c3-461d-8c52-3b50ea5f2c12', 0.0, 'RELATION_STATE', 50)]\n(Background on this error at: https://sqlalche.me/e/20/f405)",
+      "suite": "cross-service:e2e",
+      "trace": "self = <sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_cursor object at 0x10b72f880>\noperation = '\\nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\\n       r.canonical_type, r.semantic_mode, r.decay_c...ULL OR r.confidence >= $2)\\n  AND ($3 IS NULL OR r.semantic_mode = $3)\\nORDER BY r.latest_evidence_at DESC\\nLIMIT $4\\n'\nparameters = ('27689585-d5c3-461d-8c52-3b50ea5f2c12', 0.0, 'RELATION_STATE', 50)\n    async def _prepare_and_execute(self, operation, parameters):\n        adapt_connection = self._adapt_connection\n        async with adapt_connection._execute_mutex:\n            if not adapt_connection._started:\n                await adapt_connection._start_transaction()\n            if parameters is None:\n                parameters = ()\n            try:\n>               prepared_stmt, attributes = await adapt_connection._prepare(\n                    operation, self._invalidate_schema_cache_asof\n                )\n.venv/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:458:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <AdaptedConnection <asyncpg.connection.Connection object at 0x10b7de7a0>>\noperation = '\\nSELECT r.relation_id, r.subject_entity_id, r.object_entity_id,\\n       r.canonical_type, r.semantic_mode, r.decay_c...ULL OR r.confidence >= $2)\\n  AND ($3 IS NULL OR r.semantic_mode = $3)\\nORDER BY r.latest_evidence_at DESC\\nLIMIT $4\\n'\ninvalidate_timestamp = 0\n    async def _prepare(self, operation, invalidate_timestamp):\n        await self._check_type_cache_invalidation(invalidate_timestamp)\n        cache = self._prepared_statement_cache\n        if cache is None:\n            prepared_stmt = await self._connection.prepare(operation)\n            attributes = prepared_stmt.get_attributes()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-ingestion_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_healthz_always_ok",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "market-ingestion:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-4' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<local...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_readyz_db_ok",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-8' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<local...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_single_symbol_creates_task",
+      "reason": "failed on teardown with \"ExceptionGroup: errors while tearing down <Coroutine test_trigger_single_symbol_creates_task> (2 sub-exceptions)\"",
+      "suite": "cross-service:e2e",
+      "trace": "+ Exception Group Traceback (most recent call last):\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/_pytest/runner.py\", line 341, in from_call\n  |     result: Optional[TResult] = func()\n  |                                 ^^^^^^\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/_pytest/runner.py\", line 241, in <lambda>\n  |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise\n  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/pluggy/_hooks.py\", line 512, in __call__\n  |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)\n  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/pluggy/_manager.py\", line 120, in _hookexec\n  |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)\n  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/pluggy/_callers.py\", line 167, in _multicall\n  |     raise exception\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/pluggy/_callers.py\", line 139, in _multicall\n  |     teardown.throw(exception)\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/_pytest/threadexception.py\", line 92, in pytest_runtest_teardown\n  |     yield from thread_exception_runtest_hook()\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/_pytest/threadexception.py\", line 63, in thread_exception_runtest_hook\n  |     yield\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/pluggy/_callers.py\", line 139, in _multicall\n  |     teardown.throw(exception)\n  |   File \"/Users/arnaurodon/Projects/University/final_thesis/worldview/services/market-ingestion/.venv/lib/python3.11/site-packages/_pytest/unraisableexception.py\", line 95, in pytest_runtest_teardown\n  |     yield from unraisable_exception_runtest_hook()"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_multiple_symbols",
+      "reason": "AssertionError: {\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"symbols\"],\"msg\":\"Value error, Symbol 'E2E_MULTI_1774969645_A' must be 1-20 characters\",\"input\":[\"E2E_MULTI_1774969645_A\",\"E2E_MULTI_1774969645_B\",\"E2E_MULTI_1774969645_C\"],\"ctx\":{\"error\":{}}}]}\nassert 422 == 202\n +  where 422 = <Response [422 Unprocessable Entity]>.status_code",
+      "suite": "cross-service:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x10adb4a50>\n    async def test_trigger_multiple_symbols(e2e_client: AsyncClient) -> None:\n        \"\"\"POST /api/v1/ingest/trigger with multiple symbols creates N tasks.\"\"\"\n        ts = int(time.time())\n        symbols = [f\"E2E_MULTI_{ts}_A\", f\"E2E_MULTI_{ts}_B\", f\"E2E_MULTI_{ts}_C\"]\n        resp = await e2e_client.post(\n            \"/api/v1/ingest/trigger\",\n            json={\n                \"provider\": \"eodhd\",\n                \"symbols\": symbols,\n                \"dataset_type\": \"ohlcv\",\n                \"timeframe\": \"1d\",\n            },\n            headers=_AUTH_HEADERS,\n        )\n>       assert resp.status_code == 202, resp.text\nE       AssertionError: {\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"symbols\"],\"msg\":\"Value error, Symbol 'E2E_MULTI_1774969645_A' must be 1-20 characters\",\"input\":[\"E2E_MULTI_1774969645_A\",\"E2E_MULTI_1774969645_B\",\"E2E_MULTI_1774969645_C\"],\"ctx\":{\"error\":{}}}]}\nE       assert 422 == 202\nE        +  where 422 = <Response [422 Unprocessable Entity]>.status_code\ntests/e2e/test_api_workflows.py:105: AssertionError"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_multiple_symbols",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-19' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_idempotent",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-23' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_invalid_provider_returns_422",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-27' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_backfill_90_days_produces_3_chunks",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-31' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_backfill_single_day_one_chunk",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-35' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_backfill_exceeds_max_chunks_returns_422",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-39' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_backfill_idempotent",
+      "reason": "assert 422 == 202\n +  where 422 = <Response [422 Unprocessable Entity]>.status_code",
+      "suite": "cross-service:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x11283d650>\n    async def test_backfill_idempotent(e2e_client: AsyncClient) -> None:\n        \"\"\"Same backfill request twice: second call has tasks_created=0.\"\"\"\n        symbol = f\"E2E_BFIDEM_{int(time.time())}\"\n        payload = {\n            \"provider\": \"eodhd\",\n            \"symbol\": symbol,\n            \"start_date\": \"2024-01-01\",\n            \"end_date\": \"2024-01-31\",\n            \"timeframe\": \"1d\",\n            \"chunk_days\": 30,\n        }\n        resp1 = await e2e_client.post(\"/api/v1/ingest/backfill\", json=payload, headers=_AUTH_HEADERS)\n>       assert resp1.status_code == 202\nE       assert 422 == 202\nE        +  where 422 = <Response [422 Unprocessable Entity]>.status_code\ntests/e2e/test_api_workflows.py:224: AssertionError"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_backfill_idempotent",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-43' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_ingest_status_returns_counts",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-47' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_list_policies_returns_list",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-51' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_then_status_reflects_pending_task",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-55' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_trigger_full_async_pipeline_reaches_terminal_states",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=False debug=False>\nfuture = <Task finished name='Task-62' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    },
+    {
+      "kind": "failure",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_triggered_task_progresses_out_of_pending",
+      "reason": "AssertionError: {\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"symbols\"],\"msg\":\"Value error, Symbol 'E2E_LIFECYCLE_1774969667' must be 1-20 characters\",\"input\":[\"E2E_LIFECYCLE_1774969667\"],\"ctx\":{\"error\":{}}}]}\nassert 422 == 202\n +  where 422 = <Response [422 Unprocessable Entity]>.status_code",
+      "suite": "cross-service:e2e",
+      "trace": "e2e_client = <httpx.AsyncClient object at 0x11269fc10>\ne2e_db_session = <sqlalchemy.orm.session.AsyncSession object at 0x10aba5910>\n    async def test_triggered_task_progresses_out_of_pending(\n        e2e_client: AsyncClient,\n        e2e_db_session: AsyncSession,\n    ) -> None:\n        \"\"\"A manually-triggered task should be claimed/processed by worker pipeline.\n        We do not require success (provider/network may retry/fail), only that the\n        task leaves PENDING and enters processing lifecycle states.\n        \"\"\"\n        from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel\n        from sqlalchemy import select\n        symbol = f\"E2E_LIFECYCLE_{int(time.time())}\"\n        resp = await e2e_client.post(\n            \"/api/v1/ingest/trigger\",\n            json={\n                \"provider\": \"eodhd\",\n                \"symbols\": [symbol],\n                \"dataset_type\": \"ohlcv\",\n                \"timeframe\": \"1d\",\n            },\n            headers=_AUTH_HEADERS,\n        )\n>       assert resp.status_code == 202, resp.text\nE       AssertionError: {\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"symbols\"],\"msg\":\"Value error, Symbol 'E2E_LIFECYCLE_1774969667' must be 1-20 characters\",\"input\":[\"E2E_LIFECYCLE_1774969667\"],\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "kind": "error",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "name": "tests.e2e.test_api_workflows::test_triggered_task_progresses_out_of_pending",
+      "reason": "failed on teardown with \"RuntimeError: Event loop is closed\"",
+      "suite": "cross-service:e2e",
+      "trace": "def finalizer() -> None:\n        \"\"\"Yield again, to finalize.\"\"\"\n        async def async_finalizer() -> None:\n            try:\n                await gen_obj.__anext__()  # type: ignore[union-attr]\n            except StopAsyncIteration:\n                pass\n            else:\n                msg = \"Async generator fixture didn't stop.\"\n                msg += \"Yield only once.\"\n                raise ValueError(msg)\n>       event_loop.run_until_complete(async_finalizer())\n.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:341:\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _\nself = <_UnixSelectorEventLoop running=False closed=True debug=False>\nfuture = <Task finished name='Task-73' coro=<_wrap_asyncgen_fixture.<locals>._asyncgen_fixture_wrapper.<locals>.finalizer.<loca...estion/.venv/lib/python3.11/site-packages/pytest_asyncio/plugin.py:331> exception=RuntimeError('Event loop is closed')>\n    def run_until_complete(self, future):\n        \"\"\"Run until the Future is done.\n        If the argument is a coroutine, it is wrapped in a Task.\n        WARNING: It would be disastrous to call run_until_complete()\n        with the same coroutine twice -- it would wrap it in two\n        different Tasks and that can't be good.\n        Return the Future's result, or raise its exception.\n        \"\"\"\n        self._check_closed()"
+    }
+  ],
+  "infra": {
+    "artifacts": {
+      "compose_all_log": "docs/testing/test-runs/20260331T145855Z/infra/compose.all.log",
+      "compose_config": "docs/testing/test-runs/20260331T145855Z/infra/compose.config.yaml",
+      "compose_ps": "docs/testing/test-runs/20260331T145855Z/infra/compose.ps.txt",
+      "inspect_dir": "docs/testing/test-runs/20260331T145855Z/infra/inspect",
+      "services_logs_dir": "docs/testing/test-runs/20260331T145855Z/infra/services"
+    },
+    "status": "passed"
+  },
+  "run": {
+    "artifacts_dir": "docs/testing/test-runs/20260331T145855Z",
+    "duration_sec": 721,
+    "ended_at_utc": "2026-03-31T15:10:56Z",
+    "metadata": {
+      "docker_compose_version": "Docker Compose version v5.0.0-desktop.1",
+      "docker_version": "Docker version 29.1.3, build f52814d",
+      "git_branch": "feat/content-ingestion-wave-a1",
+      "git_sha": "d84e79ff6409c536164be235f53822d0d7eefb3e",
+      "hostname": "MacBook-Pro.local",
+      "integration_mode": "sequential",
+      "keep_volumes": "false",
+      "max_parallel": "2",
+      "no_cleanup": "false",
+      "python": "/Users/arnaurodon/Projects/University/final_thesis/worldview/.venv/bin/python",
+      "python_version": "Python 3.12.7",
+      "repo_root": "/Users/arnaurodon/Projects/University/final_thesis/worldview",
+      "retain_logs": "on-failure",
+      "run_id": "20260331T145855Z",
+      "run_integration_on_readiness_failure": "false",
+      "run_started_at_utc": "2026-03-31T14:58:55Z"
+    },
+    "run_id": "20260331T145855Z",
+    "started_at_utc": "2026-03-31T14:58:55Z"
+  },
+  "suites": [
+    {
+      "collected": "35",
+      "duration_sec": "3",
+      "failure_type": "",
+      "label": "architecture",
+      "layer": "architecture",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/architecture.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/architecture.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "7",
+      "failure_type": "",
+      "label": "libs",
+      "layer": "libs",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/libs.log",
+      "reason": "summarized by scripts/test-libs.sh",
+      "status": "passed",
+      "suite_type": "script",
+      "xml": ""
+    },
+    {
+      "collected": "126",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "alert:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/alert_unit.xml"
+    },
+    {
+      "collected": "12",
+      "duration_sec": "0",
+      "failure_type": "",
+      "label": "api-gateway:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/api-gateway_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/api-gateway_unit.xml"
+    },
+    {
+      "collected": "411",
+      "duration_sec": "3",
+      "failure_type": "",
+      "label": "content-ingestion:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-ingestion_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-ingestion_unit.xml"
+    },
+    {
+      "collected": "241",
+      "duration_sec": "2",
+      "failure_type": "",
+      "label": "content-store:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-store_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-store_unit.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "1",
+      "failure_type": "no_tests",
+      "label": "intelligence-migrations:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/intelligence-migrations_unit.log",
+      "reason": "no tests collected",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/intelligence-migrations_unit.xml"
+    },
+    {
+      "collected": "177",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "knowledge-graph:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/knowledge-graph_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/knowledge-graph_unit.xml"
+    },
+    {
+      "collected": "338",
+      "duration_sec": "10",
+      "failure_type": "",
+      "label": "market-data:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-data_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-data_unit.xml"
+    },
+    {
+      "collected": "399",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "market-ingestion:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-ingestion_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-ingestion_unit.xml"
+    },
+    {
+      "collected": "217",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "nlp-pipeline:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/nlp-pipeline_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/nlp-pipeline_unit.xml"
+    },
+    {
+      "collected": "290",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "portfolio:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/portfolio_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/portfolio_unit.xml"
+    },
+    {
+      "collected": "2",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "rag-chat:unit",
+      "layer": "unit",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/rag-chat_unit.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/rag-chat_unit.xml"
+    },
+    {
+      "collected": "3",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "alert:contract",
+      "layer": "contract",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_contract.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/alert_contract.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "api-gateway:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "content-ingestion:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "content-store:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "intelligence-migrations:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract dir",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "knowledge-graph:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "market-data:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "3",
+      "duration_sec": "0",
+      "failure_type": "",
+      "label": "market-ingestion:contract",
+      "layer": "contract",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-ingestion_contract.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-ingestion_contract.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "nlp-pipeline:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "14",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "portfolio:contract",
+      "layer": "contract",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/portfolio_contract.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/portfolio_contract.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "rag-chat:contract",
+      "layer": "contract",
+      "log": "",
+      "reason": "no contract tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "98",
+      "failure_type": "",
+      "label": "compose:up",
+      "layer": "infra",
+      "log": "docs/testing/test-runs/20260331T145855Z/infra/compose.up.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "compose_startup",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "2",
+      "failure_type": "",
+      "label": "compose:readiness",
+      "layer": "infra",
+      "log": "docs/testing/test-runs/20260331T145855Z/infra/compose.readiness.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "readiness",
+      "xml": ""
+    },
+    {
+      "collected": "19",
+      "duration_sec": "5",
+      "failure_type": "assertion",
+      "label": "alert:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_integration.log",
+      "reason": "pytest exited with code 1",
+      "status": "failed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/alert_integration.xml"
+    },
+    {
+      "collected": "20",
+      "duration_sec": "3",
+      "failure_type": "assertion",
+      "label": "alert:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/alert_e2e.log",
+      "reason": "pytest exited with code 1",
+      "status": "failed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/alert_e2e.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "api-gateway:integration",
+      "layer": "integration",
+      "log": "",
+      "reason": "no integration tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "api-gateway:e2e",
+      "layer": "e2e",
+      "log": "",
+      "reason": "no e2e tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "29",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "content-ingestion:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-ingestion_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-ingestion_integration.xml"
+    },
+    {
+      "collected": "25",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "content-ingestion:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-ingestion_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-ingestion_e2e.xml"
+    },
+    {
+      "collected": "10",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "content-store:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-store_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-store_integration.xml"
+    },
+    {
+      "collected": "24",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "content-store:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/content-store_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/content-store_e2e.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "intelligence-migrations:integration",
+      "layer": "integration",
+      "log": "",
+      "reason": "no integration tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "intelligence-migrations:e2e",
+      "layer": "e2e",
+      "log": "",
+      "reason": "no e2e tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "22",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "knowledge-graph:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/knowledge-graph_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/knowledge-graph_integration.xml"
+    },
+    {
+      "collected": "20",
+      "duration_sec": "6",
+      "failure_type": "assertion",
+      "label": "knowledge-graph:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/knowledge-graph_e2e.log",
+      "reason": "pytest exited with code 1",
+      "status": "failed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/knowledge-graph_e2e.xml"
+    },
+    {
+      "collected": "67",
+      "duration_sec": "21",
+      "failure_type": "",
+      "label": "market-data:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-data_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-data_integration.xml"
+    },
+    {
+      "collected": "24",
+      "duration_sec": "8",
+      "failure_type": "",
+      "label": "market-data:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-data_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-data_e2e.xml"
+    },
+    {
+      "collected": "10",
+      "duration_sec": "0",
+      "failure_type": "",
+      "label": "market-ingestion:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-ingestion_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-ingestion_integration.xml"
+    },
+    {
+      "collected": "16",
+      "duration_sec": "23",
+      "failure_type": "assertion",
+      "label": "market-ingestion:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/market-ingestion_e2e.log",
+      "reason": "pytest exited with code 1",
+      "status": "failed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/market-ingestion_e2e.xml"
+    },
+    {
+      "collected": "5",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "nlp-pipeline:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/nlp-pipeline_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/nlp-pipeline_integration.xml"
+    },
+    {
+      "collected": "33",
+      "duration_sec": "3",
+      "failure_type": "",
+      "label": "nlp-pipeline:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/nlp-pipeline_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/nlp-pipeline_e2e.xml"
+    },
+    {
+      "collected": "45",
+      "duration_sec": "6",
+      "failure_type": "",
+      "label": "portfolio:integration",
+      "layer": "integration",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/portfolio_integration.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/portfolio_integration.xml"
+    },
+    {
+      "collected": "10",
+      "duration_sec": "1",
+      "failure_type": "",
+      "label": "portfolio:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/portfolio_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/portfolio_e2e.xml"
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "rag-chat:integration",
+      "layer": "integration",
+      "log": "",
+      "reason": "no integration tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "0",
+      "duration_sec": "0",
+      "failure_type": "no_tests",
+      "label": "rag-chat:e2e",
+      "layer": "e2e",
+      "log": "",
+      "reason": "no e2e tests",
+      "status": "skipped",
+      "suite_type": "pytest",
+      "xml": ""
+    },
+    {
+      "collected": "97",
+      "duration_sec": "124",
+      "failure_type": "",
+      "label": "cross-service:e2e",
+      "layer": "e2e",
+      "log": "docs/testing/test-runs/20260331T145855Z/suites/cross-service_e2e.log",
+      "reason": "",
+      "status": "passed",
+      "suite_type": "pytest",
+      "xml": "docs/testing/test-runs/20260331T145855Z/junit/cross-service_e2e.xml"
+    }
+  ]
+}

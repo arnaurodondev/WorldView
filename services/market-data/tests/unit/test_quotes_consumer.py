@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from market_data.domain.entities import Instrument, Quote
@@ -104,11 +104,15 @@ async def test_quotes_consumer_skips_non_quote() -> None:
 
 @pytest.mark.asyncio
 async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
-    """Consumer creates a new Instrument when symbol/exchange is unknown."""
+    """Consumer creates a new Instrument when symbol/exchange is unknown.
+
+    QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+    """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
     mock_uow.quotes.upsert = AsyncMock(return_value=None)
 
     mock_storage = AsyncMock()
@@ -118,16 +122,54 @@ async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
     await consumer.process_message(None, _make_message(), {})
 
     mock_uow.instruments.upsert.assert_awaited_once()
-    mock_uow.collect_event.assert_called_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_emits_instrument_updated_when_flag_missing() -> None:
+    """Consumer emits InstrumentUpdated to outbox when instrument exists but lacks has_quotes.
+
+    QA-016: the flag-change path previously emitted nothing; now atomically writes to outbox.
+    """
+    instrument = _make_instrument(has_quotes=False)
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.update_flags = AsyncMock()
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-002")
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.instruments.update_flags.assert_awaited_once()
+    mock_uow.outbox_events.create.assert_awaited_once()
+    call_kwargs = mock_uow.outbox_events.create.call_args
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.updated"
+    assert call_kwargs.kwargs["payload"]["has_quotes"] is True
+    assert call_kwargs.kwargs["payload"]["fields_updated"] == ["has_quotes"]
 
 
 @pytest.mark.asyncio
 async def test_quotes_consumer_invalidates_cache_after_upsert() -> None:
-    """After DB upsert, the consumer invalidates the Valkey cache entry."""
+    """After DB upsert, the consumer schedules cache invalidation via schedule_post_commit (M-005).
+
+    The invalidation must be scheduled — not awaited inline — so it only runs
+    after the transaction commits (preventing stale-read-into-cache races).
+    """
+
     instrument = _make_instrument()
+    captured_hooks: list = []
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
     mock_uow.quotes.upsert = AsyncMock(return_value=None)
+    # schedule_post_commit is sync — capture the coroutine for manual drain
+    mock_uow.schedule_post_commit = MagicMock(side_effect=captured_hooks.append)
 
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
@@ -138,6 +180,12 @@ async def test_quotes_consumer_invalidates_cache_after_upsert() -> None:
     consumer = _make_consumer(mock_uow, mock_storage, quote_cache=mock_cache)
     await consumer.process_message(None, _make_message(), {})
 
+    # Hook was scheduled but NOT yet awaited (it runs after commit)
+    assert len(captured_hooks) == 1
+    mock_cache.invalidate.assert_not_awaited()
+
+    # Simulate commit draining the hook
+    await captured_hooks[0]
     mock_cache.invalidate.assert_awaited_once_with("instr-789")
 
 
@@ -173,3 +221,75 @@ async def test_quotes_consumer_parse_failure_raises_fatal() -> None:
     consumer = _make_consumer(mock_uow, mock_storage)
     with pytest.raises(MalformedDataError):
         await consumer.process_message(None, _make_message(), {})
+
+
+# ── T-E2-1-01/02: atomic dedup + T-E2-1-03: nullable Quote fields ──────────
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_content_hash_dedup_marks_processed() -> None:
+    """Unchanged content hash → event_id still recorded despite early return (BP-034)."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    # _make_consumer overwrites exists_by_content_hash → set it to True after
+    mock_uow.ingestion_events.exists_by_content_hash = AsyncMock(return_value=True)
+    msg = _make_message()
+    msg["canonical_ref_sha256"] = "deadbeef"
+
+    await consumer.process_message(None, msg, {})
+
+    mock_uow.ingestion_events.create_if_not_exists.assert_awaited_once()
+    mock_storage.get_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_skips_processing_on_duplicate_insert() -> None:
+    """Duplicate event_id → early return, no data written."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=False)
+
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_storage.get_bytes.assert_not_called()
+    mock_uow.quotes.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_null_bid_ask_handled() -> None:
+    """NULL bid/ask in canonical payload → None in Quote entity (D-004)."""
+
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+
+    # Canonical quote with null bid/ask/last
+    null_quote_json = json.dumps(
+        {
+            "symbol": "MSFT",
+            "exchange": "US",
+            "bid": None,
+            "ask": None,
+            "last": None,
+            "volume": None,
+            "timestamp": "2024-01-15T14:30:00",
+            "source": "polygon",
+        }
+    ).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=null_quote_json)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    quote: Quote = mock_uow.quotes.upsert.call_args[0][0]
+    assert quote.bid is None
+    assert quote.ask is None
+    assert quote.last is None
+    assert quote.volume is None

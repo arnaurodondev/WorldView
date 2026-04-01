@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.unit_of_work import UnitOfWork
 from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
@@ -19,6 +20,8 @@ from portfolio.infrastructure.db.repositories.transaction import SqlAlchemyTrans
 from portfolio.infrastructure.db.repositories.user import SqlAlchemyUserRepository
 from portfolio.infrastructure.db.repositories.watchlist import SqlAlchemyWatchlistRepository
 from portfolio.infrastructure.db.repositories.watchlist_member import SqlAlchemyWatchlistMemberRepository
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -89,11 +92,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # Option B (QA-006): __aexit__ never auto-commits — only rolls back on exception.
+        # Explicit await uow.commit() is required in every mutating use case.
         try:
             if exc_type is not None:
-                await self.rollback()
-            else:
-                await self.commit()
+                try:
+                    await self.rollback()
+                except Exception as rollback_err:
+                    logger.error(
+                        "uow_rollback_error",
+                        error=str(rollback_err),
+                        original_exception=repr(exc_val),
+                    )
         finally:
             if self._session is not None:
                 await self._session.close()

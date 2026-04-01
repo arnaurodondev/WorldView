@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_BASE_URL = "https://eodhd.com/api"
 _TIMEFRAME_MAP = {
     "1m": "1m",
     "5m": "5m",
@@ -43,9 +42,10 @@ class EODHDProviderAdapter(ProviderAdapter):
     - Bad JSON / missing fields → ProviderDataError
     """
 
-    def __init__(self, api_key: str, client: httpx.AsyncClient) -> None:
+    def __init__(self, api_key: str, client: httpx.AsyncClient, base_url: str = "https://eodhd.com/api") -> None:
         self._api_key = api_key
         self._client = client
+        self._base_url = base_url
 
     _INTRADAY_INTERVAL_MAP: ClassVar[dict[str, str]] = {"1m": "1m", "5m": "5m", "1h": "1h"}
 
@@ -84,7 +84,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if end:
             params["to"] = end.strftime("%Y-%m-%d")
 
-        url = f"{_BASE_URL}/eod/{ticker}"
+        url = f"{self._base_url}/eod/{ticker}"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -109,7 +109,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         """Fetch real-time quote for *symbol*."""
         ticker = _build_ticker(symbol, exchange)
         params = {"api_token": self._api_key, "fmt": "json"}
-        url = f"{_BASE_URL}/real-time/{ticker}"
+        url = f"{self._base_url}/real-time/{ticker}"
 
         t0 = time.monotonic()
         raw = await self._get(url, params)
@@ -143,7 +143,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             "api_token": self._api_key,
             "fmt": "json",
         }
-        url = f"{_BASE_URL}/fundamentals/{ticker}"
+        url = f"{self._base_url}/fundamentals/{ticker}"
 
         t0 = time.monotonic()
         raw = await self._get(url, params)
@@ -164,7 +164,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         """Verify the API key is valid by hitting the exchange list endpoint."""
         try:
             params = {"api_token": self._api_key, "fmt": "json"}
-            await self._get(f"{_BASE_URL}/exchanges-list", params)
+            await self._get(f"{self._base_url}/exchanges-list", params)
             return True
         except (ProviderAuthError, ProviderUnavailable, ProviderRateLimited):
             return False
@@ -194,7 +194,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if to_ts is not None:
             params["to"] = to_ts
 
-        url = f"{_BASE_URL}/intraday/{ticker}"
+        url = f"{self._base_url}/intraday/{ticker}"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -226,7 +226,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if symbols:
             params["symbols"] = ",".join(symbols)
 
-        url = f"{_BASE_URL}/calendar/earnings"
+        url = f"{self._base_url}/calendar/earnings"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -263,7 +263,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if comparison:
             params["comparison"] = comparison
 
-        url = f"{_BASE_URL}/economic-events"
+        url = f"{self._base_url}/economic-events"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -290,7 +290,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             "indicator": indicator,
         }
 
-        url = f"{_BASE_URL}/macro-indicator/{country}"
+        url = f"{self._base_url}/macro-indicator/{country}"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -327,7 +327,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if to_date:
             params["to"] = to_date
 
-        url = f"{_BASE_URL}/news"
+        url = f"{self._base_url}/news"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -360,7 +360,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if to_date:
             params["to"] = to_date
 
-        url = f"{_BASE_URL}/insider-transactions"
+        url = f"{self._base_url}/insider-transactions"
         params["code"] = ticker
         t0 = time.monotonic()
         raw = await self._get(url, params)
@@ -401,7 +401,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if to_date:
             params["to"] = to_date
 
-        url = f"{_BASE_URL}/{path}"
+        url = f"{self._base_url}/{path}"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -432,7 +432,7 @@ class EODHDProviderAdapter(ProviderAdapter):
         if to_date:
             params["to"] = to_date
 
-        url = f"{_BASE_URL}/historical-market-cap/{ticker}"
+        url = f"{self._base_url}/historical-market-cap/{ticker}"
         t0 = time.monotonic()
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)

@@ -2,91 +2,97 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+import structlog.contextvars
 from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_ingestion.config import Settings
+from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Manage application lifecycle: startup and shutdown."""
-    from observability.logging import get_logger  # type: ignore[import-untyped]
-
-    logger = get_logger(__name__)
-    settings: Settings = app.state.settings
-
-    logger.info("market_ingestion_starting", version=app.version)
-
-    # Configure OTel tracing if endpoint configured (field added in T-MI-25)
-    otlp_endpoint = getattr(settings, "otlp_endpoint", None)
-    if otlp_endpoint:
-        try:
-            from observability.tracing import configure_tracing  # type: ignore[import-untyped]
-
-            configure_tracing(service_name="market-ingestion", endpoint=otlp_endpoint)  # type: ignore[call-arg]
-            logger.info("otel_tracing_configured", endpoint=otlp_endpoint)
-        except Exception as exc:
-            logger.warning("otel_tracing_setup_failed", error=str(exc))
-
-    yield
-
-    logger.info("market_ingestion_stopped")
+_VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
-    from observability.logging import get_logger  # type: ignore[import-untyped]
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Propagate X-Request-ID through the request lifecycle.
 
-    logger = get_logger(__name__)
-    settings = Settings()
+    Validates the incoming header: only alphanumeric + hyphens, max 64 chars.
+    Invalid or missing values are replaced with a fresh ULID.
+    """
 
-    app = FastAPI(
-        title="market-ingestion",
-        version="2026.3.0",
-        lifespan=lifespan,
-    )
-    app.state.settings = settings
-
-    # Request-ID middleware: generate X-Request-ID if absent, bind to log context
-    @app.middleware("http")
-    async def request_id_middleware(
+    async def dispatch(
+        self,
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         import common.ids
 
-        request_id = request.headers.get("X-Request-ID") or common.ids.new_ulid()
-        try:
-            import structlog
-
-            structlog.contextvars.bind_contextvars(request_id=request_id)
-        except Exception as exc:
-            logger.debug("request_id_bind_failed", error=str(exc))
+        raw_id = request.headers.get("X-Request-ID", "")
+        request_id = raw_id if _VALID_REQUEST_ID_RE.match(raw_id) else common.ids.new_ulid()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
         response: Response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Request-ID"] = str(request_id)
+        structlog.contextvars.clear_contextvars()
         return response
 
-    # Prometheus middleware
-    try:
-        from observability.metrics import add_prometheus_middleware  # type: ignore[import-untyped]
 
-        add_prometheus_middleware(app)  # type: ignore[call-arg]
-    except Exception as exc:
-        logger.warning("prometheus_middleware_setup_failed", error=str(exc))
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Manage application lifecycle: startup and shutdown."""
+    settings: Settings = app.state.settings
 
-    # OTel middleware
-    try:
-        from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
+    # 1. Logging — always first
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    log = get_logger("market_ingestion.app")
 
-        add_otel_middleware(app)  # type: ignore[call-arg]
-    except Exception as exc:
-        logger.warning("otel_middleware_setup_failed", error=str(exc))
+    # 2. Tracing config (optional — middleware already registered in create_app)
+    if settings.otlp_endpoint:
+        configure_tracing(
+            service_name=settings.service_name,
+            otlp_endpoint=settings.otlp_endpoint,
+        )
+
+    # 3. DB session factories — built once at startup, shared across all requests
+    from market_ingestion.infrastructure.db.session import _build_factories
+
+    write_factory, read_factory = _build_factories(settings)
+    app.state.write_session_factory = write_factory
+    app.state.read_session_factory = read_factory
+
+    log.info("service_started", service=settings.service_name, version=app.version)
+    yield
+    log.info("service_stopped", service=settings.service_name)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create and configure the FastAPI application."""
+    app = FastAPI(
+        title="market-ingestion",
+        version="2026.3.0",
+        lifespan=lifespan,
+    )
+    settings = settings or Settings()  # type: ignore[call-arg]
+    app.state.settings = settings
+
+    # Middleware — must be registered before app starts (Starlette requirement)
+    app.add_middleware(RequestIdMiddleware)
+    metrics = create_metrics(service_name=settings.service_name)
+    add_prometheus_middleware(app, metrics)
+    add_otel_middleware(app)
+    app.state.metrics = metrics
 
     from market_ingestion.api.routes import router
 

@@ -11,7 +11,7 @@
     {"name": "doc_id",          "type": "string",                  "doc": "UUIDv7 canonical document identifier"},
     {"name": "content_hash",    "type": "string",                  "doc": "SHA-256 of raw content"},
     {"name": "normalized_hash", "type": "string",                  "doc": "SHA-256 of normalized text"},
-    {"name": "dedup_result",    "type": "string",                  "doc": "unique | corroborating | near_dup | exact_dup"},
+    {"name": "dedup_result",    "type": "string",                  "doc": "unique | corroborating | semantic_near_duplicate | same_source_duplicate | duplicate_exact | duplicate_normalized"},
     {"name": "minio_silver_key","type": "string",                  "doc": "MinIO silver layer clean text key"},
     {"name": "source_type",     "type": "string"},
     {"name": "title",           "type": ["null", "string"],        "default": null},

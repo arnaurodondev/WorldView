@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Configuration for the content-store service."""
+    """Configuration for the Content Store service (S5).
+
+    All fields are read from environment variables prefixed with
+    ``CONTENT_STORE_`` (set by ``env_prefix``).
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="CONTENT_STORE_",
@@ -15,27 +19,61 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Server
+    # ── Server ─────────────────────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8005
     debug: bool = False
 
-    # Database
+    # ── Database ───────────────────────────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_store_db"
+    database_url_read: str = ""
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
 
-    # Kafka
+    # ── Kafka ──────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
     schema_registry_url: str = "http://localhost:8081"
+    kafka_input_topic: str = "content.article.raw.v1"
+    kafka_output_topic: str = "content.article.stored.v1"
+    kafka_consumer_group: str = "content-store-consumer"
 
-    # Storage
-    storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    # ── MinIO (object storage) ─────────────────────────────────────────────────
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_bronze_bucket: str = "worldview-bronze"
+    minio_silver_bucket: str = "worldview-silver"
+    minio_secure: bool = False
 
-    # Valkey
-    valkey_url: str = "redis://localhost:6379/0"
+    # ── Valkey (LSH bands) ─────────────────────────────────────────────────────
+    valkey_url: str = "redis://localhost:6379"
 
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
+    # ── Security ───────────────────────────────────────────────────────────────
+    admin_token: str = ""
+
+    # ── Outbox dispatcher ──────────────────────────────────────────────────────
+    outbox_batch_size: int = 100
+    outbox_poll_interval_seconds: float = 5.0
+    outbox_lease_seconds: int = 30
+    outbox_max_attempts: int = 5
+    outbox_metrics_poll_seconds: int = 30
+
+    # ── MinHash / LSH ──────────────────────────────────────────────────────────
+    minhash_num_perm: int = 128
+    lsh_num_bands: int = 4
+    lsh_rows_per_band: int = 32
+
+    # ── LSH time windows (days) per source type ────────────────────────────────
+    lsh_window_news_days: int = 7
+    lsh_window_filings_days: int = 180
+    lsh_window_transcripts_days: int = 60
+    lsh_window_research_days: int = 30
+    lsh_window_press_release_days: int = 14
+
+    # ── Observability ──────────────────────────────────────────────────────────
+    service_name: str = "content-store"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""

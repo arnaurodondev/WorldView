@@ -7,7 +7,7 @@ API surface:
   GET  /api/v1/policies         — List enabled polling policies
   GET  /healthz                 — Liveness probe (always 200)
   GET  /readyz                  — Readiness probe (checks DB + storage)
-  GET  /metrics                 — Prometheus exposition (via middleware)
+  GET  /metrics                 — Prometheus metrics endpoint
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import prometheus_client
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from market_ingestion.api.dependencies import (
+    InternalAuthDep,
     get_object_store,
     get_settings,
     get_uow,
@@ -36,11 +38,11 @@ from market_ingestion.api.schemas import (
 from market_ingestion.application.use_cases.backfill import BackfillUseCase
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
 from market_ingestion.domain.enums import DatasetType, Provider
-from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import ObjectStoreAdapter
+    from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.config import Settings
 
 logger = get_logger(__name__)
@@ -67,7 +69,7 @@ async def healthz() -> HealthResponse:
 @router.get("/readyz", response_model=ReadyResponse, tags=["probes"])
 async def readyz(
     settings: Settings = Depends(get_settings),
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
     object_store: ObjectStoreAdapter = Depends(get_object_store),
 ) -> ReadyResponse:
     """Readiness probe — checks DB connectivity and storage availability."""
@@ -79,8 +81,8 @@ async def readyz(
         await uow.tasks.count_by_status()
         checks["db"] = "ok"
     except Exception as exc:
-        logger.error("readyz_db_check_failed", error=str(exc))
-        checks["db"] = f"error: {exc}"
+        logger.error("readyz_db_check_failed", error_type=type(exc).__name__, error=str(exc))
+        checks["db"] = "error"
         all_ok = False
 
     # Storage check — verify the ingestion bucket is reachable
@@ -88,8 +90,8 @@ async def readyz(
         await object_store.exists(settings.storage_bucket, "__healthcheck__")
         checks["storage"] = "ok"
     except Exception as exc:
-        logger.error("readyz_storage_check_failed", error=str(exc))
-        checks["storage"] = f"error: {exc}"
+        logger.error("readyz_storage_check_failed", error_type=type(exc).__name__, error=str(exc))
+        checks["storage"] = "error"
         all_ok = False
 
     status_str = "ok" if all_ok else "degraded"
@@ -114,7 +116,8 @@ async def readyz(
 )
 async def trigger_ingestion(
     req: TriggerRequest,
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    _auth: InternalAuthDep,
+    uow: UnitOfWork = Depends(get_uow),
 ) -> TriggerResponse:
     """Trigger immediate ingestion for one or more symbols."""
     try:
@@ -156,7 +159,8 @@ async def trigger_ingestion(
 )
 async def trigger_backfill(
     req: BackfillRequest,
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    _auth: InternalAuthDep,
+    uow: UnitOfWork = Depends(get_uow),
 ) -> BackfillResponse:
     """Trigger a historical backfill for a single symbol."""
     try:
@@ -200,7 +204,7 @@ async def trigger_backfill(
     tags=["ingestion"],
 )
 async def ingest_status(
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> TaskStatusResponse:
     """Return task counts grouped by status."""
     counts = await uow.tasks.count_by_status()
@@ -218,7 +222,7 @@ async def ingest_status(
     tags=["policies"],
 )
 async def list_policies(
-    uow: SqlaUnitOfWork = Depends(get_uow),
+    uow: UnitOfWork = Depends(get_uow),
 ) -> PolicyListResponse:
     """List all enabled polling policies."""
     policies = await uow.policies.list_enabled()
@@ -236,3 +240,15 @@ async def list_policies(
         for p in policies
     ]
     return PolicyListResponse(policies=summaries, total=len(summaries))
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+
+@router.get("/metrics", tags=["probes"])
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    data = prometheus_client.generate_latest()
+    return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)

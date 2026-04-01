@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -18,6 +17,8 @@ from portfolio.domain.enums import TransactionDirection, TransactionType
 from portfolio.domain.errors import (
     AuthorizationError,
     CurrencyMismatchError,
+    IdempotencyConflictError,
+    IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
     PortfolioNotFoundError,
     TenantInactiveError,
@@ -61,19 +62,31 @@ class RecordTransactionUseCase:
     async def execute(self, cmd: RecordTransactionCommand, uow: UnitOfWork) -> RecordTransactionResult:
         from uuid import UUID as _UUID
 
-        # Idempotency check
+        # Idempotency check — fail-fast on invalid key (D-007)
+        idem_uuid: _UUID | None = None
         if cmd.idempotency_key is not None:
             try:
                 idem_uuid = _UUID(cmd.idempotency_key)
-                already_done = await uow.idempotency.exists(idem_uuid)
-                if already_done:
-                    # Look up existing transaction by external_ref as proxy
-                    txns, _ = await uow.transactions.list_by_portfolio(cmd.portfolio_id, cmd.tenant_id, limit=10000)
-                    for t in txns:
-                        if t.external_ref == cmd.idempotency_key:
-                            return RecordTransactionResult(transaction=t)
-            except (ValueError, AttributeError):
-                pass
+            except (ValueError, AttributeError) as exc:
+                raise IdempotencyKeyInvalidError(
+                    f"idempotency_key must be a valid UUID: {exc}",
+                ) from exc
+            # BP-035: atomic dedup — single INSERT ON CONFLICT DO NOTHING RETURNING eliminates
+            # the TOCTOU race that exists between separate exists() and record() calls.
+            is_new = await uow.idempotency.create_if_not_exists(idem_uuid)
+            if not is_new:
+                existing = await uow.transactions.find_by_external_ref(
+                    cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
+                )
+                if existing is not None:
+                    return RecordTransactionResult(transaction=existing)
+                # F-DS-002: idempotency key recorded but transaction missing — inconsistent state.
+                # This can happen if a previous request committed the idempotency row but then
+                # rolled back before writing the transaction. Raise to surface as 409.
+                raise IdempotencyConflictError(
+                    f"Idempotency key {cmd.idempotency_key!r} already recorded but "
+                    "original transaction not found; state is inconsistent. Retry the request."
+                )
 
         # Validate tenant
         tenant = await uow.tenants.get(cmd.tenant_id)
@@ -113,7 +126,7 @@ class RecordTransactionUseCase:
                 details={"instrument_id": str(cmd.instrument_id)},
             )
 
-        # Create transaction
+        # Create transaction entity (in memory)
         transaction = Transaction(
             id=new_uuid(),
             tenant_id=cmd.tenant_id,
@@ -128,9 +141,8 @@ class RecordTransactionUseCase:
             executed_at=cmd.executed_at,
             external_ref=cmd.external_ref or cmd.idempotency_key,
         )
-        await uow.transactions.save(transaction)
 
-        # Update or create holding
+        # Update or create holding (in memory)
         holding = await uow.holdings.get(cmd.portfolio_id, cmd.instrument_id)
         if holding is None:
             holding = Holding(
@@ -143,9 +155,9 @@ class RecordTransactionUseCase:
         # Compute quantity delta: positive for inflow, negative for outflow
         qty_delta = cmd.quantity if cmd.direction == TransactionDirection.INFLOW else -cmd.quantity
         holding.apply_delta(qty_delta, cmd.price)
-        await uow.holdings.save(holding)
 
-        # Emit outbox events
+        # Pre-validate: build outbox event dicts BEFORE any DB writes (M-009).
+        # Serialization errors surface here, not after partial DB writes.
         tx_event = TransactionRecorded(
             tenant_id=cmd.tenant_id,
             transaction_id=transaction.id,
@@ -169,14 +181,19 @@ class RecordTransactionUseCase:
             average_cost=str(holding.average_cost),
             currency=holding.currency,
         )
+        tx_event_dict = transaction_recorded_to_dict(tx_event)
+        holding_event_dict = holding_changed_to_dict(holding_event)
 
+        # All DB writes together — atomic within the UoW transaction
+        await uow.transactions.save(transaction)
+        await uow.holdings.save(holding)
         await uow.outbox.save(
             OutboxRecord(
                 id=new_uuid(),
                 tenant_id=cmd.tenant_id,
                 event_type=TransactionRecorded.EVENT_TYPE,
                 topic=EVENT_TOPIC_MAP[TransactionRecorded.EVENT_TYPE],
-                payload=transaction_recorded_to_dict(tx_event),
+                payload=tx_event_dict,
                 status="pending",
                 attempt_count=0,
                 lease_owner=None,
@@ -189,7 +206,7 @@ class RecordTransactionUseCase:
                 tenant_id=cmd.tenant_id,
                 event_type=HoldingChanged.EVENT_TYPE,
                 topic=EVENT_TOPIC_MAP[HoldingChanged.EVENT_TYPE],
-                payload=holding_changed_to_dict(holding_event),
+                payload=holding_event_dict,
                 status="pending",
                 attempt_count=0,
                 lease_owner=None,
@@ -197,10 +214,26 @@ class RecordTransactionUseCase:
             )
         )
 
-        # Record idempotency
-        if cmd.idempotency_key is not None:
-            with contextlib.suppress(ValueError):
-                await uow.idempotency.record(_UUID(cmd.idempotency_key))
+        # Catch IntegrityError from concurrent same-key commits (TOCTOU race post-BP-035).
+        # Both requests passed create_if_not_exists (neither had committed yet), then one
+        # wins the commit race and the other hits a unique constraint violation.
+        # Import is at call-site to keep the infrastructure detail contained (sqlalchemy
+        # is a dependency of the infrastructure layer; use case tolerates this boundary cross).
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await uow.commit()
+        except IntegrityError as exc:
+            await uow.rollback()
+            if cmd.idempotency_key is not None:
+                existing = await uow.transactions.find_by_external_ref(
+                    cmd.portfolio_id, cmd.tenant_id, cmd.idempotency_key
+                )
+                if existing is not None:
+                    return RecordTransactionResult(transaction=existing)
+            raise IdempotencyConflictError(
+                f"Concurrent idempotency conflict on key {cmd.idempotency_key!r}; retry the request."
+            ) from exc
 
         log = logger.bind(
             tenant_id=str(cmd.tenant_id),

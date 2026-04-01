@@ -8,18 +8,21 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
-from sqlalchemy.dialects import postgresql
 from market_ingestion.domain.entities.ingestion_task import IngestionTask
 from market_ingestion.domain.enums import IngestionTaskStatus, Provider
 from market_ingestion.domain.events import MarketDatasetFetched
 from market_ingestion.domain.value_objects import DateRange, ObjectRef, Timeframe
+from market_ingestion.infrastructure.db.models.polling_policy import PollingPolicyModel
 from market_ingestion.infrastructure.db.repositories.outbox_repository import (
     _DispatchableOutboxRecord,
+)
+from market_ingestion.infrastructure.db.repositories.policy_repository import (
+    _to_domain as policy_to_domain,
 )
 from market_ingestion.infrastructure.db.repositories.task_repository import (
     SqlaTaskRepository,
@@ -27,6 +30,7 @@ from market_ingestion.infrastructure.db.repositories.task_repository import (
     _to_model,
 )
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from sqlalchemy.dialects import postgresql
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -104,6 +108,68 @@ def test_model_to_domain_nullable_fields():
 
 
 @pytest.mark.unit
+def test_policy_model_to_domain_maps_backfill_fields() -> None:
+    model = PollingPolicyModel(
+        id="01HXSEED000000000000000001",
+        provider="eodhd",
+        dataset_type="ohlcv",
+        dataset_variant=None,
+        symbol="AAPL",
+        exchange="US",
+        timeframe="1d",
+        base_interval_sec=3600,
+        min_interval_sec=60,
+        jitter_sec=10,
+        adaptive_enabled=False,
+        adaptive_k=1.0,
+        adaptive_half_life_sec=3600,
+        priority=5,
+        enabled=True,
+        backfill_enabled=True,
+        backfill_start_date=date(2020, 1, 1),
+        backfill_chunk_days=30,
+        created_at=_utc(2024, 1, 1),
+        updated_at=_utc(2024, 1, 1),
+    )
+
+    domain = policy_to_domain(model)
+
+    assert domain.backfill_enabled is True
+    assert domain.backfill_start_date == date(2020, 1, 1)
+    assert domain.backfill_days == 30
+
+
+@pytest.mark.unit
+def test_policy_model_to_domain_keeps_backfill_disabled() -> None:
+    model = PollingPolicyModel(
+        id="01HXSEED000000000000000002",
+        provider="eodhd",
+        dataset_type="ohlcv",
+        dataset_variant=None,
+        symbol="AAPL",
+        exchange="US",
+        timeframe="1d",
+        base_interval_sec=3600,
+        min_interval_sec=60,
+        jitter_sec=10,
+        adaptive_enabled=False,
+        adaptive_k=1.0,
+        adaptive_half_life_sec=3600,
+        priority=5,
+        enabled=True,
+        backfill_enabled=False,
+        backfill_start_date=date(2020, 1, 1),
+        backfill_chunk_days=30,
+        created_at=_utc(2024, 1, 1),
+        updated_at=_utc(2024, 1, 1),
+    )
+
+    domain = policy_to_domain(model)
+
+    assert domain.backfill_enabled is False
+
+
+@pytest.mark.unit
 async def test_task_repo_add_many_empty_returns_zero():
     session = _make_mock_session()
     repo = SqlaTaskRepository(write_session=session, read_session=session)
@@ -153,6 +219,139 @@ async def test_task_repo_has_active_task_uses_is_null_for_nullable_tuple_fields(
     sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "exchange IS NULL" in sql
     assert "dataset_variant IS NULL" in sql
+
+
+# ---------------------------------------------------------------------------
+# T-E1-3-01: claim_batch CTE atomicity (M-006)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_claim_batch_atomic_cte_no_race_window() -> None:
+    """claim_batch uses a single CTE+UPDATE statement, not SELECT-then-UPDATE.
+
+    The CTE selects candidates (FOR UPDATE SKIP LOCKED) and the UPDATE operates on
+    the locked set in one SQL round-trip, closing the race window (M-006).
+    """
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=mock_result)
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    result = await repo.claim_batch(worker_id="w1", limit=5, lease_seconds=60)
+
+    # Only ONE execute call — the CTE+UPDATE is a single statement
+    assert session.execute.await_count == 1
+    assert result == []
+
+    # The statement must be an UPDATE (not a SELECT)
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
+    assert "UPDATE" in sql.upper()
+    assert "candidates" in sql  # CTE name present
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-02: result_ref + completed_at round-trip tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_save_persists_result_ref_on_success() -> None:
+    """After task.succeed(ref), save() includes result_ref columns in UPDATE."""
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.status = IngestionTaskStatus.RUNNING
+    ref = ObjectRef(
+        bucket="market-bronze", key="raw/task-1", sha256="a" * 64, byte_length=512, mime_type="application/json"
+    )
+    task.result_ref = ref
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    await repo.save(task)
+
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "market-bronze" in sql
+    assert "raw/task-1" in sql
+    assert "a" * 64 in sql
+
+
+@pytest.mark.unit
+async def test_save_completed_at_set_on_success() -> None:
+    """completed_at is included in the UPDATE statement after task.succeed()."""
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.status = IngestionTaskStatus.SUCCEEDED
+    task.completed_at = _utc(2026, 3, 27)
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    await repo.save(task)
+
+    stmt = session.execute.call_args.args[0]
+    compiled = stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    # completed_at must be in the UPDATE SET clause
+    assert "completed_at" in str(compiled)
+
+
+@pytest.mark.unit
+async def test_save_result_ref_none_on_pending_task() -> None:
+    """Pending task has null result_ref columns — UPDATE sets them to NULL."""
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    assert task.result_ref is None
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    await repo.save(task)
+
+    stmt = session.execute.call_args.args[0]
+    # Inspect the VALUES dict — all result_ref columns should be None
+    update_params = stmt.compile(dialect=postgresql.dialect()).params
+    assert update_params.get("result_ref_bucket_1") is None
+    assert update_params.get("result_ref_key_1") is None
+
+
+@pytest.mark.unit
+def test_to_domain_reconstructs_result_ref_from_columns() -> None:
+    """_to_domain() rebuilds ObjectRef when bucket+key columns are populated."""
+    task = _make_task()
+    model = _to_model(task)
+    model.status = "succeeded"
+    model.result_ref_bucket = "market-bronze"
+    model.result_ref_key = "raw/task-1"
+    model.result_ref_sha256 = "b" * 64
+    model.result_ref_mime_type = "application/json"
+    model.completed_at = _utc(2026, 3, 27)
+
+    domain = _to_domain(model)
+
+    assert domain.result_ref is not None
+    assert domain.result_ref.bucket == "market-bronze"
+    assert domain.result_ref.key == "raw/task-1"
+    assert domain.result_ref.sha256 == "b" * 64
+    assert domain.completed_at == _utc(2026, 3, 27)
+
+
+@pytest.mark.unit
+def test_to_domain_result_ref_none_when_columns_null() -> None:
+    """_to_domain() returns result_ref=None when columns are NULL."""
+    task = _make_task()
+    model = _to_model(task)
+    model.result_ref_bucket = None
+    model.result_ref_key = None
+
+    domain = _to_domain(model)
+    assert domain.result_ref is None
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +479,86 @@ async def test_uow_mark_outbox_events_added():
         assert not uow.has_outbox_events
         uow.mark_outbox_events_added()
         assert uow.has_outbox_events
+
+
+# ---------------------------------------------------------------------------
+# T-E1-2-03: UoW __aexit__ session cleanup (BP-037)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_uow_close_sessions_always_called_on_rollback_failure() -> None:
+    """_close_sessions() runs even if rollback() raises — BP-037."""
+    write_factory = MagicMock()
+    write_session = AsyncMock()
+    write_session.__aenter__ = AsyncMock(return_value=write_session)
+    write_session.__aexit__ = AsyncMock(return_value=None)
+    # rollback raises — _close_sessions must still run
+    write_session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+    write_factory.return_value = write_session
+
+    uow = SqlaUnitOfWork(write_factory)
+    # Enter, then exit with an exception to trigger rollback path
+    try:
+        async with uow:
+            raise ValueError("business error")
+    except ValueError:
+        pass
+
+    # __aexit__ calls _write_session.__aexit__ (which is _close_sessions)
+    write_session.__aexit__.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_uow_original_exception_logged_on_rollback_failure() -> None:
+    """When rollback() raises, the original exc info is preserved in the log."""
+    from unittest.mock import patch
+
+    write_factory = MagicMock()
+    write_session = AsyncMock()
+    write_session.__aenter__ = AsyncMock(return_value=write_session)
+    write_session.__aexit__ = AsyncMock(return_value=None)
+    write_session.rollback = AsyncMock(side_effect=RuntimeError("db gone"))
+    write_factory.return_value = write_session
+
+    with patch("market_ingestion.infrastructure.db.unit_of_work.logger") as mock_logger:
+        try:
+            uow = SqlaUnitOfWork(write_factory)
+            async with uow:
+                raise ValueError("original error")
+        except ValueError:
+            pass
+
+        # logger.error should be called with the original exc in repr
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args
+        assert "original" in call_kwargs.kwargs or len(call_kwargs.args) > 0
+        logged_original = call_kwargs.kwargs.get("original", "")
+        assert "original error" in logged_original or "ValueError" in logged_original
+
+
+# ---------------------------------------------------------------------------
+# T-E1-2-04: Outbox _get_topic guard (BP-039)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_outbox_get_topic_raises_on_unknown_event_type() -> None:
+    """_get_topic() raises ValueError for unregistered event types — BP-039."""
+    from market_ingestion.infrastructure.db.repositories.outbox_repository import _get_topic
+
+    with pytest.raises(ValueError, match="Unknown event_type"):
+        _get_topic("completely.unknown.event")
+
+
+@pytest.mark.unit
+def test_outbox_get_topic_returns_correct_topic_for_known_event() -> None:
+    """_get_topic() resolves the correct topic for market.dataset.fetched."""
+    from market_ingestion.infrastructure.db.repositories.outbox_repository import _get_topic
+
+    topic = _get_topic("market.dataset.fetched")
+    assert topic  # non-empty string
+    assert "market" in topic  # either the canonical name or messaging lib value
 
 
 # ---------------------------------------------------------------------------

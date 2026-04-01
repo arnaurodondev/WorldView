@@ -116,8 +116,57 @@ async def test_list_transactions(integration_client, db_session) -> None:
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] >= 1
+    # Portfolio is freshly created — exactly 1 transaction expected (no shared state).
+    assert data["total"] == 1
     assert data["items"][0]["portfolio_id"] == portfolio["id"]
+
+
+async def test_transaction_requires_positive_quantity(integration_client, db_session) -> None:
+    """POST /api/v1/transactions with quantity=0 returns 422."""
+    tenant = await make_tenant(integration_client, name="ValCo")
+    user = await make_user(integration_client, tenant["id"])
+    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    instrument_id = await _seed_instrument(db_session, "AMZN", "NASDAQ")
+
+    resp = await integration_client.post(
+        "/api/v1/transactions",
+        json={
+            "portfolio_id": portfolio["id"],
+            "instrument_id": str(instrument_id),
+            "transaction_type": "BUY",
+            "direction": "INFLOW",
+            "quantity": "0",
+            "price": "100.00",
+            "currency": "USD",
+            "executed_at": _EXECUTED_AT,
+        },
+        headers={"X-Tenant-ID": tenant["id"], "X-Owner-ID": user["id"]},
+    )
+    assert resp.status_code == 422
+
+
+async def test_transaction_requires_positive_price(integration_client, db_session) -> None:
+    """POST /api/v1/transactions with price=0 returns 422."""
+    tenant = await make_tenant(integration_client, name="PriceCo")
+    user = await make_user(integration_client, tenant["id"])
+    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    instrument_id = await _seed_instrument(db_session, "META", "NASDAQ")
+
+    resp = await integration_client.post(
+        "/api/v1/transactions",
+        json={
+            "portfolio_id": portfolio["id"],
+            "instrument_id": str(instrument_id),
+            "transaction_type": "BUY",
+            "direction": "INFLOW",
+            "quantity": "5",
+            "price": "0",
+            "currency": "USD",
+            "executed_at": _EXECUTED_AT,
+        },
+        headers={"X-Tenant-ID": tenant["id"], "X-Owner-ID": user["id"]},
+    )
+    assert resp.status_code == 422
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

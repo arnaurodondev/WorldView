@@ -27,7 +27,7 @@ A senior engineer with deep experience in distributed systems, event-driven arch
 4. **Apply checklists** (REVIEW_CHECKLIST, KAFKA_PIPELINE_CHECKLIST, STORAGE_IO_CHECKLIST)
 5. **Check invariants** (`.claude/review/protocols/INVARIANT_ANALYSIS.md`)
 6. **Scan for high-risk patterns** (`.claude/review/heuristics/HIGH_RISK_PATTERNS.md`)
-7. **Cross-reference bug patterns** (`docs/ai-interactions/BUG_PATTERNS.md`)
+7. **Cross-reference bug patterns** (`docs/BUG_PATTERNS.md`)
 8. **Generate edge cases** for untested paths (`.claude/review/heuristics/EDGE_CASE_GENERATION.md`)
 9. **Produce structured report** with severity classification
 

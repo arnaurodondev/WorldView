@@ -117,11 +117,21 @@ class TestOutboxRepository:
 
     async def test_move_to_dead_letter_executes_update(self) -> None:
         session = _mock_session()
+        # Mock: first execute returns the outbox record, second executes the UPDATE
+        mock_record = MagicMock()
+        mock_record.id = UUID("00000000-0000-0000-0000-000000000014")
+        mock_record.topic = "content.article.raw.v1"
+        mock_record.payload = {"doc_id": "test"}
+        first_result = MagicMock()
+        first_result.scalar_one_or_none.return_value = mock_record
+        session.execute = AsyncMock(side_effect=[first_result, MagicMock()])
         repo = OutboxRepository(session)  # type: ignore[arg-type]
 
         await repo.move_to_dead_letter(UUID("00000000-0000-0000-0000-000000000014"))
 
-        session.execute.assert_awaited_once()
+        assert session.execute.await_count == 2
+        # Verify a DLQ model was added to the session
+        session.add.assert_called_once()
 
 
 class TestSourceRepository:

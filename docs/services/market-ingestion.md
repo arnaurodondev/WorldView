@@ -19,15 +19,17 @@ serve end-user queries, directly write to `market_data_db`.
 
 ## API Surface
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (DB + MinIO check) | — |
-| GET | `/metrics` | Prometheus metrics | — |
-| POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | — |
-| POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | — |
-| GET | `/api/v1/ingest/status` | Current ingestion task status | — |
-| GET | `/api/v1/policies` | List polling policies | slow |
+| Method | Path | Description | Auth | Cache |
+|--------|------|-------------|------|-------|
+| GET | `/healthz` | Liveness | — | — |
+| GET | `/readyz` | Readiness (DB + MinIO check) | — | — |
+| GET | `/metrics` | Prometheus metrics | — | — |
+| POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | `X-Internal-Token` required | — |
+| POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | `X-Internal-Token` required | — |
+| GET | `/api/v1/ingest/status` | Current ingestion task status | — | — |
+| GET | `/api/v1/policies` | List polling policies | — | slow |
+
+**Authentication**: Mutating endpoints (`POST /trigger`, `POST /backfill`) require `X-Internal-Token: <token>` header. Set `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` env var. Returns `401` if header is missing or does not match.
 
 ---
 
@@ -140,7 +142,7 @@ services/market-ingestion/src/app/
 │       └── execute_task.py
 ├── domain/
 │   ├── entities/            # ingestion_task, polling_policy, provider_budget, watermark
-│   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus, etc.
+│   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus (re-export from contracts), etc.
 │   ├── events.py            # MarketDatasetFetched (pointer event)
 │   ├── errors.py
 │   └── value_objects.py     # Timeframe, ObjectRef (claim-check pointer), InstrumentKey, DateRange
@@ -179,6 +181,13 @@ All methods perform provider-level error mapping (auth errors, rate limits, tran
 and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (accessible by
 everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
 the other 5 endpoints require a paid subscription.
+
+**Provider configuration (env vars):**
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `MARKET_INGESTION_EODHD_API_KEY` | `demo` | EODHD API key (set to live key in production) |
+| `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | EODHD base URL (override for staging/mock without image rebuild) |
 
 ---
 
@@ -244,7 +253,7 @@ sequenceDiagram
 |------|------|---------|
 | Unit | Domain entities, canonical transformation | `make test` |
 | Unit | Use cases (mock repos + adapters) | `make test` |
-| Unit | EODHD adapter (mocked) | `make test` (22 tests) |
+| Unit | EODHD adapter (mocked) | `make test` (24 tests) |
 | Live | EODHD adapter with real demo API calls | `make test -- tests/live/test_eodhd_live.py` (56 tests: 48 passed, 8 xfailed for paid-only) |
 | Integration | Worker → MinIO round-trip | `make test-integration` |
 | Contract | Avro event contract (market.dataset.fetched mapper/topic/schema alignment) | `make test-contract` |
@@ -256,7 +265,7 @@ sequenceDiagram
 ```bash
 cd services/market-ingestion
 cp configs/dev.local.env.example .env
-make run       # API on port 8001
+make run       # API on port 8002
 make test
 make lint
 make migrate

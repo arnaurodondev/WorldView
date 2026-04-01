@@ -31,7 +31,7 @@ ignore = [
 unfixable = ["F841"]  # don't auto-remove unused variables
 
 [lint.per-file-ignores]
-"**/tests/**/*.py" = ["S101", "S106", "S603", "S607", "T20", "N802", "N815", "N806", "B023", "SIM", "F821", "TCH003"]
+"**/tests/**/*.py" = ["S101", "S106", "S603", "S607", "T20", "N802", "N815", "N806", "B023", "SIM", "F821", "TCH003", "E402"]
 "services/*/src/*/config.py" = ["S104", "S105"]
 "libs/*/src/*/settings.py" = ["S105"]
 "**/alembic/**/*.py" = ["E501", "TCH003"]
@@ -41,6 +41,16 @@ unfixable = ["F841"]  # don't auto-remove unused variables
 "services/*/src/*/api/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/api/**/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/infrastructure/db/models/*.py" = ["TCH003"]
+"services/*/src/*/infrastructure/*/models.py" = ["TCH003"]
+# Domain entity/enum files re-export shared enums (contracts.enums) at runtime;
+# they appear type-only due to `from __future__ import annotations`.
+"services/*/src/*/domain/entities.py" = ["TCH001"]
+"services/*/src/*/domain/enums.py" = ["TCH001"]
+# Dynamic SQL construction via text(f"...WHERE {where_sql}...") pattern is safe
+# because where_sql is built from trusted string literals (not user input).
+"services/*/src/*/infrastructure/**/repositories/*.py" = ["S608"]
+# Lazy re-exports in pg/__init__.py use __getattr__ + TYPE_CHECKING pattern
+"libs/messaging/src/messaging/pg/__init__.py" = ["TCH004"]
 
 [lint.isort]
 known-first-party = [

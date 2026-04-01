@@ -1,0 +1,28 @@
+The first issue was not a missing column in ORM, but a consistency gap across layers. The schema and model already had backfill fields, but naming drift made the intent unclear: persistence uses backfill_chunk_days while domain used backfill_days, so the same concept looked like two different things and created confusion when reading scheduling logic. You can see this split in polling_policy.py:51 and polling_policy.py:40.
+
+The second issue was a real repository mapping bug: backfill fields were not fully round-tripped between DB and domain in earlier code, so persisted policy state could be silently lost or misread by scheduler code. That was especially risky for backfill_start_date and backfill_enabled semantics because scheduling decisions depend on them. The mapping now lives in policy_repository.py:18, but the identified problem was that this layer had fallen out of sync with model/migration expectations.
+
+The third issue is behavioral and more important long-term: disabling backfill immediately after candidate generation is too early. In the current branch in schedule_tasks.py:125, the policy can be flipped off before budget filtering and max-tasks truncation complete, which means a policy may stop backfilling even if only part of the historical windows were actually enqueued. This is why a cursor/completion-based transition is safer than a schedule-time toggle.
+
+The fourth issue is ordering of budgeting versus dedupe. Candidate tasks are budget-charged before insertion conflict checks, so duplicate windows can consume tokens even when they are not inserted because of ON CONFLICT idempotency. That behavior is spread across schedule_tasks.py:76 and task_repository.py:143, and can starve useful work under tight provider budgets.
+
+The fifth issue was test coverage shape: application tests mocked policies directly, so repository-field drift was not exercised, and infrastructure tests focused mainly on task repository mappings. That left a blind spot where policy mapping regressions could pass CI. The new checks were added in test_schedule_tasks.py:231 and test_repositories.py:111, but the identified weakness was that these guardrails were missing before.
+
+
+
+
+
+
+
+
+
+
+Yes, this is expected in the current code: _to_model is effectively a helper used by tests, not by runtime repository write paths. In production, add/add_many build insert statements directly instead of calling _to_model, which is why you only see _to_model referenced from tests in test_repositories.py:71. This is not wrong, but it does duplicate mapping logic; long-term, either remove _to_model or reuse it in writes to avoid drift.
+
+Claiming is protected with row-level locking, so one task should only be claimed by one worker at a time. The repository uses SELECT ... FOR UPDATE SKIP LOCKED in task_repository.py:187, then updates those rows to RUNNING in the same transaction in task_repository.py:198. The claim use case commits right after claiming in claim_tasks.py:42.
+
+Async gather is running tasks concurrently, yes. The worker calls gather over the claimed batch in worker.py:109, so each _execute_task coroutine progresses in parallel for I/O waits. One caveat: concurrency is effectively bounded by batch size, and worker_concurrency from settings is currently not used as a semaphore limit, so operational control is weaker than it looks in config.
+
+In _fetch, using ext_adapter as Any is a typing workaround, not a runtime requirement. The base ProviderAdapter interface does not declare provider-specific methods like fetch_intraday, fetch_macro_indicator, etc. in adapters.py:43, so direct calls on adapter would fail static typing. The cast in execute_task.py:196 is therefore intentional; long-term, define a richer protocol/interface for extended endpoints instead of Any casts.
+
+HTTPX requests are not going through your internal API gateway service right now; they go directly to EODHD. The provider base URL is hardcoded to external EODHD in eodhd.py:24, and calls use self._client.get in eodhd.py:466. The client itself is correctly reused per worker process in worker.py:157, but if you want egress via gateway/proxy, base URL and transport/proxy config should be made configurable in settings rather than hardcoded.

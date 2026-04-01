@@ -91,6 +91,9 @@ class CreateWatchlistUseCase:
         if user is None:
             raise UserNotFoundError(f"User {cmd.user_id} not found", user_id=cmd.user_id)
 
+        # Application-layer duplicate check — catches the common case early and produces
+        # a friendly error. The DB unique constraint (uq_watchlists_user_name_active) is
+        # the authoritative guard against race conditions (M-010: TOCTOU note).
         existing = await uow.watchlists.list_by_user(cmd.user_id, cmd.tenant_id)
         for w in existing:
             if w.is_active() and w.name == cmd.name:
@@ -119,6 +122,7 @@ class CreateWatchlistUseCase:
                 cmd.tenant_id,
             )
         )
+        await uow.commit()
         logger.info("watchlist_created", watchlist_id=str(watchlist.id), user_id=str(cmd.user_id))
         return watchlist
 
@@ -166,6 +170,7 @@ class DeleteWatchlistUseCase:
                 cmd.tenant_id,
             )
         )
+        await uow.commit()
         logger.info("watchlist_deleted", watchlist_id=str(cmd.watchlist_id))
 
 
@@ -221,7 +226,13 @@ class AddWatchlistMemberUseCase:
                 cmd.tenant_id,
             )
         )
-        await cache.invalidate_entity(cmd.entity_id)
+        # Commit before cache invalidation so stale cache entries are only evicted
+        # after the DB write is durable (M-005: cache invalidation ordering).
+        await uow.commit()
+        try:
+            await cache.invalidate_entity(cmd.entity_id)
+        except Exception as cache_exc:
+            logger.warning("watchlist_cache_invalidation_failed", entity_id=str(cmd.entity_id), error=str(cache_exc))
         logger.info("watchlist_member_added", watchlist_id=str(cmd.watchlist_id), entity_id=str(cmd.entity_id))
         return member
 
@@ -266,5 +277,11 @@ class RemoveWatchlistMemberUseCase:
                 cmd.tenant_id,
             )
         )
-        await cache.invalidate_entity(cmd.entity_id)
+        # Commit before cache invalidation so stale cache entries are only evicted
+        # after the DB write is durable (M-005: cache invalidation ordering).
+        await uow.commit()
+        try:
+            await cache.invalidate_entity(cmd.entity_id)
+        except Exception as cache_exc:
+            logger.warning("watchlist_cache_invalidation_failed", entity_id=str(cmd.entity_id), error=str(cache_exc))
         logger.info("watchlist_member_removed", watchlist_id=str(cmd.watchlist_id), entity_id=str(cmd.entity_id))

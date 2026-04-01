@@ -3,7 +3,7 @@ PYTHON    := $(VENV)/bin/python
 UV        := uv
 LIBS_ROOT := ../../libs
 
-.PHONY: run test test-integration lint migrate migrate-new .env-check setup
+.PHONY: run test test-integration test-integration-centralized test-all lint migrate migrate-new .env-check setup
 
 setup:
 	@test -d $(VENV) || $(UV) venv --python 3.11 $(VENV)
@@ -33,6 +33,14 @@ test-integration:
 		exit 0; \
 	fi; \
 	exit $$EXIT
+
+test-integration-centralized:
+	cd ../.. && docker compose -f infra/compose/docker-compose.test.yml \
+		--profile content-ingestion-test up -d --wait
+	$(VENV)/bin/pytest tests/ -m integration -v
+
+test-all:
+	$(VENV)/bin/pytest tests/ -v
 
 lint:
 	$(VENV)/bin/ruff check src/ tests/

@@ -102,12 +102,20 @@ class InstrumentRepository(ABC):
     async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]: ...
 
     @abstractmethod
-    async def upsert(self, instrument: InstrumentRef) -> None: ...
+    async def upsert(self, instrument: InstrumentRef) -> InstrumentRef: ...
 
 
 class TransactionRepository(ABC):
     @abstractmethod
     async def get(self, transaction_id: UUID, tenant_id: UUID) -> Transaction | None: ...
+
+    @abstractmethod
+    async def find_by_external_ref(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        external_ref: str,
+    ) -> Transaction | None: ...
 
     @abstractmethod
     async def list_by_portfolio(
@@ -161,6 +169,11 @@ class IdempotencyRepository(ABC):
     @abstractmethod
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None: ...
 
+    @abstractmethod
+    async def create_if_not_exists(self, event_id: UUID) -> bool:
+        """Atomically insert event_id; return True if newly inserted, False if duplicate."""
+        ...
+
 
 class WatchlistRepository(ABC):
     @abstractmethod
@@ -173,7 +186,14 @@ class WatchlistRepository(ABC):
     async def save(self, watchlist: Watchlist) -> None: ...
 
     @abstractmethod
-    async def delete(self, watchlist_id: UUID) -> None: ...
+    async def hard_delete(self, watchlist_id: UUID) -> None:
+        """Physically remove the watchlist row.
+
+        Prefer the use-case soft-delete path (set status=DELETED via save())
+        for all application-layer operations; this method exists only for
+        administrative / test teardown purposes.
+        """
+        ...
 
 
 class WatchlistMemberRepository(ABC):

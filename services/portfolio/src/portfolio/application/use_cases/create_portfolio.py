@@ -76,6 +76,7 @@ class CreatePortfolioUseCase:
         )
         await uow.outbox.save(record)
 
+        await uow.commit()
         logger.info(
             "portfolio_created",
             tenant_id=str(portfolio.tenant_id),

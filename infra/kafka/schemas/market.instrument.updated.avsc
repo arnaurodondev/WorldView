@@ -2,6 +2,7 @@
   "type": "record",
   "name": "InstrumentUpdatedV1",
   "namespace": "com.worldview.market",
+  "doc": "Emitted by S3 when an instrument's capability flags change (has_ohlcv, has_quotes, has_fundamentals). S1 uses this to update its local InstrumentRef cache.",
   "fields": [
     {"name": "event_id", "type": "string"},
     {"name": "event_type", "type": "string", "default": "market.instrument.updated"},
@@ -9,7 +10,13 @@
     {"name": "occurred_at", "type": "string"},
     {"name": "instrument_id", "type": "string"},
     {"name": "symbol", "type": "string"},
-    {"name": "fields_updated", "type": {"type": "array", "items": "string"}, "default": []},
-    {"name": "correlation_id", "type": ["null", "string"], "default": null}
+    {"name": "exchange", "type": ["null", "string"], "default": null},
+    {"name": "has_ohlcv", "type": ["null", "boolean"], "default": null, "doc": "True if the instrument now has OHLCV data."},
+    {"name": "has_quotes", "type": ["null", "boolean"], "default": null, "doc": "True if the instrument now has quote data."},
+    {"name": "has_fundamentals", "type": ["null", "boolean"], "default": null, "doc": "True if the instrument now has fundamentals data."},
+    {"name": "fields_updated", "type": {"type": "array", "items": "string"}, "default": [], "doc": "Names of the fields that changed in this update."},
+    {"name": "entity_id", "type": ["null", "string"], "default": null, "doc": "Stable cross-service instrument identifier (= instrument_id in market-data). M-017."},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null}
   ]
 }

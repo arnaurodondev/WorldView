@@ -9,6 +9,8 @@
 - [ ] Temporary files/objects are cleaned up on all paths (success AND failure)
 - [ ] Partial failure doesn't leave orphaned resources (DB connections, file handles)
 - [ ] Async context managers properly used for DB sessions
+- [ ] Advisory/distributed locks do not span external I/O (fetch outside lock, write inside)
+- [ ] Lock duration is bounded and predictable (milliseconds, not seconds)
 
 ## 2. Exception Handling
 
@@ -24,6 +26,9 @@
 - [ ] DB + Kafka dual writes use outbox pattern (never separate transactions)
 - [ ] Failure during multi-step operations has cleanup or is idempotent
 - [ ] MinIO writes use claim-check pattern for Kafka events
+- [ ] Outbox payload field names match Avro schema exactly
+- [ ] MinIO write before DB commit: compensating delete implemented on rollback (§4.4)
+- [ ] Compensating GC failures logged as WARNING, original exception preserved and re-raised
 
 ## 4. Idempotency
 
@@ -31,6 +36,17 @@
 - [ ] Processing is safe to retry (no double-counting, no duplicate notifications)
 - [ ] Idempotency key checked before side effects
 - [ ] Database operations use upsert or check-before-insert
+- [ ] Outbox payload includes all required Avro envelope fields (event_id, event_type, schema_version, occurred_at)
+- [ ] **Atomic dedup**: `is_duplicate` + `process_message` + `mark_processed` are NOT in separate transactions — use BP-035/BP-045 `INSERT…ON CONFLICT DO NOTHING RETURNING` inside the same UoW as business logic; `is_duplicate()` → `return False`; `mark_processed()` → no-op (HR-021)
+- [ ] **All storage steps have skip-if-exists (D-008)**: if `_store_bronze` has an `exists()` guard, `_store_canonical` and any other storage steps must have the same guard — partial guards break retry idempotency (BP-048)
+
+## 4b. Unit of Work / Transaction Integrity (R26)
+
+- [ ] UoW `__aexit__`: no `else: await self.commit()` — only rolls back on exception (R26, HR-025)
+- [ ] Every mutating use case calls `await uow.commit()` explicitly before returning (not relying on `__aexit__`)
+- [ ] Rollback is wrapped in try/except; session close is in the `finally` block (prevents session leak when rollback raises)
+- [ ] Post-commit hooks run INSIDE `commit()` via `_drain_post_commit_hooks()` — NOT in `__aexit__()` (see STANDARDS.md §17.3)
+- [ ] Post-commit hook failures are caught and logged — never propagated (a cache-flush failure must not dead-letter a successfully-committed message)
 
 ## 5. Data Integrity
 
@@ -47,16 +63,43 @@
 - [ ] No hardcoded secrets, tokens, or API keys
 - [ ] No PII or secrets in log output
 - [ ] Multi-tenant isolation: all queries filter by tenant_id
-- [ ] Error messages don't leak internal details to clients
+- [ ] Error messages don't leak internal details to clients — **`/readyz` and `/healthz` endpoints return opaque `"error"` strings in HTTP body, never raw exception messages** (BP-047, HR-023)
+- [ ] Token comparisons use `hmac.compare_digest()` (not `==`)
+- [ ] Query pagination has upper bound (max limit parameter)
+- [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
+
+## 6b. Schema & Data Pipeline Integrity
+
+- [ ] Migration DDL matches ORM columns exactly — names, types, defaults, nullability (BP-008, BP-019)
+- [ ] `move_to_dead_letter` INSERTs a DLQ row with original payload (not just status update) (BP-020)
+- [ ] DLQ `requeue()` preserves original `aggregate_id`, `aggregate_type`, `event_type` from stored DLQ columns — never hardcode or use outbox PK as `aggregate_id` (BP-024)
+- [ ] DNS resolution in async context uses `asyncio.to_thread(socket.getaddrinfo, ...)` with explicit timeout — never blocking `socket.getaddrinfo` directly on event loop (BP-025)
+- [ ] SSRF IP check uses `addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_multicast` — covers IPv4-mapped IPv6 (`::ffff:`) after extracting `addr.ipv4_mapped` (BP-026)
+- [ ] Avro contract tests exist for every schema a service produces
+- [ ] `doc_id` in outbox payloads is a per-document UUIDv7 (not source/aggregate ID)
+- [ ] SSRF URL validation resolves DNS hostnames, not just IP literals
+- [ ] LSH/cache writes happen AFTER DB commit, not before (prevents phantom entries on rollback)
+- [ ] **Cache invalidation uses `schedule_post_commit(cache.invalidate(id))`**, never `await cache.invalidate(id)` inside `process_message()` — invalidating before commit enables stale-read-into-cache races (BP-046, HR-022, M-005)
+- [ ] **Avro record names are valid Java identifiers (PascalCase)** — no dots, no version suffixes in `"name"` field; dots belong in `"namespace"` only (BP-051)
+- [ ] **Avro namespace uses canonical format `com.worldview.<service>.events`** — all schemas in a service share the same namespace; inconsistent namespaces create divergent Schema Registry subjects (BP-052)
+- [ ] **`schema_version` base class default is `1`, not `0`** — default 0 means subclasses that forget to override emit version-0 events silently (BP-053)
+- [ ] **`asyncio.Event.set()` in confluent-kafka delivery callbacks uses `loop.call_soon_threadsafe(event.set)`** — direct `event.set()` from librdkafka C thread is not thread-safe (BP-050, HR-024)
+- [ ] **Repositories with read/write session splitting: `get_or_create` reads back via write session after INSERT** — never call `self.get()` (read session) immediately after INSERT on write session (BP-049)
 
 ## 7. Architecture Compliance
 
 - [ ] Domain layer has zero infrastructure imports
 - [ ] Application layer depends only on domain + ports (no direct DB/Kafka)
+- [ ] Application layer has `application/ports/` directory with port ABCs (R20, DOMAIN-PORTS)
 - [ ] Infrastructure layer implements port interfaces
 - [ ] No cross-service DB access (use Kafka events or REST)
 - [ ] Uses shared libs correctly (`common`, `contracts`, `messaging`, `storage`, `observability`, `ml-clients`)
 - [ ] No direct imports of underlying packages (no `aiokafka`, `redis.asyncio`, `Minio`, `logging.getLogger`)
+- [ ] Import guards pass: `python3 scripts/import_guards/check_import_guards.py --strict --baseline scripts/import_guards/baseline.json`
+- [ ] `setattr` uses field allowlist, never user-controlled keys directly
+- [ ] All Kafka consumers extend `BaseKafkaConsumer` — no direct `confluent_kafka.Consumer` (R20)
+- [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
+- [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
 
 ## 8. Test Coverage
 

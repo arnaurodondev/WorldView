@@ -5,10 +5,15 @@ Topic routing:
   ``market.instrument.updated``  ←  :class:`~market_data.domain.events.InstrumentUpdated`
 
 Serialization:
-- Avro schemas are loaded from the ``schemas/`` directory next to this package.
+- Avro schemas are loaded from the canonical ``infra/kafka/schemas/`` directory.
 - All :class:`~decimal.Decimal` fields are cast to ``str`` before encoding.
 - All UUID values are cast to ``str`` before encoding.
   (Confluent AvroSerializer rejects non-primitive Python types.)
+
+Outbox write pattern:
+  Consumers write to ``outbox_events`` atomically via ``uow.outbox_events.create()``
+  using :func:`event_to_outbox_payload` to build the Avro-compatible payload dict.
+  The dispatcher polls the outbox table and publishes via Kafka.
 """
 
 from __future__ import annotations
@@ -29,28 +34,33 @@ from messaging.kafka.schema_registry import (  # type: ignore[import-untyped]
     SchemaRegistryConfig,
     build_schema_registry_client,
 )
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from market_data.config import Settings
 
-_SCHEMA_DIR = Path(__file__).parent.parent / "schemas"
+# Canonical Avro schemas live in infra/kafka/schemas/ at the repo root.
+# Resolve: outbox/ → messaging/ → infrastructure/ → market_data/ → src/ → market-data/ → services/ → repo root
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Static event-type → topic routing ────────────────────────────────────────
 
-MARKET_EVENTS_V1 = "market.events.v1"
-
+# QA-016 fix: each event type is published to its own dedicated topic.
+# Previously both were incorrectly routed to "market.events.v1", causing
+# portfolio (S1) to never receive instrument sync events.
 EVENT_TOPIC_MAP: dict[str, str] = {
-    "market.instrument.created": MARKET_EVENTS_V1,
-    "market.instrument.updated": MARKET_EVENTS_V1,
+    "market.instrument.created": "market.instrument.created",
+    "market.instrument.updated": "market.instrument.updated",
 }
 
 # ── Event-type → Avro schema file mapping ─────────────────────────────────────
 
 _AVSC_MAP: dict[str, str] = {
-    "market.instrument.created": "instrument.created.v1.avsc",
-    "market.instrument.updated": "instrument.updated.v1.avsc",
+    "market.instrument.created": "market.instrument.created.avsc",
+    "market.instrument.updated": "market.instrument.updated.avsc",
 }
 
 
@@ -73,8 +83,43 @@ def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _event_to_avro_dict(event: Any) -> dict[str, Any]:
-    """Convert a domain event dataclass to a sanitized dict for Avro encoding."""
+    """Convert a domain event dataclass to a sanitized dict for Avro encoding.
+
+    ``event_type`` and ``schema_version`` are ``ClassVar`` fields that are
+    excluded from ``dataclasses.asdict()``.  They are added back explicitly
+    so the Avro schema fields are populated correctly.
+    """
     raw = dataclasses.asdict(event)
+    raw["event_type"] = type(event).event_type
+    raw["schema_version"] = type(event).schema_version
+    return _sanitize_payload(raw)
+
+
+def event_to_outbox_payload(event: Any) -> dict[str, Any]:
+    """Convert a domain event dataclass to a sanitized dict for the outbox table.
+
+    Extends :func:`_event_to_avro_dict` with two additional transformations:
+
+    * **entity_id** (M-017): portfolio (S1) uses ``entity_id`` as the stable
+      cross-service instrument identifier.  We set ``entity_id = instrument_id``
+      so replaying the same event always produces the same ``InstrumentRef.id``.
+    * **tuple → list**: Avro arrays require a ``list``, but Python dataclass
+      fields typed as ``tuple[str, ...]`` serialize to tuples via
+      ``dataclasses.asdict()``.  Any tuple value is converted to a list here.
+
+    Use this function — not ``_event_to_avro_dict`` — when writing event payloads
+    to ``uow.outbox_events`` from consumers.
+    """
+    raw = dataclasses.asdict(event)
+    raw["event_type"] = type(event).event_type
+    raw["schema_version"] = type(event).schema_version
+    # M-017: portfolio uses entity_id as the stable cross-service instrument ID
+    if "instrument_id" in raw:
+        raw["entity_id"] = raw["instrument_id"]
+    # Avro arrays require list not tuple
+    for key in list(raw.keys()):
+        if isinstance(raw[key], tuple):
+            raw[key] = list(raw[key])
     return _sanitize_payload(raw)
 
 
@@ -121,6 +166,35 @@ class MarketDataOutboxDispatcher(BaseOutboxDispatcher):
 
         return SqlAlchemyUnitOfWork(self._session_factory, self._session_factory)
 
+    async def _dispatch_batch(self) -> list[Any]:
+        """Override base to emit reclaim warnings for records being retried.
+
+        Lease duration uses the DispatcherConfig default (30 s) — typical Kafka
+        publish <5 s; 6x safety margin prevents concurrent dispatchers from
+        re-claiming a stalled record. See B-006 (dispatcher lease duration).
+        """
+        async with await self.get_unit_of_work() as uow:
+            records = await uow.outbox.fetch_pending(
+                worker_id=self._config.worker_id,
+                lease_seconds=self._config.lease_seconds,
+                batch_size=self._config.batch_size,
+            )
+            for record in records:
+                if record.attempts > 0:
+                    logger.warning(
+                        "outbox.record_reclaimed",
+                        record_id=str(record.id),
+                        attempts=record.attempts,
+                    )
+            results = []
+            for record in records:
+                result = await self._dispatch_record(record, uow)
+                results.append(result)
+                if not result.success:
+                    await self.on_delivery_failure(result)
+            await uow.commit()
+            return results
+
     # ── Lifecycle helpers (called from app lifespan) ──────────────────────────
 
     async def start(self) -> None:
@@ -160,7 +234,7 @@ def create_dispatcher(
 
 __all__ = [
     "EVENT_TOPIC_MAP",
-    "MARKET_EVENTS_V1",
     "MarketDataOutboxDispatcher",
     "create_dispatcher",
+    "event_to_outbox_payload",
 ]

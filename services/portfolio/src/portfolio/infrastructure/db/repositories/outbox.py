@@ -26,11 +26,16 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         self._session = session
 
     def _to_record(self, row: OutboxEventModel) -> OutboxRecord:
+        topic = EVENT_TOPIC_MAP.get(row.event_type)
+        if topic is None:
+            raise ValueError(
+                f"No topic mapping for event_type={row.event_type!r}. Add it to EVENT_TOPIC_MAP in topics.py."
+            )
         return OutboxRecord(
             id=row.id,
             tenant_id=row.tenant_id,
             event_type=row.event_type,
-            topic=EVENT_TOPIC_MAP.get(row.event_type, row.event_type),
+            topic=topic,
             payload=row.payload,
             status=row.status,
             attempt_count=row.attempt_count,
@@ -69,7 +74,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         for row in rows:
             row.lease_owner = worker_id
             row.lease_expires = lease_until
-            row.status = "processing"
+            row.status = "in_flight"
 
         return [self._to_record(r) for r in rows]
 
@@ -77,17 +82,20 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="delivered", published_at=_utc_now(), lease_owner=None, lease_expires=None)
+            .values(status="published", published_at=_utc_now(), lease_owner=None, lease_expires=None)
         )
 
     async def increment_attempts(self, record_id: UUID) -> None:
-        result = await self._session.execute(select(OutboxEventModel).where(OutboxEventModel.id == record_id))
-        row = result.scalar_one_or_none()
-        if row:
-            row.attempt_count = row.attempt_count + 1
-            row.status = "pending"
-            row.lease_owner = None
-            row.lease_expires = None
+        await self._session.execute(
+            update(OutboxEventModel)
+            .where(OutboxEventModel.id == record_id)
+            .values(
+                attempt_count=OutboxEventModel.attempt_count + 1,
+                status="pending",
+                lease_owner=None,
+                lease_expires=None,
+            )
+        )
 
     async def move_to_dead_letter(self, record_id: UUID) -> None:
         await self._session.execute(

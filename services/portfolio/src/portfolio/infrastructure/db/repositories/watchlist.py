@@ -67,7 +67,12 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
             row.status = str(watchlist.status)
         await self._session.flush()
 
-    async def delete(self, watchlist_id: UUID) -> None:
+    async def hard_delete(self, watchlist_id: UUID) -> None:
+        """Physically remove the watchlist row (admin/test teardown only).
+
+        Application-layer deletes must go through the use-case soft-delete path
+        (set status=DELETED via save()) to preserve audit history.
+        """
         row = await self._session.get(WatchlistModel, watchlist_id)
         if row is not None:
             await self._session.delete(row)

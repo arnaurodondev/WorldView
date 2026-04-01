@@ -135,6 +135,21 @@ class FakeTransactionRepository(TransactionRepository):
             return None
         return t
 
+    async def find_by_external_ref(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+        external_ref: str,
+    ) -> Transaction | None:
+        return next(
+            (
+                t
+                for t in self._store.values()
+                if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id and t.external_ref == external_ref
+            ),
+            None,
+        )
+
     async def list_by_portfolio(
         self,
         portfolio_id: UUID,
@@ -200,6 +215,12 @@ class FakeIdempotencyRepository(IdempotencyRepository):
     async def record(self, event_id: UUID, processed_at: datetime | None = None) -> None:
         self._seen.add(event_id)
 
+    async def create_if_not_exists(self, event_id: UUID) -> bool:
+        if event_id in self._seen:
+            return False
+        self._seen.add(event_id)
+        return True
+
 
 class FakeWatchlistRepository(WatchlistRepository):
     """In-memory watchlist store."""
@@ -219,7 +240,7 @@ class FakeWatchlistRepository(WatchlistRepository):
     async def save(self, watchlist: Watchlist) -> None:
         self._store[watchlist.id] = watchlist
 
-    async def delete(self, watchlist_id: UUID) -> None:
+    async def hard_delete(self, watchlist_id: UUID) -> None:
         self._store.pop(watchlist_id, None)
 
 
@@ -314,6 +335,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._entity_suppressions = FakeEntitySuppressionRepository()
         self.committed = False
         self.rolled_back = False
+        self.commit_count = 0
 
     @property
     def tenants(self) -> FakeTenantRepository:
@@ -365,6 +387,7 @@ class FakeUnitOfWork(UnitOfWork):
 
     async def commit(self) -> None:
         self.committed = True
+        self.commit_count += 1
 
     async def rollback(self) -> None:
         self.rolled_back = True

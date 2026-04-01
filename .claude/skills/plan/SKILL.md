@@ -23,7 +23,7 @@ PRD reference: `$ARGUMENTS`
 6. Read per-service context: `services/<service>/.claude-context.md`
 7. Read existing plans in `docs/plans/` to avoid conflicts
 8. Read `docs/plans/TRACKING.md` for active work
-9. Read `docs/ai-interactions/BUG_PATTERNS.md` for patterns to guard against
+9. Read `docs/BUG_PATTERNS.md` for patterns to guard against
 10. Read existing service source code (especially mature services like portfolio, market-ingestion, market-data) to understand implementation patterns the agent should follow
 
 ## Phase 1 — Plan Decomposition Strategy
@@ -63,6 +63,22 @@ For each plan, decompose into **waves**. Each wave is a batch of tasks that are:
 6. **Context efficiency**: Tasks in a wave should touch related files to minimize context loading
 7. **Follow architectural layers**: Wave 1 = domain + config, Wave 2 = infrastructure/adapters, Wave 3 = application/use-cases, Wave 4 = API + wiring, Wave N = integration tests
 
+### Task Dependency Tracking
+
+Each task MUST include explicit dependency metadata:
+
+```markdown
+**depends_on**: [T-<ID>, ...] or "none"
+**blocks**: [T-<ID>, ...] or "none"
+```
+
+**Rules**:
+- Tasks with `depends_on: none` are **immediately claimable** and can run in parallel
+- A task cannot start until ALL tasks in its `depends_on` list are DONE
+- The `blocks` field is informational — it helps identify critical-path tasks
+- When two tasks in the same wave have `depends_on: none` and touch **different services**, they can be executed in parallel worktrees via `/implement`
+- The `/implement` skill MUST check dependency status before starting a task
+
 ### Task Detail Requirements
 
 **Each task must include these sections** (not just a one-line description):
@@ -71,6 +87,8 @@ For each plan, decompose into **waves**. Each wave is a batch of tasks that are:
 #### T-<ID>: <Task Title>
 
 **Type**: impl | test | config | schema | docs
+**depends_on**: [T-<ID>, ...] or "none"
+**blocks**: [T-<ID>, ...] or "none"
 **Target files**: <exact file paths that will be created or modified>
 **PRD reference**: §<section> (so the agent can look up the full spec)
 
@@ -184,8 +202,13 @@ For the overall implementation:
 ### 5.1 Master Plan File
 Save to: `docs/plans/<NNNN>-<slug>-plan.md`
 
-### 5.2 Update Tracking Index
-Append to `docs/plans/TRACKING.md`
+### 5.2 Update Tracking Index (MANDATORY)
+Append the new plan to `docs/plans/TRACKING.md` Active Plans table. This is non-negotiable — a plan that exists as a file but is not in TRACKING.md is invisible to other skills.
+
+1. **Read TRACKING.md** before appending — verify the plan ID doesn't already exist
+2. **Add a row** with: Plan ID, Title, PRD, `draft`, `0/<total_waves>`, `—` (QA column), today's date
+3. **Verify after writing** — re-read TRACKING.md to confirm the row was added
+4. **Include TRACKING.md in the commit** alongside the plan file
 
 ### 5.3 Present Summary to User
 Show the user:
@@ -210,13 +233,22 @@ Show the user:
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **Primary next step**: `/implement <PLAN-ID> Wave <first-wave>` — start implementing the first wave
+- **If plan needs review**: `/review` on the plan file itself
+- **If requirements are unclear**: Return to `/prd` to refine before implementing
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

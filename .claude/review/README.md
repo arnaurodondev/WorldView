@@ -13,7 +13,7 @@ review/
 ├── heuristics/         # Pattern detection and risk signals
 │   └── HIGH_RISK_PATTERNS.md
 └── knowledge/          # Historical patterns and domain knowledge
-    └── README.md (points to docs/ai-interactions/BUG_PATTERNS.md)
+    └── README.md (points to docs/BUG_PATTERNS.md)
 ```
 
 ## Review Pipeline (used by /review skill)

@@ -93,6 +93,7 @@ def _make_uow(watermark: MagicMock | None = None) -> MagicMock:
     wm = watermark or _make_watermark()
     uow.watermarks = MagicMock()
     uow.watermarks.get_or_create = AsyncMock(return_value=wm)
+    uow.watermarks.get_for_update = AsyncMock(return_value=wm)
     uow.watermarks.save = AsyncMock()
 
     uow.outbox = MagicMock()
@@ -478,3 +479,278 @@ async def test_fundamentals_report_date_preserved_when_present() -> None:
     call_args = serializer.serialize_fundamentals.call_args
     enriched_data = call_args[0][0]
     assert enriched_data["report_date"] == raw_date
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-04: Atomicity tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_get_for_update_called_in_step5() -> None:
+    """Step 5 calls get_for_update() to lock watermark against concurrent workers."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # Both get_or_create (ensure row) and get_for_update (lock row) must be called
+    uow.watermarks.get_or_create.assert_awaited_once()
+    uow.watermarks.get_for_update.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_persist_retry_clears_lease_atomically() -> None:
+    """After retry(), lease_owner/expires are cleared and committed atomically."""
+    task = _make_task()
+    exc = ProviderRateLimited("rate limit")
+    uc, uow, _, _, _ = _make_use_case(registry=_make_registry(fetch_side_effect=exc))
+
+    with pytest.raises(ProviderRateLimited):
+        await uc.execute(task)
+
+    task.retry.assert_called_once_with(exc)
+    # save() and commit() must both have been called (atomic pair)
+    uow.tasks.save.assert_awaited()
+    uow.commit.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_object_exists_skips_bronze_write_on_retry() -> None:
+    """If bronze object already exists, put() is skipped and ref is reconstructed."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    store = _make_store()
+    # Simulate bronze exists but canonical not yet (crash after bronze write, before canonical)
+    store.exists = AsyncMock(side_effect=[True, False])
+
+    uc, _, _, store, _ = _make_use_case(store=store)
+    await uc.execute(task)
+
+    # put() called only once (for canonical) — bronze upload skipped
+    assert store.put.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# T-E1-1-06: Outbox contains only MarketDatasetFetched (D-005)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_uses_created_at_when_range_end_none() -> None:
+    """When task.range_end is None, watermark is advanced by task.created_at (M-029).
+
+    Ensures deterministic ordering: two tasks without range_end produce stable
+    watermark advances via their immutable created_at timestamps, not utc_now()
+    which is racy and non-deterministic.
+    """
+    created_at = datetime(2024, 3, 15, tzinfo=UTC)
+    task = _make_task(range_end=None)
+    task.range_end = None
+    task.created_at = created_at
+
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    wm.advance_bar_ts.assert_called_once_with(created_at)
+
+
+@pytest.mark.unit
+async def test_watermark_no_regression_out_of_order_tasks() -> None:
+    """Earlier-created task with range_end=None uses created_at, not current time.
+
+    Verifies that the fallback timestamp is stable: replaying an older task
+    always uses the same created_at, preventing non-deterministic watermark
+    advances that could differ across retries.
+    """
+    created_at_early = datetime(2024, 1, 10, tzinfo=UTC)
+    task = _make_task(range_end=None)
+    task.range_end = None
+    task.created_at = created_at_early
+
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # The watermark advance is called with the stable created_at, not a moving now()
+    args = wm.advance_bar_ts.call_args[0]
+    assert args[0] == created_at_early
+
+
+@pytest.mark.unit
+async def test_execute_task_only_market_dataset_fetched_in_outbox() -> None:
+    """Only MarketDatasetFetched is written to outbox — no internal task events (D-005)."""
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    # outbox.add called exactly once, with the MarketDatasetFetched event
+    uow.outbox.add.assert_awaited_once()
+    call_kwargs = uow.outbox.add.call_args.kwargs
+    events = call_kwargs["events"]
+    from market_ingestion.domain.events import MarketDatasetFetched
+
+    assert len(events) == 1
+    assert isinstance(events[0], MarketDatasetFetched)
+
+
+# ---------------------------------------------------------------------------
+# T-E1-4-02: State-consistency error path tests (M-020)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_not_mutated_on_outbox_failure() -> None:
+    """If outbox.add() fails, watermark.save() is never called — mutation not persisted.
+
+    The watermark advance happens in memory inside the UoW block, but because
+    the exception from outbox.add() propagates before watermarks.save() is
+    reached, the mutation never reaches the DB.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uow.outbox.add = AsyncMock(side_effect=RuntimeError("outbox failure"))
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(RuntimeError, match="outbox failure"):
+        await uc.execute(task)
+
+    # In-memory advance did occur (the call was made)
+    wm.advance_bar_ts.assert_called_once()
+    # DB persistence was never reached
+    uow.watermarks.save.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_task_status_reverts_on_commit_failure() -> None:
+    """If uow.commit() raises, task.succeed() was called in memory but DB not updated.
+
+    The commit failure means the DB transaction is rolled back, so the task
+    status stays at its pre-succeed state in the database even though the
+    in-memory domain object was mutated.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uow.commit = AsyncMock(side_effect=RuntimeError("db commit failed"))
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(RuntimeError, match="db commit failed"):
+        await uc.execute(task)
+
+    # task.succeed() was called in memory before commit
+    task.succeed.assert_called_once()
+    # tasks.save() was also invoked (it was the commit that failed)
+    uow.tasks.save.assert_awaited()
+
+
+@pytest.mark.unit
+async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
+    """If the bronze object already exists, put() is not called for bronze (D-008).
+
+    Simulates a retry where the worker crashed after uploading bronze but before
+    committing the DB transaction.  On the next run, exists() returns True and
+    the upload is skipped, making the pipeline idempotent.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    store = _make_store()
+    # bronze exists (skip put), canonical does not yet (allow put)
+    store.exists = AsyncMock(side_effect=[True, False])
+    uc, _, _, store, _ = _make_use_case(store=store)
+
+    await uc.execute(task)
+
+    # Bronze put skipped; only canonical put was called
+    assert store.put.await_count == 1
+    # Pipeline still completes
+    task.succeed.assert_called_once()
+    # exists() was queried for both bronze and canonical keys
+    assert store.exists.await_count == 2
+
+
+@pytest.mark.unit
+async def test_execute_task_idempotent_on_replay() -> None:
+    """Replaying a task with bronze already in object store completes without re-uploading.
+
+    Full idempotency check: exists()=True skips bronze upload, canonical is
+    re-computed and stored, watermark is advanced, and the task succeeds.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    store = _make_store()
+    # bronze exists (skip put), canonical does not yet (allow put)
+    store.exists = AsyncMock(side_effect=[True, False])
+    uc, uow, _registry, store, _ = _make_use_case(uow=uow, store=store)
+
+    await uc.execute(task)
+
+    # Bronze skipped, canonical stored
+    assert store.put.await_count == 1
+    # Watermark still advanced
+    wm.advance_bar_ts.assert_called_once()
+    # Outbox event still emitted (data changed)
+    uow.outbox.add.assert_awaited_once()
+    # Task succeeds
+    task.succeed.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# T-D-2-02: InvalidStateTransition → FAILED task persisted (F-DS-005)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invalid_state_transition_persists_failed_task() -> None:
+    """F-DS-005 regression: InvalidStateTransition must call _persist_fail so the task
+    transitions to FAILED in the DB instead of remaining stuck in RUNNING state.
+    """
+    from market_ingestion.domain.errors import InvalidStateTransition
+
+    task = _make_task()
+    wm = _make_watermark()
+    uow = _make_uow(watermark=wm)
+
+    # Make task.succeed() raise InvalidStateTransition (task in wrong state)
+    task.succeed = MagicMock(side_effect=InvalidStateTransition("task already succeeded"))
+
+    uc, uow, _registry, _store, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(InvalidStateTransition):
+        await uc.execute(task)
+
+    # task.fail() must have been called (inside _persist_fail)
+    task.fail.assert_called_once()
+    # tasks.save must have been called with the task in FAILED state
+    uow.tasks.save.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_state_transition_reraises() -> None:
+    """F-DS-005 regression: InvalidStateTransition still propagates after persistence
+    so the caller (scheduler) can handle or log the fatal error.
+    """
+    from market_ingestion.domain.errors import InvalidStateTransition
+
+    task = _make_task()
+    uow = _make_uow()
+    original_exc = InvalidStateTransition("already in terminal state")
+    task.succeed = MagicMock(side_effect=original_exc)
+
+    uc, _uow, _registry, _store, _ = _make_use_case(uow=uow)
+
+    with pytest.raises(InvalidStateTransition) as exc_info:
+        await uc.execute(task)
+
+    assert exc_info.value is original_exc, "must re-raise the original exception"

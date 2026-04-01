@@ -12,8 +12,12 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
     from market_data.application.ports.repositories import (
         FailedTaskRepository,
+        FundamentalMetricsQueryRepository,
+        FundamentalsReadRepository,
         FundamentalsRepository,
         IngestionEventRepository,
         InstrumentRepository,
@@ -115,6 +119,16 @@ class UnitOfWork(ABC):
     def quotes_read(self) -> QuoteRepository:
         """Quote repository bound to the read (replica) session."""
 
+    @property
+    @abstractmethod
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
+
     # ── read session ─────────────────────────────────────────────────────────
 
     @abstractmethod
@@ -125,11 +139,21 @@ class UnitOfWork(ABC):
         avoid routing reads through the write session.
         """
 
+    # ── post-commit hooks ────────────────────────────────────────────────────
+
+    @abstractmethod
+    def schedule_post_commit(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Schedule a coroutine to run immediately after the next successful commit.
+
+        Use this for side-effects that must not execute before the DB write is
+        durable (e.g. cache invalidation per M-005).
+        """
+
     # ── transaction lifecycle ─────────────────────────────────────────────────
 
     @abstractmethod
     async def commit(self) -> None:
-        """Commit the write session and notify the outbox dispatcher."""
+        """Commit the write session, notify the outbox dispatcher, then run post-commit hooks."""
 
     @abstractmethod
     async def rollback(self) -> None:

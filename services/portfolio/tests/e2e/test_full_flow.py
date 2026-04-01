@@ -14,6 +14,7 @@ Workflow exercised:
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from typing import TYPE_CHECKING
 
@@ -26,12 +27,15 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 _EXECUTED_AT = "2025-06-01T10:00:00Z"
+_INTERNAL_HEADERS = {"X-Internal-Token": os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")}
 
 
 async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """Happy-path: create tenant/user/portfolio, BUY, SELL, verify holdings and transactions."""
     # 1. Create tenant
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"FlowCo-{uuid.uuid4().hex[:6]}"})
+    resp = await e2e_client.post(
+        "/api/v1/tenants", json={"name": f"FlowCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
+    )
     assert resp.status_code == 201, resp.text
     tenant_id = resp.json()["id"]
 
@@ -157,7 +161,9 @@ async def test_healthz_returns_ok(e2e_client: AsyncClient) -> None:
 
 async def test_create_tenant_returns_valid_id(e2e_client: AsyncClient) -> None:
     """POST /tenants returns 201 with a UUID id field."""
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"IdCheck-{uuid.uuid4().hex[:6]}"})
+    resp = await e2e_client.post(
+        "/api/v1/tenants", json={"name": f"IdCheck-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
+    )
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert "id" in data
@@ -166,7 +172,9 @@ async def test_create_tenant_returns_valid_id(e2e_client: AsyncClient) -> None:
 
 async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient) -> None:
     """POST /portfolios with duplicate name for same owner returns 409 or 422."""
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"DupCo-{uuid.uuid4().hex[:6]}"})
+    resp = await e2e_client.post(
+        "/api/v1/tenants", json={"name": f"DupCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
+    )
     tenant_id = resp.json()["id"]
     resp = await e2e_client.post(
         "/api/v1/users",
@@ -194,7 +202,9 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient) -> Non
 
 async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """SELL more than held quantity returns 409 or 422 (InsufficientHoldingsError)."""
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"SellCo-{uuid.uuid4().hex[:6]}"})
+    resp = await e2e_client.post(
+        "/api/v1/tenants", json={"name": f"SellCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
+    )
     tenant_id = resp.json()["id"]
     resp = await e2e_client.post(
         "/api/v1/users",
@@ -244,7 +254,9 @@ async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_
 
 async def test_archive_portfolio(e2e_client: AsyncClient) -> None:
     """DELETE /portfolios/{id} transitions portfolio to ARCHIVED status."""
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"ArchCo-{uuid.uuid4().hex[:6]}"})
+    resp = await e2e_client.post(
+        "/api/v1/tenants", json={"name": f"ArchCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
+    )
     tenant_id = resp.json()["id"]
     resp = await e2e_client.post(
         "/api/v1/users",

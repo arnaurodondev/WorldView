@@ -86,6 +86,8 @@ class WorkerProcess:
         self._lease_seconds = int(cast("Any", lease_seconds_value))
         self._idle_sleep = float(idle_sleep_value)
         self._stop_event = asyncio.Event()
+        concurrency = int(getattr(settings, "worker_concurrency", 4))
+        self._semaphore = asyncio.Semaphore(concurrency)
         self._write_factory, self._read_factory = _build_factories(settings)
 
         # Build shared infrastructure (one instance per worker process)
@@ -110,7 +112,7 @@ class WorkerProcess:
             if not claimed:
                 await asyncio.sleep(self._idle_sleep)
                 continue
-            await asyncio.gather(*[self._execute_task(task) for task in claimed])
+            await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
 
         logger.info("worker_stopped", worker_id=self._worker_id)
 
@@ -130,6 +132,21 @@ class WorkerProcess:
             logger.error("worker_claim_error", error=str(exc), worker_id=self._worker_id)
             await asyncio.sleep(self._idle_sleep)
             return []
+
+    async def _execute_with_semaphore(self, task: IngestionTask) -> None:
+        """Acquire the concurrency semaphore then execute the task.
+
+        A 60-second timeout guards against indefinite blocking when all
+        semaphore permits are held (M-033).  A timeout logs a warning and
+        allows the worker loop to continue with other tasks rather than
+        deadlocking the entire batch.
+        """
+        try:
+            async with asyncio.timeout(60.0):
+                async with self._semaphore:
+                    await self._execute_task(task)
+        except TimeoutError:
+            logger.warning("worker.semaphore_timeout", task_id=str(task.id), worker_id=self._worker_id)
 
     async def _execute_task(self, task: IngestionTask) -> None:
         """Execute a single claimed task through the pipeline."""
@@ -161,6 +178,7 @@ class WorkerProcess:
             EODHDProviderAdapter(
                 api_key=self._settings.eodhd_api_key,
                 client=client,
+                base_url=self._settings.eodhd_base_url,
             )
         )
         return registry
@@ -187,7 +205,7 @@ class WorkerProcess:
 
 async def _run_worker() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     worker = WorkerProcess(settings=settings)
 
     loop = asyncio.get_running_loop()

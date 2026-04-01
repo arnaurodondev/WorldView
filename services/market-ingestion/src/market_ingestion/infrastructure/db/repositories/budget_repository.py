@@ -25,6 +25,7 @@ def _to_domain(row: ProviderBudgetModel) -> ProviderBudget:
         burst_capacity=float(row.max_tokens),
         refill_rate=row.refill_rate_per_second,
         tokens=row.current_tokens,
+        last_refill_at=row.last_refill_at,
         updated_at=row.updated_at,
     )
 
@@ -39,6 +40,12 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
     async def get(self, provider: Provider) -> ProviderBudget | None:
         stmt = select(ProviderBudgetModel).where(ProviderBudgetModel.provider == provider.value)
         row = (await self._r.execute(stmt)).scalar_one_or_none()
+        return _to_domain(row) if row else None
+
+    async def get_for_update(self, provider: Provider) -> ProviderBudget | None:
+        """Load budget row with a row-level lock. Must be called inside an open transaction."""
+        stmt = select(ProviderBudgetModel).where(ProviderBudgetModel.provider == provider.value).with_for_update()
+        row = (await self._w.execute(stmt)).scalar_one_or_none()
         return _to_domain(row) if row else None
 
     async def get_or_create(self, provider: Provider) -> ProviderBudget:
@@ -59,9 +66,12 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
             .on_conflict_do_nothing(index_elements=["provider"])
         )
         await self._w.execute(stmt)
-        existing = await self.get(provider)
-        if existing:
-            return existing
+        # Read back from write session to guarantee read-your-own-write semantics
+        # (avoids replication lag when _r is a separate read replica).
+        select_stmt = select(ProviderBudgetModel).where(ProviderBudgetModel.provider == provider.value)
+        row = (await self._w.execute(select_stmt)).scalar_one_or_none()
+        if row:
+            return _to_domain(row)
         return defaults
 
     async def save(self, budget: ProviderBudget) -> None:
@@ -71,6 +81,7 @@ class SqlaProviderBudgetRepository(ProviderBudgetRepository):
             .where(ProviderBudgetModel.provider == budget.provider.value)
             .values(
                 current_tokens=budget.tokens,
+                last_refill_at=budget.last_refill_at,
                 updated_at=now,
             )
         )

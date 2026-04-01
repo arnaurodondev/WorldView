@@ -27,7 +27,7 @@ Own the movement, contracts, durability, and operational quality of data across 
 - `libs/storage/**`
 - `infra/**` (Kafka schemas, Postgres init, MinIO init)
 - services S2–S7 (`services/market-ingestion/`, `services/market-data/`, `services/content-ingestion/`, `services/content-store/`, `services/nlp-pipeline/`, `services/knowledge-graph/`)
-- `docs/ai-interactions/agent-responses/0014-PRD-v1-final.md` — §6 (DB schemas), §8 (partition policy), §9 (outbox/DLQ), §12 (schema registry)
+- `docs/specs/0014-PRD-v1-final.md` — §6 (DB schemas), §8 (partition policy), §9 (outbox/DLQ), §12 (schema registry)
 
 ## Responsibilities
 - define durable, evolvable data contracts (Avro schemas with forward compatibility)

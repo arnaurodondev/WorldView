@@ -4,7 +4,7 @@ prd: PRD-0001
 title: "S9 API Gateway: External Ingestion + Intelligence Query Proxy"
 status: draft
 created: 2026-03-25
-updated: 2026-03-25
+updated: 2026-03-27
 plans: 1
 waves: 2
 tasks: 8
@@ -18,6 +18,8 @@ tasks: 8
 **Goal**: Add external content ingestion endpoints and intelligence/content query proxy routes to S9. This enables external webhook receivers, manual content submission, and frontend access to intelligence data — all through the unified gateway.
 **Total Scope**: 1 plan, 2 waves, 8 tasks
 **Depends on**: PLAN-0012 (S4+S5 operational) + PLAN-0013 Sub-Plans C+D (S6+S7 API available)
+
+> **Observability note**: S9 API Gateway observability (logging, metrics, tracing, request-ID middleware) is handled by **PLAN-0003** (Observability Standardization). PLAN-0003 Wave B-2 (T-B-2-04) adds `RequestIdMiddleware` and standardizes the init sequence. This plan (0001-D) only adds new proxy routes — it does **not** need to wire observability, as that is already done by the time these waves execute. Ensure PLAN-0003 Sub-Plan B is completed before starting this plan.
 
 ---
 

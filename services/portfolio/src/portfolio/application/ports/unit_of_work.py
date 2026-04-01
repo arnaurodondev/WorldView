@@ -83,7 +83,8 @@ class UnitOfWork(ABC):
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        # Option B (QA-006): __aexit__ never auto-commits.
+        # Every mutating use case must call await uow.commit() explicitly.
+        # This prevents double-commit side effects and makes the write boundary visible.
         if exc_type is not None:
             await self.rollback()
-        else:
-            await self.commit()

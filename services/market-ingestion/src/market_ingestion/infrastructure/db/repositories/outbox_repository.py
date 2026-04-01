@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
 from market_ingestion.application.ports.repositories import OutboxRecord, OutboxRepository
@@ -20,11 +20,22 @@ if TYPE_CHECKING:
 
     from market_ingestion.domain.events import DomainEvent
 
+# Outbox status state machine (T-E1-2-02):
+#   pending → in_flight (claimed for dispatch)
+#   in_flight → published (successfully published to Kafka)
+#   in_flight → retry (dispatch failed, retries remaining)
+#   in_flight → dead (dispatch failed, max attempts exceeded)
+#   retry → in_flight (re-claimed on next dispatch cycle)
+
 _TOPIC_FOR_EVENT: dict[str, str] = {}  # populated lazily
 
 
 def _get_topic(event_type: str) -> str:
-    """Resolve the Kafka topic for a given event_type."""
+    """Resolve the Kafka topic for a given event_type.
+
+    Raises ValueError for unknown event types (BP-039) — no silent fallback
+    to event_type as topic, which would silently publish to the wrong topic.
+    """
     if not _TOPIC_FOR_EVENT:
         try:
             from messaging.topics import MARKET_DATASET_FETCHED  # type: ignore[import-untyped]
@@ -32,7 +43,13 @@ def _get_topic(event_type: str) -> str:
             _TOPIC_FOR_EVENT["market.dataset.fetched"] = MARKET_DATASET_FETCHED
         except ImportError:
             _TOPIC_FOR_EVENT["market.dataset.fetched"] = "market.dataset.fetched"
-    return _TOPIC_FOR_EVENT.get(event_type, event_type)
+    topic = _TOPIC_FOR_EVENT.get(event_type)
+    if topic is None:
+        raise ValueError(
+            f"Unknown event_type '{event_type}' — cannot resolve Kafka topic. "
+            "Register the topic in _TOPIC_FOR_EVENT before adding this event to the outbox."
+        )
+    return topic
 
 
 def _row_to_record(row: OutboxEventModel) -> OutboxRecord:
@@ -148,33 +165,26 @@ class SqlaOutboxRepository(OutboxRepository):
         max_attempts: int,
         backoff_seconds: int,
     ) -> bool:
-        # Load the current attempt count
-        stmt = select(OutboxEventModel).where(OutboxEventModel.id == str(outbox_id))
-        row = (await self._w.execute(stmt)).scalar_one_or_none()
-        if row is None:
-            return False
+        # Single atomic UPDATE: increment attempt and decide status/next_at in SQL.
+        # Avoids the read-modify-write race (M-011) where two workers could both read
+        # the same attempt count and both decide to retry instead of dead-lettering.
+        new_attempt = OutboxEventModel.attempt + 1
+        exceeded = new_attempt >= max_attempts
+        next_at = now + timedelta(seconds=backoff_seconds)
 
-        new_attempt = row.attempt + 1
-        if new_attempt >= max_attempts:
-            new_status = "dead"
-            next_at = None
-        else:
-            new_status = "retry"
-            next_at = now + timedelta(seconds=backoff_seconds)
-
-        up = (
+        stmt = (
             update(OutboxEventModel)
             .where(OutboxEventModel.id == str(outbox_id))
             .values(
-                status=new_status,
                 attempt=new_attempt,
+                status=case((exceeded, "dead"), else_="retry"),
                 last_error=error,
                 locked_by=None,
                 locked_until=None,
-                next_attempt_at=next_at,
+                next_attempt_at=case((exceeded, None), else_=next_at),
             )
         )
-        result = await self._w.execute(up)
+        result = await self._w.execute(stmt)
         return int(cast("Any", result).rowcount) > 0
 
     # ── Dispatcher-protocol-compatible helpers ─────────────────────────────────

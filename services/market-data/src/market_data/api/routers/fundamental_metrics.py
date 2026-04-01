@@ -1,6 +1,6 @@
 """Fundamental metrics API router — timeseries and screening endpoints.
 
-Reads from the ``fundamental_metrics`` read-optimized projection table.
+Reads from the ``fundamental_metrics`` read-optimised projection table.
 All queries use the **read session** (replica when configured) to avoid
 adding load to the write DB.
 
@@ -15,7 +15,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from market_data.api.dependencies import get_uow
+from market_data.api.dependencies import (
+    get_available_metrics_uc,
+    get_screen_instruments_uc,
+    get_timeseries_uc,
+)
 from market_data.api.schemas.fundamental_metrics import (
     AvailableMetricsResponse,
     MetricDataPointResponse,
@@ -24,12 +28,11 @@ from market_data.api.schemas.fundamental_metrics import (
     ScreenResponse,
     TimeseriesResponse,
 )
-from market_data.application.ports.uow import UnitOfWork
-from market_data.infrastructure.db.repositories.fundamental_metrics_query import (
-    ScreenFilter,
-    query_available_metrics,
-    query_screen,
-    query_timeseries,
+from market_data.application.ports.repositories import ScreenFilter
+from market_data.application.use_cases.query_fundamental_metrics import (
+    GetAvailableFundamentalMetricsUseCase,
+    GetFundamentalMetricsTimeseriesUseCase,
+    ScreenInstrumentsUseCase,
 )
 
 router = APIRouter(tags=["fundamental-metrics"])
@@ -43,22 +46,20 @@ async def get_timeseries(
     end_date: Annotated[date | None, Query(description="End date (inclusive)")] = None,
     period_type: Annotated[str | None, Query(description="Filter by period type (ANNUAL, QUARTERLY, SNAPSHOT)")] = None,
     limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
-    uow: UnitOfWork = Depends(get_uow),  # type: ignore[assignment]
+    uc: GetFundamentalMetricsTimeseriesUseCase = Depends(get_timeseries_uc),  # type: ignore[assignment]
 ) -> TimeseriesResponse:
     """Return timeseries data for a single instrument and metric.
 
-    Query the read-optimized ``fundamental_metrics`` table.
+    Query the read-optimised ``fundamental_metrics`` table.
     """
     if start_date is not None and end_date is not None and start_date > end_date:
         raise HTTPException(
             status_code=422,
             detail="start_date must not be after end_date",
         )
-    session = uow.get_read_session()
-    data_points = await query_timeseries(
-        session,
-        instrument_id=instrument_id,
-        metric=metric,
+    data_points = await uc.execute(
+        instrument_id,
+        metric,
         start_date=start_date,
         end_date=end_date,
         period_type=period_type,
@@ -82,14 +83,13 @@ async def get_timeseries(
 @router.post("/fundamentals/screen", response_model=ScreenResponse)
 async def screen_instruments(
     body: ScreenRequest,
-    uow: UnitOfWork = Depends(get_uow),  # type: ignore[assignment]
+    uc: ScreenInstrumentsUseCase = Depends(get_screen_instruments_uc),  # type: ignore[assignment]
 ) -> ScreenResponse:
     """Screen instruments by metric thresholds.
 
     Uses the latest available value per instrument for each metric.
     All filters are combined with AND logic.
     """
-    session = uow.get_read_session()
     screen_filters = [
         ScreenFilter(
             metric=f.metric,
@@ -100,12 +100,7 @@ async def screen_instruments(
         )
         for f in body.filters
     ]
-    results = await query_screen(
-        session,
-        filters=screen_filters,
-        limit=body.limit,
-        offset=body.offset,
-    )
+    results = await uc.execute(screen_filters, limit=body.limit, offset=body.offset)
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(
@@ -121,11 +116,10 @@ async def screen_instruments(
 @router.get("/fundamentals/metrics/{instrument_id}", response_model=AvailableMetricsResponse)
 async def get_available_metrics(
     instrument_id: str,
-    uow: UnitOfWork = Depends(get_uow),  # type: ignore[assignment]
+    uc: GetAvailableFundamentalMetricsUseCase = Depends(get_available_metrics_uc),  # type: ignore[assignment]
 ) -> AvailableMetricsResponse:
-    """Return all metric names available for an instrument in the read-optimized table."""
-    session = uow.get_read_session()
-    metrics = await query_available_metrics(session, instrument_id)
+    """Return all metric names available for an instrument in the read-optimised table."""
+    metrics = await uc.execute(instrument_id)
     return AvailableMetricsResponse(
         instrument_id=instrument_id,
         metrics=metrics,

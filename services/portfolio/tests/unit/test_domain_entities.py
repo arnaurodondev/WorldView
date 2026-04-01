@@ -17,6 +17,8 @@ from portfolio.domain.enums import (
 )
 from portfolio.domain.errors import InsufficientHoldingsError, PortfolioArchivedError
 
+pytestmark = pytest.mark.unit
+
 # ── Tenant ────────────────────────────────────────────────────────────────────
 
 
@@ -262,3 +264,47 @@ class TestInstrumentRef:
         i1 = InstrumentRef(symbol="A", exchange="B", source_event_id=uuid.uuid4())
         i2 = InstrumentRef(symbol="A", exchange="B", source_event_id=uuid.uuid4())
         assert i1.id != i2.id
+
+    def test_entity_id_can_be_set(self) -> None:
+        entity_id = uuid.uuid4()
+        instrument = InstrumentRef(symbol="AAPL", exchange="NASDAQ", source_event_id=uuid.uuid4(), entity_id=entity_id)
+        assert instrument.entity_id == entity_id
+
+    def test_synced_at_is_set(self) -> None:
+        instrument = InstrumentRef(symbol="AAPL", exchange="NASDAQ", source_event_id=uuid.uuid4())
+        assert isinstance(instrument.synced_at, datetime)
+
+
+# ── Transaction extra coverage ────────────────────────────────────────────────
+
+
+class TestTransactionExtra:
+    def test_external_ref_defaults_to_none(self) -> None:
+        txn = Transaction(
+            tenant_id=uuid.uuid4(),
+            portfolio_id=uuid.uuid4(),
+            instrument_id=uuid.uuid4(),
+            transaction_type=TransactionType.BUY,
+            direction=TransactionDirection.INFLOW,
+            quantity=Decimal("1"),
+            price=Decimal("100"),
+            currency="USD",
+            executed_at=datetime.now(tz=UTC),
+        )
+        assert txn.external_ref is None
+
+    def test_id_auto_generated(self) -> None:
+        def _make() -> Transaction:
+            return Transaction(
+                tenant_id=uuid.uuid4(),
+                portfolio_id=uuid.uuid4(),
+                instrument_id=uuid.uuid4(),
+                transaction_type=TransactionType.BUY,
+                direction=TransactionDirection.INFLOW,
+                quantity=Decimal("1"),
+                price=Decimal("100"),
+                currency="USD",
+                executed_at=datetime.now(tz=UTC),
+            )
+
+        assert _make().id != _make().id

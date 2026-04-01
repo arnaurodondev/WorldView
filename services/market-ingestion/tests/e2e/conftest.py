@@ -20,6 +20,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -32,16 +33,16 @@ _DB_URL = os.getenv(
 )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client pointing at the live market-ingestion service on localhost:8002."""
     async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
         yield ac
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def _e2e_engine():
-    return create_async_engine(_DB_URL, echo=False)
+    return create_async_engine(_DB_URL, echo=False, poolclass=NullPool)
 
 
 @pytest.fixture

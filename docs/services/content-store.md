@@ -1,7 +1,7 @@
 # S5 · Content Store Service
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Hot path complete (Wave B-3)
 
 ---
 
@@ -54,29 +54,57 @@ generation (S6 NLP Pipeline), serve graphs (S7 Knowledge Graph).
 
 ## Database Schema
 
-Migration: `alembic/versions/0001_create_content_store_schema.py`
+Migrations:
+- `0001_create_content_store_schema.py` — 5 tables (documents, minhash_signatures, minhash_entity_mentions, outbox_events, dead_letter_queue)
+- `0002_add_dedup_and_corroboration.py` — adds dedup_hashes, duplicate_clusters tables; adds dedup_result, corroborates_doc_id, is_backfill columns to documents; fixes minio_silver_key nullability
 
 ```sql
--- content_store_db
+-- content_store_db (7 tables total)
 
 -- Canonical deduplicated document store.
 CREATE TABLE documents (
-    doc_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_type      VARCHAR(50)  NOT NULL,
-    source_url       TEXT,
-    title            TEXT,
-    published_at     TIMESTAMPTZ,
-    ingested_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    content_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
-    normalized_hash  VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
-    status           VARCHAR(20)  NOT NULL DEFAULT 'stored',
-    minio_silver_key TEXT         NOT NULL,          -- MinIO silver-layer key
-    word_count       INT,
-    language         VARCHAR(10)  DEFAULT 'en',
+    doc_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type         VARCHAR(50)  NOT NULL,
+    source_url          TEXT,
+    title               TEXT,
+    published_at        TIMESTAMPTZ,
+    ingested_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    content_hash        VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
+    normalized_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
+    status              VARCHAR(20)  NOT NULL DEFAULT 'stored',
+    dedup_result        VARCHAR(30)  NOT NULL DEFAULT 'unique',
+    minio_silver_key    TEXT,                           -- NULL if suppressed/duplicate
+    word_count          INT,
+    language            VARCHAR(10)  DEFAULT 'en',
+    corroborates_doc_id UUID,                           -- set when dedup_result = 'corroborating'
+    is_backfill         BOOLEAN      NOT NULL DEFAULT FALSE,
     UNIQUE (content_hash)
 );
 CREATE INDEX idx_documents_normalized_hash ON documents (normalized_hash);
 CREATE INDEX idx_documents_source_published ON documents (source_type, published_at DESC);
+CREATE INDEX idx_documents_corroborates ON documents (corroborates_doc_id)
+    WHERE corroborates_doc_id IS NOT NULL;
+
+-- Stage A/B dedup hash tracking.
+CREATE TABLE dedup_hashes (
+    hash_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_id      UUID        NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    hash_type   VARCHAR(30) NOT NULL,  -- raw_sha256 | normalized_sha256
+    hash_value  VARCHAR(64) NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (hash_type, hash_value)
+);
+CREATE INDEX idx_dedup_hashes_lookup ON dedup_hashes (hash_type, hash_value);
+
+-- Duplicate/corroboration pair tracking.
+CREATE TABLE duplicate_clusters (
+    cluster_id       UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
+    primary_doc_id   UUID  NOT NULL REFERENCES documents(doc_id),
+    duplicate_doc_id UUID  NOT NULL REFERENCES documents(doc_id),
+    similarity       FLOAT NOT NULL,
+    detected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (primary_doc_id, duplicate_doc_id)
+);
 
 -- 128-band MinHash vectors for near-duplicate detection.
 -- signature MUST be INTEGER[] — BYTEA is not acceptable; band-by-band Jaccard
@@ -156,32 +184,94 @@ CREATE TABLE dead_letter_queue (
 
 ```
 services/content-store/src/content_store/
-├── app.py              # FastAPI app factory
-├── config.py           # Settings
-├── api/                # Article query routes
-├── domain/             # Article entity, dedup logic
-├── application/        # Store use-cases
-└── infrastructure/     # DB, Kafka adapters
+├── app.py                              # FastAPI app factory
+├── config.py                           # Settings
+├── api/                                # Article query routes
+├── domain/                             # Entities, enums, errors, value objects
+├── application/
+│   ├── text_cleaning/cleaner.py        # extract/sanitize/normalize/clean pipeline
+│   ├── use_cases/process_article.py    # ProcessArticleUseCase (full hot path)
+│   └── deduplication/
+│       ├── stage_a_raw.py              # SHA-256 raw bytes hash
+│       ├── stage_b_normalized.py       # Normalized URL+text hash
+│       └── minhash_compute.py          # MinHash signature (datasketch)
+└── infrastructure/
+    ├── db/                             # SQLAlchemy models, repositories
+    ├── storage/minio_silver.py         # Silver-tier canonical document storage
+    ├── consumer/article_consumer.py    # Kafka consumer for content.article.raw.v1
+    ├── outbox/
+    │   ├── dispatcher.py              # Outbox dispatcher (content.article.stored.v1)
+    │   └── unit_of_work.py            # SQLAlchemy UoW for dispatcher
+    └── valkey/lsh_client.py            # 4-band LSH index over Valkey sorted sets
 ```
 
 ---
 
 ## Three-Stage Deduplication
 
-| Stage | Method | Action on Match |
-|-------|--------|----------------|
-| 1 — Exact hash | SHA-256 of normalized URL | Hard duplicate → skip, mark `is_duplicate=true` |
-| 2 — Normalized hash | SHA-256 of lowercased canonical URL (strip UTM params, etc.) | Hard duplicate → skip |
-| 3 — Valkey LSH near-dup | MinHash (128 perms) + LSH bands (4 × 32); Jaccard threshold varies by doc type | Hard dup (≥ threshold) → skip; Soft dup (Tier 2) → store with `is_duplicate=false` but `near_duplicate_of` set |
+```mermaid
+flowchart TD
+    A[Raw article bytes] --> B[Stage A: SHA-256 raw hash]
+    B -->|Found in dedup_hashes| C[DUPLICATE_EXACT → suppress]
+    B -->|Not found| D[Text Cleaning Pipeline]
+    D --> E[Stage B: Normalized hash]
+    E -->|Found| F[DUPLICATE_NORMALIZED → suppress]
+    E -->|Not found| G[Stage C: MinHash + LSH]
+    G --> H[compute_shingles: word bigrams + char trigrams]
+    H --> I[compute_minhash: 128 perms → list of int]
+    I --> J[Tier 1: Valkey band lookup across 4 bands]
+    J -->|No candidates| K[UNIQUE → store]
+    J -->|Candidates found| L[Tier 2: Exact Jaccard comparison]
+    L -->|J >= hard, same source| M[SAME_SOURCE_DUPLICATE → suppress]
+    L -->|J >= hard, diff source| N[CORROBORATING → retain both, link]
+    L -->|soft <= J < hard| O[SEMANTIC_NEAR_DUPLICATE → store]
+    L -->|J < soft| K
+```
 
-Dedup thresholds (configurable via ENV):
+### Text Cleaning Pipeline
 
-| Doc Type | Hard Threshold | Soft (Tier 2) Threshold | LSH Window |
-|----------|---------------|------------------------|------------|
-| News | 0.72 | 0.55 | 7 days |
-| Filings | 0.85 | — | 180 days |
-| Transcripts | 0.75 | — | 60 days |
-| Research | — | — | 30 days |
+| Content Type | Extraction Method | Library |
+|-------------|------------------|---------|
+| HTML | readability-lxml → bleach strip | `readability-lxml`, `bleach` |
+| XML | bleach strip all tags | `bleach` |
+| JSON | Recursive string field extraction | stdlib `json` |
+| Plain text | UTF-8 decode with error replacement | stdlib |
+
+Normalization: NFC Unicode → strip zero-width chars → collapse whitespace.
+
+### MinHash Computation
+
+- **Text normalization**: NFC, lowercase, strip punctuation, remove FINANCIAL_STOPWORDS + tokens ≤1 char
+- **Shingling**: union of word bigrams (`w:{t1}_{t2}`) + char trigrams (`c:{text[i:i+3]}`)
+- **Signature**: 128 permutations via `datasketch.MinHash` → `list[int]` (CRITICAL: never numpy)
+- **Storage**: PostgreSQL `INTEGER[]` column
+
+### Valkey LSH Index
+
+- **Configuration**: 4 bands × 32 rows per band
+- **Band hash**: MD5 of band slice integers
+- **Key format**: `lsh:band:{band_id}:{bucket_hash}:{source_type}`
+- **Score**: Unix timestamp (for time-window expiry via ZRANGEBYSCORE)
+- **Member format**: `{doc_id}:{source_name}` (enables same-source detection)
+
+### Dedup Thresholds (per source type)
+
+| Source Type | Hard Threshold | Soft Threshold | LSH Window |
+|-------------|---------------|----------------|------------|
+| News (EODHD, NewsAPI) | 0.72 | 0.55 | 7 days |
+| Filings (SEC EDGAR) | 0.85 | 0.70 | 180 days |
+| Transcripts (Finnhub) | 0.75 | 0.60 | 60 days |
+| Research (Manual) | 0.70 | 0.55 | 30 days |
+| Press Release | — | — | 14 days |
+
+### Decision Matrix
+
+| Jaccard | Source | Outcome |
+|---------|--------|---------|
+| ≥ hard_threshold | Same source_name | `SAME_SOURCE_DUPLICATE` — suppress |
+| ≥ hard_threshold | Different source_name | `CORROBORATING` — retain both, link |
+| soft ≤ J < hard | Any | `SEMANTIC_NEAR_DUPLICATE` — store |
+| < soft_threshold | Any | `UNIQUE` — store |
 
 ---
 

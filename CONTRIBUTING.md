@@ -95,7 +95,7 @@ Enforced automatically by `ruff` and `mypy`. Key points:
 ## Compounding Knowledge
 
 Every contribution should leave the system smarter:
-- Found a new bug pattern? → Add to `docs/ai-interactions/BUG_PATTERNS.md`
+- Found a new bug pattern? → Add to `docs/BUG_PATTERNS.md`
 - Established a new convention? → Add to `docs/STANDARDS.md`
 - Found a security pattern? → Add to `.claude/review/heuristics/HIGH_RISK_PATTERNS.md`
 

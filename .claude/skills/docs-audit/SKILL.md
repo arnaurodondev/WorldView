@@ -30,7 +30,7 @@ Read and catalog every documentation file:
 | Workflow docs | docs/workflows/*.md | Dev processes |
 | Testing docs | docs/testing/*.md | Test strategy/guides |
 | Runbooks | docs/runbooks/*.md | Operations guides |
-| AI interactions | docs/ai-interactions/ | Agent workflow artifacts |
+
 | Review framework | .claude/review/ | Code review protocols |
 | Skills | .claude/skills/*/SKILL.md | Workflow definitions |
 | Agents | .claude/agents/*.md | Role definitions |
@@ -205,13 +205,22 @@ Last updated: 2026-03-25
 
 ---
 
+## Workflow Chain — Suggest Next Steps
+
+After completing this skill, suggest the appropriate next skill to the user:
+- **If code/doc inconsistencies found**: Fix docs directly, then `/review` the doc changes
+- **If undocumented code found**: `/implement` to add missing documentation as a standalone task
+- **If stale architecture docs**: Consider `/investigate` to verify current state before updating
+
+---
+
 ## Mandatory Compounding Step (All Skills)
 
 Before completing this skill, check if any of these documents should be updated based on what you learned during this session:
 
 | Document | Update When | Location |
 |----------|------------|----------|
-| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/ai-interactions/BUG_PATTERNS.md` |
+| **BUG_PATTERNS.md** | New failure pattern discovered | `docs/BUG_PATTERNS.md` |
 | **STANDARDS.md** | New convention or best practice identified | `docs/STANDARDS.md` |
 | **HIGH_RISK_PATTERNS.md** | New code pattern that signals risk | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
 | **REVIEW_CHECKLIST.md** | New check that would have caught an issue | `.claude/review/checklists/REVIEW_CHECKLIST.md` |

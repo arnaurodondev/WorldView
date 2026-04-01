@@ -570,11 +570,27 @@ if [[ "$should_run_integration" == "true" ]]; then
 
     e2e_dir="$svc_dir/tests/e2e"
     if has_pytest_files "$e2e_dir"; then
+      # Inject service-specific DATABASE_URL env vars for ASGI in-process e2e tests
+      case "$service" in
+        content-ingestion) export CONTENT_INGESTION_E2E_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55433/content_ingestion_db" ;;
+        content-store)     export CONTENT_STORE_E2E_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55433/content_store_db" ;;
+        nlp-pipeline)      export NLP_PIPELINE_E2E_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55433/nlp_db" ;;
+        knowledge-graph)   export KNOWLEDGE_GRAPH_E2E_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55433/intelligence_db" ;;
+        alert)             export ALERT_E2E_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:55433/alert_db" ;;
+      esac
       run_service_suite "$service" "${service}:e2e" "e2e" "pytest" "tests/e2e" -m e2e
     else
       record_skip "${service}:e2e" "e2e" "pytest" "no e2e tests"
     fi
   done
+
+  # Layer 6: cross-service e2e (tests/e2e/ at repo root)
+  echo "Layer 6: cross-service e2e"
+  if has_pytest_files "tests/e2e"; then
+    run_repo_pytest_suite "cross-service:e2e" "e2e" "pytest" tests/e2e -m e2e -v
+  else
+    record_skip "cross-service:e2e" "e2e" "pytest" "no cross-service e2e tests"
+  fi
 else
   for svc_dir in services/*; do
     [[ -d "$svc_dir" ]] || continue
@@ -590,6 +606,11 @@ else
       record_skip "${service}:e2e" "e2e" "pytest" "no e2e tests"
     fi
   done
+  if has_pytest_files "tests/e2e"; then
+    record_suite "cross-service:e2e" "skipped" "0" "e2e" "pytest" "0" "" "" "setup" "e2e skipped due to infra startup/readiness failure"
+  else
+    record_skip "cross-service:e2e" "e2e" "pytest" "no cross-service e2e tests"
+  fi
 fi
 
 RUN_ENDED_EPOCH="$(date +%s)"
