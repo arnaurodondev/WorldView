@@ -9,7 +9,6 @@
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
 | PLAN-0010 | Architecture Hardening — DLQ Use Cases (R25), Security, Platform QA Script | QA-S4S5S6S7S10-001 | complete | 6/6 | 2026-03-31 | 2026-03-31 |
-| PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | in-progress | 8/9 | — | 2026-04-01 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
@@ -55,6 +54,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | 2026-03-30 | 4 | 2026-03-30 |
 | QA-S4S5S6S7S10-001 | Full QA Pass + E2E Test Suite: S4/S5/S6/S7/S10 security fixes + ASGI e2e suites + cross-service integration + real provider tests + infra scaffold | N/A | 2026-03-30 | — | 2026-03-30 |
 | PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | — |
+| PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | 2026-04-01 | 9 | — |
 
 ## Conventions
 

@@ -15,7 +15,7 @@ _INSTRUMENT_ID = str(uuid4())
 
 def _make_consumer(*, current_hash: str | None = None):
     """Build a FundamentalsDescriptionConsumer with mocked dependencies."""
-    from knowledge_graph.infrastructure.consumer.fundamentals_consumer import FundamentalsDescriptionConsumer
+    from knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsDescriptionConsumer
 
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
