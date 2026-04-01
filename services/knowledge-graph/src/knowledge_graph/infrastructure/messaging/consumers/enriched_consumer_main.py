@@ -65,8 +65,8 @@ async def main() -> None:
 
     # Embedding client (required — exits if unavailable)
     embedding_client = OllamaEmbeddingAdapter(
-        base_url=settings.otlp_endpoint or "http://ollama:11434",
-        model_id="nomic-embed-text",
+        base_url=settings.ollama_base_url,
+        model_id=settings.embedding_model_id,
         semaphore=asyncio.Semaphore(4),
     )
 

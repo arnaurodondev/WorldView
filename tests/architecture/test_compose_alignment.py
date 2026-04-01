@@ -38,27 +38,19 @@ COMPOSE_TEST_FILE = REPO_ROOT / "infra" / "compose" / "docker-compose.test.yml"
 # yet been added.  Remove it once the container is wired up.
 COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     # portfolio: instrument_consumer_main.py has no compose container yet.
-    # Needs portfolio-instrument-consumer container — not yet scheduled in PLAN-0011.
+    # Needs portfolio-instrument-consumer container — schedule in next available plan.
     ("portfolio", "instrument_consumer_main"): ("Add portfolio-instrument-consumer container — follow-up to PLAN-0011"),
-    # market-data: consumer_main.py files created in Wave B-2; compose containers
-    # will be added once market-data consumers are extracted from lifespan (post-B-2).
+    # market-data: consumer_main.py files exist; add containers first, then extract
+    # from lifespan in PLAN-0012 or next available wave.
     ("market-data", "ohlcv_consumer_main"): (
-        "Add market-data-ohlcv-consumer container after lifespan cleanup (PLAN-0011 post-B-2)"
+        "Add market-data-ohlcv-consumer container first, then extract from lifespan (PLAN-0012)"
     ),
     ("market-data", "quotes_consumer_main"): (
-        "Add market-data-quotes-consumer container after lifespan cleanup (PLAN-0011 post-B-2)"
+        "Add market-data-quotes-consumer container first, then extract from lifespan (PLAN-0012)"
     ),
     ("market-data", "fundamentals_consumer_main"): (
-        "Add market-data-fundamentals-consumer container after lifespan cleanup (PLAN-0011 post-B-2)"
+        "Add market-data-fundamentals-consumer container first, then extract from lifespan (PLAN-0012)"
     ),
-    # content-store: dispatcher_main and article_consumer_main promoted to mature in PLAN-0012.
-    # Compose containers not yet added — follow-up to PLAN-0011.
-    ("content-store", "dispatcher_main"): "Add content-store-dispatcher container (PLAN-0011 follow-up)",
-    ("content-store", "article_consumer_main"): "Add content-store-article-consumer container (PLAN-0011 follow-up)",
-    # nlp-pipeline: same — promoted to mature in PLAN-0012; containers not yet added.
-    ("nlp-pipeline", "dispatcher_main"): "Add nlp-pipeline-dispatcher container (PLAN-0011 follow-up)",
-    ("nlp-pipeline", "article_consumer_main"): "Add nlp-pipeline-article-consumer container (PLAN-0011 follow-up)",
-    ("nlp-pipeline", "watchlist_consumer_main"): "Add nlp-pipeline-watchlist-consumer container (PLAN-0011 follow-up)",
 }
 
 
