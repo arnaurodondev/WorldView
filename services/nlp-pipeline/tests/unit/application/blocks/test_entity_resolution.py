@@ -38,10 +38,51 @@ def _make_repos(
     fuzzy_results: list[tuple[uuid.UUID, float]] | None = None,
     ann_results: list[tuple[uuid.UUID, float]] | None = None,
 ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
+    """Build mock repos.
+
+    The run_entity_resolution_block function uses batch_* methods.
+    The individual stage helpers (_stage1_exact etc.) use the single-mention methods.
+    Both sets of mocks are wired here so stage helper tests still pass.
+    """
     alias_repo = MagicMock()
+    # Single-mention methods (used by _stage1_exact, _stage2_ticker_isin, _stage3_fuzzy helpers)
     alias_repo.exact_match = AsyncMock(return_value=exact_result)
     alias_repo.ticker_isin_match = AsyncMock(return_value=ticker_result)
     alias_repo.fuzzy_trigram = AsyncMock(return_value=fuzzy_results or [])
+
+    # Batch methods (used by run_entity_resolution_block)
+    alias_repo.batch_exact_match = AsyncMock(
+        return_value={} if exact_result is None else {},  # filled per-test below
+    )
+    alias_repo.batch_ticker_isin_match = AsyncMock(return_value={})
+    alias_repo.batch_fuzzy_trigram = AsyncMock(return_value={})
+
+    embedding_repo = MagicMock()
+    embedding_repo.ann_search = AsyncMock(return_value=ann_results or [])
+
+    canonical_repo = MagicMock()
+    resolution_audit_repo = MagicMock()
+    resolution_audit_repo.add = AsyncMock()
+    resolution_audit_repo.add_batch = AsyncMock()
+
+    return alias_repo, embedding_repo, canonical_repo, resolution_audit_repo
+
+
+def _make_batch_repos(
+    exact_map: dict[str, uuid.UUID] | None = None,
+    ticker_isin_map: dict[str, uuid.UUID] | None = None,
+    fuzzy_map: dict[str, list[tuple[uuid.UUID, float]]] | None = None,
+    ann_results: list[tuple[uuid.UUID, float]] | None = None,
+) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
+    """Build mock repos with batch methods pre-loaded — for run_entity_resolution_block tests."""
+    alias_repo = MagicMock()
+    alias_repo.batch_exact_match = AsyncMock(return_value=exact_map or {})
+    alias_repo.batch_ticker_isin_match = AsyncMock(return_value=ticker_isin_map or {})
+    alias_repo.batch_fuzzy_trigram = AsyncMock(return_value=fuzzy_map or {})
+    # Single-mention methods still present (stage helper tests)
+    alias_repo.exact_match = AsyncMock(return_value=None)
+    alias_repo.ticker_isin_match = AsyncMock(return_value=None)
+    alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
 
     embedding_repo = MagicMock()
     embedding_repo.ann_search = AsyncMock(return_value=ann_results or [])
@@ -158,12 +199,7 @@ class TestRunEntityResolutionBlock:
     async def test_unresolved_mentions_never_discarded(self) -> None:
         """CRITICAL: UNRESOLVED mentions must remain in the output list."""
         mention = _make_mention("Completely Unknown Corp")
-        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_repos(
-            exact_result=None,
-            ticker_result=None,
-            fuzzy_results=[],
-            ann_results=[],
-        )
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
         embedding_client = MagicMock()
         embedding_client.embed = AsyncMock(return_value=[])
 
@@ -182,18 +218,17 @@ class TestRunEntityResolutionBlock:
             instruction_prefix="",
         )
 
-        # Mention must still be in output
         assert len(resolved) == 1
         assert resolved[0].resolution_outcome == ResolutionOutcome.UNRESOLVED
         assert resolved[0].resolved_entity_id is None
 
     @pytest.mark.asyncio
     async def test_auto_resolve_sets_entity_id(self) -> None:
-        """AUTO_RESOLVE ≥ 0.72 → resolved_entity_id is set."""
+        """AUTO_RESOLVE ≥ 0.72 → resolved_entity_id is set (Stage 1 exact hit)."""
         entity_id = uuid.uuid4()
         mention = _make_mention("Apple Inc.")
-        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_repos(
-            exact_result=entity_id,  # Stage 1 returns entity (confidence 1.0)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            exact_map={"apple inc.": entity_id},
         )
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
@@ -216,14 +251,12 @@ class TestRunEntityResolutionBlock:
 
     @pytest.mark.asyncio
     async def test_provisional_outcome_for_mid_range_confidence(self) -> None:
-        """0.45 ≤ composite < 0.72 → PROVISIONAL (queued but not resolved)."""
+        """0.45 <= composite < 0.72 → PROVISIONAL (queued but not resolved)."""
         entity_id = uuid.uuid4()
-        # Fuzzy trigram match with similarity ~0.55 → composite = 0.55*0.90 = 0.495 (>= 0.45, < 0.72)
+        # Fuzzy trigram with similarity 0.55 → composite = 0.55*0.90 = 0.495
         mention = _make_mention("Apple Incorporated")
-        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_repos(
-            exact_result=None,
-            ticker_result=None,
-            fuzzy_results=[(entity_id, 0.55)],  # 0.55 * 0.90 = 0.495
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            fuzzy_map={"apple incorporated": [(entity_id, 0.55)]},
         )
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
@@ -244,12 +277,12 @@ class TestRunEntityResolutionBlock:
         assert resolved[0].resolved_entity_id is None
 
     @pytest.mark.asyncio
-    async def test_cascade_stops_at_first_hit(self) -> None:
-        """Cascade stops at Stage 1 if exact match found — Stage 2/3/4 not called."""
+    async def test_stage1_hit_skips_stage4_ann(self) -> None:
+        """When Stage 1 resolves a mention, Stage 4 ANN is not called."""
         entity_id = uuid.uuid4()
         mention = _make_mention("Apple Inc.")
-        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_repos(
-            exact_result=entity_id,
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            exact_map={"apple inc.": entity_id},
         )
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
@@ -266,28 +299,20 @@ class TestRunEntityResolutionBlock:
             instruction_prefix="",
         )
 
-        # Stage 2 and 3 should NOT have been called
-        alias_repo.ticker_isin_match.assert_not_called()
-        alias_repo.fuzzy_trigram.assert_not_called()
+        # Stage 4 (ANN) should NOT be called when Stage 1 already resolved
+        embedding_repo.ann_search.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_multiple_mentions_all_processed(self) -> None:
-        """All mentions are processed, regardless of individual resolution outcome."""
+        """All mentions are processed regardless of individual resolution outcome."""
+        entity_id = uuid.uuid4()
         mentions = [
             _make_mention("Apple Inc."),
             _make_mention("Unknown Corp XYZ"),
         ]
-        entity_id = uuid.uuid4()
-        alias_repo = MagicMock()
-        # First call returns entity, second returns None
-        alias_repo.exact_match = AsyncMock(side_effect=[entity_id, None])
-        alias_repo.ticker_isin_match = AsyncMock(return_value=None)
-        alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
-
-        embedding_repo, canonical_repo, audit_repo = MagicMock(), MagicMock(), MagicMock()
-        embedding_repo.ann_search = AsyncMock(return_value=[])
-        audit_repo.add = AsyncMock()
-
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            exact_map={"apple inc.": entity_id},
+        )
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
 
@@ -309,14 +334,9 @@ class TestRunEntityResolutionBlock:
 
     @pytest.mark.asyncio
     async def test_audit_trail_written_for_each_stage_attempted(self) -> None:
-        """Audit records are produced for every stage that is attempted."""
+        """Audit records are produced for every stage (1-4) attempted."""
         mention = _make_mention("Unknown Corp")
-        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_repos(
-            exact_result=None,
-            ticker_result=None,
-            fuzzy_results=[],
-            ann_results=[],
-        )
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
 
@@ -332,9 +352,30 @@ class TestRunEntityResolutionBlock:
             instruction_prefix="",
         )
 
-        # All 4 stages should have audit entries (stages 1-4)
         stages_hit = {r.stage for r in audit}
-        assert 1 in stages_hit  # exact
-        assert 2 in stages_hit  # ticker/isin
-        assert 3 in stages_hit  # fuzzy
-        assert 4 in stages_hit  # ANN
+        assert 1 in stages_hit  # exact (miss audit entry)
+        assert 2 in stages_hit  # ticker/isin (miss audit entry)
+        assert 3 in stages_hit  # fuzzy (miss audit entry)
+        assert 4 in stages_hit  # ANN (always emits)
+
+    @pytest.mark.asyncio
+    async def test_empty_mentions_returns_empty(self) -> None:
+        """Empty input returns immediately with no DB calls."""
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        intelligence_session = MagicMock()
+
+        resolved, audit = await run_entity_resolution_block(
+            [],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert resolved == []
+        assert audit == []
+        alias_repo.batch_exact_match.assert_not_called()

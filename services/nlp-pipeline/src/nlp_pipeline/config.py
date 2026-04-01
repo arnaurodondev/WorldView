@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
+    # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
+    # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
+    gliner_base_url: str = ""
+
     # GLiNER thresholds (PRD §6.7 Block 4)
     gliner_threshold: float = 0.35  # for routing/novelty signal
     gliner_resolution_threshold: float = 0.45  # for entity resolution cascade

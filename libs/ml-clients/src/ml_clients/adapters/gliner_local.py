@@ -65,38 +65,62 @@ class GLiNERLocalAdapter:
         return self._model
 
     async def extract_entities(self, inp: NERInput) -> NEROutput:
+        results = await self.batch_extract_entities([inp])
+        return results[0]
+
+    async def batch_extract_entities(self, inputs: list[NERInput]) -> list[NEROutput]:
+        """Run GLiNER on a batch of texts in a single model forward pass.
+
+        GLiNER accepts a list of texts natively — one GPU/CPU forward pass for
+        all sections rather than N separate calls.  All inputs must use the same
+        entity_classes and threshold; if they differ, the first input's values are
+        used (documents are always processed with a single ontology in this system).
+
+        NMS is applied per-section so overlapping spans within a single section are
+        suppressed without affecting other sections in the batch.
+        """
+        if not inputs:
+            return []
         async with self._semaphore:
             try:
                 model = await self._get_model()
                 loop = asyncio.get_event_loop()
 
-                text = inp.text
-                entity_classes = inp.entity_classes
-                threshold = inp.threshold
+                texts = [inp.text for inp in inputs]
+                entity_classes = inputs[0].entity_classes
+                threshold = inputs[0].threshold
 
-                def sync_call() -> list[dict[str, Any]]:
+                def sync_batch_call() -> list[list[dict[str, Any]]]:
+                    # GLiNER predict_entities accepts a list of texts when passed
+                    # as the first argument; returns list[list[entity_dict]].
                     return model.predict_entities(  # type: ignore[no-any-return]
-                        text, entity_classes, threshold=threshold
+                        texts, entity_classes, threshold=threshold
                     )
 
-                raw_entities: list[dict[str, Any]] = await loop.run_in_executor(None, sync_call)
-                filtered = _apply_nms(raw_entities)
-                mentions = [
-                    EntityMention(
-                        text=str(e["text"]),
-                        label=str(e["label"]),
-                        start=int(e["start"]),
-                        end=int(e["end"]),
-                        score=float(e["score"]),
-                    )
-                    for e in filtered
-                ]
+                raw_batched: list[list[dict[str, Any]]] = await loop.run_in_executor(None, sync_batch_call)
+
+                outputs: list[NEROutput] = []
+                for raw_entities in raw_batched:
+                    filtered = _apply_nms(raw_entities)
+                    mentions = [
+                        EntityMention(
+                            text=str(e["text"]),
+                            label=str(e["label"]),
+                            start=int(e["start"]),
+                            end=int(e["end"]),
+                            score=float(e["score"]),
+                        )
+                        for e in filtered
+                    ]
+                    outputs.append(NEROutput(mentions=mentions))
+
                 logger.info(
-                    "ner_completed",
+                    "ner_batch_completed",
                     model_path=self._model_path,
-                    entity_count=len(mentions),
+                    batch_size=len(inputs),
+                    total_entities=sum(len(o.mentions) for o in outputs),
                 )
-                return NEROutput(mentions=mentions)
+                return outputs
             except (MemoryError, RuntimeError) as exc:
                 raise RetryableError(f"GLiNER transient error: {exc}") from exc
             except ValueError as exc:

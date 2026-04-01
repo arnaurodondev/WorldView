@@ -291,6 +291,10 @@ async def run_entity_resolution_block(
 ) -> tuple[list[EntityMention], list[MentionResolution]]:
     """Run the 4-stage entity resolution cascade for all mentions.
 
+    Stages 1-3 use batch DB queries (1 query per stage for N mentions) to avoid
+    O(N*3) round-trips.  Stage 4 (ANN HNSW + embedding) runs per-mention only
+    for mentions that did not resolve in the earlier stages.
+
     Critical invariants (PRD §6.7 Block 9):
       - UNRESOLVED mentions are NEVER discarded — they remain in the output list.
       - AUTO_RESOLVE and PROVISIONAL outcomes write audit trail entries.
@@ -311,25 +315,110 @@ async def run_entity_resolution_block(
         (resolved_mentions, audit_records)
         All input mentions are returned (potentially with resolved_entity_id set).
     """
+    if not mentions:
+        return mentions, []
+
     all_audit: list[MentionResolution] = []
 
+    # ── Stage 1 batch: exact alias (1 query for all mentions) ─────────────────
+    all_texts = [m.mention_text for m in mentions]
+    exact_matches: dict[str, UUID] = await alias_repo.batch_exact_match(all_texts)
+
+    # ── Stage 2 batch: ticker/ISIN (1-2 queries for all mentions) ─────────────
+    tickers: list[str] = []
+    isins: list[str] = []
+    for m in mentions:
+        text_stripped = m.mention_text.strip()
+        if text_stripped.isupper() and len(text_stripped) <= 6:
+            tickers.append(text_stripped)
+        if len(text_stripped) == 12 and text_stripped[:2].isalpha() and text_stripped[2:].isalnum():
+            isins.append(text_stripped)
+    ticker_isin_matches: dict[str, UUID] = await alias_repo.batch_ticker_isin_match(tickers, isins)
+
+    # ── Stage 3 batch: fuzzy trigram (1 LATERAL query for all mentions) ────────
+    # Only pass mentions that didn't resolve in stages 1 or 2
+    stage3_candidates = [
+        m
+        for m in mentions
+        if m.mention_text.lower().strip() not in exact_matches and m.mention_text.strip() not in ticker_isin_matches
+    ]
+    fuzzy_matches: dict[str, list[tuple[UUID, float]]] = {}
+    if stage3_candidates:
+        stage3_texts = [m.mention_text for m in stage3_candidates]
+        fuzzy_matches = await alias_repo.batch_fuzzy_trigram(stage3_texts, threshold=0.75, top_k_per_mention=5)
+
+    # ── Per-mention classification + Stage 4 for remaining unresolved ─────────
     for mention in mentions:
         audit: list[MentionResolution] = []
         resolved_id: UUID | None = None
         confidence: float = 0.0
 
-        # ── Stage 1: Exact alias ───────────────────────────────────────────
-        resolved_id, confidence = await _stage1_exact(mention, alias_repo, audit)
+        # Stage 1 result — always emit audit entry (hit or miss) for full trail
+        norm_text = mention.mention_text.lower().strip()
+        s1_entity = exact_matches.get(norm_text)
+        if s1_entity is not None:
+            resolved_id = s1_entity
+            confidence = CONFIDENCE_EXACT
+        audit.append(
+            MentionResolution(
+                mention_id=mention.mention_id,
+                stage=1,
+                score=CONFIDENCE_EXACT if s1_entity else 0.0,
+                is_winner=s1_entity is not None,
+                candidate_entity_id=s1_entity,
+                metadata={"method": "exact_alias"},
+            ),
+        )
 
-        # ── Stage 2: Ticker/ISIN ───────────────────────────────────────────
+        # Stage 2 result — always emit audit entry (hit or miss) for full trail
         if resolved_id is None:
-            resolved_id, confidence = await _stage2_ticker_isin(mention, alias_repo, audit)
+            stripped = mention.mention_text.strip()
+            s2_entity = ticker_isin_matches.get(stripped)
+            if s2_entity is not None:
+                resolved_id = s2_entity
+                confidence = CONFIDENCE_TICKER_ISIN
+            audit.append(
+                MentionResolution(
+                    mention_id=mention.mention_id,
+                    stage=2,
+                    score=CONFIDENCE_TICKER_ISIN if s2_entity else 0.0,
+                    is_winner=s2_entity is not None,
+                    candidate_entity_id=s2_entity,
+                    metadata={"method": "ticker_isin"},
+                ),
+            )
 
-        # ── Stage 3: Fuzzy trigram ─────────────────────────────────────────
+        # Stage 3 result
         if resolved_id is None:
-            resolved_id, confidence = await _stage3_fuzzy(mention, alias_repo, audit)
+            candidates = fuzzy_matches.get(norm_text, [])
+            if candidates:
+                best_entity_id, best_sim = candidates[0]
+                composite = best_sim * FUZZY_CONFIDENCE_MULTIPLIER
+                resolved_id = best_entity_id
+                confidence = composite
+                audit.append(
+                    MentionResolution(
+                        mention_id=mention.mention_id,
+                        stage=3,
+                        score=composite,
+                        is_winner=True,
+                        candidate_entity_id=resolved_id,
+                        metadata={"method": "fuzzy_trigram", "similarity": best_sim, "candidates": len(candidates)},
+                    ),
+                )
+            else:
+                audit.append(
+                    MentionResolution(
+                        mention_id=mention.mention_id,
+                        stage=3,
+                        score=0.0,
+                        is_winner=False,
+                        candidate_entity_id=None,
+                        metadata={"method": "fuzzy_trigram", "candidates": 0},
+                    ),
+                )
 
-        # ── Stage 4: ANN HNSW ─────────────────────────────────────────────
+        # Stage 4: ANN HNSW — only for mentions still unresolved after stages 1-3
         if resolved_id is None:
             resolved_id, confidence = await _stage4_ann(
                 mention,
@@ -348,7 +437,6 @@ async def run_entity_resolution_block(
             mention.resolution_outcome = ResolutionOutcome.AUTO_RESOLVED
 
         elif resolved_id is not None and confidence >= PROVISIONAL_THRESHOLD:
-            # Provisional — queue for human/deferred resolution
             mention.resolution_confidence = confidence
             mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
             try:
@@ -360,7 +448,6 @@ async def run_entity_resolution_block(
                 )
 
         else:
-            # UNRESOLVED — preserve mention, never discard
             mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
             logger.debug(
                 "entity_resolution.unresolved",

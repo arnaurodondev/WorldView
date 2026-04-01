@@ -54,14 +54,7 @@ from tests.architecture._utils import (
 #   TOPO-DIR-OUTBOX        — infrastructure/outbox/ outside messaging/outbox/
 #   TOPO-STALE-OUTBOX      — infrastructure/outbox/ co-exists with messaging/outbox/ (stale)
 
-TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
-    # --- S3: market-data — consumer_main.py files exist; lifespan cleanup + compose containers deferred ---
-    # TOPO-LIFESPAN: consumers still embedded; entry points already created, schedule cleanup in PLAN-0012.
-    (
-        "market-data",
-        "TOPO-LIFESPAN",
-    ): "S3 lifespan cleanup deferred — schedule in PLAN-0012 (entry points already exist, add containers first)",
-}
+TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {}
 
 # All rule IDs this module uses — used for baseline integrity checks.
 _KNOWN_RULE_IDS: frozenset[str] = frozenset(

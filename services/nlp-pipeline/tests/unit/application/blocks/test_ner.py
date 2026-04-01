@@ -54,7 +54,11 @@ def _make_mention(
 
 
 def _make_ner_client(mentions: list[dict[str, Any]]) -> Any:
-    """Build a mock NERClient that returns given mentions."""
+    """Build a mock NERClient that returns the given mentions for every section.
+
+    run_ner_block now calls batch_extract_entities (one call per batch of sections).
+    The mock returns the same mention list for every section in the batch.
+    """
     from ml_clients.dataclasses import EntityMention as MLMention  # type: ignore[import-not-found]
     from ml_clients.dataclasses import NEROutput
 
@@ -68,9 +72,15 @@ def _make_ner_client(mentions: list[dict[str, Any]]) -> Any:
         )
         for m in mentions
     ]
-    output = NEROutput(mentions=ml_mentions)
+    per_section_output = NEROutput(mentions=ml_mentions)
+
+    async def _batch(inputs: list[Any]) -> list[NEROutput]:
+        return [per_section_output] * len(inputs)
+
     client = MagicMock()
-    client.extract_entities = AsyncMock(return_value=output)
+    client.batch_extract_entities = AsyncMock(side_effect=_batch)
+    # extract_entities kept for completeness (not called by run_ner_block anymore)
+    client.extract_entities = AsyncMock(return_value=per_section_output)
     return client
 
 

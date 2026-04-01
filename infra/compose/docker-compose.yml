@@ -773,6 +773,78 @@ services:
     command: ["python", "-m", "content_store.infrastructure.messaging.consumers.article_consumer_main"]
     restart: on-failure
 
+  # ── Ollama — LLM inference (embeddings + Qwen2.5 extraction) ─────────────────
+  # Serves:
+  #   - BGE-large-en-v1.5  (embedding model, Block 7)
+  #   - Qwen2.5:7b-instruct (extraction model, Block 10)
+  #
+  # GPU notes:
+  #   Ollama can use a GPU when the Docker host has NVIDIA drivers + nvidia-docker2.
+  #   Uncomment the `deploy.resources` block below to enable GPU passthrough.
+  #   Without GPU, Qwen2.5:7b runs on CPU at ~5-15 min/document (DEEP tier only).
+  #   BGE-large embeddings are fast enough on CPU (~0.1 s/section).
+  #
+  # Usage:
+  #   After first start, pull models inside the container:
+  #     docker compose exec ollama ollama pull bge-large-en-v1.5
+  #     docker compose exec ollama ollama pull qwen2.5:7b-instruct
+  #   Or mount a pre-populated model cache via the ollama_data volume.
+  ollama:
+    image: ollama/ollama:0.6.7
+    profiles: [infra, all]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
+    # Requires: nvidia-docker2, NVIDIA drivers ≥ 525, and
+    #   DOCKER_DEFAULT_RUNTIME=nvidia in /etc/docker/daemon.json
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ── GLiNER server — NER inference (Block 4) ───────────────────────────────────
+  # Runs GLiNER (DeBERTa-large) as a standalone HTTP service so NLP pipeline
+  # replicas share a single warm model instance.
+  #
+  # GPU notes:
+  #   GLiNER (DeBERTa-large, ~500MB) runs well on CPU (~0.5-3 s/batch of 20 sections).
+  #   GPU is optional but reduces latency to ~50 ms/batch.
+  #   Uncomment the `deploy.resources` block to enable GPU passthrough (same as above).
+  gliner-server:
+    build:
+      context: ../gliner
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    ports:
+      - "8090:8080"
+    environment:
+      GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # model download on first boot can take several minutes
+    # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
   # ── NLP Pipeline (S6) — migrate + API + dispatcher + 2 consumers ────────────
   # S6 owns nlp_db DDL; intelligence_db DDL is owned by intelligence-migrations.
   nlp-pipeline-migrate:
@@ -851,6 +923,10 @@ services:
       minio-init:
         condition: service_completed_successfully
       valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      gliner-server:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
@@ -1112,3 +1188,4 @@ volumes:
   loki_data:
   alloy_data:
   alertmanager_data:
+  ollama_data:
