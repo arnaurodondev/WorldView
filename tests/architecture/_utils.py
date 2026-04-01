@@ -8,7 +8,7 @@ and rich assertion wrappers used by all architecture test modules.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path

@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
 
+    # ML model endpoints
+    ollama_base_url: str = "http://ollama:11434"
+    embedding_model_id: str = "nomic-embed-text"
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True

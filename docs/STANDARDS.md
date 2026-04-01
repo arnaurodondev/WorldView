@@ -519,7 +519,7 @@ in service code.
 
 ```python
 # ✅ CORRECT
-# services/my-service/src/my_service/infrastructure/consumer/my_consumer.py
+# services/my-service/src/my_service/infrastructure/messaging/consumers/my_consumer.py
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
 from messaging.kafka.consumer.errors import FatalError, RetryableError
 
@@ -1047,20 +1047,14 @@ async def lifespan(app: FastAPI):
     )
     app.state.storage = storage
 
-    # 7. Outbox dispatcher (background task)
-    dispatcher = MyServiceOutboxDispatcher(settings=settings, session_factory=session_factory)
-    import asyncio
-    dispatch_task = asyncio.create_task(dispatcher.run())
-    app.state.dispatcher = dispatcher
-
     logger.info("service_started")
     yield
 
     # Shutdown
-    dispatcher.stop()
-    await dispatch_task
     await valkey.close()
     logger.info("service_stopped")
+    # NOTE: Outbox dispatcher and consumers run as standalone processes (R22/§14).
+    # Do NOT start asyncio.create_task() for them here — see §14 for entry point conventions.
 
 
 def create_app() -> FastAPI:

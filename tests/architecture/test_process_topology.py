@@ -55,12 +55,12 @@ from tests.architecture._utils import (
 #   TOPO-STALE-OUTBOX      — infrastructure/outbox/ co-exists with messaging/outbox/ (stale)
 
 TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
-    # --- S3: market-data — consumers extracted (Wave B-2); lifespan cleanup deferred ---
-    # TOPO-LIFESPAN: consumers still embedded pending compose containers for standalone processes.
+    # --- S3: market-data — consumer_main.py files exist; lifespan cleanup + compose containers deferred ---
+    # TOPO-LIFESPAN: consumers still embedded; entry points already created, schedule cleanup in PLAN-0012.
     (
         "market-data",
         "TOPO-LIFESPAN",
-    ): "Remove create_task calls once consumer containers are added to compose (PLAN-0011 post-B-2)",
+    ): "S3 lifespan cleanup deferred — schedule in PLAN-0012 (entry points already exist, add containers first)",
 }
 
 # All rule IDs this module uses — used for baseline integrity checks.

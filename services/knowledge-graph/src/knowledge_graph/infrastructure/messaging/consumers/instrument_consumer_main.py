@@ -64,7 +64,7 @@ async def main() -> None:
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
-        group_id="kg-instrument-group",
+        group_id=f"{settings.kafka_consumer_group}-instrument",
         topics=[settings.kafka_topic_instrument_created],
     )
     consumer = InstrumentEntityConsumer(
