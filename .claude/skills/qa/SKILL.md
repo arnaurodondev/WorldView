@@ -3,6 +3,7 @@ name: qa
 description: "Run a full Quality Assurance pass with multi-agent specialist review. Spawns parallel agents (QA, Security, Data Platform, Distributed Systems, Architecture) that each analyze the full implementation from their perspective, then consolidates findings, applies fixes, and runs all tests across all services."
 user-invocable: true
 argument-hint: "[--plan PLAN-ID] [service-name] ['full']"
+effort: killer
 ---
 
 # QA — Multi-Agent Quality Assurance Pipeline

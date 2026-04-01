@@ -3,6 +3,7 @@ name: plan
 description: "Generate a structured implementation plan from a PRD. Breaks the PRD into distinct service-level plans, each decomposed into dependency-ordered waves of tasks. Use after /prd to prepare for implementation."
 user-invocable: true
 argument-hint: "[PRD ID or path, e.g. PRD-0001 or docs/specs/0001-feature.md]"
+effort: medium
 ---
 
 # Plan Generation — From PRD to Implementation Waves

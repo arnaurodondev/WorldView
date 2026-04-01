@@ -3,6 +3,7 @@ name: implement
 description: "Implement a wave from a plan, or a standalone change. Follows a strict pipeline: context loading, implementation with tests, lint/mypy/test validation, security review, code review, documentation update, and commit. Use for all feature implementation work."
 user-invocable: true
 argument-hint: "[wave reference (e.g. PLAN-0001 Wave A-1) or standalone task description]"
+effort: killer
 ---
 
 # Implement — Strict Development Pipeline

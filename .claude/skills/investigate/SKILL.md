@@ -3,6 +3,7 @@ name: investigate
 description: "Deep investigation of a complex issue, unexpected behavior, or architectural concern. Gathers all context, traces execution paths, defines hypotheses, verifies them, and produces a detailed investigation report. Deeper than /fix-bug — use when the root cause is unknown or the issue spans multiple services."
 user-invocable: true
 argument-hint: "[issue description, unexpected behavior, or area of concern]"
+effort: heavy
 ---
 
 # Investigate — Deep-Dive Issue Analysis

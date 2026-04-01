@@ -20,6 +20,8 @@
 | **Security review** | `/security-audit` | OWASP, multi-tenant, injection, secrets scan |
 | **Refactoring** | `/refactor` | Safe behavior-preserving restructure |
 | **Documentation audit** | `/docs-audit` | Find gaps, staleness, inconsistencies in docs |
+| **Scaffold new service** | `/scaffold-service` | Full hexagonal service skeleton: domain, API, tests, docker-compose |
+| **DB migration** | `/migrate-db` | Generate, validate, and test Alembic migration (forward-compat + rollback) |
 
 **Always use a skill for non-trivial work.** Skills enforce the correct workflow, validation gates, and mandatory compounding updates.
 
