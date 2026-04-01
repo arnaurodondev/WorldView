@@ -90,6 +90,7 @@ Environment prefix: `ALERT_`
 | `ALERT_KAFKA_WATCHLIST_CONSUMER_GROUP` | `alert-service-watchlist-group` | Watchlist consumer group |
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 base URL |
 | `INTERNAL_SERVICE_TOKEN` | `` | Shared inter-service token (no prefix) |
+| `ALERT_VALKEY_URL` | `redis://localhost:6379/0` | Valkey connection URL (pub/sub + cache) |
 | `ALERT_ALERT_DEDUP_WINDOW_SECONDS` | `300` | Dedup window in seconds |
 | `ALERT_WATCHLIST_CACHE_TTL_SECONDS` | `300` | Valkey cache TTL |
 | `ALERT_SERVICE_NAME` | `alert` | For observability |
@@ -138,15 +139,45 @@ Default window: 300 s. Same entity+type within one window → single alert.
 2. Resolve watchers via `WatchlistCache` → S1 fallback
 3. Dedup check via `DedupRepository.exists(dedup_key)`
 4. **Single transaction**: INSERT alert + INSERT pending_alert (per watcher) + INSERT outbox_event (per watcher)
-5. **Post-commit**: WebSocket push via `ConnectionManager` (never inside transaction)
+5. **Post-commit**: WebSocket push via `INotificationPublisher` → `ValkeyNotificationPublisher` publishes JSON to Valkey channel `alert:{user_id}` (never inside transaction)
 
 ---
 
-## WebSocket Delivery (Wave E-2)
+## WebSocket Delivery (Wave E-2 + PLAN-0013 Wave C-2)
 
-`ConnectionManager` stores active connections in memory (keyed by `user_id`).
+### Cross-Process Architecture (PLAN-0013 Wave C-2)
 
-**⚠ Single-replica constraint**: connections are in-process memory. Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub).
+Real-time WebSocket delivery uses a **Valkey pub/sub bridge** to cross the process boundary between the standalone consumer process and the API process:
+
+```
+intelligence_consumer_main (OS process)
+  └─ AlertFanoutUseCase
+       └─ ValkeyNotificationPublisher.send_to_user(user_id, payload)
+            └─ PUBLISH alert:{user_id} <JSON>
+                                          │  Valkey
+                                          ▼
+                        API process (FastAPI / alerts_stream WS route)
+                          └─ ValkeyClient.subscribe("alert:{user_id}")
+                               └─ async for msg in pubsub.listen():
+                                    └─ websocket.send_text(msg["data"])
+```
+
+**Delivery is best-effort**: if no client is connected when a message is published, the message is dropped. Clients catch up on reconnect via `GET /api/v1/alerts/pending`.
+
+### INotificationPublisher Port
+
+`AlertFanoutUseCase` depends on the `INotificationPublisher` Protocol (application layer), not on any concrete infrastructure class:
+
+```python
+class INotificationPublisher(Protocol):
+    async def send_to_user(self, user_id: UUID, payload: dict[str, Any]) -> None: ...
+```
+
+`ValkeyNotificationPublisher` (infrastructure) implements this port; it publishes to channel `alert:{user_id}` and swallows all exceptions (publish failures are logged but never raise into the use case).
+
+### ConnectionManager (in-process)
+
+`ConnectionManager` is retained for direct in-process pushes (e.g., integration tests, future in-process paths):
 
 | Method | Behaviour |
 |--------|-----------|
@@ -154,6 +185,8 @@ Default window: 300 s. Same entity+type within one window → single alert.
 | `disconnect(user_id)` | Remove; no-op if not connected |
 | `send_to_user(user_id, data)` | JSON push; cleans up stale connections on failure |
 | `broadcast(data)` | Push to all connected users |
+
+The API process stores a `ws_manager` (`ConnectionManager`) on `app.state` and a `valkey` (`ValkeyClient`) on `app.state`. The WebSocket route subscribes to Valkey and calls `manager.disconnect(user_id)` on cleanup.
 
 ---
 
@@ -215,13 +248,13 @@ Admin endpoints protected by `X-Admin-Token` header (`ALERT_ADMIN_TOKEN` env var
 
 ## Deployment Constraints
 
-### Single-Replica Requirement (WebSocket)
+### WebSocket Fan-out (PLAN-0013 Wave C-2 — Resolved)
 
-The `ConnectionManager` stores active WebSocket connections in process memory (`_connections: dict[UUID, WebSocket]`). Running ≥2 replicas of S10 would mean a push arriving at replica A cannot reach a user connected to replica B.
+The original single-replica WebSocket constraint (connections stored in `ConnectionManager` in-process memory) has been **resolved** by the Valkey pub/sub bridge introduced in PLAN-0013 Wave C-2.
 
-**Current deployment**: single-replica only.  Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub) to broadcast push notifications across all replicas.
+The `intelligence_consumer_main` standalone process now uses `ValkeyNotificationPublisher` (not `ConnectionManager`) to publish alerts. The API process subscribes to `alert:{user_id}` and forwards messages to the connected WebSocket client. Any number of API replicas can handle WebSocket connections independently — each subscribes to its own Valkey channel for the user it is serving.
 
-This constraint is documented in the `.. warning::` docstring of `services/alert/src/alert/infrastructure/websocket/manager.py`.
+**Current deployment**: multi-replica capable. The `ConnectionManager` warning docstring in `manager.py` is retained for historical context but no longer applies to the primary delivery path.
 
 ### S9 Auth-Injection (user_id Parameter)
 
@@ -238,3 +271,8 @@ This is noted in the docstrings of the REST and WebSocket route handlers in `ser
 - [x] Wave E-1: Service setup, domain, DB, S1 client, tests (43 tests)
 - [x] Wave E-2: Consumers, alert fan-out, WebSocket, outbox (97 tests, ruff + mypy clean)
 - [x] Wave E-3: REST API, health, integration tests, full pipeline validation (114 unit tests, ruff + mypy clean — 2026-03-29)
+- [x] PLAN-0013 Wave A-1: Strip background tasks from S3 lifespan (market-data service)
+- [x] PLAN-0013 Waves B-1+B-2: Entrypoint unit tests for S3/S5/S6/S7
+- [x] PLAN-0013 Wave B-3: Entrypoint unit tests for S10 (136 unit tests)
+- [x] PLAN-0013 Wave C-1: `INotificationPublisher` port + `ValkeyNotificationPublisher` adapter; `AlertFanoutUseCase` decoupled from `ConnectionManager`; `intelligence_consumer_main.py` uses Valkey pub/sub
+- [x] PLAN-0013 Wave C-2: WebSocket route subscribes to `alert:{user_id}` Valkey channel; `ValkeyClient.publish()` + `subscribe()` added to `libs/messaging`; integration tests via `fakeredis.FakeServer`

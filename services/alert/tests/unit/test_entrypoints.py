@@ -5,9 +5,6 @@ Covers: intelligence_consumer_main, watchlist_consumer_main, dispatcher_main.
 All tests use ``unittest.mock.patch`` to isolate all infrastructure.
 The pre-set ``asyncio.Event`` pattern is used so ``stop_event.wait()``
 returns immediately and the entire cleanup path executes within the test.
-
-NOTE: intelligence_consumer_main currently uses ConnectionManager (in-process).
-TODO: add publisher mock after Wave C-2 lands (ValkeyNotificationPublisher).
 """
 
 from __future__ import annotations
@@ -72,7 +69,7 @@ def _intelligence_patches(
         ("messaging.valkey.create_valkey_client_from_url", mock_valkey),
         ("alert.infrastructure.clients.s1_client.S1Client", MagicMock()),
         ("alert.infrastructure.cache.watchlist_cache.WatchlistCache", MagicMock()),
-        ("alert.infrastructure.websocket.manager.ConnectionManager", MagicMock()),
+        ("alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher", MagicMock()),
         ("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", MagicMock()),
         (
             "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
@@ -108,7 +105,10 @@ async def test_intelligence_consumer_graceful_stop() -> None:
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
         patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch("alert.infrastructure.websocket.manager.ConnectionManager", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
+            return_value=MagicMock(),
+        ),
         patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
         patch(
             "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
@@ -148,7 +148,10 @@ async def test_intelligence_consumer_stop_pre_set() -> None:
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
         patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch("alert.infrastructure.websocket.manager.ConnectionManager", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
+            return_value=MagicMock(),
+        ),
         patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
         patch(
             "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
@@ -191,7 +194,10 @@ async def test_intelligence_consumer_cleanup_order() -> None:
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
         patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch("alert.infrastructure.websocket.manager.ConnectionManager", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
+            return_value=MagicMock(),
+        ),
         patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
         patch(
             "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",

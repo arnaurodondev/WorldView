@@ -38,7 +38,7 @@ async def main() -> None:
     from alert.infrastructure.messaging.consumers.intelligence_consumer import (
         IntelligenceConsumer,
     )
-    from alert.infrastructure.websocket.manager import ConnectionManager
+    from alert.infrastructure.notification.valkey_publisher import ValkeyNotificationPublisher
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
@@ -74,9 +74,8 @@ async def main() -> None:
     # Watchlist cache
     watchlist_cache = WatchlistCache(valkey, s1_client, ttl=settings.watchlist_cache_ttl_seconds)  # type: ignore[arg-type]
 
-    # WebSocket manager (in-memory — only useful if consumers and API share process;
-    # kept for fan-out use case interface compatibility)
-    ws_manager = ConnectionManager()
+    # Notification publisher — sends to Valkey pub/sub channel per user
+    notification_publisher = ValkeyNotificationPublisher(valkey)
 
     # Build fan-out use case
     def _repo_factory(session):  # type: ignore[no-untyped-def]
@@ -90,7 +89,7 @@ async def main() -> None:
     fanout = AlertFanoutUseCase(
         session_factory=write_factory,
         watchlist_cache=watchlist_cache,
-        connection_manager=ws_manager,
+        connection_manager=notification_publisher,
         repo_factory=_repo_factory,  # type: ignore[arg-type]
         dedup_window_seconds=settings.alert_dedup_window_seconds,
         alert_delivered_topic=settings.kafka_topic_alert_delivered,
