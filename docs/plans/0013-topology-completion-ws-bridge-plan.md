@@ -156,12 +156,13 @@ If `test_app_lifespan.py` exists, update any tests that assert on the presence o
 
 Each test file covers: stop-immediately-when-stop-called, run-one-iteration-then-stop, fatal-error-exits, cleanup-resources-on-stop (engine.dispose / valkey.close called).
 
-### Wave B-1: Entrypoint Tests — S3 market-data + S5 content-store
+### Wave B-1: Entrypoint Tests — S3 market-data + S5 content-store ✅
 
 **Goal**: Add `test_entrypoints.py` for market-data (3 consumers + dispatcher) and content-store (1 consumer + dispatcher).
 **Depends on**: Wave A-1
 **Estimated effort**: 45–60 min
 **Architecture layer**: test
+**Status**: **DONE** — 2026-04-01 · 10 market-data + 6 content-store unit tests pass · ruff + format clean
 
 #### Tasks
 
@@ -194,9 +195,9 @@ Unit tests for the three consumer entry points (`ohlcv_consumer_main`, `quotes_c
 Edge cases: KeyboardInterrupt during run; `_build_factories()` raises.
 
 **Acceptance criteria**:
-- [ ] ≥10 test functions
-- [ ] All pass with `pytest -m unit`
-- [ ] No infrastructure connections in tests
+- [x] ≥10 test functions
+- [x] All pass with `pytest -m unit`
+- [x] No infrastructure connections in tests
 
 ---
 
@@ -223,22 +224,23 @@ Unit tests for `article_consumer_main` and `dispatcher_main`. Pattern matches T-
 | `test_dispatcher_main_cleanup` | engine.dispose() + valkey.close() on exit | unit |
 
 **Acceptance criteria**:
-- [ ] ≥6 test functions
-- [ ] All pass with `pytest -m unit`
+- [x] ≥6 test functions
+- [x] All pass with `pytest -m unit`
 
 #### Validation Gate (B-1)
-- [ ] `python -m pytest services/market-data/tests/ -m unit -v` passes (new tests included)
-- [ ] `python -m pytest services/content-store/tests/ -m unit -v` passes
-- [ ] `ruff check` passes on new test files
-- [ ] `mypy` passes on new test files
+- [x] `python -m pytest services/market-data/tests/ -m unit -v` passes (new tests included)
+- [x] `python -m pytest services/content-store/tests/ -m unit -v` passes
+- [x] `ruff check` passes on new test files
+- [x] `mypy` passes on new test files
 
 ---
 
-### Wave B-2: Entrypoint Tests — S6 nlp-pipeline + S7 knowledge-graph
+### Wave B-2: Entrypoint Tests — S6 nlp-pipeline + S7 knowledge-graph ✅
 
 **Goal**: Add `test_entrypoints.py` for nlp-pipeline (2 consumers + dispatcher) and knowledge-graph (4 consumers + dispatcher + scheduler).
 **Depends on**: Wave B-1 (patterns established)
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-04-01 · 7 nlp-pipeline + 8 knowledge-graph unit tests pass · ruff + format clean
 
 #### Tasks
 
@@ -266,8 +268,8 @@ Unit tests for `article_consumer_main`, `watchlist_consumer_main`, and `dispatch
 | `test_dispatcher_main_stop` | dispatcher.stop() delegated | unit |
 
 **Acceptance criteria**:
-- [ ] ≥7 test functions
-- [ ] Both-engines-disposed test explicitly verifies two `dispose()` calls
+- [x] ≥7 test functions
+- [x] Both-engines-disposed test explicitly verifies two `dispose()` calls
 
 ---
 
@@ -297,12 +299,12 @@ Note for `enriched_consumer_main`: it creates an `OllamaEmbeddingAdapter` using 
 | `test_any_consumer_stop_pre_set` | consumer never started | unit |
 
 **Acceptance criteria**:
-- [ ] ≥7 test functions
-- [ ] Ollama mock test explicitly verifies `settings.ollama_base_url` is used (guards against BP-085 regression)
+- [x] ≥7 test functions
+- [x] Ollama mock test explicitly verifies `settings.ollama_base_url` is used (guards against BP-085 regression)
 
 #### Validation Gate (B-2)
-- [ ] `python -m pytest services/nlp-pipeline/tests/ -m unit -v` passes
-- [ ] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/ -m unit -v` passes
+- [x] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
 
 ---
 
