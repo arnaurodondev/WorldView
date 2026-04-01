@@ -110,7 +110,7 @@ def _make_mock_session() -> AsyncMock:
 
 class TestEnrichedConsumerOrchestration:
     def _make_consumer(self, session: AsyncMock | None = None) -> object:
-        from knowledge_graph.infrastructure.consumer.enriched_consumer import (
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
             EnrichedArticleConsumer,
         )
 
@@ -182,11 +182,11 @@ class TestEnrichedConsumerOrchestration:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.consumer.enriched_consumer.canonicalize_relation_type",
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.canonicalize_relation_type",
                 side_effect=mock_canonicalize,
             ),
             patch(
-                "knowledge_graph.infrastructure.consumer.enriched_consumer.materialize_graph",
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.materialize_graph",
                 side_effect=mock_materialize,
             ),
         ):
@@ -217,7 +217,7 @@ class TestEnrichedConsumerOrchestration:
 
 class TestEnrichedConsumerIdempotency:
     def _make_consumer(self) -> object:
-        from knowledge_graph.infrastructure.consumer.enriched_consumer import (
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
             EnrichedArticleConsumer,
         )
 
@@ -258,7 +258,7 @@ class TestEnrichedConsumerIdempotency:
 
 class TestEntityCreatedConsumer:
     def _make_consumer(self, session: AsyncMock | None = None) -> object:
-        from knowledge_graph.infrastructure.consumer.entity_consumer import (
+        from knowledge_graph.infrastructure.messaging.consumers.entity_consumer import (
             EntityCreatedConsumer,
         )
 

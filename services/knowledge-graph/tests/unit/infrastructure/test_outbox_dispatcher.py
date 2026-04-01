@@ -40,7 +40,7 @@ def _make_event(topic: str) -> dict:
 class TestOutboxDispatcherAllowedTopics:
     def test_allowed_topic_produces_and_marks_dispatched(self) -> None:
         """graph.state.changed.v1 -> producer.produce() called, mark_dispatched called."""
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("graph.state.changed.v1")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -50,7 +50,7 @@ class TestOutboxDispatcherAllowedTopics:
         producer.flush = MagicMock(return_value=0)
 
         with patch(
-            "knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository",
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer, poll_interval_s=0.0)
@@ -62,7 +62,7 @@ class TestOutboxDispatcherAllowedTopics:
         outbox_repo.mark_failed.assert_not_awaited()
 
     def test_contradiction_topic_dispatched(self) -> None:
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("intelligence.contradiction.v1")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -71,7 +71,10 @@ class TestOutboxDispatcherAllowedTopics:
         producer.produce = MagicMock()
         producer.flush = MagicMock(return_value=0)
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 
@@ -79,7 +82,7 @@ class TestOutboxDispatcherAllowedTopics:
         producer.produce.assert_called_once()
 
     def test_relation_proposed_topic_dispatched(self) -> None:
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("relation.type.proposed.v1")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -88,7 +91,10 @@ class TestOutboxDispatcherAllowedTopics:
         producer.produce = MagicMock()
         producer.flush = MagicMock(return_value=0)
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 
@@ -98,7 +104,7 @@ class TestOutboxDispatcherAllowedTopics:
 class TestOutboxDispatcherEntityDirtied:
     def test_entity_dirtied_logs_warning_and_marks_dispatched(self) -> None:
         """entity.dirtied.v1 found in outbox -> WARNING logged, mark_dispatched (not produce)."""
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("entity.dirtied.v1")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -106,7 +112,10 @@ class TestOutboxDispatcherEntityDirtied:
         producer = MagicMock()
         producer.produce = MagicMock()
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 
@@ -122,7 +131,7 @@ class TestOutboxDispatcherEntityDirtied:
 class TestOutboxDispatcherUnknownTopic:
     def test_unknown_topic_marks_failed(self) -> None:
         """Unknown topic -> mark_failed called, producer never called."""
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("completely.unknown.v9")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -130,7 +139,10 @@ class TestOutboxDispatcherUnknownTopic:
         producer = MagicMock()
         producer.produce = MagicMock()
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 
@@ -140,7 +152,7 @@ class TestOutboxDispatcherUnknownTopic:
 
     def test_producer_error_marks_failed(self) -> None:
         """If producer.produce raises -> mark_failed called."""
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         event = _make_event("graph.state.changed.v1")
         sf, _session, outbox_repo = _make_session_factory([event])
@@ -148,7 +160,10 @@ class TestOutboxDispatcherUnknownTopic:
         producer = MagicMock()
         producer.produce = MagicMock(side_effect=RuntimeError("broker down"))
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 
@@ -158,12 +173,15 @@ class TestOutboxDispatcherUnknownTopic:
 
     def test_empty_queue_returns_zero(self) -> None:
         """Empty outbox -> zero dispatched, no produce calls."""
-        from knowledge_graph.infrastructure.outbox.dispatcher import OutboxDispatcher
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
         sf, _session, outbox_repo = _make_session_factory([])
         producer = MagicMock()
 
-        with patch("knowledge_graph.infrastructure.outbox.dispatcher.OutboxRepository", return_value=outbox_repo):
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
             dispatcher = OutboxDispatcher(sf, producer)
             dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
 

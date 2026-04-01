@@ -844,6 +844,150 @@ services:
       start_period: 45s
       retries: 5
 
+  knowledge-graph-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  knowledge-graph-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      knowledge-graph:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-enriched-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-entity-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.entity_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-fundamentals-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-instrument-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   # ── Alert (S10) ────────────────────────────────────────────────────────────
   alert-migrate:
     build:

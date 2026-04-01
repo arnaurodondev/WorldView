@@ -1,9 +1,9 @@
 # PLAN-0011: Process Topology Standardization & Architecture Test Enforcement
 
 **PRD**: N/A (Standards enforcement initiative)
-**Status**: in-progress
+**Status**: completed
 **Created**: 2026-03-31
-**Updated**: 2026-04-01 (Waves C-1 + C-2 + C-4 + B-2 complete)
+**Updated**: 2026-04-01 (All 9 waves complete)
 **Author**: Claude (plan generation)
 
 ---
@@ -1091,12 +1091,13 @@ Add containers: `nlp-pipeline-dispatcher`, `nlp-pipeline-article-consumer`,
 
 ---
 
-### Wave C-3: S7 Knowledge Graph — Extract Dispatcher + Scheduler + Consumers
+### Wave C-3: S7 Knowledge Graph — Extract Dispatcher + Scheduler + Consumers ✅
 
 **Goal**: Extract `OutboxDispatcher`, `KnowledgeGraphScheduler`, and all 4 consumers from
 `app.py` lifespan. This is the most complex extraction — S7 has the most embedded processes.
 **Depends on**: Waves A-2, B-1
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-04-01 · 179 unit tests pass · 94 arch tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 #### T-C-3-01: Create `messaging/outbox/dispatcher_main.py` for S7
@@ -1214,10 +1215,10 @@ and consumer containers (may group related consumers into fewer containers).
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py`
 
 #### Validation Gate
-- [ ] ruff + mypy clean for S7
-- [ ] S7 unit tests pass
-- [ ] `make test-arch` — S7 violations cleared
-- [ ] Compose YAML validates
+- [x] ruff + mypy clean for S7
+- [x] S7 unit tests pass (179)
+- [x] `make test-arch` — S7 violations cleared (94 arch tests pass)
+- [x] Compose YAML validates
 
 ---
 

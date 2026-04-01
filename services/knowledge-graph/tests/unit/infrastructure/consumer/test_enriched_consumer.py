@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from knowledge_graph.infrastructure.consumer.enriched_consumer import EnrichedArticleConsumer
+from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import EnrichedArticleConsumer
 from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
