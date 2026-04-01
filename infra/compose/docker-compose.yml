@@ -6,6 +6,11 @@
 #   monitoring   — observability stack (Prometheus, Grafana, Loki, Tempo, Alloy, Alertmanager)
 #   all          — starts every service in this compose file
 #
+# Notes:
+#   - postgres is built from timescale/timescaledb (includes TimescaleDB + pgvector + AGE).
+#     It also exposes the "timescaledb" alias so market-data can use its standard docker.env.
+#   - intelligence-migrations owns all DDL for intelligence_db; S6/S7 set ALEMBIC_ENABLED=false.
+#
 # Usage:
 #   Full infra:   docker compose -f infra/compose/docker-compose.yml --profile infra up -d
 #   Monitoring:   docker compose -f infra/compose/docker-compose.yml --profile monitoring up -d
@@ -80,6 +85,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # timescaledb alias: market-data's docker.env uses "timescaledb" hostname;
+    # this single postgres container (built from timescaledb image) serves both roles.
+    networks:
+      default:
+        aliases:
+          - timescaledb
 
   # ── Kafka (KRaft mode) ──────────────────────────────────────────────────────
   kafka:
@@ -358,8 +369,6 @@ services:
     command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
     restart: on-failure
 
-  # ── Monitoring Stack ────────────────────────────────────────────────────────
-
   prometheus:
     image: prom/prometheus:v3.2.1
     profiles: [monitoring, all]
@@ -482,6 +491,20 @@ services:
       start_period: 10s
 
   # ── Content Ingestion (S4) — 4 processes, same image ──────────────────────
+  # Migrations (one-shot)
+  content-ingestion-migrate:
+    build:
+      context: ../../services/content-ingestion
+      dockerfile: Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-ingestion/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
   # API server
   content-ingestion:
     build:
@@ -494,8 +517,8 @@ services:
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
-      postgres:
-        condition: service_healthy
+      content-ingestion-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       minio:
@@ -550,11 +573,533 @@ services:
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
-      content-ingestion:
-        condition: service_healthy
+      content-ingestion-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     restart: on-failure
+
+  # ── Market Data (S3) — migrate + API + dispatcher + 3 consumers ─────────────
+  # TimescaleDB for OHLCV hypertables. The "postgres" service also serves as
+  # "timescaledb" via its network alias (both names resolve to the same container).
+  market-data-migrate:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  market-data:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8003:8003"
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/healthz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  market-data-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  market-data-ohlcv-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.ohlcv_consumer_main"]
+    restart: on-failure
+
+  market-data-quotes-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.quotes_consumer_main"]
+    restart: on-failure
+
+  market-data-fundamentals-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    restart: on-failure
+
+  # ── Content Store (S5) — migrate + API + dispatcher + consumer ──────────────
+  content-store-migrate:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  content-store:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/readyz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  content-store-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["python", "-m", "content_store.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  content-store-consumer:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["python", "-m", "content_store.infrastructure.messaging.consumers.article_consumer_main"]
+    restart: on-failure
+
+  # ── NLP Pipeline (S6) — migrate + API + dispatcher + 2 consumers ────────────
+  # S6 owns nlp_db DDL; intelligence_db DDL is owned by intelligence-migrations.
+  nlp-pipeline-migrate:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  nlp-pipeline:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    ports:
+      - "8006:8006"
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8006/readyz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+  nlp-pipeline-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  nlp-pipeline-article-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
+    restart: on-failure
+
+  nlp-pipeline-watchlist-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+
+  # ── Knowledge Graph (S7) — API + dispatcher + scheduler + 4 consumers ───────
+  # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
+  knowledge-graph:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    ports:
+      - "8007:8007"
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/readyz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+  knowledge-graph-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  knowledge-graph-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      knowledge-graph:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
+    restart: unless-stopped
+
+  knowledge-graph-enriched-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer_main"]
+    restart: on-failure
+
+  knowledge-graph-entity-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.entity_consumer_main"]
+    restart: on-failure
+
+  knowledge-graph-fundamentals-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    restart: on-failure
+
+  knowledge-graph-instrument-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main"]
+    restart: on-failure
+
+  # ── Alert (S10) — migrate + API + dispatcher + 2 consumers ──────────────────
+  alert-migrate:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  alert:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    ports:
+      - "8010:8010"
+    env_file:
+      - ../../services/alert/configs/docker.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/readyz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  alert-dispatcher:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.outbox.dispatcher_main"]
+    restart: on-failure
+
+  alert-intelligence-consumer:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
+    restart: on-failure
+
+  alert-watchlist-consumer:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+
+  # ── Monitoring Stack ─────────────────────────────────────────────────────────
 
 volumes:
   minio_data:
