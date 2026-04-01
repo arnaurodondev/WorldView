@@ -3790,6 +3790,28 @@ git add -f services/<service>/src/
 
 ---
 
+## BP-088 — `asyncio.Event` patch causes infinite recursion in entrypoint tests
+
+**Context**: Unit testing standalone consumer `main()` functions that create an `asyncio.Event` for shutdown signalling.
+
+**Symptom**: `RecursionError: maximum recursion depth exceeded` inside `unittest.mock`. The stack shows repeated calls to the side_effect function from inside itself.
+
+**Root cause**: The `side_effect` helper calls `asyncio.Event()` to create a pre-set event, but `asyncio.Event` has already been patched by `patch("asyncio.Event", side_effect=helper)`. The helper therefore calls itself recursively.
+
+**Fix**: Capture the real `asyncio.Event` class at module level BEFORE any test patches it:
+```python
+_REAL_ASYNCIO_EVENT = asyncio.Event  # module-level, before any patches
+
+def _preset_event(*_args, **_kwargs):
+    e = _REAL_ASYNCIO_EVENT()  # real class, not the patch
+    e.set()
+    return e
+```
+
+**Prevention**: Any `side_effect` function that instantiates a class being patched must hold a reference to the original class captured before the patch context is entered.
+
+---
+
 ## BP-079 — Expired worker lease stalls source permanently
 
 **Date discovered**: 2026-04-01
