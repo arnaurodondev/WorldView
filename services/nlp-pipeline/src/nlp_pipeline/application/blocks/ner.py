@@ -131,46 +131,58 @@ async def run_ner_block(
 
     all_mentions: list[EntityMention] = []
 
-    # Process sections in batches
+    # Process sections in batches — each batch is ONE model forward pass.
     for i in range(0, len(sections), batch_size):
         batch = sections[i : i + batch_size]
+
+        # Build per-section inputs, truncating to the token limit.
+        batch_inputs: list[NERInput] = []
+        valid_sections: list[Section] = []  # parallel list to batch_inputs
         for section in batch:
             truncated_text = _truncate_to_tokens(section.text, SECTION_TOKEN_LIMIT)
             if not truncated_text.strip():
                 continue
-
-            inp = NERInput(
-                text=truncated_text,
-                entity_classes=NER_CLASS_LABELS,
-                threshold=threshold,
-            )
-            # OOM retry: attempt once with reduced text on failure
-            try:
-                output = await ner_client.extract_entities(inp)
-            except MemoryError:
-                # One retry with halved token budget
-                inp_reduced = NERInput(
-                    text=_truncate_to_tokens(truncated_text, SECTION_TOKEN_LIMIT // 2),
+            batch_inputs.append(
+                NERInput(
+                    text=truncated_text,
                     entity_classes=NER_CLASS_LABELS,
                     threshold=threshold,
                 )
-                output = await ner_client.extract_entities(inp_reduced)
+            )
+            valid_sections.append(section)
 
+        if not batch_inputs:
+            continue
+
+        # One forward pass for the whole batch (OOM retry with halved token budget)
+        try:
+            batch_outputs = await ner_client.batch_extract_entities(batch_inputs)
+        except MemoryError:
+            reduced_inputs = [
+                NERInput(
+                    text=_truncate_to_tokens(inp.text, SECTION_TOKEN_LIMIT // 2),
+                    entity_classes=NER_CLASS_LABELS,
+                    threshold=threshold,
+                )
+                for inp in batch_inputs
+            ]
+            batch_outputs = await ner_client.batch_extract_entities(reduced_inputs)
+
+        for section, output in zip(valid_sections, batch_outputs, strict=True):
             section_mentions: list[EntityMention] = []
             for ml_mention in output.mentions:
-                # Filter < 2 chars
                 if len(ml_mention.text.strip()) < 2:
                     continue
                 try:
                     mention_class = MentionClass(ml_mention.label)
                 except ValueError:
-                    continue  # unknown class — skip
+                    continue
 
                 section_mentions.append(
                     EntityMention(
                         mention_id=common.ids.new_uuid7(),
                         doc_id=doc_id,
-                        section_id=section.section_id,
+                        section_id=section.section_id,  # type: ignore[attr-defined]
                         mention_text=ml_mention.text.strip(),
                         mention_class=mention_class,
                         confidence=ml_mention.score,
@@ -179,7 +191,6 @@ async def run_ner_block(
                     ),
                 )
 
-            # NMS per section
             section_mentions = _nms(section_mentions)
             all_mentions.extend(section_mentions)
 

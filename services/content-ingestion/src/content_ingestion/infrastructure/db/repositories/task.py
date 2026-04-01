@@ -184,6 +184,45 @@ class TaskRepository:
         result = await self._session.execute(stmt)
         return result.first() is not None
 
+    async def recover_expired_leases(self, now: dt.datetime, lease_timeout_seconds: int) -> int:
+        """Reset CLAIMED/RUNNING tasks with expired leases back to RETRY.
+
+        A worker that crashes while holding a lease will leave tasks stuck in
+        CLAIMED or RUNNING indefinitely.  This method is called at the start of
+        each scheduler tick to reclaim those tasks so they can be picked up by
+        another worker.
+
+        Args:
+            now: Current UTC timestamp (avoids clock skew inside the transaction).
+            lease_timeout_seconds: Grace period in seconds beyond ``lease_expires``
+                before a task is considered abandoned.  Zero = recover immediately
+                when ``lease_expires < now``.
+
+        Returns:
+            Number of tasks recovered.
+        """
+        cutoff = now - dt.timedelta(seconds=lease_timeout_seconds)
+        recoverable_statuses = ("claimed", "running")
+        stmt = (
+            update(ContentIngestionTaskModel)
+            .where(
+                ContentIngestionTaskModel.status.in_(recoverable_statuses),
+                ContentIngestionTaskModel.lease_expires.isnot(None),
+                ContentIngestionTaskModel.lease_expires < cutoff,
+            )
+            .values(
+                status="retry",
+                worker_id=None,
+                leased_at=None,
+                lease_expires=None,
+                updated_at=now,
+            )
+            .returning(ContentIngestionTaskModel.id)
+        )
+        result = await self._session.execute(stmt)
+        recovered = len(result.fetchall())
+        return recovered
+
     async def count_by_status(self) -> dict[str, int]:
         """Return task counts grouped by status (for metrics)."""
         stmt = select(

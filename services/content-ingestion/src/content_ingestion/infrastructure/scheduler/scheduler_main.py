@@ -14,6 +14,7 @@ import asyncio
 import signal
 from contextlib import suppress
 
+import common.time  # type: ignore[import-untyped]
 from content_ingestion.application.use_cases.schedule_sources import ScheduleDueSourcesUseCase
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
@@ -66,7 +67,32 @@ class SchedulerProcess:
         logger.info("scheduler_stopped")
 
     async def _tick(self) -> None:
-        """Execute one scheduler tick."""
+        """Execute one scheduler tick.
+
+        Recovery runs first so that sources blocked by crashed workers are
+        unblocked before the scheduling pass evaluates them.
+        """
+        now = common.time.utc_now()
+
+        # 1. Recover tasks whose worker lease has expired (crashed/killed workers).
+        try:
+            uow_recover = SqlaUnitOfWork(self._write_factory, self._read_factory)
+            async with uow_recover:
+                recovered = await uow_recover.tasks.recover_expired_leases(
+                    now,
+                    lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+                await uow_recover.commit()
+            if recovered:
+                logger.warning(
+                    "scheduler_leases_recovered",
+                    count=recovered,
+                    lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+        except Exception as exc:
+            logger.error("scheduler_lease_recovery_error", error=str(exc))
+
+        # 2. Evaluate sources and enqueue new tasks.
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
         use_case = ScheduleDueSourcesUseCase(
             uow=uow,

@@ -82,6 +82,7 @@
 | [BP-076](#bp-076) | asyncpg rejects PostgreSQL `::type` cast syntax in `text()` params | `asyncpg.exceptions._base.UnknownPostgresError` or `UndefinedParameter` — SQLAlchemy `text()` does not transform `:name::type` to `$N`; asyncpg receives the raw cast notation and fails | Any service with raw SQL in `text()` using PostgreSQL cast syntax (e.g., `:payload::jsonb`, `:id::uuid`) |
 | [BP-077](#bp-077) | `ON CONFLICT DO NOTHING` missing `index_where=` for partial index | `ProgrammingError: there is no unique or exclusion constraint matching the ON CONFLICT specification` — partial unique index not matched because `index_where` was omitted | Any service using `on_conflict_do_nothing(index_elements=[...])` on a table with a partial unique index |
 | [BP-078](#bp-078) | Cross-service E2E `ImportError` when service package not installed | `ImportError: No module named 'portfolio'` in cross-service test even when the skip marker fires — import inside test function runs before `pytest.skip()` | `tests/e2e/` cross-service test files importing ORM models from individual service packages |
+| [BP-079](#bp-079) | Expired worker lease stalls source permanently | Worker crashes after claiming a task; lease never expires in DB; scheduler's `has_active_task()` guard permanently blocks new tasks for that source — source silently stops ingesting | S4 `content-ingestion` scheduler tick; any scheduler-worker pattern with lease-based task ownership |
 
 ---
 
@@ -3786,3 +3787,56 @@ git add -f services/<service>/src/
 **Fix**: Implement a cross-process pub/sub bridge (e.g., Valkey pub/sub). The consumer process publishes to a Valkey channel; the API process subscribes and broadcasts to WebSocket clients.
 
 **Prevention**: Any in-process mutable state (connection registries, caches, queues) that was shared between the consumer and API in a monolithic deployment will break after process separation. Audit all stateful objects passed to use cases in standalone consumer entry points.
+
+---
+
+## BP-079 — Expired worker lease stalls source permanently
+
+**Date discovered**: 2026-04-01
+**Service affected**: `content-ingestion` (S4)
+
+### Symptom
+
+A polling source silently stops producing tasks. No errors in the scheduler log. The
+worker log shows no activity for the affected source. `GET /api/v1/status` shows the
+source as "active" (last fetch time is stale). Other sources continue to run normally.
+
+### Root cause
+
+The scheduler's `has_active_task(source_id)` guard checks for any task in
+`PENDING | CLAIMED | RUNNING` state before creating a new task. When a worker process
+crashes mid-execution (OOM, SIGKILL, container restart), the task row remains in
+`CLAIMED` or `RUNNING` state with a `lease_expires` timestamp that has long since
+passed. The guard finds this zombie task and returns `True` — so the scheduler never
+creates a replacement task. The source is permanently stalled.
+
+### Fix
+
+Add a `recover_expired_leases(now, lease_timeout_seconds)` method to `TaskRepository`
+that resets all `CLAIMED`/`RUNNING` tasks whose `lease_expires < now - grace_period`
+back to `RETRY`. Call this at the **start** of every scheduler tick (before the
+`ScheduleDueSourcesUseCase`), so expired leases are cleaned up before the
+`has_active_task` guard runs.
+
+```python
+# scheduler_main.py — _tick() runs recovery before scheduling
+async def _tick(self) -> None:
+    now = common.time.utc_now()
+    async with uow_recover:
+        recovered = await uow_recover.tasks.recover_expired_leases(
+            now, lease_timeout_seconds=self._settings.worker_lease_seconds
+        )
+        await uow_recover.commit()
+    if recovered:
+        logger.warning("scheduler_leases_recovered", count=recovered)
+    # ... then run ScheduleDueSourcesUseCase as normal
+```
+
+### Prevention
+
+Any scheduler-worker pattern that uses lease-based task ownership MUST include a
+periodic lease-recovery sweep. The `has_active_task` guard is only safe when paired
+with `recover_expired_leases`. Document this invariant in the service context.
+
+**Related**: `TaskRepository.has_active_task` does NOT exclude expired leases by design
+(it would create a TOCTOU window). Always call `recover_expired_leases` first.

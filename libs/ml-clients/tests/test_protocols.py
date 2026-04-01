@@ -27,6 +27,9 @@ class MockNERClient:
     async def extract_entities(self, inp: NERInput) -> NEROutput:
         return NEROutput(mentions=[])
 
+    async def batch_extract_entities(self, inputs: list[NERInput]) -> list[NEROutput]:
+        return [NEROutput(mentions=[]) for _ in inputs]
+
 
 class MockExtractionClient:
     async def extract(self, inp: ExtractionInput) -> ExtractionOutput:

@@ -66,7 +66,6 @@ async def main() -> None:
     )
 
     # ML clients
-    from ml_clients.adapters.gliner_local import GLiNERLocalAdapter  # type: ignore[import-not-found]
     from ml_clients.adapters.ollama_embedding import (
         OllamaEmbeddingAdapter,  # type: ignore[import-not-found]
     )
@@ -75,10 +74,25 @@ async def main() -> None:
     )
 
     ml_sem = asyncio.Semaphore(settings.embedding_max_concurrent)
-    ner_client = GLiNERLocalAdapter(
-        model_path=settings.ner_model_id,
-        semaphore=asyncio.Semaphore(1),
-    )
+
+    # GLiNER: use HTTP adapter when gliner_base_url is configured (containerised),
+    # otherwise fall back to in-process local adapter.
+    if settings.gliner_base_url:
+        from ml_clients.adapters.gliner_http import GLiNERHTTPAdapter  # type: ignore[import-not-found]
+
+        ner_client = GLiNERHTTPAdapter(
+            base_url=settings.gliner_base_url,
+            semaphore=asyncio.Semaphore(settings.embedding_max_concurrent),
+        )
+        log.info("gliner_http_adapter_selected", base_url=settings.gliner_base_url)
+    else:
+        from ml_clients.adapters.gliner_local import GLiNERLocalAdapter  # type: ignore[import-not-found]
+
+        ner_client = GLiNERLocalAdapter(  # type: ignore[assignment]
+            model_path=settings.ner_model_id,
+            semaphore=asyncio.Semaphore(1),
+        )
+        log.info("gliner_local_adapter_selected", model_path=settings.ner_model_id)
     embedding_client = OllamaEmbeddingAdapter(
         base_url=settings.ollama_base_url,
         model_id=settings.embedding_model_id,
