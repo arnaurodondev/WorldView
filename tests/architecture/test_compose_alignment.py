@@ -37,20 +37,7 @@ COMPOSE_TEST_FILE = REPO_ROOT / "infra" / "compose" / "docker-compose.test.yml"
 # Add an entry here when a *_main.py exists but its compose container has not
 # yet been added.  Remove it once the container is wired up.
 COMPOSE_BASELINE: dict[tuple[str, str], str] = {
-    # portfolio: instrument_consumer_main.py has no compose container yet.
-    # Needs portfolio-instrument-consumer container — schedule in next available plan.
-    ("portfolio", "instrument_consumer_main"): ("Add portfolio-instrument-consumer container — follow-up to PLAN-0011"),
-    # market-data: consumer_main.py files exist; add containers first, then extract
-    # from lifespan in PLAN-0012 or next available wave.
-    ("market-data", "ohlcv_consumer_main"): (
-        "Add market-data-ohlcv-consumer container first, then extract from lifespan (PLAN-0012)"
-    ),
-    ("market-data", "quotes_consumer_main"): (
-        "Add market-data-quotes-consumer container first, then extract from lifespan (PLAN-0012)"
-    ),
-    ("market-data", "fundamentals_consumer_main"): (
-        "Add market-data-fundamentals-consumer container first, then extract from lifespan (PLAN-0012)"
-    ),
+    # All known gaps resolved in PLAN-0011 follow-up (docker-compose additions).
 }
 
 

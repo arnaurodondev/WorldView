@@ -79,9 +79,12 @@ async def main() -> None:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()  # type: ignore[attr-defined]
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("instrument_consumer_fatal_error", error=str(exc))
         sys.exit(1)
