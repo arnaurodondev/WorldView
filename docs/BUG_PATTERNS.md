@@ -3717,3 +3717,30 @@ Requires adding `count_failed()` to the port ABC, concrete repository, and use c
 - All paginated endpoints MUST derive `total` from a `COUNT(*)` query, not `len(page)`
 - Review checklist: when reviewing any paginated list endpoint, verify `total` comes from a separate count query
 - Port ABCs for repositories should include `count_*()` methods alongside `list_*()` methods from the start
+
+---
+
+## BP-084 — `.gitignore` `src/` rule blocks new service source files from being tracked
+
+**Category**: git — untracked files silently ignored
+
+**Symptom**: `git add services/<service>/src/<new_file>.py` appears to succeed but `git diff --cached --name-only` returns empty. `git status` shows the file as untracked. New `*_main.py` entry points or other new source files under `services/*/src/` cannot be staged normally.
+
+**Root cause**: `.gitignore` contains a bare `src/` rule (line 66 in this repo — added as a "Local attached source folder" marker). This rule matches **any directory named `src/` anywhere in the repo tree**, which includes every `services/*/src/` directory. New (untracked) files in those directories are silently ignored by git.
+
+**Fix**: Use `git add -f` (force) to stage ignored files:
+
+```bash
+git add -f services/<service>/src/<new_file>.py
+```
+
+Or, if adding many new files in a service:
+
+```bash
+git add -f services/<service>/src/
+```
+
+**Prevention**
+
+- When adding new source files under any `services/*/src/` path and `git status` does not show them as staged, check with `git check-ignore -v <path>` before assuming staging failed.
+- The `src/` entry in `.gitignore` is intentional (for local IDE source-attachment workflows) — do not remove it. Always use `git add -f` for new files in service `src/` directories.
