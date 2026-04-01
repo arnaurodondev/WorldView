@@ -3744,3 +3744,45 @@ git add -f services/<service>/src/
 
 - When adding new source files under any `services/*/src/` path and `git status` does not show them as staged, check with `git check-ignore -v <path>` before assuming staging failed.
 - The `src/` entry in `.gitignore` is intentional (for local IDE source-attachment workflows) — do not remove it. Always use `git add -f` for new files in service `src/` directories.
+
+---
+
+## BP-085 — Config field reuse: `otlp_endpoint` used as ML model URL
+
+**Context**: Process topology refactoring (PLAN-0011) — standalone `*_consumer_main.py` entry points
+
+**Symptom**: Embedding client silently connects to OpenTelemetry collector instead of Ollama. All vector embeddings fail or return nonsense. Error message resembles Jaeger/Tempo connection refused rather than Ollama.
+
+**Root cause**: `settings.otlp_endpoint` was copy-pasted as the Ollama `base_url` fallback: `base_url=settings.otlp_endpoint or "http://ollama:11434"`. When OTLP is configured (e.g., `http://tempo:4317`), this URL is sent to the Ollama adapter instead of the OTel exporter endpoint.
+
+**Fix**: Add a dedicated `ollama_base_url: str = "http://ollama:11434"` field to `Settings` (and optionally `embedding_model_id: str = "nomic-embed-text"`), then use `settings.ollama_base_url` in the entry point.
+
+**Prevention**: Never reuse config fields for unrelated purposes. When writing a new entry point, check that every settings field used actually corresponds to the purpose implied by its name.
+
+---
+
+## BP-086 — Hardcoded Kafka consumer group IDs in standalone entry points
+
+**Context**: Process topology refactoring — standalone `*_consumer_main.py` entry points
+
+**Symptom**: Consumer group cannot be overridden via environment variable. Blue/green deployments collide on the same group ID. Non-default `kafka_consumer_group` in `.env` is silently ignored for some consumers but respected for others in the same service.
+
+**Root cause**: Consumer group IDs hardcoded as string literals (`group_id="kg-fundamentals-group"`) instead of derived from `settings.kafka_consumer_group` with a suffix.
+
+**Fix**: Replace hardcoded strings with `f"{settings.kafka_consumer_group}-{suffix}"` (e.g., `f"{settings.kafka_consumer_group}-fundamentals"`).
+
+**Prevention**: When writing a new `*_consumer_main.py`, always derive `group_id` from `settings.kafka_consumer_group`. Search the same service's other consumer mains for the correct pattern before writing a new one.
+
+---
+
+## BP-087 — In-process WebSocket `ConnectionManager` dead in standalone consumer process
+
+**Context**: Process topology refactoring — standalone `*_consumer_main.py` entry points
+
+**Symptom**: WebSocket push notifications to browser clients never fire. `AlertFanoutUseCase.broadcast()` executes without error but no clients receive the message. Log shows events processed successfully.
+
+**Root cause**: `ConnectionManager` maintains an in-memory set of WebSocket connections. When consumers run as separate OS processes, the consumer process has its own empty `ConnectionManager` instance with zero connections (all connections are registered in the API process).
+
+**Fix**: Implement a cross-process pub/sub bridge (e.g., Valkey pub/sub). The consumer process publishes to a Valkey channel; the API process subscribes and broadcasts to WebSocket clients.
+
+**Prevention**: Any in-process mutable state (connection registries, caches, queues) that was shared between the consumer and API in a monolithic deployment will break after process separation. Audit all stateful objects passed to use cases in standalone consumer entry points.
