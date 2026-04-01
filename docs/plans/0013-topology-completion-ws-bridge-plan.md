@@ -1,6 +1,6 @@
 # PLAN-0013 — Process Topology Completion + Alert WebSocket Cross-Process Bridge
 
-**Status**: in-progress
+**Status**: completed
 **Created**: 2026-04-01
 **Updated**: 2026-04-01
 **Author**: /plan skill
@@ -372,12 +372,13 @@ alert API process (FastAPI)
                 └─→ websocket.send_text(payload)
 ```
 
-### Wave C-1: `INotificationPublisher` Port + `ValkeyNotificationPublisher`
+### Wave C-1: `INotificationPublisher` Port + `ValkeyNotificationPublisher` ✅
 
 **Goal**: Add the application port and infrastructure adapter. Update `AlertFanoutUseCase` to depend on the port. Update `intelligence_consumer_main.py` to use `ValkeyNotificationPublisher`.
 **Depends on**: none (can run in parallel with A and B)
 **Estimated effort**: 45–60 min
 **Architecture layer**: application (port) + infrastructure (adapter)
+**Status**: **DONE** — 2026-04-01 · 136 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -405,8 +406,8 @@ class INotificationPublisher(Protocol):
 Use `typing.Protocol` (structural subtyping) so both `ValkeyNotificationPublisher` and the existing `ConnectionManager` satisfy the interface without explicit inheritance.
 
 **Acceptance criteria**:
-- [ ] Protocol defined using `typing.Protocol` with `runtime_checkable` decorator
-- [ ] `mypy` passes (no protocol violations)
+- [x] Protocol defined using `typing.Protocol` with `runtime_checkable` decorator
+- [x] `mypy` passes (no protocol violations)
 
 ---
 
@@ -427,9 +428,9 @@ Changes:
 3. Update `self._ws` annotation to `INotificationPublisher`
 
 **Acceptance criteria**:
-- [ ] `AlertFanoutUseCase.__init__` signature accepts `INotificationPublisher`
-- [ ] `ConnectionManager` still satisfies the protocol (existing tests pass unmodified)
-- [ ] `mypy` passes
+- [x] `AlertFanoutUseCase.__init__` signature accepts `INotificationPublisher`
+- [x] `ConnectionManager` still satisfies the protocol (existing tests pass unmodified)
+- [x] `mypy` passes
 
 ---
 
@@ -473,9 +474,9 @@ class ValkeyNotificationPublisher:
 | `test_publish_swallows_valkey_error` | no exception raised if valkey.publish fails | unit |
 
 **Acceptance criteria**:
-- [ ] 3 unit tests pass
-- [ ] Channel format: `alert:{user_id}` (UUID string)
-- [ ] Payload: `json.dumps(payload, default=str)` for UUID/datetime safety
+- [x] 3 unit tests pass
+- [x] Channel format: `alert:{user_id}` (UUID string)
+- [x] Payload: `json.dumps(payload, default=str)` for UUID/datetime safety
 
 ---
 
@@ -503,10 +504,10 @@ fanout = AlertFanoutUseCase(..., connection_manager=notification_publisher, ...)
 Remove the now-unused `from alert.infrastructure.websocket.manager import ConnectionManager` import.
 
 **Acceptance criteria**:
-- [ ] `ConnectionManager` no longer imported in `intelligence_consumer_main.py`
-- [ ] `ValkeyNotificationPublisher` used instead
-- [ ] `ruff check` passes (no unused imports)
-- [ ] Existing alert unit tests still pass (they mock `AlertFanoutUseCase`)
+- [x] `ConnectionManager` no longer imported in `intelligence_consumer_main.py`
+- [x] `ValkeyNotificationPublisher` used instead
+- [x] `ruff check` passes (no unused imports)
+- [x] Existing alert unit tests still pass (they mock `AlertFanoutUseCase`)
 
 #### Pre-read
 - `services/alert/src/alert/application/use_cases/alert_fanout.py`
@@ -515,18 +516,19 @@ Remove the now-unused `from alert.infrastructure.websocket.manager import Connec
 - `libs/messaging/src/messaging/valkey/client.py`
 
 #### Validation Gate (C-1)
-- [ ] `ruff check services/alert/src/` passes
-- [ ] `mypy services/alert/src/ --config-file services/alert/mypy.ini` passes
-- [ ] `python -m pytest services/alert/tests/ -m unit -v` passes (existing + new)
+- [x] `ruff check services/alert/src/` passes
+- [x] `mypy services/alert/src/ --config-file services/alert/mypy.ini` passes
+- [x] `python -m pytest services/alert/tests/ -m unit -v` passes (existing + new)
 
 ---
 
-### Wave C-2: WebSocket Route — Valkey Subscriber + Integration
+### Wave C-2: WebSocket Route — Valkey Subscriber + Integration ✅
 
 **Goal**: Update the WebSocket route in the FastAPI app to subscribe to the user's Valkey channel and forward messages to the connected client.
 **Depends on**: Wave C-1
 **Estimated effort**: 60–90 min
 **Architecture layer**: API + integration test
+**Status**: **DONE** — 2026-04-01 · 136 unit tests + 3 integration tests pass · 45 messaging lib tests pass · 94 architecture tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -572,10 +574,10 @@ async def websocket_endpoint(
 Note: `ValkeyClient.subscribe()` may need a new async context manager method if one doesn't exist. Check `libs/messaging/src/messaging/valkey/client.py` first; add if needed.
 
 **Acceptance criteria**:
-- [ ] WebSocket handler subscribes to `alert:{user_id}` Valkey channel
-- [ ] Messages forwarded to client as-is (JSON string)
-- [ ] Disconnect triggers cleanup (unsubscribe + `manager.disconnect`)
-- [ ] `ruff check` and `mypy` pass
+- [x] WebSocket handler subscribes to `alert:{user_id}` Valkey channel
+- [x] Messages forwarded to client as-is (JSON string)
+- [x] Disconnect triggers cleanup (unsubscribe + `manager.disconnect`)
+- [x] `ruff check` and `mypy` pass
 
 ---
 
@@ -607,9 +609,9 @@ async def subscribe(self, *channels: str) -> AsyncIterator[aioredis.client.PubSu
 Also add a `publish(channel: str, message: str) -> int` method if missing (needed by `ValkeyNotificationPublisher`).
 
 **Acceptance criteria**:
-- [ ] `ValkeyClient.subscribe()` async context manager exists
-- [ ] `ValkeyClient.publish()` method exists
-- [ ] Tests in `libs/messaging/tests/unit/test_valkey_client.py` updated to cover new methods
+- [x] `ValkeyClient.subscribe()` async context manager exists
+- [x] `ValkeyClient.publish()` method exists
+- [x] Tests in `libs/messaging/tests/test_valkey.py` and `test_valkey_integration.py` updated to cover new methods
 
 ---
 
@@ -636,9 +638,9 @@ Integration test using `fakeredis.aioredis.FakeRedis` (no real Valkey) and FastA
 | `test_ws_swallows_valkey_down` | If Valkey errors during subscribe, client is disconnected cleanly | integration |
 
 **Acceptance criteria**:
-- [ ] 3 integration tests pass with `pytest -m integration`
-- [ ] Tests use `fakeredis` — no real Valkey required
-- [ ] `pytest.mark.integration` marker applied
+- [x] 3 integration tests pass with `pytest -m integration`
+- [x] Tests use `fakeredis` — no real Valkey required
+- [x] `pytest.mark.integration` marker applied
 
 #### Pre-read
 - `services/alert/src/alert/api/routes.py`
@@ -647,12 +649,12 @@ Integration test using `fakeredis.aioredis.FakeRedis` (no real Valkey) and FastA
 - `libs/messaging/tests/unit/test_valkey_client.py`
 
 #### Validation Gate (C-2)
-- [ ] `ruff check services/alert/src/ libs/messaging/src/` passes
-- [ ] `mypy services/alert/src/ --config-file services/alert/mypy.ini` passes
-- [ ] `python -m pytest services/alert/tests/ -m unit -v` passes
-- [ ] `python -m pytest services/alert/tests/ -m integration -v` passes (fakeredis-backed)
-- [ ] `python -m pytest tests/architecture -v` — 0 warnings
-- [ ] Existing `alert` integration tests still pass
+- [x] `ruff check services/alert/src/ libs/messaging/src/` passes
+- [x] `mypy services/alert/src/ --config-file services/alert/mypy.ini` passes
+- [x] `python -m pytest services/alert/tests/ -m unit -v` passes
+- [x] `python -m pytest services/alert/tests/ -m integration -v` passes (fakeredis-backed)
+- [x] `python -m pytest tests/architecture -v` — 0 warnings
+- [x] Existing `alert` integration tests still pass
 
 ---
 

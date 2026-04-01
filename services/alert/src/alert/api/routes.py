@@ -109,22 +109,38 @@ async def alerts_stream(
     """WebSocket endpoint — pushes real-time alerts to a connected user.
 
     The client must pass ``user_id`` as a query parameter on connect.
-    The connection manager (``app.state.ws_manager``) handles registration
-    and broadcasting.  Stale connections are cleaned up on send failure.
+
+    Architecture (cross-process fan-out):
+    - The standalone ``intelligence_consumer_main`` process publishes alerts to
+      Valkey channel ``alert:{user_id}`` via ``ValkeyNotificationPublisher``.
+    - This handler subscribes to that channel and forwards each message to the
+      connected WebSocket client.
+    - The in-process ``ConnectionManager`` is retained for direct pushes from
+      within the API process (e.g., integration tests, future in-process paths).
+
+    Delivery is best-effort: if no client is connected when a message arrives,
+    the message is dropped.  On reconnect, clients catch up via GET /alerts/pending.
     """
     manager = websocket.app.state.ws_manager
+    valkey = websocket.app.state.valkey
+    channel = f"alert:{user_id}"
+
     await manager.connect(user_id, websocket)
     try:
-        while True:
-            # Keep connection alive; we only push server→client.
-            # Wait for any client message (ping/close frame).
-            await websocket.receive_text()
+        async with valkey.subscribe(channel) as pubsub:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        await websocket.send_text(message["data"])
+                    except WebSocketDisconnect:
+                        break
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
+        pass
     except Exception:
         logger.warning(  # type: ignore[no-any-return]
             "websocket_error",
             user_id=str(user_id),
             exc_info=True,
         )
+    finally:
         manager.disconnect(user_id)

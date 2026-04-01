@@ -35,6 +35,7 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from alert.application.ports.notification import INotificationPublisher
     from alert.application.ports.repositories import (
         AlertSaveRepositoryPort,
         DedupRepositoryPort,
@@ -42,7 +43,6 @@ if TYPE_CHECKING:
         PendingAlertRepositoryPort,
     )
     from alert.infrastructure.cache.watchlist_cache import WatchlistCache
-    from alert.infrastructure.websocket.manager import ConnectionManager
 
     class RepoFactory:
         """Protocol for constructing repos from a session."""
@@ -192,7 +192,7 @@ class AlertFanoutUseCase:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         watchlist_cache: WatchlistCache,
-        connection_manager: ConnectionManager,
+        connection_manager: INotificationPublisher,
         repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
