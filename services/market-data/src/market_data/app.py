@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -50,7 +49,6 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Async context manager that starts and stops all service infrastructure."""
     from market_data.infrastructure.db.session import build_read_engine, build_session_factory, build_write_engine
-    from market_data.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     settings = app.state.settings
 
@@ -104,70 +102,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("object_storage_init_failed_degrading")
     app.state.object_storage = object_storage
 
-    # 7. UoW factory
-    from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
-
-    def uow_factory() -> SqlAlchemyUnitOfWork:
-        return SqlAlchemyUnitOfWork(write_factory, read_factory)
-
-    # 8. Outbox dispatcher
-    dispatcher = create_dispatcher(settings=settings, session_factory=write_factory)
-
-    # 9. Consumers
-    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
-    from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVConsumer
-    from market_data.infrastructure.messaging.consumers.quotes_consumer import QuotesConsumer
-    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
-
-    ohlcv_consumer = OHLCVConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-ohlcv",
-            topics=["market.dataset.fetched"],
-        ),
-    )
-    quotes_consumer = QuotesConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        valkey_client=valkey_client,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-quotes",
-            topics=["market.dataset.fetched"],
-        ),
-    )
-    fundamentals_consumer = FundamentalsConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-fundamentals",
-            topics=["market.dataset.fetched"],
-        ),
-    )
-
-    # Start background tasks
-    ohlcv_task = asyncio.create_task(ohlcv_consumer.run())
-    quotes_task = asyncio.create_task(quotes_consumer.run())
-    fundamentals_task = asyncio.create_task(fundamentals_consumer.run())
-    dispatcher_task = asyncio.create_task(dispatcher.run())
-
     log.info("service_started", service=settings.service_name)
     yield
-
-    # Shutdown
-    ohlcv_consumer.stop()
-    quotes_consumer.stop()
-    fundamentals_consumer.stop()
-    dispatcher.stop()
-
-    for task in [ohlcv_task, quotes_task, fundamentals_task, dispatcher_task]:
-        try:
-            await asyncio.wait_for(task, timeout=5.0)
-        except (TimeoutError, asyncio.CancelledError, Exception):
-            task.cancel()
 
     await valkey_client.close()
     await write_engine.dispose()
@@ -248,8 +184,6 @@ def create_app() -> FastAPI:
             _log.error("readyz_storage_check_failed", error_type=type(exc).__name__, error=str(exc))
             checks["storage"] = "error"
             all_ok = False
-
-        checks["kafka"] = "ok"  # consumers managed as background tasks
 
         if not all_ok:
             raise HTTPException(
