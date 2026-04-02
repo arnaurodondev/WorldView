@@ -56,7 +56,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | QA-S4S5S6S7S10-001 | Full QA Pass + E2E Test Suite: S4/S5/S6/S7/S10 security fixes + ASGI e2e suites + cross-service integration + real provider tests + infra scaffold | N/A | 2026-03-30 | — | 2026-03-30 |
 | PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | — |
 | PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | 2026-04-01 | 9 | 2026-04-01 |
-| PLAN-0013 | Process Topology Completion + Alert WebSocket Cross-Process Bridge | PLAN-0011 QA follow-up | 2026-04-01 | 6 | — |
+| PLAN-0013 | Process Topology Completion + Alert WebSocket Cross-Process Bridge | PLAN-0011 QA follow-up | 2026-04-01 | 6 | 2026-04-01 |
 
 ## Conventions
 

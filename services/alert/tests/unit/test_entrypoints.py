@@ -10,6 +10,7 @@ returns immediately and the entire cleanup path executes within the test.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,26 +57,38 @@ def _mock_settings(**overrides: object) -> MagicMock:
     return s
 
 
+@contextlib.contextmanager  # type: ignore[misc]
 def _intelligence_patches(
     mock_engine: AsyncMock,
     mock_valkey: AsyncMock,
     mock_consumer: MagicMock,
+    mock_s1: AsyncMock,
     settings: MagicMock,
-) -> list[tuple[str, object]]:
-    """Return a list of (target, return_value) for intelligence_consumer_main patches."""
-    return [
-        ("alert.config.Settings", settings),
-        ("alert.infrastructure.db.session._build_factories", (mock_engine, MagicMock(), MagicMock())),
-        ("messaging.valkey.create_valkey_client_from_url", mock_valkey),
-        ("alert.infrastructure.clients.s1_client.S1Client", MagicMock()),
-        ("alert.infrastructure.cache.watchlist_cache.WatchlistCache", MagicMock()),
-        ("alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher", MagicMock()),
-        ("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", MagicMock()),
-        (
-            "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
-            mock_consumer,
+):  # type: ignore[no-untyped-def]
+    """Context manager that patches all intelligence_consumer_main dependencies."""
+    with (
+        patch("alert.config.Settings", return_value=settings),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.db.session._build_factories",
+            return_value=(mock_engine, MagicMock(), MagicMock()),
         ),
-    ]
+        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
+        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
+        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
+            return_value=MagicMock(),
+        ),
+        patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
+        patch(
+            "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
+            return_value=mock_consumer,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -94,28 +107,7 @@ async def test_intelligence_consumer_graceful_stop() -> None:
     mock_s1 = AsyncMock()
     settings = _mock_settings()
 
-    with (
-        patch("alert.config.Settings", return_value=settings),
-        patch("observability.configure_logging"),
-        patch("observability.get_logger", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
-        ),
-        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
-        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
-        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
-            return_value=MagicMock(),
-        ),
-        patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
-            return_value=mock_consumer,
-        ),
-        patch("asyncio.Event", side_effect=_preset_event),
-    ):
+    with _intelligence_patches(mock_engine, mock_valkey, mock_consumer, mock_s1, settings):
         from alert.infrastructure.messaging.consumers.intelligence_consumer_main import main
 
         await main()
@@ -128,7 +120,7 @@ async def test_intelligence_consumer_graceful_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_intelligence_consumer_stop_pre_set() -> None:
-    """Consumer never started if stop_event is pre-set."""
+    """Consumer task is started then stopped immediately when stop_event is pre-set."""
     mock_engine = AsyncMock()
     mock_valkey = AsyncMock()
     mock_consumer = MagicMock()
@@ -137,29 +129,7 @@ async def test_intelligence_consumer_stop_pre_set() -> None:
     mock_s1 = AsyncMock()
     settings = _mock_settings()
 
-    with (
-        patch("alert.config.Settings", return_value=settings),
-        patch("observability.configure_logging"),
-        patch("observability.get_logger", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
-        ),
-        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
-        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
-        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
-            return_value=MagicMock(),
-        ),
-        patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
-            return_value=mock_consumer,
-        ),
-        patch("asyncio.Event", side_effect=_preset_event),
-    ):
-        # Reload to pick up the patched asyncio.Event
+    with _intelligence_patches(mock_engine, mock_valkey, mock_consumer, mock_s1, settings):
         import importlib
 
         from alert.infrastructure.messaging.consumers import intelligence_consumer_main
@@ -183,28 +153,7 @@ async def test_intelligence_consumer_cleanup_order() -> None:
     mock_consumer.stop = MagicMock()
     settings = _mock_settings()
 
-    with (
-        patch("alert.config.Settings", return_value=settings),
-        patch("observability.configure_logging"),
-        patch("observability.get_logger", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
-        ),
-        patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
-        patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
-        patch("alert.infrastructure.cache.watchlist_cache.WatchlistCache", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.notification.valkey_publisher.ValkeyNotificationPublisher",
-            return_value=MagicMock(),
-        ),
-        patch("alert.application.use_cases.alert_fanout.AlertFanoutUseCase", return_value=MagicMock()),
-        patch(
-            "alert.infrastructure.messaging.consumers.intelligence_consumer.IntelligenceConsumer",
-            return_value=mock_consumer,
-        ),
-        patch("asyncio.Event", side_effect=_preset_event),
-    ):
+    with _intelligence_patches(mock_engine, mock_valkey, mock_consumer, mock_s1, settings):
         import importlib
 
         from alert.infrastructure.messaging.consumers import intelligence_consumer_main

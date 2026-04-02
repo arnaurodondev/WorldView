@@ -52,7 +52,7 @@ def _make_repos(
 
     # Batch methods (used by run_entity_resolution_block)
     alias_repo.batch_exact_match = AsyncMock(
-        return_value={} if exact_result is None else {},  # filled per-test below
+        return_value={},  # filled per-test below
     )
     alias_repo.batch_ticker_isin_match = AsyncMock(return_value={})
     alias_repo.batch_fuzzy_trigram = AsyncMock(return_value={})

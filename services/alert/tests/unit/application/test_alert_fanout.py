@@ -101,7 +101,7 @@ def _make_use_case(
     use_case = AlertFanoutUseCase(
         session_factory=mock_sf,
         watchlist_cache=mock_cache,
-        connection_manager=mock_ws,
+        notification_publisher=mock_ws,
         repo_factory=_repo_factory,
         dedup_window_seconds=300,
     )

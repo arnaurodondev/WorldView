@@ -177,7 +177,7 @@ async def integration_app(
     app.state.fanout_use_case = AlertFanoutUseCase(
         session_factory=factory,
         watchlist_cache=app.state.watchlist_cache,
-        connection_manager=app.state.ws_manager,
+        notification_publisher=app.state.ws_manager,
         repo_factory=_repo_factory,
         dedup_window_seconds=integration_settings.alert_dedup_window_seconds,
         alert_delivered_topic=integration_settings.kafka_topic_alert_delivered,
