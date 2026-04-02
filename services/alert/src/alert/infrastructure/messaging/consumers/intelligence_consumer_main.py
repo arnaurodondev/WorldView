@@ -89,7 +89,7 @@ async def main() -> None:
     fanout = AlertFanoutUseCase(
         session_factory=write_factory,
         watchlist_cache=watchlist_cache,
-        connection_manager=notification_publisher,
+        notification_publisher=notification_publisher,
         repo_factory=_repo_factory,  # type: ignore[arg-type]
         dedup_window_seconds=settings.alert_dedup_window_seconds,
         alert_delivered_topic=settings.kafka_topic_alert_delivered,

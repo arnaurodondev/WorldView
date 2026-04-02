@@ -223,17 +223,12 @@ async def test_fundamentals_consumer_group_id_from_settings() -> None:
 
         await main()
 
-    # The ConsumerConfig passed must contain the correct group_id
-    # FundamentalsDescriptionConsumer is constructed with config= kwarg
+    # Verify FundamentalsDescriptionConsumer was constructed with the correct group_id
     call_kwargs = mock_consumer_cls.call_args
     assert call_kwargs is not None
     config_arg = call_kwargs.kwargs.get("config") or (call_kwargs.args[0] if call_kwargs.args else None)
     assert config_arg is not None
-    # Group ID comes from ConsumerConfig — verify it was built with the right value
-    # by checking the ConsumerConfig constructor call via messaging.kafka.consumer.base
-    expected_group = f"{settings.kafka_consumer_group}-fundamentals"
-    # Verify consumer was created (group_id encoding is in ConsumerConfig)
-    assert expected_group == f"{settings.kafka_consumer_group}-fundamentals"
+    assert config_arg.group_id == f"{settings.kafka_consumer_group}-fundamentals"
     mock_consumer.run.assert_called_once()
 
 
@@ -272,16 +267,19 @@ async def test_instrument_consumer_group_id_from_settings() -> None:
         patch(
             "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer.InstrumentEntityConsumer",
             return_value=mock_consumer,
-        ),
+        ) as mock_instrument_cls,
         patch("asyncio.Event", side_effect=_preset_event),
     ):
         from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main import main
 
         await main()
 
-    # Verify group_id pattern
-    expected_group = f"{settings.kafka_consumer_group}-instrument"
-    assert expected_group == f"{settings.kafka_consumer_group}-instrument"
+    # Verify InstrumentEntityConsumer was constructed with the correct group_id
+    call_kwargs = mock_instrument_cls.call_args
+    assert call_kwargs is not None
+    config_arg = call_kwargs.kwargs.get("config") or (call_kwargs.args[0] if call_kwargs.args else None)
+    assert config_arg is not None
+    assert config_arg.group_id == f"{settings.kafka_consumer_group}-instrument"
     mock_consumer.run.assert_called_once()
 
 

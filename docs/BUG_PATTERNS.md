@@ -3862,3 +3862,51 @@ with `recover_expired_leases`. Document this invariant in the service context.
 
 **Related**: `TaskRepository.has_active_task` does NOT exclude expired leases by design
 (it would create a TOCTOU window). Always call `recover_expired_leases` first.
+
+## BP-089 — Tautology assertions in entry-point tests: `assert X == f"{X}"`
+
+**Services affected**: knowledge-graph, (any service with standalone consumer entry point tests)
+**Detected**: PLAN-0013 QA pass (2026-04-01)
+
+### Symptom
+
+A test that is supposed to verify a constructor argument (e.g., `group_id`) passes
+unconditionally because the assertion compares a variable to the identical expression
+used to define it:
+
+```python
+expected_group = f"{settings.kafka_consumer_group}-fundamentals"
+assert expected_group == f"{settings.kafka_consumer_group}-fundamentals"  # always True
+```
+
+The test passes even if the production code never constructs a `ConsumerConfig` at all.
+
+### Root Cause
+
+When the mock class is captured (`as mock_consumer_cls`) but the assertion is written
+with the literal formula instead of inspecting `mock_consumer_cls.call_args`, the test
+becomes a no-op.
+
+### Fix
+
+Capture the mock class with `as mock_cls` and assert on `call_args`:
+
+```python
+) as mock_cls,
+...
+
+call_kwargs = mock_cls.call_args
+assert call_kwargs is not None
+config_arg = call_kwargs.kwargs.get("config") or (
+    call_kwargs.args[0] if call_kwargs.args else None
+)
+assert config_arg is not None
+assert config_arg.group_id == f"{settings.kafka_consumer_group}-fundamentals"
+```
+
+### Prevention
+
+In entrypoint tests, every constructor-argument assertion must reference
+`mock_cls.call_args`, not restate the expected value formula.
+Review checklist item: "Does the assertion inspect production behaviour, or does
+it merely compare two identical expressions?"

@@ -128,8 +128,16 @@ async def alerts_stream(
     await manager.connect(user_id, websocket)
     try:
         async with valkey.subscribe(channel) as pubsub:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
+                if message is None:
+                    # 30 s elapsed with no alert — send a ping to detect stale connections.
+                    # If the client has disconnected, send_text raises and we exit cleanly.
+                    try:
+                        await websocket.send_text('{"type":"ping"}')
+                    except (WebSocketDisconnect, Exception):
+                        break
+                elif message.get("type") == "message":
                     try:
                         await websocket.send_text(message["data"])
                     except WebSocketDisconnect:
@@ -138,9 +146,15 @@ async def alerts_stream(
         pass
     except Exception:
         logger.warning(  # type: ignore[no-any-return]
-            "websocket_error",
+            "websocket_subscribe_failed",
             user_id=str(user_id),
             exc_info=True,
         )
+        # Inform the client before closing; suppress errors if already disconnected.
+        try:
+            await websocket.send_json({"error": "service_unavailable", "code": 1011})
+            await websocket.close(code=1011)
+        except Exception:  # noqa: S110
+            pass
     finally:
         manager.disconnect(user_id)

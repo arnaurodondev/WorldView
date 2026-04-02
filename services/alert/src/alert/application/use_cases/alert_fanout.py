@@ -183,7 +183,7 @@ class AlertFanoutUseCase:
     Args:
         session_factory: SQLAlchemy async session factory for alert_db.
         watchlist_cache: Cache-aside wrapper for S1 watchlist lookups.
-        connection_manager: Active WebSocket connection manager.
+        notification_publisher: Real-time notification publisher port (Valkey pub/sub or in-process).
         dedup_window_seconds: Deduplication window length (default 300 s).
         alert_delivered_topic: Kafka topic for outbox events.
     """
@@ -192,14 +192,14 @@ class AlertFanoutUseCase:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         watchlist_cache: WatchlistCache,
-        connection_manager: INotificationPublisher,
+        notification_publisher: INotificationPublisher,
         repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
-        self._ws = connection_manager
+        self._notification_publisher = notification_publisher
         self._repo_factory = repo_factory
         self._dedup_window = dedup_window_seconds
         self._alert_delivered_topic = alert_delivered_topic
@@ -349,7 +349,7 @@ class AlertFanoutUseCase:
             "occurred_at": now.isoformat(),
         }
         for user_uuid in watcher_user_ids:
-            await self._ws.send_to_user(user_uuid, ws_payload)
+            await self._notification_publisher.send_to_user(user_uuid, ws_payload)
 
         logger.info(  # type: ignore[no-any-return]
             "alert_fanout.completed",

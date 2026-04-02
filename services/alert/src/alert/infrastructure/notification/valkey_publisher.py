@@ -44,4 +44,5 @@ class ValkeyNotificationPublisher:
             logger.warning(  # type: ignore[no-any-return]
                 "notification_publish_failed",
                 user_id=str(user_id),
+                exc_info=True,
             )
