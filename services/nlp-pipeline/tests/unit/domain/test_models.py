@@ -10,6 +10,7 @@ from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome, RoutingTi
 from nlp_pipeline.domain.models import (
     Chunk,
     DocumentEntityStats,
+    DocumentSourceMetadata,
     EmbeddingPendingEntry,
     EntityMention,
     MentionResolution,
@@ -271,3 +272,31 @@ class TestEmbeddingPendingEntry:
         )
         assert entry.section_id is None
         assert "OOM" in entry.error_detail
+
+
+@pytest.mark.unit
+class TestDocumentSourceMetadata:
+    def test_frozen(self) -> None:
+        dsm = DocumentSourceMetadata(
+            doc_id=_uuid(),
+            created_at=_now(),
+            title="Q3 Earnings Call",
+            url="https://example.com/doc",
+            source_name="SEC EDGAR",
+            source_type="sec_10q",
+            word_count=5000,
+        )
+        with pytest.raises(AttributeError):
+            dsm.title = "other"  # type: ignore[misc]
+
+    def test_none_fields_allowed(self) -> None:
+        dsm = DocumentSourceMetadata(
+            doc_id=_uuid(),
+            created_at=_now(),
+        )
+        assert dsm.title is None
+        assert dsm.url is None
+        assert dsm.published_at is None
+        assert dsm.source_name is None
+        assert dsm.source_type is None
+        assert dsm.word_count is None

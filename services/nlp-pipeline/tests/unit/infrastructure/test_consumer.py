@@ -377,3 +377,89 @@ class TestNlpCommitFailure:
             finally:
                 for p in _HALT_PATCHES:
                     p.stop()
+
+
+# ── T-B-1-04: source metadata write tests ────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestSourceMetadataWrite:
+    @pytest.mark.asyncio
+    async def test_consumer_writes_metadata_on_success(self) -> None:
+        """_write_source_metadata calls repo.upsert with correct field values."""
+        doc_id = uuid.uuid4()
+
+        upsert_calls: list[object] = []
+
+        async def _fake_upsert(metadata: object) -> None:
+            upsert_calls.append(metadata)
+
+        mock_repo = AsyncMock()
+        mock_repo.upsert = _fake_upsert
+
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        nlp_sf = MagicMock(return_value=mock_cm)
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+
+        with patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer"
+            ".SQLAlchemyDocumentSourceMetadataRepository",
+            return_value=mock_repo,
+        ):
+            await consumer._write_source_metadata(
+                doc_id=doc_id,
+                title="Earnings Report",
+                url="https://sec.gov/doc",
+                published_at=None,
+                source_name="SEC EDGAR",
+                source_type="sec_10q",
+                word_count=8000,
+            )
+
+        assert len(upsert_calls) == 1
+        m = upsert_calls[0]
+        assert hasattr(m, "doc_id") and m.doc_id == doc_id  # type: ignore[union-attr]
+        assert hasattr(m, "title") and m.title == "Earnings Report"  # type: ignore[union-attr]
+        assert hasattr(m, "source_type") and m.source_type == "sec_10q"  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_consumer_continues_on_metadata_failure(self) -> None:
+        """If the metadata repo raises, _write_source_metadata logs a warning and does not re-raise."""
+        doc_id = uuid.uuid4()
+
+        mock_repo = AsyncMock()
+        mock_repo.upsert = AsyncMock(side_effect=RuntimeError("db unavailable"))
+
+        mock_session = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        nlp_sf = MagicMock(return_value=mock_cm)
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+
+        with patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer"
+            ".SQLAlchemyDocumentSourceMetadataRepository",
+            return_value=mock_repo,
+        ):
+            with capture_logs() as cap:
+                # Must NOT raise
+                await consumer._write_source_metadata(
+                    doc_id=doc_id,
+                    title=None,
+                    url=None,
+                    published_at=None,
+                    source_name=None,
+                    source_type="eodhd_news",
+                    word_count=None,
+                )
+
+        assert any(
+            e.get("event") == "source_metadata_write_failed" for e in cap
+        ), f"Expected warning not found in logs: {cap}"

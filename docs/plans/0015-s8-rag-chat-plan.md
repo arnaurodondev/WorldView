@@ -63,7 +63,7 @@ Phase 4 (deferred — not in this plan):
 | A-1 | intelligence-migrations 0002 + 003 seed | ✅ done | 2026-04-05 |
 | A-2 | S5 batch documents endpoint | ✅ done | 2026-04-05 |
 | A-3 | S1 portfolio context endpoint | ✅ done | 2026-04-05 |
-| B-1 | S6 document_source_metadata | pending | — |
+| B-1 | S6 document_source_metadata | ✅ done | 2026-04-05 |
 | B-2 | S6 entity resolve endpoint | pending | — |
 | B-3 | S6 enhanced chunk search | pending | — |
 | C-1 | S7 claims/search + contradictions | pending | — |
@@ -470,12 +470,13 @@ additions that extend S6 without modifying existing behavior.
 
 ---
 
-### Wave B-1: document_source_metadata Table + Consumer Extension
+### Wave B-1: document_source_metadata Table + Consumer Extension ✅
 
 **Goal**: Add `document_source_metadata` table to `nlp_db` and extend the article consumer to populate it.
 **Depends on**: none (independent of A-1)
 **Estimated effort**: 35–50 min
 **Architecture layer**: infrastructure + domain
+**Status**: **DONE** — 2026-04-05 · 245 tests pass · ruff + mypy clean
 
 **Pre-read**:
 - `services/nlp-pipeline/src/nlp_pipeline/infrastructure/db/models/` — existing ORM models
@@ -626,16 +627,16 @@ await self._metadata_repo.upsert(metadata)
 | `test_consumer_continues_on_metadata_failure` | metadata write raises → consumer still succeeds | unit |
 
 **Acceptance criteria**:
-- [ ] Metadata write is best-effort (exception caught, warning logged, not re-raised)
-- [ ] Existing consumer tests still pass (no regression)
+- [x] Metadata write is best-effort (exception caught, warning logged, not re-raised)
+- [x] Existing consumer tests still pass (no regression)
 
 ---
 
 **Validation Gate (Wave B-1)**:
-- [ ] ruff check + mypy pass on `services/nlp-pipeline/`
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes (all 217+ existing pass)
-- [ ] Alembic migration runs and rolls back cleanly
-- [ ] DDL alignment test added and passes
+- [x] ruff check + mypy pass on `services/nlp-pipeline/`
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes (245 tests pass)
+- [x] Alembic migration runs and rolls back cleanly
+- [x] DDL alignment test added and passes
 
 ---
 

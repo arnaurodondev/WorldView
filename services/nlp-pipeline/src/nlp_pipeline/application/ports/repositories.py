@@ -124,3 +124,24 @@ class SignalsQueryPort(ABC):
     ) -> None:
         """Insert an outbox event and commit."""
         ...
+
+
+# ── DocumentSourceMetadata port ───────────────────────────────────────────────
+
+
+class DocumentSourceMetadataRepository(ABC):
+    """Port for caching article citation metadata for S8 RAG retrieval.
+
+    Populated by the S6 article consumer as a best-effort side effect.
+    Queried by S8 to attach citation data to chunk search results.
+    """
+
+    @abstractmethod
+    async def upsert(self, metadata: Any) -> None:
+        """Persist metadata; ON CONFLICT (doc_id) DO NOTHING — idempotent."""
+        ...
+
+    @abstractmethod
+    async def batch_get(self, doc_ids: list[UUID]) -> dict[UUID, Any]:
+        """Return metadata keyed by doc_id; only present doc_ids are included."""
+        ...
