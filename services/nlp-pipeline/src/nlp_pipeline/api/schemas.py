@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ── Signal schemas ────────────────────────────────────────────────────────────
 
@@ -111,6 +111,61 @@ class ResolvedEntityResponse(BaseModel):
 class EntityResolveResponse(BaseModel):
     entities: list[ResolvedEntityResponse]
     query_text_normalized: str
+
+
+# ── Enhanced chunk search (Wave B-3) ─────────────────────────────────────────
+
+
+class ChunkSearchRequest(BaseModel):
+    query_text: str | None = Field(None, min_length=1, max_length=2000)
+    query_embedding: list[float] | None = Field(None, min_length=1024, max_length=1024)
+    granularity: str = Field(default="chunk", pattern="^(chunk|section|both)$")
+    top_k: int = Field(default=20, ge=1, le=50)
+    min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    include_entities: bool = True
+    date_from: date | None = None
+    date_to: date | None = None
+    source_types: list[str] = []
+
+    @model_validator(mode="after")
+    def exactly_one_query(self) -> ChunkSearchRequest:
+        if (self.query_text is None) == (self.query_embedding is None):
+            raise ValueError("Exactly one of query_text or query_embedding must be provided")
+        return self
+
+
+class ChunkEntityAnnotationResponse(BaseModel):
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    confidence: float
+
+
+class SourceMetadataResponse(BaseModel):
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_name: str | None
+    source_type: str | None
+
+
+class EnrichedChunkResultResponse(BaseModel):
+    chunk_id: UUID
+    doc_id: UUID
+    section_id: UUID | None
+    granularity: str
+    text: str
+    score: float
+    source_metadata: SourceMetadataResponse
+    entities: list[ChunkEntityAnnotationResponse]
+    section_type: str | None
+    heading_path: str | None
+
+
+class ChunkSearchResponse(BaseModel):
+    results: list[EnrichedChunkResultResponse]
+    total_searched: int
+    embedding_model: str
 
 
 # ── Reprocess ─────────────────────────────────────────────────────────────────

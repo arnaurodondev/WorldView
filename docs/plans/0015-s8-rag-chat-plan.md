@@ -3,7 +3,7 @@
 > **PRD**: `docs/specs/0015-s8-rag-chat-hybrid-pipeline.md`
 > **Status**: in-progress
 > **Created**: 2026-04-02
-> **Updated**: 2026-04-05
+> **Updated**: 2026-04-06
 > **Sub-plans**: 7 (A–G)
 > **Total waves**: 22
 > **Total estimated effort**: 12–20 agent-hours
@@ -761,11 +761,12 @@ POST /api/v1/entities/resolve
 
 ---
 
-### Wave B-3: Enhanced Chunk Search Endpoint
+### Wave B-3: Enhanced Chunk Search Endpoint ✅
 
 **Goal**: Add `POST /api/v1/search/chunks` — ANN search with inline entity annotations and source metadata.
 **Depends on**: B-1 (document_source_metadata table required for inline metadata)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-06 · 271 tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -862,17 +863,17 @@ class ChunkSearchRequest(BaseModel):
 | `test_chunk_search_neither_query_fields_rejected` | Neither provided → 422 | unit |
 
 **Acceptance criteria**:
-- [ ] Old `/vector-search` endpoint unchanged and still passing tests
-- [ ] New `/search/chunks` endpoint registered
-- [ ] Model validator enforces exactly-one query pattern
-- [ ] Unit tests pass
+- [x] Old `/vector-search` endpoint unchanged and still passing tests
+- [x] New `/search/chunks` endpoint registered
+- [x] Model validator enforces exactly-one query pattern
+- [x] Unit tests pass
 
 ---
 
 **Validation Gate (Wave B-3)**:
-- [ ] ruff check + mypy pass
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes (217+ tests, no regression)
-- [ ] Both endpoints accessible; old endpoint still works
+- [x] ruff check + mypy pass
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes (271 tests, no regression)
+- [x] Both endpoints accessible; old endpoint still works
 
 ---
 
