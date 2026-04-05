@@ -62,7 +62,7 @@ Phase 4 (deferred — not in this plan):
 |------|-------|--------|-----------|
 | A-1 | intelligence-migrations 0002 + 003 seed | ✅ done | 2026-04-05 |
 | A-2 | S5 batch documents endpoint | ✅ done | 2026-04-05 |
-| A-3 | S1 portfolio context endpoint | pending | — |
+| A-3 | S1 portfolio context endpoint | ✅ done | 2026-04-05 |
 | B-1 | S6 document_source_metadata | pending | — |
 | B-2 | S6 entity resolve endpoint | pending | — |
 | B-3 | S6 enhanced chunk search | pending | — |
@@ -329,11 +329,12 @@ POST /api/v1/documents/batch
 
 ---
 
-### Wave A-3: S1 Portfolio — Portfolio Context Endpoint
+### Wave A-3: S1 Portfolio — Portfolio Context Endpoint ✅
 
-**Goal**: Add `GET /api/v1/users/{user_id}/portfolio/context` for PORTFOLIO-intent queries in S8.
+**Goal**: Add `GET /internal/v1/users/{user_id}/portfolio/context` for PORTFOLIO-intent queries in S8.
 **Depends on**: none
 **Estimated effort**: 25–40 min
+**Status**: **DONE** — 2026-04-05 · 13 new unit tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -454,9 +455,9 @@ GET /api/v1/users/{user_id}/portfolio/context
 ---
 
 **Validation Gate (Wave A-3)**:
-- [ ] ruff check + mypy pass on `services/portfolio/`
-- [ ] `python -m pytest services/portfolio/tests -m unit -v` passes (no existing tests broken)
-- [ ] New endpoint accessible via ASGI test client with correct auth
+- [x] ruff check + mypy pass on `services/portfolio/`
+- [x] `python -m pytest services/portfolio/tests -m unit -v` passes (311 passed, no existing tests broken)
+- [x] New endpoint accessible via ASGI test client with correct auth
 
 ---
 

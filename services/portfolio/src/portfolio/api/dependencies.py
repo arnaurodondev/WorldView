@@ -24,6 +24,15 @@ async def get_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
         yield uow
 
 
+async def get_read_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
+    """Yield a read-only SqlAlchemyUnitOfWork bound to the app's read replica factory (R27)."""
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+
+    read_factory = request.app.state.read_factory
+    async with SqlAlchemyUnitOfWork(read_factory) as uow:
+        yield uow
+
+
 async def get_watchlist_cache(request: Request) -> WatchlistCachePort:
     """Return a ValkeyWatchlistCache backed by the app's Valkey client."""
     from portfolio.infrastructure.cache.watchlist_cache import ValkeyWatchlistCache
@@ -45,5 +54,6 @@ async def verify_internal_token(
 
 
 UoWDep = Annotated[UnitOfWork, Depends(get_uow)]
+ReadUoWDep = Annotated[UnitOfWork, Depends(get_read_uow)]
 WatchlistCacheDep = Annotated[WatchlistCachePort, Depends(get_watchlist_cache)]
 InternalAuthDep = Annotated[None, Depends(verify_internal_token)]
