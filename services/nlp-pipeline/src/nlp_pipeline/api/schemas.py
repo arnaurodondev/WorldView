@@ -88,6 +88,31 @@ class VectorSearchResponse(BaseModel):
     hits: list[VectorSearchHit]
 
 
+# ── Entity resolve (Wave B-2) ─────────────────────────────────────────────────
+
+
+class EntityResolveRequest(BaseModel):
+    query_text: str = Field(..., min_length=1, max_length=2000)
+    top_k_per_mention: int = Field(default=3, ge=1, le=10)
+    min_confidence: float = Field(default=0.45, ge=0.0, le=1.0)
+
+
+class ResolvedEntityResponse(BaseModel):
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    confidence: float
+    ticker: str | None
+    isin: str | None
+    matched_text: str
+    resolution_stage: int
+
+
+class EntityResolveResponse(BaseModel):
+    entities: list[ResolvedEntityResponse]
+    query_text_normalized: str
+
+
 # ── Reprocess ─────────────────────────────────────────────────────────────────
 
 
