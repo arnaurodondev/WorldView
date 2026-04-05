@@ -103,9 +103,9 @@ def test_source_trust_weights_seeded(conn: sa.engine.Connection) -> None:
 
 
 def test_relation_type_registry_seeded(conn: sa.engine.Connection) -> None:
-    """20 relation types seeded."""
+    """24 relation types seeded (20 from migration 0001 + 4 added by migration 0002)."""
     result = conn.execute(text("SELECT count(*) FROM relation_type_registry"))
-    assert result.scalar() == 20
+    assert result.scalar() == 24
 
 
 def test_relation_type_registry_has_embedding_column(conn: sa.engine.Connection) -> None:
@@ -234,3 +234,80 @@ def test_entity_embedding_state_pk(conn: sa.engine.Connection) -> None:
     )
     pk_cols = [row[0] for row in result]
     assert pk_cols == ["entity_id", "view_type"]
+
+
+# ── Migration 0002: events columns + relation types ───────────────────────────
+
+
+def test_events_new_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0002 adds event_subtype, source_type, structured_data to events."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'events' "
+            "  AND column_name IN ('event_subtype', 'source_type', 'structured_data') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "event_subtype" in rows, "event_subtype column missing from events"
+    assert "source_type" in rows, "source_type column missing from events"
+    assert "structured_data" in rows, "structured_data column missing from events"
+    assert rows["structured_data"] == "jsonb", f"structured_data expected jsonb, got {rows['structured_data']}"
+
+
+def test_events_new_columns_are_nullable(conn: sa.engine.Connection) -> None:
+    """Migration 0002 event columns are nullable (backward-compatible)."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'events' "
+            "  AND column_name IN ('event_subtype', 'source_type', 'structured_data')"
+        )
+    )
+    for col_name, is_nullable in result:
+        assert is_nullable == "YES", f"Column {col_name} expected nullable, got {is_nullable}"
+
+
+def test_events_composite_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0002 creates ix_events_entity_type_date index on events parent table."""
+    result = conn.execute(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'events' AND indexname = 'ix_events_entity_type_date'"
+        )
+    )
+    assert result.fetchone() is not None, "ix_events_entity_type_date index missing from events"
+
+
+def test_relation_type_registry_new_types(conn: sa.engine.Connection) -> None:
+    """Migration 0002 inserts 4 new canonical_types into relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT canonical_type, semantic_mode, decay_class, base_confidence "
+            "FROM relation_type_registry "
+            "WHERE canonical_type IN ('is_in_sector', 'is_in_industry', 'earnings_released', 'corporate_action') "
+            "ORDER BY canonical_type"
+        )
+    )
+    rows = {row[0]: row for row in result}
+    assert len(rows) == 4, f"Expected 4 new relation types, found {len(rows)}"
+
+    # Verify key attributes match the plan spec (§6.4 relation_type_registry)
+    assert rows["is_in_sector"][1] == "RELATION_STATE"
+    assert rows["is_in_sector"][2] == "PERMANENT"
+    assert rows["is_in_sector"][3] == pytest.approx(0.90)
+
+    assert rows["is_in_industry"][1] == "RELATION_STATE"
+    assert rows["is_in_industry"][2] == "DURABLE"
+    assert rows["is_in_industry"][3] == pytest.approx(0.85)
+
+    assert rows["earnings_released"][1] == "TEMPORAL_CLAIM"
+    assert rows["earnings_released"][2] == "FAST"
+    assert rows["earnings_released"][3] == pytest.approx(0.95)
+
+    assert rows["corporate_action"][1] == "TEMPORAL_CLAIM"
+    assert rows["corporate_action"][2] == "DURABLE"
+    assert rows["corporate_action"][3] == pytest.approx(0.90)
