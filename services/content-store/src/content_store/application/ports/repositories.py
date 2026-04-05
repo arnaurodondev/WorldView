@@ -37,11 +37,34 @@ class DLQEntryData:
     resolution_note: str | None
 
 
+# ── Document metadata DTO ────────────────────────────────────────────────────
+
+
+@dataclass
+class DocumentMetadataDTO:
+    """Lightweight document metadata returned by the batch lookup endpoint.
+
+    ``source_name`` is always ``None`` — the ``documents`` table has no such
+    column.  S8 derives it from ``document_source_metadata`` in S6.
+    """
+
+    doc_id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_name: str | None
+    source_type: str | None
+    word_count: int | None
+
+
 class DocumentRepositoryPort(ABC):
     """Port for canonical document storage."""
 
     @abstractmethod
     async def create(self, doc: CanonicalDocument) -> None: ...
+
+    @abstractmethod
+    async def batch_get_metadata(self, doc_ids: list[UUID]) -> list[DocumentMetadataDTO]: ...
 
 
 class DedupHashRepositoryPort(ABC):

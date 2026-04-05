@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from content_store.api.dlq import router as dlq_router
+from content_store.api.documents import router as documents_router
 from content_store.api.health import router as health_router
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -20,6 +21,7 @@ def app():
     test_app = FastAPI(title="content-store-test")
     test_app.include_router(health_router)
     test_app.include_router(dlq_router)
+    test_app.include_router(documents_router)
 
     # Set mock state (ASGI transport does not trigger lifespan)
     settings = MagicMock()
@@ -33,6 +35,7 @@ def app():
 
     test_app.state.settings = settings
     test_app.state.session_factory = lambda: cm
+    test_app.state.read_factory = lambda: cm
     test_app.state.valkey = None
     test_app.state.consumer_alive = True
 
