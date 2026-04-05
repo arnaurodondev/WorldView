@@ -28,3 +28,25 @@ class DLQListResponse(BaseModel):
 
 class DLQResolveRequest(BaseModel):
     note: str = Field(..., max_length=2000)
+
+
+# ── Batch documents ───────────────────────────────────────────────────────────
+
+
+class BatchDocumentsRequest(BaseModel):
+    # max_length not enforced here — use case raises DomainError (→ 400) for >50
+    doc_ids: list[UUID] = Field(..., min_length=1)
+
+
+class DocumentMetadataResponse(BaseModel):
+    doc_id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_name: str | None
+    source_type: str | None
+    word_count: int | None
+
+
+class BatchDocumentsResponse(BaseModel):
+    documents: list[DocumentMetadataResponse]

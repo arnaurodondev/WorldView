@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from content_store.api.dlq import router as dlq_router
+from content_store.api.documents import router as documents_router
 from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.db.session import _build_factories
@@ -140,5 +141,6 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(dlq_router)
+    app.include_router(documents_router)
 
     return app

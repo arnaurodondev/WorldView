@@ -61,7 +61,7 @@ Phase 4 (deferred — not in this plan):
 | Wave | Title | Status | Validated |
 |------|-------|--------|-----------|
 | A-1 | intelligence-migrations 0002 + 003 seed | ✅ done | 2026-04-05 |
-| A-2 | S5 batch documents endpoint | pending | — |
+| A-2 | S5 batch documents endpoint | ✅ done | 2026-04-05 |
 | A-3 | S1 portfolio context endpoint | pending | — |
 | B-1 | S6 document_source_metadata | pending | — |
 | B-2 | S6 entity resolve endpoint | pending | — |
@@ -205,11 +205,12 @@ Communication Services (Media, Telecom), Utilities (Electric, Gas), Real Estate 
 
 ---
 
-### Wave A-2: S5 Content Store — Batch Documents Endpoint
+### Wave A-2: S5 Content Store — Batch Documents Endpoint ✅
 
 **Goal**: Add `POST /api/v1/documents/batch` so S8 can fetch citation metadata for up to 50 doc_ids in one call.
 **Depends on**: none (independent of A-1)
 **Estimated effort**: 25–40 min
+**Status**: **DONE** — 2026-04-05 · 13 new unit tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -322,9 +323,9 @@ POST /api/v1/documents/batch
 ---
 
 **Validation Gate (Wave A-2)**:
-- [ ] ruff check + mypy pass on `services/content-store/`
-- [ ] `python -m pytest services/content-store/tests/ --ignore=services/content-store/tests/integration -v` passes
-- [ ] New endpoint registered and accessible in test client
+- [x] ruff check + mypy pass on `services/content-store/`
+- [x] `python -m pytest services/content-store/tests/ --ignore=services/content-store/tests/integration -v` passes (266 passed)
+- [x] New endpoint registered and accessible in test client
 
 ---
 
