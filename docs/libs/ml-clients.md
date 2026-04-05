@@ -70,7 +70,7 @@ containers (lists, dicts) are frozen by reference.
 | `AnthropicExtractionAdapter` | `ExtractionClient` | Anthropic Messages API | `claude-sonnet-4-6` | `ml-clients[anthropic]` |
 | `GeminiExtractionAdapter` | `ExtractionClient` | Google GenAI API | `gemini-2.5-pro` | `ml-clients[gemini]` |
 | `ChatGPTExtractionAdapter` | `ExtractionClient` | OpenAI Chat Completions API | `gpt-5-mini` | `ml-clients[openai]` |
-| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `deepseek-chat` | `ml-clients[openai]` |
+| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `DeepSeek R1 Distill 32B` | `ml-clients[openai]` |
 
 All adapters implement the error mapping contract:
 

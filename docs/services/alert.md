@@ -1,7 +1,7 @@
 # S10 · Alert Service
 
 > **Owner**: Alert domain · **Database**: `alert_db` · **Port**: 8010
-> **Status**: Stub (🔲 Pending implementation)
+> **Status**: Mature (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge)
 
 ---
 

@@ -83,6 +83,10 @@
 | [BP-077](#bp-077) | `ON CONFLICT DO NOTHING` missing `index_where=` for partial index | `ProgrammingError: there is no unique or exclusion constraint matching the ON CONFLICT specification` — partial unique index not matched because `index_where` was omitted | Any service using `on_conflict_do_nothing(index_elements=[...])` on a table with a partial unique index |
 | [BP-078](#bp-078) | Cross-service E2E `ImportError` when service package not installed | `ImportError: No module named 'portfolio'` in cross-service test even when the skip marker fires — import inside test function runs before `pytest.skip()` | `tests/e2e/` cross-service test files importing ORM models from individual service packages |
 | [BP-079](#bp-079) | Expired worker lease stalls source permanently | Worker crashes after claiming a task; lease never expires in DB; scheduler's `has_active_task()` guard permanently blocks new tasks for that source — source silently stops ingesting | S4 `content-ingestion` scheduler tick; any scheduler-worker pattern with lease-based task ownership |
+| [BP-090](#bp-090) | Ephemeral event in `relations` table — wrong decay behaviour | Geopolitical/regulatory/macro events put in `relations` use continuous confidence decay from inception; but these events are binary (active/inactive) then residually decaying. `confidence` reads as near-zero before active_from or very low during residual period | S7 knowledge graph: any new relation type representing temporal events |
+| [BP-091](#bp-091) | AGE Cypher injection via f-string entity_id | `entity_id` f-stringed into Cypher query allows graph traversal manipulation; UUID validation alone is insufficient since AGE executes arbitrary Cypher string | S7 Cypher endpoints: `CypherPathUseCase`, `CypherNeighborhoodUseCase`; all AGE query builders |
+| [BP-092](#bp-092) | GLOBAL temporal event → entity_event_exposures explosion | Creating `entity_event_exposures` rows for every company affected by a GLOBAL event (pandemic, rate cycle) creates millions of rows; one GLOBAL event can affect 50K companies | S7 `TemporalEventConsumer`: entity exposure linking; any code that creates exposures for GLOBAL-scope events |
+| [BP-093](#bp-093) | EODHD non-existent fields (`Officers`/`Institutions`/`Revenue_Segment`) | `payload.get("General", {}).get("Officers", {})` always returns `{}`; these fields don't exist in the EODHD API | S7 `FundamentalsConsumer`, any EODHD payload extraction; use Insider Transactions API for officers |
 
 ---
 
@@ -3910,3 +3914,191 @@ In entrypoint tests, every constructor-argument assertion must reference
 `mock_cls.call_args`, not restate the expected value formula.
 Review checklist item: "Does the assertion inspect production behaviour, or does
 it merely compare two identical expressions?"
+
+---
+
+## BP-090 — Ephemeral event in `relations` table — wrong decay behaviour
+
+**Services affected**: knowledge-graph (S7), intelligence-migrations
+**Detected**: PRD-0018 design session (2026-04-04)
+
+### Symptom
+
+Geopolitical, regulatory, or macroeconomic events stored as rows in the `relations` table
+display wrong confidence values: near-zero before they become active (treated as very old
+evidence), and continuous decay even after the event ends (instead of binary end + residual decay).
+The event confidence never spikes to its full value during its active period.
+
+### Root Cause
+
+The `relations` table uses continuous confidence decay from the moment evidence was created
+(`evidence_created_at`). This models timeless facts (e.g., "TSMC manufactures chips for NVIDIA")
+that degrade in relevance over time. Ephemeral events have a completely different lifecycle:
+they are **inactive** before their start date, **fully active** between start and end, and
+**residually decaying** after they end.
+
+Using the `TEMPORAL_CLAIM` semantic mode on a relation doesn't help — it still applies a
+continuous half-life from evidence creation, not binary activation at `active_from`.
+
+### Fix
+
+Ephemeral events MUST go in the separate `temporal_events` table (PRD-0018), NOT in `relations`.
+The `temporal_events.lifecycle_phase` property correctly models the binary lifecycle:
+
+```python
+@property
+def lifecycle_phase(self) -> str:
+    now = utc_now()
+    if now < self.active_from:
+        return "PENDING_ACTIVE"
+    if self.active_until is None or now <= self.active_until:
+        return "ACTIVE"
+    days_since_end = (now - self.active_until).days
+    if days_since_end <= self.residual_impact_days:
+        return "RESIDUAL"
+    return "EXPIRED"
+```
+
+### Prevention
+
+If a relation type represents something that: (1) has a clear start date, (2) has a clear end
+or could end, and (3) has a residual impact period — it belongs in `temporal_events`, not `relations`.
+Code review checklist: "Does this relation type model a timeless fact (use `relations`) or a
+time-bounded event (use `temporal_events`)?"
+
+---
+
+## BP-091 — AGE Cypher injection via f-string entity_id
+
+**Services affected**: knowledge-graph (S7) — `CypherPathUseCase`, `CypherNeighborhoodUseCase`
+**Detected**: PRD-0018 security analysis (2026-04-04)
+
+### Symptom
+
+A Cypher query built with an f-string allows an attacker to manipulate graph traversal,
+bypass confidence filters, or trigger unexpected query patterns. Even though `entity_id`
+is validated as a UUID, the AGE `cypher()` function executes the full string as Cypher —
+UUID validation does not prevent injection in other query parameters.
+
+### Root Cause
+
+```python
+# WRONG — Cypher injection vector:
+query = f"""
+SELECT * FROM ag_catalog.cypher('worldview_graph', $$
+  MATCH path = shortestPath((s:Entity {{entity_id: '{entity_id}'}})-[r*1..{max_hops}]->(...))
+$$) AS (path ag_catalog.agtype)
+"""
+```
+
+The `max_hops` parameter is an integer but still f-stringed; if the validation is bypassed,
+arbitrary Cypher can be injected via other parameters.
+
+### Fix
+
+Use AGE parameterized Cypher with the `params` argument to `ag_catalog.cypher()`:
+
+```python
+query = text("""
+SELECT * FROM ag_catalog.cypher('worldview_graph', $$
+  MATCH path = shortestPath(
+    (s:Entity {entity_id: $source})-[r*1..5]->(t:Entity {entity_id: $target})
+  )
+  WHERE ALL(rel IN relationships(path) WHERE rel.confidence >= $min_conf)
+  RETURN path
+$$, :params) AS (path ag_catalog.agtype)
+""")
+result = await session.execute(query, {
+    "params": json.dumps({"source": str(source_id), "target": str(target_id), "min_conf": min_confidence})
+})
+```
+
+Note: `max_hops` must be hardcoded in the Cypher template (not parameterized) since Cypher
+variable-length patterns `[r*1..N]` do not accept runtime parameters for `N`. The route layer
+enforces `max_hops ≤ 5` before the use case is called.
+
+### Prevention
+
+All AGE Cypher queries must use `ag_catalog.cypher(..., :params)` with a JSON params dict.
+Never f-string any variable into a Cypher query string, even validated UUIDs.
+REVIEW_CHECKLIST item: "AGE Cypher queries — parameterized, not f-stringed."
+
+---
+
+## BP-092 — GLOBAL temporal event → entity_event_exposures explosion
+
+**Services affected**: knowledge-graph (S7) `TemporalEventConsumer`, intelligence-migrations
+**Detected**: PRD-0018 design session (2026-04-04)
+
+### Symptom
+
+After consuming a GLOBAL-scope temporal event (e.g., COVID-19 pandemic, global interest
+rate cycle), the `entity_event_exposures` table balloons with one row per company entity
+in the database — potentially 50,000+ rows from a single event. This causes:
+- INSERT latency spike in the consumer
+- Table size explosion (~50MB per GLOBAL event × thousands of events/year)
+- Cascading slowdowns on queries that JOIN `entity_event_exposures`
+
+### Root Cause
+
+The `TemporalEventConsumer` iterates over all `entity_id` values from `exposed_entities[]`
+in the Kafka message. If the NLP pipeline sets scope=GLOBAL and includes every company in
+the affected sector, the consumer creates one exposure row per company.
+
+### Fix
+
+Apply scope-tiered entity exposure logic:
+
+```python
+if event.scope == EventScope.GLOBAL:
+    # Link to sector/industry entities ONLY
+    # Company exposure is inferred at query time via is_in_sector traversal
+    for entity in event.exposed_entities:
+        assert entity.entity_type in ("sector", "industry"), (
+            f"GLOBAL event {event.event_id} must only link to sector/industry entities, "
+            f"not {entity.entity_type}"
+        )
+elif event.scope == EventScope.NATIONAL:
+    # Link to country entities only
+    ...
+else:  # LOCAL or REGIONAL
+    # Create per-company/per-country rows as normal
+    ...
+```
+
+The NLP pipeline (S6 Block 13E) must enforce this constraint before producing the Kafka event:
+only include company entities in `exposed_entities[]` for LOCAL/REGIONAL events.
+
+### Prevention
+
+The Avro schema for `intelligence.temporal_event.v1` should include a validation hint
+in the `ExposedEntity` record: when `scope=GLOBAL`, `entity_type` must be `sector` or `industry`.
+Consumer validates this invariant before INSERT and logs + skips violating rows.
+
+---
+
+## BP-093 — EODHD API: Assumed fields don't exist (`General.Officers`, `Holders.Institutions`, `Financials.Revenue_Segment`)
+
+**Symptom**: Implementation fetches `payload.get("General", {}).get("Officers", {})` but always gets `{}` even for large-cap companies with many executives. Similarly, `Holders.Institutions` and `Financials.Revenue_Segment` always return empty/absent.
+
+**Root Cause**: These three sections (`General.Officers`, `Holders.Institutions`, `Financials.Revenue_Segment`) **do not exist** in the EODHD Fundamentals API response. They were assumed based on EODHD documentation that describes different response formats from different API tiers/endpoints.
+
+**Affected Areas**: S7 `FundamentalsConsumer`, any code reading EODHD fundamentals payload from MinIO, PRD/plan sections referencing these fields.
+
+**Correct Data Sources**:
+| Intended Signal | Correct EODHD Source |
+|-----------------|---------------------|
+| Company officers / executives | `GET /insider-transactions?code={ticker}.US` — `ownerName` + `ownerTitle` |
+| Institutional ownership | `SharesStats.PercentInstitutions` (aggregate %, from fundamentals payload) |
+| Insider ownership | `SharesStats.PercentInsiders` (aggregate %, from fundamentals payload) |
+| Geographic revenue breakdown | Not available — derive from `headquartered_in` + macro context |
+
+**Fields That DO Exist** in EODHD fundamentals payload:
+- `General.FullTimeEmployees` (int)
+- `Highlights.RevenueTTM` (int, USD)
+- `SharesStats.PercentInsiders` (float)
+- `SharesStats.PercentInstitutions` (float)
+- `General.Description` (str)
+- All of: `Highlights` (MarketCap, EBITDA, PERatio, ROE, ROA), `Valuation` (TrailingPE, ForwardPE, EV/EBITDA)
+
+**Prevention**: Before implementing any EODHD data extraction, verify the field exists in `docs/references/eodhd-endpoints-reference.md` against the Outputs section with actual JSON examples.

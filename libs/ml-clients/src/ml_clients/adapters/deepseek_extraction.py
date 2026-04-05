@@ -15,12 +15,12 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-_DEFAULT_MODEL_ID = "deepseek-chat"
+_DEFAULT_MODEL_ID = "DeepSeek R1 Distill 32B"
 _DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
 
 class DeepSeekExtractionAdapter:
-    """Implements ExtractionClient via DeepSeek API (OpenAI-compatible). Default model: deepseek-chat."""
+    """Implements ExtractionClient via DeepSeek API (OpenAI-compatible). Default model: DeepSeek R1 Distill 32B."""
 
     def __init__(
         self,
