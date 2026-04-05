@@ -44,6 +44,34 @@ class CanonicalEntityRepository:
             "exchange": row[5],
         }
 
+    async def batch_get(self, entity_ids: list[UUID]) -> dict[UUID, dict[str, object]]:
+        """Fetch multiple canonical entities by ID in a single query.
+
+        Returns a dict keyed by entity_id; missing IDs are omitted.
+        """
+        if not entity_ids:
+            return {}
+
+        result = await self._session.execute(
+            text(
+                "SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange "
+                "FROM canonical_entities WHERE entity_id = ANY(:ids)",
+            ),
+            {"ids": [str(eid) for eid in entity_ids]},
+        )
+        rows = result.fetchall()
+        return {
+            UUID(str(row[0])): {
+                "entity_id": UUID(str(row[0])),
+                "canonical_name": row[1],
+                "entity_type": row[2],
+                "isin": row[3],
+                "ticker": row[4],
+                "exchange": row[5],
+            }
+            for row in rows
+        }
+
     async def create(
         self,
         canonical_name: str,

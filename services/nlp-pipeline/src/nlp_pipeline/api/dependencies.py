@@ -11,10 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nlp_pipeline.application.ports.repositories import SignalsQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
+from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
 from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
+from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
 from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
+from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
+    SQLAlchemyDocumentSourceMetadataRepository,
+)
 from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
@@ -99,3 +104,27 @@ def get_entity_resolver_use_case(
 
 
 EntityResolverDep = Annotated[QueryEntityResolverUseCase, Depends(get_entity_resolver_use_case)]
+
+
+def get_chunk_search_use_case(
+    request: Request,
+    nlp_session: Annotated[AsyncSession, Depends(get_nlp_session)],
+    intel_session: Annotated[AsyncSession, Depends(get_intelligence_session)],
+) -> EnhancedChunkSearchUseCase:
+    """Build EnhancedChunkSearchUseCase for the current request.
+
+    EmbeddingClient is not available in the API process — callers must supply
+    ``query_embedding`` directly (pre-computed by S8 or passed through).
+    """
+    valkey = getattr(request.app.state, "valkey", None)
+    raw_valkey = valkey._redis if valkey is not None else None  # type: ignore[attr-defined]
+    return EnhancedChunkSearchUseCase(
+        chunk_ann_repo=ChunkANNRepository(nlp_session),
+        source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
+        canonical_entity_repo=CanonicalEntityRepository(intel_session),
+        valkey=raw_valkey,
+        embedding_client=None,
+    )
+
+
+ChunkSearchUseCaseDep = Annotated[EnhancedChunkSearchUseCase, Depends(get_chunk_search_use_case)]
