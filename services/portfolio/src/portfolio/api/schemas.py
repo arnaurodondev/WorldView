@@ -265,3 +265,32 @@ class BatchEntityLookupResponse(BaseModel):
 class WatchlistEntitiesResponse(BaseModel):
     watchlist_id: UUID
     entity_ids: list[UUID]
+
+
+# ── Internal API schemas (S8 → S1) ───────────────────────────────────────────
+
+
+class HoldingContextItem(BaseModel):
+    ticker: str | None
+    entity_id: UUID | None
+    canonical_name: str | None
+    quantity: Decimal
+    current_weight: float
+
+    @field_serializer("quantity")
+    def serialize_quantity(self, v: Decimal) -> str:
+        return f"{v:.8f}"
+
+
+class WatchlistContextItem(BaseModel):
+    ticker: str | None
+    entity_id: UUID | None
+    canonical_name: str | None
+
+
+class PortfolioContextResponse(BaseModel):
+    user_id: UUID
+    tenant_id: UUID
+    holdings: list[HoldingContextItem]
+    watchlist: list[WatchlistContextItem]
+    total_positions: int
