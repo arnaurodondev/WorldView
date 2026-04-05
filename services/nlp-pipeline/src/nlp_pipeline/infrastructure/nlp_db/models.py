@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
+from sqlalchemy import VARCHAR, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -194,3 +194,22 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DocumentSourceMetadataModel(Base):
+    """Cached citation metadata for stored articles (PRD §6 Wave B-1).
+
+    Populated by the S6 consumer; queried by S8 RAG for inline citations.
+    Access is always by PK or batch IN clause — no additional indexes needed.
+    """
+
+    __tablename__ = "document_source_metadata"
+
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_name: Mapped[str | None] = mapped_column(VARCHAR(100), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(VARCHAR(50), nullable=True)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -65,6 +65,9 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
 from nlp_pipeline.infrastructure.nlp_db.repositories.document_entity_stats import (
     DocumentEntityStatsRepository,
 )
+from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
+    SQLAlchemyDocumentSourceMetadataRepository,
+)
 from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import (
     EntityMentionRepository,
 )
@@ -152,6 +155,8 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         """Orchestrate all 8 blocks for one article event.
 
         Acquires one backpressure slot before ML work starts.
+        After the main pipeline commits, writes citation metadata as a
+        best-effort side effect (failure is logged but does not re-raise).
         """
         doc_id = uuid.UUID(str(value["doc_id"]))
         minio_key = str(value["minio_silver_key"])
@@ -181,6 +186,18 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 is_backfill=is_backfill,
                 correlation_id=correlation_id,
             )
+
+        # Best-effort: cache citation metadata for S8 RAG inline citations.
+        # Failure must never cause NLP processing to fail.
+        await self._write_source_metadata(
+            doc_id=doc_id,
+            title=value.get("title"),
+            url=value.get("url"),
+            published_at=published_at,
+            source_name=value.get("source_name"),
+            source_type=source_type,
+            word_count=value.get("word_count"),
+        )
 
     async def _run_pipeline(
         self,
@@ -371,6 +388,48 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         if isinstance(raw, bytes):
             return raw.decode("utf-8", errors="replace")
         return str(raw)
+
+    # ── Source metadata cache (best-effort) ──────────────────────────────────
+
+    async def _write_source_metadata(
+        self,
+        *,
+        doc_id: uuid.UUID,
+        title: str | None,
+        url: str | None,
+        published_at: datetime | None,
+        source_name: str | None,
+        source_type: str | None,
+        word_count: int | None,
+    ) -> None:
+        """Write citation metadata to nlp_db.document_source_metadata.
+
+        Best-effort: any exception is logged as a warning and swallowed so
+        that NLP processing is never blocked by a metadata write failure.
+        """
+        from nlp_pipeline.domain.models import DocumentSourceMetadata
+
+        try:
+            metadata = DocumentSourceMetadata(
+                doc_id=doc_id,
+                title=str(title) if title is not None else None,
+                url=str(url) if url is not None else None,
+                published_at=published_at,
+                source_name=str(source_name) if source_name is not None else None,
+                source_type=str(source_type) if source_type is not None else None,
+                word_count=int(word_count) if word_count is not None else None,
+                created_at=common.time.utc_now(),
+            )
+            async with self._nlp_sf() as session:
+                repo = SQLAlchemyDocumentSourceMetadataRepository(session)
+                await repo.upsert(metadata)
+                await session.commit()
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "source_metadata_write_failed",
+                doc_id=str(doc_id),
+                exc_info=True,
+            )
 
     # ── Idempotency ───────────────────────────────────────────────────────────
 

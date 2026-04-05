@@ -140,3 +140,22 @@ class EmbeddingPendingEntry:
     section_id: UUID | None
     error_detail: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class DocumentSourceMetadata:
+    """Cached citation metadata for a stored article (PRD §6 Wave B-1).
+
+    Populated by S6 consumer from ``content.article.stored.v1`` events.
+    Accessed by S8 RAG pipeline to return inline citation data without
+    a round-trip to S5.
+    """
+
+    doc_id: UUID
+    created_at: datetime
+    title: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None  # UTC-aware
+    source_name: str | None = None  # e.g. "SEC EDGAR", "Finnhub"
+    source_type: str | None = None  # e.g. "sec_10q", "eodhd_news"
+    word_count: int | None = None
