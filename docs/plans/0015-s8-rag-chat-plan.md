@@ -64,7 +64,7 @@ Phase 4 (deferred — not in this plan):
 | A-2 | S5 batch documents endpoint | ✅ done | 2026-04-05 |
 | A-3 | S1 portfolio context endpoint | ✅ done | 2026-04-05 |
 | B-1 | S6 document_source_metadata | ✅ done | 2026-04-05 |
-| B-2 | S6 entity resolve endpoint | pending | — |
+| B-2 | S6 entity resolve endpoint | ✅ done | 2026-04-05 |
 | B-3 | S6 enhanced chunk search | pending | — |
 | C-1 | S7 claims/search + contradictions | pending | — |
 | C-2 | S7 events/search | pending | — |
@@ -640,11 +640,12 @@ await self._metadata_repo.upsert(metadata)
 
 ---
 
-### Wave B-2: Entity Resolution Endpoint
+### Wave B-2: Entity Resolution Endpoint ✅
 
 **Goal**: Add `POST /api/v1/entities/resolve` — query-time entity resolution using 5-stage cascade.
 **Depends on**: B-1 (nlp_db and intelligence_db sessions already wired)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-05 · 257 tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -754,9 +755,9 @@ POST /api/v1/entities/resolve
 ---
 
 **Validation Gate (Wave B-2)**:
-- [ ] ruff check + mypy pass
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes
-- [ ] Resolve endpoint accessible; cache key follows `s6:v1:resolve:*` pattern
+- [x] ruff check + mypy pass
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/ -v` passes
+- [x] Resolve endpoint accessible; cache key follows `s6:v1:resolve:*` pattern
 
 ---
 

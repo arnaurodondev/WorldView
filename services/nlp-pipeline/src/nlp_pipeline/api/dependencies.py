@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nlp_pipeline.application.ports.repositories import SignalsQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
+from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
+from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
+from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
 from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
 from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 
@@ -72,3 +75,27 @@ def get_signals_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_sess
 
 
 SignalsQueryRepoDep = Annotated[SignalsQueryPort, Depends(get_signals_query_repo)]
+
+
+def get_entity_resolver_use_case(
+    request: Request,
+    intel_session: Annotated[AsyncSession, Depends(get_intelligence_session)],
+) -> QueryEntityResolverUseCase:
+    """Build QueryEntityResolverUseCase for the current request.
+
+    ML clients (ner_client, embedding_client) are not available in the API
+    process — stages 4 and 5 are skipped gracefully.
+    """
+    valkey = getattr(request.app.state, "valkey", None)
+    raw_valkey = valkey._redis if valkey is not None else None  # type: ignore[attr-defined]
+    return QueryEntityResolverUseCase(
+        alias_repo=EntityAliasRepository(intel_session),
+        canonical_repo=CanonicalEntityRepository(intel_session),
+        valkey=raw_valkey,
+        ner_client=None,
+        embedding_client=None,
+        embedding_repo=None,
+    )
+
+
+EntityResolverDep = Annotated[QueryEntityResolverUseCase, Depends(get_entity_resolver_use_case)]
