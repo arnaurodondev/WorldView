@@ -3,7 +3,7 @@
 > **PRD**: `docs/specs/0015-s8-rag-chat-hybrid-pipeline.md`
 > **Status**: in-progress
 > **Created**: 2026-04-02
-> **Updated**: 2026-04-06
+> **Updated**: 2026-04-06 (Wave E-3 done)
 > **Sub-plans**: 7 (A–G)
 > **Total waves**: 22
 > **Total estimated effort**: 12–20 agent-hours
@@ -2262,11 +2262,12 @@ _INTENT_TO_PLAN = {
 
 ---
 
-### Wave E-3: Upstream Service HTTP Clients
+### Wave E-3: Upstream Service HTTP Clients ✅
 
 **Goal**: Implement all HTTP client adapters for upstream services (S6, S7, S3, S1).
 **Depends on**: D-3 (settings with base URLs)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-06 · 84 unit tests pass (4 new) · ruff + mypy clean
 **Architecture layer**: infrastructure (adapters)
 
 **Pre-read**:
@@ -2374,9 +2375,9 @@ class BaseUpstreamClient:
 ---
 
 **Validation Gate (Wave E-3)**:
-- [ ] ruff check + mypy pass
-- [ ] All 4 client tests pass
-- [ ] No client method propagates an exception on network/timeout error
+- [x] ruff check + mypy pass
+- [x] All 4 client tests pass
+- [x] No client method propagates an exception on network/timeout error
 
 ---
 
