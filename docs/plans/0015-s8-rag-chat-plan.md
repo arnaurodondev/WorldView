@@ -3,7 +3,7 @@
 > **PRD**: `docs/specs/0015-s8-rag-chat-hybrid-pipeline.md`
 > **Status**: in-progress
 > **Created**: 2026-04-02
-> **Updated**: 2026-04-07
+> **Updated**: 2026-04-06
 > **Sub-plans**: 7 (A–G)
 > **Total waves**: 22
 > **Total estimated effort**: 12–20 agent-hours
@@ -2102,11 +2102,12 @@ class CompletionCache:
 
 ---
 
-### Wave E-2: Intent Classifier + HyDE Expander + Retrieval Plan Builder
+### Wave E-2: Intent Classifier + HyDE Expander + Retrieval Plan Builder ✅
 
 **Goal**: Steps 3 and 4 of the pipeline — classify query intent and generate HyDE hypothesis.
 **Depends on**: E-1 (settings pattern established)
 **Estimated effort**: 50–65 min
+**Status**: **DONE** — 2026-04-06 · 83 unit tests pass · ruff + mypy clean
 **Architecture layer**: application (ML orchestration)
 
 **Pre-read**:
@@ -2255,9 +2256,9 @@ _INTENT_TO_PLAN = {
 ---
 
 **Validation Gate (Wave E-2)**:
-- [ ] ruff check + mypy pass
-- [ ] All 9 tests pass
-- [ ] `use_cypher` is `False` when `settings.cypher_enabled=False` regardless of intent
+- [x] ruff check + mypy pass
+- [x] All 9 tests pass (10 tests written — 5 classifier + 5 HyDE/plan builder)
+- [x] `use_cypher` is `False` when `settings.cypher_enabled=False` regardless of intent
 
 ---
 
