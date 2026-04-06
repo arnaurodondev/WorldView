@@ -1709,12 +1709,13 @@ class RagUnitOfWork:
 
 ---
 
-### Wave D-3: Service Scaffold + Config + Docker
+### Wave D-3: Service Scaffold + Config + Docker ✅
 
 **Goal**: Create pyproject.toml, settings, app.py, health endpoints, Docker compose entry, and env example.
 **Depends on**: D-2 (session factory needed in lifespan)
 **Estimated effort**: 30–45 min
 **Architecture layer**: infrastructure + config
+**Status**: **DONE** — 2026-04-06 · 28 tests pass · ruff + mypy clean
 
 **Pre-read**:
 - `services/alert/pyproject.toml` — recent service pyproject.toml as template
@@ -1845,10 +1846,10 @@ rag-chat:
 ---
 
 **Validation Gate (Wave D-3)**:
-- [ ] ruff check + mypy pass on all new files
-- [ ] Service starts with `python -m rag_chat` (lifespan completes)
-- [ ] All 3 health endpoint tests pass
-- [ ] Docker compose entry is valid YAML
+- [x] ruff check + mypy pass on all new files
+- [x] Service starts with `python -m rag_chat` (lifespan completes)
+- [x] All 3 health endpoint tests pass
+- [x] Docker compose entry is valid YAML
 
 ---
 

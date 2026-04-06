@@ -1175,6 +1175,45 @@ services:
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.watchlist_consumer_main"]
     restart: on-failure
 
+  # ── S8 RAG/Chat Service ───────────────────────────────────────────────────────
+
+  rag-chat-migrate:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  rag-chat:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    ports:
+      - "8008:8008"
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    command: ["python", "-m", "rag_chat"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/healthz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   # ── Monitoring Stack ─────────────────────────────────────────────────────────
 
 volumes:

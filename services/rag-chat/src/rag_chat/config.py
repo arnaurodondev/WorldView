@@ -1,41 +1,8 @@
-"""Service configuration via environment variables."""
+"""Thin re-export shim — canonical settings live in infrastructure/config/settings.py."""
 
-from __future__ import annotations
+from rag_chat.infrastructure.config.settings import RagChatSettings
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+# Alias so existing imports of ``from rag_chat.config import Settings`` keep working.
+Settings = RagChatSettings
 
-
-class Settings(BaseSettings):
-    """Configuration for the rag-chat service."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="RAG_CHAT_",
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    # Server
-    host: str = "0.0.0.0"
-    port: int = 8008
-    debug: bool = False
-
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/rag_db"
-
-    # Kafka
-    kafka_bootstrap_servers: str = "localhost:9092"
-    schema_registry_url: str = "http://localhost:8081"
-
-    # Storage
-    storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
-
-    # Valkey
-    valkey_url: str = "redis://localhost:6379/0"
-
-    # Observability (STANDARDS.md §8.3 — mandatory in every service)
-    log_level: str = "INFO"
-    log_json: bool = True
-    otlp_endpoint: str = ""
+__all__ = ["RagChatSettings", "Settings"]
