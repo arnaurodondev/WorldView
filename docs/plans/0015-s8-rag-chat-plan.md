@@ -1534,11 +1534,12 @@ class PIIDetectedError(RagError): pass
 
 ---
 
-### Wave D-2: rag_db Infrastructure (Models + Alembic + UoW)
+### Wave D-2: rag_db Infrastructure (Models + Alembic + UoW) ✅
 
 **Goal**: Create SQLAlchemy models, Alembic migration, repository implementations, and UoW for `rag_db`.
 **Depends on**: D-1 (domain entities)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-06 · 25 tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure
 
 **Pre-read**:
@@ -1701,10 +1702,10 @@ class RagUnitOfWork:
 ---
 
 **Validation Gate (Wave D-2)**:
-- [ ] ruff check + mypy pass
-- [ ] `alembic upgrade head` + `downgrade -1` succeed on fresh rag_db
-- [ ] DDL alignment test passes
-- [ ] UoW `__aexit__` does NOT call `commit()` (enforced by test)
+- [x] ruff check + mypy pass
+- [ ] `alembic upgrade head` + `downgrade -1` succeed on fresh rag_db (requires running DB — deferred to integration)
+- [x] DDL alignment test passes
+- [x] UoW `__aexit__` does NOT call `commit()` (enforced by test)
 
 ---
 
