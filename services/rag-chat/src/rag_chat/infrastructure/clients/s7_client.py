@@ -1,0 +1,237 @@
+"""S7 Knowledge Graph HTTP client adapter (T-E-3-02).
+
+Endpoints:
+  POST /api/v1/search/relations         → ANN relation search
+  GET  /api/v1/entities/{id}/graph      → egocentric sub-graph
+  POST /api/v1/claims/search            → temporal claims
+  POST /api/v1/events/search            → structured events
+  GET  /api/v1/entities/{id}/contradictions → active contradictions
+  POST /api/v1/graph/cypher             → multi-hop Cypher (feature-flagged)
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from rag_chat.application.ports.upstream_clients import (
+    ClaimResult,
+    ContradictionResult,
+    EgocentricGraph,
+    EventResult,
+    RelationResult,
+)
+from rag_chat.infrastructure.clients.base import BaseUpstreamClient
+
+if TYPE_CHECKING:
+    from datetime import datetime
+    from uuid import UUID
+
+
+class S7Client(BaseUpstreamClient):
+    """Concrete HTTP adapter for S7 Knowledge Graph."""
+
+    # ── Relation search ────────────────────────────────────────────────────────
+
+    async def search_relations(
+        self,
+        embedding: list[float],
+        entity_ids: list[UUID],
+        top_k: int = 15,
+        min_confidence: float = 0.30,
+    ) -> list[RelationResult]:
+        """POST /api/v1/search/relations → ANN relation results.
+
+        Returns empty list on timeout or HTTP error.
+        """
+        payload: dict = {
+            "query_embedding": embedding,
+            "top_k": top_k,
+            "min_confidence": min_confidence,
+            "entity_ids": [str(eid) for eid in entity_ids],
+        }
+        raw = await self._post("/api/v1/search/relations", payload)
+        results: list[RelationResult] = []
+        for item in raw.get("relations", []):
+            try:
+                results.append(
+                    RelationResult(
+                        relation_id=item["relation_id"],
+                        subject=item.get("subject", ""),
+                        relation_type=item.get("relation_type", ""),
+                        object=item.get("object", ""),
+                        summary=item.get("summary", ""),
+                        confidence=float(item.get("confidence", 0.0)),
+                        summary_authority=item.get("summary_authority"),
+                        evidence_count=int(item.get("evidence_count", 0)),
+                        latest_evidence_at=item.get("latest_evidence_at"),
+                        semantic_mode=item.get("semantic_mode"),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return results
+
+    # ── Egocentric graph ───────────────────────────────────────────────────────
+
+    async def get_egocentric_graph(
+        self,
+        entity_id: UUID,
+        min_confidence: float,
+        limit: int,
+    ) -> EgocentricGraph:
+        """GET /api/v1/entities/{id}/graph → egocentric sub-graph.
+
+        Returns an empty graph on timeout or HTTP error.
+        """
+        raw = await self._get(
+            f"/api/v1/entities/{entity_id}/graph",
+            params={"min_confidence": min_confidence, "limit": limit},
+        )
+        if not raw:
+            return EgocentricGraph(entity_id=str(entity_id))
+        return EgocentricGraph(
+            entity_id=raw.get("entity_id", str(entity_id)),
+            nodes=raw.get("nodes", []),
+            edges=raw.get("edges", []),
+        )
+
+    # ── Claims search ──────────────────────────────────────────────────────────
+
+    async def search_claims(
+        self,
+        entity_ids: list[UUID],
+        claim_types: list[str] | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        top_k: int = 20,
+        min_confidence: float = 0.45,
+    ) -> list[ClaimResult]:
+        """POST /api/v1/claims/search → temporal claims for entities.
+
+        Returns empty list on timeout or HTTP error.
+        """
+        payload: dict = {
+            "entity_ids": [str(eid) for eid in entity_ids],
+            "top_k": top_k,
+            "min_confidence": min_confidence,
+            "claim_types": claim_types or [],
+        }
+        if date_from is not None:
+            payload["date_from"] = date_from.date().isoformat()
+        if date_to is not None:
+            payload["date_to"] = date_to.date().isoformat()
+
+        raw = await self._post("/api/v1/claims/search", payload)
+        results: list[ClaimResult] = []
+        for item in raw.get("claims", []):
+            try:
+                results.append(
+                    ClaimResult(
+                        claim_id=item["claim_id"],
+                        subject_entity_id=item.get("subject_entity_id", ""),
+                        claim_type=item.get("claim_type", ""),
+                        polarity=item.get("polarity", ""),
+                        claim_text=item.get("claim_text", ""),
+                        extraction_confidence=float(item.get("extraction_confidence", 0.0)),
+                        doc_id=item.get("doc_id"),
+                        created_at=item.get("created_at"),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return results
+
+    # ── Events search ──────────────────────────────────────────────────────────
+
+    async def search_events(
+        self,
+        entity_ids: list[UUID],
+        event_types: list[str] | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        top_k: int = 20,
+    ) -> list[EventResult]:
+        """POST /api/v1/events/search → structured events for entities.
+
+        Returns empty list on timeout or HTTP error.
+        """
+        payload: dict = {
+            "entity_ids": [str(eid) for eid in entity_ids],
+            "top_k": top_k,
+            "event_types": event_types or [],
+        }
+        if date_from is not None:
+            payload["date_from"] = date_from.date().isoformat()
+        if date_to is not None:
+            payload["date_to"] = date_to.date().isoformat()
+
+        raw = await self._post("/api/v1/events/search", payload)
+        results: list[EventResult] = []
+        for item in raw.get("events", []):
+            try:
+                results.append(
+                    EventResult(
+                        event_id=item["event_id"],
+                        event_type=item.get("event_type", ""),
+                        event_text=item.get("event_text", ""),
+                        subject_entity_id=item.get("subject_entity_id"),
+                        event_subtype=item.get("event_subtype"),
+                        event_date=item.get("event_date"),
+                        structured_data=item.get("structured_data"),
+                        extraction_confidence=float(item.get("extraction_confidence", 0.0)),
+                        doc_id=item.get("doc_id"),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return results
+
+    # ── Contradictions ─────────────────────────────────────────────────────────
+
+    async def get_contradictions(
+        self,
+        entity_id: UUID,
+        top_k: int = 5,
+    ) -> list[ContradictionResult]:
+        """GET /api/v1/entities/{id}/contradictions → active contradiction pairs.
+
+        Returns empty list on timeout or HTTP error.
+        """
+        raw = await self._get(
+            f"/api/v1/entities/{entity_id}/contradictions",
+            params={"top_k": top_k},
+        )
+        results: list[ContradictionResult] = []
+        for item in raw.get("contradictions", []):
+            try:
+                results.append(
+                    ContradictionResult(
+                        claim_type=item.get("claim_type", ""),
+                        strength=float(item.get("strength", 0.0)),
+                        detected_at=item.get("detected_at", ""),
+                        sides=item.get("sides", []),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return results
+
+    # ── Cypher traversal (feature-flagged) ────────────────────────────────────
+
+    async def cypher_traverse(
+        self,
+        cypher: str,
+        params: dict,
+        max_results: int = 50,
+    ) -> list[dict]:
+        """POST /api/v1/graph/cypher → multi-hop traversal results.
+
+        Returns empty list when feature is disabled (501) or on any error.
+        This method NEVER raises; callers treat an empty list as unavailable.
+        """
+        raw = await self._post(
+            "/api/v1/graph/cypher",
+            {"cypher": cypher, "params": params, "max_results": max_results},
+        )
+        results: list[dict] = raw.get("results", [])  # type: ignore[assignment]
+        return results
