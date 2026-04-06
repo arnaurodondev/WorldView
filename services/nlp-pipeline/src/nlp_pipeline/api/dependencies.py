@@ -115,15 +115,18 @@ def get_chunk_search_use_case(
 
     EmbeddingClient is not available in the API process — callers must supply
     ``query_embedding`` directly (pre-computed by S8 or passed through).
+    ``chunk_text_store`` is injected from app.state when MinIO is configured.
     """
     valkey = getattr(request.app.state, "valkey", None)
     raw_valkey = valkey._redis if valkey is not None else None  # type: ignore[attr-defined]
+    chunk_text_store = getattr(request.app.state, "chunk_text_store", None)
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
         embedding_client=None,
+        chunk_text_store=chunk_text_store,
     )
 
 

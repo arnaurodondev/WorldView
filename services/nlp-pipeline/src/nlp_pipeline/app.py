@@ -104,6 +104,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey = valkey
     app.state.watchlist_cache = watchlist_cache
 
+    # 5. Optional: MinIO chunk text store (for search use case text hydration)
+    app.state.chunk_text_store = None
+    if settings.storage_access_key:
+        try:
+            from nlp_pipeline.infrastructure.storage.chunk_text_store import MinIOChunkTextStore
+            from storage.factory import build_object_storage  # type: ignore[import-untyped]
+            from storage.settings import StorageSettings  # type: ignore[import-untyped]
+
+            _obj_storage = build_object_storage(
+                settings=StorageSettings(
+                    endpoint=settings.storage_endpoint,
+                    access_key=settings.storage_access_key,
+                    secret_key=settings.storage_secret_key,
+                )
+            )
+            app.state.chunk_text_store = MinIOChunkTextStore(_obj_storage, settings.chunk_bucket)
+            log.info("chunk_text_store_configured", bucket=settings.chunk_bucket)
+        except Exception:
+            log.warning("chunk_text_store_init_failed", exc_info=True)
+
     log.info("service_started", service=settings.service_name)
     yield
 

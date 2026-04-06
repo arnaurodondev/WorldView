@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient  # type: ignore[import-not-found]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision, Section
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
@@ -127,6 +128,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         embedding_client: EmbeddingClient,
         extraction_client: ExtractionClient,
         backpressure: BackpressureController,
+        chunk_text_store: ChunkTextStorePort | None = None,
     ) -> None:
         super().__init__(config)
         self._settings = settings
@@ -138,6 +140,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         self._emb = embedding_client
         self._ext = extraction_client
         self._bp = backpressure
+        self._chunk_text_store = chunk_text_store
 
     # ── UoW (no-op — session managed inside process_message) ─────────────────
 
@@ -252,6 +255,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             model_id=self._settings.embedding_model_id,
             instruction_prefix=self._settings.embedding_instruction_prefix,
             generate_chunk_embeddings=generate_chunks,
+            chunk_text_store=self._chunk_text_store,
         )
 
         # ── Block 8: Novelty gate (skip for HALT — can't downgrade further) ──
