@@ -126,6 +126,35 @@ class SignalsQueryPort(ABC):
         ...
 
 
+# ── ChunkTextStore port ───────────────────────────────────────────────────────
+
+
+class ChunkTextStorePort(ABC):
+    """Port for persisting and retrieving chunk text via object storage.
+
+    Implemented by ``MinIOChunkTextStore`` in the infrastructure layer.
+    The port decouples Block 7 and the search use case from MinIO details.
+    """
+
+    @abstractmethod
+    async def put(self, chunk_id: UUID, doc_id: UUID, text: str) -> str:
+        """Upload chunk text; return the storage key (e.g. MinIO object key)."""
+        ...
+
+    @abstractmethod
+    async def get_batch(self, key_map: dict[UUID, str]) -> dict[UUID, str]:
+        """Fetch texts for multiple chunks concurrently.
+
+        Args:
+            key_map: Mapping of chunk_id → storage_key for chunks to fetch.
+
+        Returns:
+            Mapping of chunk_id → text for successfully retrieved chunks.
+            Chunks whose key is missing or whose fetch fails are omitted.
+        """
+        ...
+
+
 # ── DocumentSourceMetadata port ───────────────────────────────────────────────
 
 

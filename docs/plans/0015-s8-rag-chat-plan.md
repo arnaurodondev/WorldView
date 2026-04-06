@@ -65,8 +65,8 @@ Phase 4 (deferred — not in this plan):
 | A-3 | S1 portfolio context endpoint | ✅ done | 2026-04-05 |
 | B-1 | S6 document_source_metadata | ✅ done | 2026-04-05 |
 | B-2 | S6 entity resolve endpoint | ✅ done | 2026-04-05 |
-| B-3 | S6 enhanced chunk search | pending | — |
-| C-1 | S7 claims/search + contradictions | pending | — |
+| B-3 | S6 enhanced chunk search | ✅ done | 2026-04-06 |
+| C-1 | S7 claims/search + contradictions | ✅ done | 2026-04-06 |
 | C-2 | S7 events/search | pending | — |
 | C-3 | S7 relation ANN search | pending | — |
 | C-4 | S7 FundamentalsWorker enhancements | pending | — |
@@ -888,11 +888,12 @@ All four are independent of the S8 core build and can run in parallel with PLAN-
 
 ---
 
-### Wave C-1: Claims Search + Contradictions Endpoint
+### Wave C-1: Claims Search + Contradictions Endpoint ✅
 
 **Goal**: Add `POST /api/v1/claims/search` and `GET /api/v1/entities/{entity_id}/contradictions`.
 **Depends on**: none (queries existing `article_claims` and `contradiction_links` tables)
 **Estimated effort**: 40–55 min
+**Status**: **DONE** — 2026-04-06 · 198 tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -1026,9 +1027,9 @@ LIMIT :top_k
 ---
 
 **Validation Gate (Wave C-1)**:
-- [ ] ruff check + mypy pass on `services/knowledge-graph/`
-- [ ] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
-- [ ] Two new endpoints accessible and returning correct schemas
+- [x] ruff check + mypy pass on `services/knowledge-graph/`
+- [x] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
+- [x] Two new endpoints accessible and returning correct schemas
 
 ---
 

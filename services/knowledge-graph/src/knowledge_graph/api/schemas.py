@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -106,3 +106,53 @@ class DLQListResponse(BaseModel):
 
 class DLQResolveRequest(BaseModel):
     note: str = Field(default="", max_length=2048)
+
+
+# ── POST /api/v1/claims/search ────────────────────────────────────────────────
+
+
+class ClaimsSearchRequest(BaseModel):
+    entity_ids: list[UUID] = Field(..., min_length=1, max_length=10)
+    claim_types: list[str] = Field(default_factory=list)
+    date_from: date | None = None
+    date_to: date | None = None
+    top_k: int = Field(default=20, ge=1, le=100)
+    min_confidence: float = Field(default=0.45, ge=0.0, le=1.0)
+
+
+class ClaimResponse(BaseModel):
+    claim_id: UUID
+    subject_entity_id: UUID
+    claim_type: str
+    polarity: str
+    claim_text: str
+    extraction_confidence: float
+    doc_id: UUID | None
+    created_at: datetime
+
+
+class ClaimsSearchResponse(BaseModel):
+    claims: list[ClaimResponse]
+
+
+# ── GET /api/v1/entities/{entity_id}/contradictions ───────────────────────────
+
+
+class ContradictionSideResponse(BaseModel):
+    polarity: str
+    confidence: float
+    doc_id: UUID | None
+    claim_text: str
+    evidence_date: datetime
+
+
+class ContradictionDetailResponse(BaseModel):
+    claim_type: str
+    strength: float
+    detected_at: datetime
+    sides: list[ContradictionSideResponse]
+
+
+class ContradictionsListResponse(BaseModel):
+    entity_id: UUID
+    contradictions: list[ContradictionDetailResponse]
