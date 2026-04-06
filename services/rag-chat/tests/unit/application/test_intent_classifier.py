@@ -23,7 +23,7 @@ class TestKeywordHeuristicClassifier:
     def test_keyword_classifier_portfolio(self) -> None:
         """'my holdings' → PORTFOLIO intent."""
         clf = KeywordHeuristicClassifier()
-        intent, sub_q, rephrased = clf.classify("What risks affect my holdings?")
+        intent, sub_q, _ = clf.classify("What risks affect my holdings?")
         assert intent == QueryIntent.PORTFOLIO
         assert sub_q == []
 
