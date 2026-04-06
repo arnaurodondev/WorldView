@@ -3,7 +3,7 @@
 > **PRD**: `docs/specs/0015-s8-rag-chat-hybrid-pipeline.md`
 > **Status**: in-progress
 > **Created**: 2026-04-02
-> **Updated**: 2026-04-06
+> **Updated**: 2026-04-07
 > **Sub-plans**: 7 (A–G)
 > **Total waves**: 22
 > **Total estimated effort**: 12–20 agent-hours
@@ -1979,11 +1979,12 @@ These are prerequisites for the retrieval and response waves (F).
 
 ---
 
-### Wave E-1: Input Validation + Rate Limiting + Completion Cache
+### Wave E-1: Input Validation + Rate Limiting + Completion Cache ✅
 
 **Goal**: Implement the security and caching layer that fronts every chat request.
 **Depends on**: D-3 (Valkey client available)
 **Estimated effort**: 40–55 min
+**Status**: **DONE** — 2026-04-06 · 70 tests pass · ruff + mypy clean
 **Architecture layer**: application (security + caching)
 
 **Pre-read**:
@@ -2095,9 +2096,9 @@ class CompletionCache:
 ---
 
 **Validation Gate (Wave E-1)**:
-- [ ] ruff check + mypy pass
-- [ ] 11 security tests pass (all CRITICAL marked)
-- [ ] Rate limiter uses Valkey sliding window (not simple counter)
+- [x] ruff check + mypy pass
+- [x] 11 security tests pass (all CRITICAL marked)
+- [x] Rate limiter uses Valkey sliding window (not simple counter)
 
 ---
 
