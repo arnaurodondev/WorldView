@@ -1033,11 +1033,12 @@ LIMIT :top_k
 
 ---
 
-### Wave C-2: Events Search Endpoint
+### Wave C-2: Events Search Endpoint ✅
 
 **Goal**: Add `POST /api/v1/events/search` using the new columns added by migration 0002.
 **Depends on**: A-1 (migration 0002 adds event_subtype, source_type, structured_data columns)
 **Estimated effort**: 30–45 min
+**Status**: **DONE** — 2026-04-06 · 209 unit tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -1125,9 +1126,9 @@ class EventsSearchResponse(BaseModel):
 ---
 
 **Validation Gate (Wave C-2)**:
-- [ ] ruff check + mypy pass
-- [ ] Unit tests pass (including test that structured_data is returned as dict)
-- [ ] Endpoint returns 501 if called before migration 0002 (handled by schema-level null)
+- [x] ruff check + mypy pass
+- [x] Unit tests pass (including test that structured_data is returned as dict)
+- [x] Endpoint returns 501 if called before migration 0002 (handled by schema-level null)
 
 ---
 
