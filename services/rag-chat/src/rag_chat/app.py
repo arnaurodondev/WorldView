@@ -22,6 +22,7 @@ from observability import configure_logging, get_logger  # type: ignore[import-u
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from rag_chat.api import health as health_router
+from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
 
@@ -89,8 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.valkey = valkey
 
-    # 5. Provider negative cache (populated by LLM client in later waves)
+    # 5. Provider negative cache
     app.state.provider_cache = {}  # type: ignore[assignment]
+
+    # 6. Build and wire the ChatOrchestrator
+    _wire_orchestrator(app, settings, valkey)
 
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
@@ -99,6 +103,102 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await valkey.aclose()
     await engine.dispose()
     log.info("rag_chat_stopped", service=settings.service_name)  # type: ignore[no-any-return]
+
+
+def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> None:
+    """Build and attach the ChatOrchestrator to app.state."""
+
+    from rag_chat.application.caching.completion_cache import CompletionCache
+    from rag_chat.application.caching.rate_limiter import RateLimiter
+    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
+    from rag_chat.application.pipeline.hyde_expander import HydeExpander
+    from rag_chat.application.pipeline.intent_classifier import OllamaIntentClassifier
+    from rag_chat.application.pipeline.reranker import BGEReranker
+    from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
+    from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
+    from rag_chat.application.security.input_validator import InputValidator
+    from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestrator
+    from rag_chat.application.use_cases.get_thread import GetThreadUseCase
+    from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
+    from rag_chat.infrastructure.clients.s1_client import S1Client
+    from rag_chat.infrastructure.clients.s3_client import S3Client
+    from rag_chat.infrastructure.clients.s6_client import S6Client
+    from rag_chat.infrastructure.clients.s7_client import S7Client
+    from rag_chat.infrastructure.llm.ollama_adapter import OllamaCompletionAdapter
+    from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
+
+    # Upstream service clients
+    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
+    s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    s1 = S1Client(
+        base_url=settings.s1_base_url,
+        valkey=valkey,
+        timeout=settings.upstream_timeout_seconds,
+    )
+
+    # LLM provider chain
+    providers: list[Any] = []
+    if settings.deepinfra_api_key:
+        from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
+
+        providers.append(DeepInfraCompletionAdapter(api_key=settings.deepinfra_api_key))
+    if settings.openrouter_api_key:
+        from rag_chat.infrastructure.llm.openrouter_adapter import OpenRouterCompletionAdapter
+
+        providers.append(OpenRouterCompletionAdapter(api_key=settings.openrouter_api_key))
+    # Ollama is always the emergency fallback
+    providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
+    llm_chain = LLMProviderChain(providers=providers, valkey=valkey)
+
+    # Embedding: use S6 embedding endpoint via a simple adapter
+    class _S6EmbeddingAdapter:
+        """Minimal embedding adapter that calls S6 POST /api/v1/embed."""
+
+        def __init__(self, client: Any) -> None:
+            self._client = client
+
+        async def embed(self, text: str) -> list[float]:
+            raw = await self._client._post("/api/v1/embed", {"text": text})
+            result: list[float] = raw.get("embedding", [])
+            return result
+
+    embedding_client = _S6EmbeddingAdapter(s6)
+
+    orchestrator = ChatOrchestrator(
+        validator=InputValidator(),
+        rate_limiter=RateLimiter(valkey=valkey, limit=settings.rate_limit_per_tenant),
+        cache=CompletionCache(valkey=valkey),
+        get_thread_uc=GetThreadUseCase(),
+        s6_client=s6,
+        classifier=OllamaIntentClassifier(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_classification_model,
+        ),
+        plan_builder=RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled),
+        hyde=HydeExpander(
+            llm_provider=providers[-1],  # use Ollama for HyDE (lightweight)
+            embedding_client=embedding_client,
+            valkey=valkey,
+        ),
+        embedding_client=embedding_client,
+        retrieval=ParallelRetrievalOrchestrator(
+            s6_client=s6,
+            s7_client=s7,
+            s3_client=s3,
+            s1_client=s1,
+            timeout=settings.upstream_timeout_seconds,
+        ),
+        graph_enricher=GraphEnricher(),
+        fusion=FusionPipeline(),
+        reranker=BGEReranker(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_reranker_model,
+        ),
+        llm_chain=llm_chain,
+        persistence=ChatPersistenceUseCase(),
+    )
+    app.state.chat_orchestrator = orchestrator
 
 
 def create_app(settings: RagChatSettings | None = None) -> FastAPI:
@@ -122,5 +222,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     # Routers
     app.include_router(health_router.router)
     app.include_router(threads_router.router)
+    app.include_router(chat_router.router)
 
     return app

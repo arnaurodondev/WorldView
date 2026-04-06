@@ -1,9 +1,9 @@
 # PLAN-0015: S8 RAG/Chat Hybrid Intelligence Pipeline
 
 > **PRD**: `docs/specs/0015-s8-rag-chat-hybrid-pipeline.md`
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-04-02
-> **Updated**: 2026-04-06 (Wave E-3 done)
+> **Updated**: 2026-04-06 (Wave G-1 done — all 22 waves complete)
 > **Sub-plans**: 7 (A–G)
 > **Total waves**: 22
 > **Total estimated effort**: 12–20 agent-hours
@@ -67,21 +67,21 @@ Phase 4 (deferred — not in this plan):
 | B-2 | S6 entity resolve endpoint | ✅ done | 2026-04-05 |
 | B-3 | S6 enhanced chunk search | ✅ done | 2026-04-06 |
 | C-1 | S7 claims/search + contradictions | ✅ done | 2026-04-06 |
-| C-2 | S7 events/search | done | 2026-04-06 |
-| C-3 | S7 relation ANN search | done | 2026-04-06 |
-| C-4 | S7 FundamentalsWorker enhancements | done | 2026-04-06 |
-| D-1 | S8 domain layer | done | 2026-04-06 |
-| D-2 | S8 rag_db infrastructure | pending | — |
-| D-3 | S8 service scaffold + config | pending | — |
-| D-4 | S8 conversation management CRUD | pending | — |
-| E-1 | S8 input validation + rate limiting | pending | — |
-| E-2 | S8 intent classifier + HyDE | pending | — |
-| E-3 | S8 upstream service clients | pending | — |
-| F-1 | S8 parallel retrieval + fusion | pending | — |
-| F-2 | S8 reranking + context assembly | pending | — |
-| F-3 | S8 LLM provider chain + streaming | pending | — |
-| F-4 | S8 chat endpoints + persistence | pending | — |
-| G-1 | S9 routing + documentation | pending | — |
+| C-2 | S7 events/search | ✅ done | 2026-04-06 |
+| C-3 | S7 relation ANN search | ✅ done | 2026-04-06 |
+| C-4 | S7 FundamentalsWorker enhancements | ✅ done | 2026-04-06 |
+| D-1 | S8 domain layer | ✅ done | 2026-04-06 |
+| D-2 | S8 rag_db infrastructure | ✅ done | 2026-04-06 |
+| D-3 | S8 service scaffold + config | ✅ done | 2026-04-06 |
+| D-4 | S8 conversation management CRUD | ✅ done | 2026-04-06 |
+| E-1 | S8 input validation + rate limiting | ✅ done | 2026-04-06 |
+| E-2 | S8 intent classifier + HyDE | ✅ done | 2026-04-06 |
+| E-3 | S8 upstream service clients | ✅ done | 2026-04-06 |
+| F-1 | S8 parallel retrieval + fusion | ✅ done | 2026-04-06 |
+| F-2 | S8 reranking + context assembly | ✅ done | 2026-04-06 |
+| F-3 | S8 LLM provider chain + streaming | ✅ done | 2026-04-06 |
+| F-4 | S8 chat endpoints + persistence | ✅ done | 2026-04-06 |
+| G-1 | S9 routing + documentation | ✅ done | 2026-04-06 |
 
 ---
 
@@ -2390,11 +2390,12 @@ LLM completion, and the public `/chat` API endpoints.
 
 ---
 
-### Wave F-1: Parallel Retrieval Orchestrator + Fusion Scoring
+### Wave F-1: Parallel Retrieval Orchestrator + Fusion Scoring ✅
 
 **Goal**: Step 5 (parallel retrieval via asyncio.gather) + Steps 6-7 (graph enrichment + fusion).
 **Depends on**: E-3
 **Estimated effort**: 50–70 min
+**Status**: **DONE** — 2026-04-06 · 13 new tests, 96 total · ruff + mypy clean
 **Architecture layer**: application (orchestration)
 
 **Pre-read**:
@@ -2524,11 +2525,12 @@ Returns new list of enriched items (domain entities are frozen, create new insta
 
 ---
 
-### Wave F-2: BGE Reranker + Context Assembly + Prompt Construction
+### Wave F-2: BGE Reranker + Context Assembly + Prompt Construction ✅
 
 **Goal**: Steps 8–10 — rerank top-30 to top-12, assemble context block, build final prompt.
 **Depends on**: F-1
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-06 · 15 new tests, 111 total · ruff + mypy clean
 **Architecture layer**: application
 
 **Pre-read**:
@@ -2622,11 +2624,12 @@ Sub-questions: [if COMPARISON/REASONING]
 
 ---
 
-### Wave F-3: LLM Provider Chain + SSE Streaming
+### Wave F-3: LLM Provider Chain + SSE Streaming ✅
 
 **Goal**: Steps 11 — implement 3-tier LLM provider fallback chain with SSE streaming.
 **Depends on**: F-2
 **Estimated effort**: 50–70 min
+**Status**: **DONE** — 2026-04-06 · 11 new tests, 122 total · ruff + mypy clean
 **Architecture layer**: infrastructure (LLM adapters)
 
 **Pre-read**:
@@ -2734,11 +2737,12 @@ class SSEEmitter:
 
 ---
 
-### Wave F-4: Output Processing + Chat Endpoints + Integration Tests
+### Wave F-4: Output Processing + Chat Endpoints + Integration Tests ✅
 
 **Goal**: Steps 12–13 — output sanitization, citation injection, persistence, and public /chat endpoints.
 **Depends on**: F-3
 **Estimated effort**: 60–80 min
+**Status**: **DONE** — 2026-04-06 · 17 new tests, 139 total · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -2996,11 +3000,12 @@ rag_injection_blocked = Counter("rag_injection_blocked_total", "Injection attemp
 
 ---
 
-### Wave G-1: S9 Route Additions + Documentation Updates
+### Wave G-1: S9 Route Additions + Documentation Updates ✅
 
 **Goal**: Wire S8 into S9 API Gateway and update all service docs to reflect new capabilities.
 **Depends on**: F-4
 **Estimated effort**: 35–50 min
+**Status**: **DONE** — 2026-04-06 · 5 new tests (S9), 17 gateway total · ruff + mypy clean
 **Architecture layer**: infrastructure (gateway) + docs
 
 **Pre-read**:

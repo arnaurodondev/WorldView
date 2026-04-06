@@ -37,7 +37,13 @@ See `docs/MASTER_PLAN.md` § Contracts for the full endpoint table.
 | `/api/v1/portfolios`, `/api/v1/transactions`, `/api/v1/holdings` | Portfolio |
 | `/api/v1/articles`, `/api/v1/sources` | Content |
 | `/api/v1/signals`, `/api/v1/entities`, `/api/v1/topics`, `/api/v1/search` | Intelligence |
-| `/api/v1/chat` | RAG/Chat |
+| `/v1/chat` | RAG/Chat S8 — sync chat (buffered) |
+| `/v1/chat/stream` | RAG/Chat S8 — SSE streaming (unbuffered, chunked) |
+| `/v1/threads`, `/v1/threads/{id}` | RAG/Chat S8 — conversation thread CRUD |
+
+**SSE Note**: `POST /v1/chat/stream` uses `StreamingResponse` with `aiter_bytes()` to forward
+Server-Sent Events without buffering. `X-Tenant-Id` and `X-User-Id` headers are injected from
+the decoded JWT before forwarding to S8.
 
 ---
 
