@@ -51,6 +51,22 @@ WHERE entity_id = :entity_id
         )
         return result.fetchone() is not None
 
+    async def find_by_name_and_type(self, canonical_name: str, entity_type: str) -> UUID | None:
+        """Find entity_id by exact canonical_name + entity_type match.
+
+        Used by FundamentalsRefreshWorker to resolve GICS sector/industry entities.
+        Returns None if not found (e.g. unsupported sector name, seed not applied).
+        """
+        result = await self._session.execute(
+            text("""
+SELECT entity_id FROM canonical_entities
+WHERE canonical_name = :canonical_name AND entity_type = :entity_type
+"""),
+            {"canonical_name": canonical_name, "entity_type": entity_type},
+        )
+        row = result.fetchone()
+        return UUID(str(row[0])) if row else None
+
     async def create(
         self,
         canonical_name: str,

@@ -305,7 +305,7 @@ def test_relation_type_registry_new_types(conn: sa.engine.Connection) -> None:
     assert rows["is_in_industry"][3] == pytest.approx(0.85)
 
     assert rows["earnings_released"][1] == "TEMPORAL_CLAIM"
-    assert rows["earnings_released"][2] == "FAST"
+    assert rows["earnings_released"][2] == "MEDIUM"
     assert rows["earnings_released"][3] == pytest.approx(0.95)
 
     assert rows["corporate_action"][1] == "TEMPORAL_CLAIM"

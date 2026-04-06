@@ -72,6 +72,10 @@ INSERT INTO relations (
     now(), now(), 1
 )
 ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET
+    semantic_mode     = EXCLUDED.semantic_mode,
+    decay_class       = EXCLUDED.decay_class,
+    decay_alpha       = EXCLUDED.decay_alpha,
+    base_confidence   = EXCLUDED.base_confidence,
     latest_evidence_at = now(),
     evidence_count     = relations.evidence_count + 1,
     confidence_stale   = true,

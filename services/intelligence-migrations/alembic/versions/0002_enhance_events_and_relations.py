@@ -47,7 +47,7 @@ INSERT INTO relation_type_registry
 VALUES
     ('is_in_sector',      'RELATION_STATE',  'PERMANENT', 0.90, 'GICS sector membership from EODHD'),
     ('is_in_industry',    'RELATION_STATE',  'DURABLE',   0.85, 'GICS industry group from EODHD'),
-    ('earnings_released', 'TEMPORAL_CLAIM',  'FAST',      0.95, 'Quarterly/annual earnings event'),
+    ('earnings_released', 'TEMPORAL_CLAIM',  'MEDIUM',      0.95, 'Quarterly/annual earnings event'),
     ('corporate_action',  'TEMPORAL_CLAIM',  'DURABLE',   0.90, 'Dividend, split, buyback events')
 ON CONFLICT (canonical_type) DO NOTHING
 """)

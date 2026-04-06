@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from knowledge_graph.domain.confidence import (
-    _TEMPORAL_CLAIM_ALPHA,
     ContradictionInput,
     EvidenceInput,
     compute_confidence,
@@ -224,38 +222,28 @@ class TestContradiction:
 
 
 class TestSemanticModeDecay:
-    def test_temporal_claim_uses_fixed_alpha(self) -> None:
-        """TEMPORAL_CLAIM uses 0.02310 regardless of decay_alpha parameter.
-
-        Two evidence pieces: fresh high-weight + very old low-weight.
-        With alpha=0 (RELATION_STATE): equally weighted → average = 0.5.
-        With alpha=0.02310 (TEMPORAL_CLAIM): old piece nearly zeroed → ~0.9.
-        """
+    def test_temporal_claim_uses_relation_decay_alpha(self) -> None:
+        """TEMPORAL_CLAIM uses relation decay_alpha (same as RELATION_STATE)."""
         fresh = _evidence(source_weight=0.9, source_type="A", source_name="srcA", days_ago=0)
         old = _evidence(source_weight=0.1, source_type="B", source_name="srcB", days_ago=365)
+        alpha = 0.011552  # MEDIUM half-life (60 days)
 
         result_rs = compute_confidence(
             evidence=[fresh, old],
             contradictions=[],
-            decay_alpha=0.0,  # no decay for RELATION_STATE
+            decay_alpha=alpha,
             semantic_mode=SemanticMode.RELATION_STATE,
             now=_NOW,
         )
         result_tc = compute_confidence(
             evidence=[fresh, old],
             contradictions=[],
-            decay_alpha=0.0,  # ignored by TEMPORAL_CLAIM; uses 0.02310
+            decay_alpha=alpha,
             semantic_mode=SemanticMode.TEMPORAL_CLAIM,
             now=_NOW,
         )
-        # TEMPORAL_CLAIM down-weights old evidence → support closer to 0.9
-        # RELATION_STATE with alpha=0 treats both equally → support = 0.5
-        assert result_tc.support > result_rs.support
-
-    def test_temporal_claim_alpha_is_30_day_half_life(self) -> None:
-        """exp(-0.02310 * 30) ≈ 0.5 (30-day half-life)."""
-        expected_half = math.exp(-_TEMPORAL_CLAIM_ALPHA * 30)
-        assert abs(expected_half - 0.5) < 0.01
+        assert result_tc.support == pytest.approx(result_rs.support)
+        assert result_tc.corroboration == pytest.approx(result_rs.corroboration)
 
 
 class TestFinalBounded:

@@ -69,7 +69,7 @@ Phase 4 (deferred — not in this plan):
 | C-1 | S7 claims/search + contradictions | ✅ done | 2026-04-06 |
 | C-2 | S7 events/search | pending | — |
 | C-3 | S7 relation ANN search | pending | — |
-| C-4 | S7 FundamentalsWorker enhancements | pending | — |
+| C-4 | S7 FundamentalsWorker enhancements | done | 2026-04-06 |
 | D-1 | S8 domain layer | pending | — |
 | D-2 | S8 rag_db infrastructure | pending | — |
 | D-3 | S8 service scaffold + config | pending | — |
@@ -1243,11 +1243,12 @@ class RelationSearchResponse(BaseModel):
 
 ---
 
-### Wave C-4: FundamentalsRefreshWorker Enhancements
+### Wave C-4: FundamentalsRefreshWorker Enhancements ✅
 
 **Goal**: Extend `FundamentalsRefreshWorker` to insert earnings events and upsert is_in_sector/is_in_industry relations.
 **Depends on**: A-1 (migration 0002 columns + 003 sector entities seed)
 **Estimated effort**: 50–70 min
+**Status**: **DONE** — 2026-04-06 · 10 tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure (worker enhancement)
 
 **Pre-read**:
@@ -1326,10 +1327,10 @@ look up the corresponding sector/industry `canonical_entity` (from 003 seed), th
 ---
 
 **Validation Gate (Wave C-4)**:
-- [ ] ruff check + mypy pass on `services/knowledge-graph/`
-- [ ] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
-- [ ] Earnings event insertion is idempotent (ON CONFLICT tested)
-- [ ] Sector/industry lookup handles missing entity gracefully
+- [x] ruff check + mypy pass on `services/knowledge-graph/`
+- [x] `python -m pytest services/knowledge-graph/tests/ -m unit -v` passes
+- [x] Earnings event insertion is idempotent (ON CONFLICT tested)
+- [x] Sector/industry lookup handles missing entity gracefully
 
 
 ---

@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     relation_canonicalization_threshold: float = 0.35
     confidence_corroboration_cap: float = 0.20
     confidence_contradiction_cap: float = 0.60
-    confidence_temporal_claim_alpha: float = 0.02310  # 30-day half-life
+    confidence_temporal_claim_alpha: float = 0.02310  # legacy compatibility; currently ignored
     confidence_corroboration_gain_per_source: float = 0.05
     confidence_corroboration_min_temporal_weight: float = 0.1
     confidence_contradiction_top_k: int = 3
