@@ -4102,3 +4102,36 @@ Consumer validates this invariant before INSERT and logs + skips violating rows.
 - All of: `Highlights` (MarketCap, EBITDA, PERatio, ROE, ROA), `Valuation` (TrailingPE, ForwardPE, EV/EBITDA)
 
 **Prevention**: Before implementing any EODHD data extraction, verify the field exists in `docs/references/eodhd-endpoints-reference.md` against the Outputs section with actual JSON examples.
+
+
+## BP-096 — FastAPI Route Parameters Must Not Be Under TYPE_CHECKING
+
+**Pattern**: FastAPI route function parameters that appear in type annotations (e.g., `request: Request`) must be importable at runtime. Placing the import inside `if TYPE_CHECKING:` causes `PydanticUndefinedAnnotation` at application startup when FastAPI/Pydantic resolves the route's dependency graph.
+
+**Symptom**:
+```
+pydantic.errors.PydanticUndefinedAnnotation: name 'Request' is not defined
+```
+
+**Cause**: `from __future__ import annotations` makes all annotations strings (lazy), but FastAPI's `get_dependant()` still evaluates them at route registration time via `get_type_hints()`. If `Request` (or any other route-parameter type) is only available under `TYPE_CHECKING`, this lookup fails.
+
+**Fix**: Always import types used in route function signatures at module level (not under `TYPE_CHECKING`):
+```python
+# WRONG
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from fastapi import Request
+
+@router.get("/readyz")
+async def readyz(request: Request) -> Response: ...
+
+# CORRECT
+from fastapi import APIRouter, Request  # ← runtime import
+
+@router.get("/readyz")
+async def readyz(request: Request) -> Response: ...
+```
+
+**Types that CAN be under TYPE_CHECKING**: return type annotations that FastAPI doesn't inspect at registration (only if the return type is a concrete Pydantic model or `dict`), and service-specific types used only in the function body (not the signature).
+
+**Applies to**: All FastAPI services (S1–S10) when using `from __future__ import annotations`.
