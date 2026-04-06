@@ -22,6 +22,7 @@ from observability import configure_logging, get_logger  # type: ignore[import-u
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from rag_chat.api import health as health_router
+from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
 
 if TYPE_CHECKING:
@@ -120,5 +121,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
 
     # Routers
     app.include_router(health_router.router)
+    app.include_router(threads_router.router)
 
     return app

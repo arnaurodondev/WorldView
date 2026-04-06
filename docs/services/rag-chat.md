@@ -1,7 +1,7 @@
 # RAG / Chat Service
 
-> **Owner**: Chat domain · **Database**: None (stateless) · **Port**: 8008
-> **Status**: New
+> **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
+> **Status**: In-progress (PLAN-0015 Wave D-4 complete)
 
 ---
 
@@ -18,14 +18,18 @@ LLM provider fallback, streaming response delivery, citation injection, response
 
 ## API Surface
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (checks downstream services) | — |
-| GET | `/metrics` | Prometheus | — |
-| POST | `/api/v1/chat` | Chat completion (body: message, context) | private |
-| GET | `/api/v1/chat/stream` | SSE streaming endpoint | private |
-| GET | `/api/v1/providers/status` | LLM provider health status | — |
+| Method | Path | Description | Auth | Cache |
+|--------|------|-------------|------|-------|
+| GET | `/healthz` | Liveness | — | — |
+| GET | `/readyz` | Readiness (rag_db + Valkey) | — | — |
+| GET | `/metrics` | Prometheus | — | — |
+| POST | `/api/v1/chat` | Chat completion (body: message, context) | X-Tenant-Id + X-User-Id | private |
+| GET | `/api/v1/chat/stream` | SSE streaming chat | X-Tenant-Id + X-User-Id | — |
+| GET | `/api/v1/providers/status` | LLM provider availability | — | — |
+| POST | `/api/v1/threads` | Create conversation thread | X-Tenant-Id + X-User-Id | — |
+| GET | `/api/v1/threads` | List active threads (paginated) | X-Tenant-Id + X-User-Id | — |
+| GET | `/api/v1/threads/{thread_id}` | Get thread with messages | X-Tenant-Id + X-User-Id | — |
+| DELETE | `/api/v1/threads/{thread_id}` | Soft-delete thread | X-Tenant-Id + X-User-Id | — |
 
 ### Request/Response Models
 
