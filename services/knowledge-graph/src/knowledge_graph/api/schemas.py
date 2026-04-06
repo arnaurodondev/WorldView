@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -183,3 +184,32 @@ class EventResponse(BaseModel):
 
 class EventsSearchResponse(BaseModel):
     events: list[EventResponse]
+
+
+# ── POST /api/v1/search/relations ─────────────────────────────────────────────
+
+
+class RelationSearchRequest(BaseModel):
+    query_embedding: list[float] = Field(..., min_length=1024, max_length=1024)
+    top_k: int = Field(default=15, ge=1, le=50)
+    min_confidence: float = Field(default=0.30, ge=0.0, le=1.0)
+    entity_ids: list[UUID] = Field(default_factory=list)
+    relation_types: list[str] = Field(default_factory=list)
+    semantic_mode: Literal["RELATION_STATE", "TEMPORAL_CLAIM"] | None = None
+
+
+class RelationSearchResultItem(BaseModel):
+    relation_id: UUID
+    subject: str
+    relation_type: str
+    object: str
+    summary: str
+    confidence: float
+    summary_authority: float
+    evidence_count: int
+    latest_evidence_at: datetime | None
+    semantic_mode: str
+
+
+class RelationSearchResponse(BaseModel):
+    relations: list[RelationSearchResultItem]
