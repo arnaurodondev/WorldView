@@ -96,10 +96,11 @@ class Settings(BaseSettings):
     dispatcher_poll_interval_secs: float = 1.0
     dispatcher_batch_size: int = 50
 
-    # Storage (MinIO/S3 for Silver tier reading)
+    # Storage (MinIO/S3 for Silver tier reading and chunk text persistence)
     storage_endpoint: str = "http://localhost:7480"
     storage_access_key: str = ""
     storage_secret_key: str = ""
+    chunk_bucket: str = "worldview"
 
     # Admin API
     admin_token: str = ""

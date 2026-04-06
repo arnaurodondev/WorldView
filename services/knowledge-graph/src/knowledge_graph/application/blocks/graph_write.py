@@ -238,6 +238,10 @@ async def materialize_graph(
     is_backfill: bool,
     relations: list[RawRelation],
     canonical_types: list[str | None],
+    canonical_semantic_modes: list[str | None],
+    canonical_decay_classes: list[str | None],
+    canonical_decay_alphas: list[float | None],
+    canonical_base_confidences: list[float | None],
     events: list[RawEvent],
     claims: list[RawClaim],
     session: AsyncSession,
@@ -254,6 +258,9 @@ async def materialize_graph(
     the canonicalized type for each relation (``None`` if proposed/unknown —
     those relations are still written with ``canonical_type=None``).
 
+    Metadata arrays (semantic mode, decay class/alpha, base confidence) must
+    be the same length/order as ``relations`` as returned by Block 11.
+
     Advisory lock + upsert + evidence are written atomically within the
     caller-managed *session* transaction.  The caller must commit/rollback.
 
@@ -263,6 +270,10 @@ async def materialize_graph(
         is_backfill: Whether this is a backfill message.
         relations: Raw relation objects extracted from the document.
         canonical_types: Canonicalized types (same order as *relations*).
+        canonical_semantic_modes: Canonical semantic modes per relation.
+        canonical_decay_classes: Canonical decay classes per relation.
+        canonical_decay_alphas: Canonical decay alphas per relation.
+        canonical_base_confidences: Canonical base confidence per relation.
         events: Raw event objects extracted from the document.
         claims: Raw claim objects extracted from the document.
         session: Intelligence_db async session (caller-managed transaction).
@@ -287,7 +298,22 @@ async def materialize_graph(
     # ------------------------------------------------------------------
     # 1+2 — Relations: advisory lock + upsert + insert relation_evidence_raw
     # ------------------------------------------------------------------
-    for rel, canonical_type in zip(relations, canonical_types, strict=True):
+    for (
+        rel,
+        canonical_type,
+        semantic_mode,
+        decay_class,
+        decay_alpha,
+        base_confidence,
+    ) in zip(
+        relations,
+        canonical_types,
+        canonical_semantic_modes,
+        canonical_decay_classes,
+        canonical_decay_alphas,
+        canonical_base_confidences,
+        strict=True,
+    ):
         # Skip provisional entities from the aggregation worker perspective,
         # but still INSERT the raw evidence row (entity_provisional=true rows
         # are held until entity.canonical.created.v1 resolves them).
@@ -296,10 +322,10 @@ async def materialize_graph(
                 subject_entity_id=rel.subject_entity_id,
                 object_entity_id=rel.object_entity_id,
                 canonical_type=canonical_type,
-                semantic_mode="RELATION_STATE",  # default; updated if registry returns mode
-                decay_class="STANDARD",  # default; updated if registry returns class
-                decay_alpha=0.000950,  # default; updated by Worker 13A
-                base_confidence=rel.extraction_confidence,
+                semantic_mode=semantic_mode or "RELATION_STATE",
+                decay_class=decay_class or "DURABLE",
+                decay_alpha=decay_alpha if decay_alpha is not None else 0.000950,
+                base_confidence=base_confidence if base_confidence is not None else rel.extraction_confidence,
             )
             relation_ids.append(str(relation_id))
         else:

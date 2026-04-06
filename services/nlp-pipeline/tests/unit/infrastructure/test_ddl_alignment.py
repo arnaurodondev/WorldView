@@ -35,7 +35,7 @@ _MIGRATION_DIR = Path(__file__).parent.parent.parent.parent / "alembic/versions"
 
 
 def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
-    """Extract column names from a CREATE TABLE statement in the migration SQL."""
+    """Extract column names from CREATE TABLE and ALTER TABLE ADD COLUMN statements."""
     pattern = rf"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+{table_name}\s*\("
     match = re.search(pattern, migration_text, re.IGNORECASE)
     if not match:
@@ -74,6 +74,12 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         parts = line.split()
         if parts:
             columns.add(parts[0].strip('"'))
+
+    # Also collect columns added via ALTER TABLE ... ADD COLUMN
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(\w+)"
+    for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+        columns.add(m.group(1))
+
     return columns
 
 

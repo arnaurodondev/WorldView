@@ -30,8 +30,10 @@ and performs read/write operations only.
 | GET | `/readyz` | — | Readiness — SELECT 1 on intelligence_db; 503 if degraded |
 | GET | `/metrics` | — | Prometheus text format |
 | GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200) |
+| GET | `/api/v1/entities/{entity_id}/contradictions` | — | Active contradiction links for entity; query params: `claim_type`, `top_k` (1–100, default 20). Returns empty list when none exist (NOT 404) |
 | GET | `/api/v1/relations` | — | Paginated filtered relation list; query params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |
+| POST | `/api/v1/claims/search` | — | Search `claims` table; body: `{entity_ids[1..10], claim_types[], date_from, date_to, top_k(1–100), min_confidence(0–1)}`. Returns ordered by `extraction_confidence DESC` |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
 | GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
 | POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |

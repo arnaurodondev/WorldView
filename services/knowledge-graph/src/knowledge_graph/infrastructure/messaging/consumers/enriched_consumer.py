@@ -178,6 +178,10 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                 canon_results.append(result)
 
             canonical_types = [r.canonical_type for r in canon_results]
+            canonical_semantic_modes = [r.semantic_mode for r in canon_results]
+            canonical_decay_classes = [r.decay_class for r in canon_results]
+            canonical_decay_alphas = [r.decay_alpha for r in canon_results]
+            canonical_base_confidences = [r.base_confidence for r in canon_results]
 
             # ----------------------------------------------------------
             # Block 12a: Graph materialization
@@ -188,6 +192,10 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                 is_backfill=is_backfill,
                 relations=raw_relations,
                 canonical_types=canonical_types,
+                canonical_semantic_modes=canonical_semantic_modes,
+                canonical_decay_classes=canonical_decay_classes,
+                canonical_decay_alphas=canonical_decay_alphas,
+                canonical_base_confidences=canonical_base_confidences,
                 events=raw_events,
                 claims=raw_claims,
                 session=session,

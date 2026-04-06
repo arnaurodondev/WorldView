@@ -47,6 +47,7 @@ class Chunk:
     sentence_end_idx: int | None = None
     speaker: str | None = None  # transcripts only
     heading_path: str | None = None  # e.g. "Item 1A > Risk Factors"
+    text_key: str | None = None  # MinIO key for chunk text; set after upload
 
 
 @dataclass
