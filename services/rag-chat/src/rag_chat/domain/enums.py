@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class QueryIntent(str, Enum):
+class QueryIntent(StrEnum):
     """Intent categories for user queries — drives retrieval strategy selection."""
 
     FACTUAL_LOOKUP = "FACTUAL_LOOKUP"
@@ -17,7 +17,7 @@ class QueryIntent(str, Enum):
     PORTFOLIO = "PORTFOLIO"
 
 
-class ItemType(str, Enum):
+class ItemType(StrEnum):
     """Type of a retrieved item in the unified retrieval result."""
 
     chunk = "chunk"
@@ -28,7 +28,7 @@ class ItemType(str, Enum):
     cypher_path = "cypher_path"
 
 
-class MessageRole(str, Enum):
+class MessageRole(StrEnum):
     """Role in a conversation message."""
 
     user = "user"
