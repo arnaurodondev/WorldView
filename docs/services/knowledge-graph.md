@@ -35,6 +35,7 @@ and performs read/write operations only.
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |
 | POST | `/api/v1/claims/search` | — | Search `claims` table; body: `{entity_ids[1..10], claim_types[], date_from, date_to, top_k(1–100), min_confidence(0–1)}`. Returns ordered by `extraction_confidence DESC` |
 | POST | `/api/v1/events/search` | — | Search `events` table (migration 0002); body: `{entity_ids[] (empty=no filter), event_types[], date_from, date_to, top_k(1–100)}`. Returns ordered by `event_date DESC`. Includes `event_subtype` and `structured_data` (JSONB) |
+| POST | `/api/v1/search/relations` | — | HNSW ANN semantic search over `relation_summaries`; body: `{query_embedding[1024], top_k(1–50), min_confidence, entity_ids[], relation_types[], semantic_mode}`. Returns ordered by cosine distance ASC. `summary_authority = confidence * log1p(evidence_count)` computed at query time |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
 | GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
 | POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |

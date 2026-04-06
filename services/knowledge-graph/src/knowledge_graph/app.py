@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import common.ids  # type: ignore[import-untyped]
-from knowledge_graph.api import claims, dlq, entities, events, health, routes
+from knowledge_graph.api import claims, dlq, entities, events, health, routes, search
 from knowledge_graph.config import Settings
 from knowledge_graph.domain.errors import KnowledgeGraphError
 from knowledge_graph.infrastructure.intelligence_db.session import (
@@ -134,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(claims.router)
     app.include_router(entities.router)
     app.include_router(events.router)
+    app.include_router(search.router)
     app.include_router(dlq.router)
 
     return app

@@ -1,24 +1,34 @@
-"""RelationSummary repository (PRD §6.7 Block 13C).
+"""RelationSummary repository (PRD §6.7 Block 13C + Wave C-3).
 
 Uses raw SQL via ``text()`` — S7 does not own intelligence_db DDL.
 
 Insert pattern: set old summaries ``is_current=false`` THEN insert new one
 within the same transaction to maintain the unique constraint on
 ``(relation_id) WHERE is_current = true``.
+
+Wave C-3 adds ``search_by_embedding``: HNSW ANN cosine search on
+``summary_embedding`` joining ``relations`` + ``canonical_entities``.
+``summary_authority`` is computed in Python (NOT a stored column).
 """
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.relation_summary_repository import (
+    RelationSummaryRepositoryPort,
+    RelationSummarySearchResult,
+)
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationSummaryRepository:
+class RelationSummaryRepository(RelationSummaryRepositoryPort):
     """Write/read repository for ``relation_summaries``."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -115,3 +125,70 @@ WHERE summary_id = :summary_id
 """),
             {"summary_id": str(summary_id), "embedding": embedding},
         )
+
+    async def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        *,
+        entity_ids: list[UUID] | None = None,
+        min_confidence: float = 0.30,
+        relation_types: list[str] | None = None,
+        semantic_mode: str | None = None,
+        top_k: int = 15,
+    ) -> list[RelationSummarySearchResult]:
+        """ANN cosine search on ``relation_summaries.summary_embedding`` (Wave C-3).
+
+        Uses the HNSW index ``idx_relation_summary_emb_hnsw`` (is_current=true,
+        summary_embedding IS NOT NULL). Joins ``relations`` and
+        ``canonical_entities`` to return entity names and relation metadata.
+
+        ``summary_authority`` is computed at fetch time:
+        ``confidence * log1p(evidence_count)`` — NOT a stored column.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT rs.relation_id, r.subject_entity_id, r.object_entity_id,
+       se.canonical_name AS subject_name, oe.canonical_name AS object_name,
+       r.canonical_type, rs.summary_text, r.confidence, r.evidence_count,
+       r.latest_evidence_at, r.semantic_mode,
+       rs.summary_embedding <=> :query_embedding::vector AS distance
+FROM relation_summaries rs
+JOIN relations r ON rs.relation_id = r.relation_id
+JOIN canonical_entities se ON r.subject_entity_id = se.entity_id
+JOIN canonical_entities oe ON r.object_entity_id = oe.entity_id
+WHERE rs.is_current = true
+  AND rs.summary_embedding IS NOT NULL
+  AND r.confidence >= :min_confidence
+  AND (:entity_ids IS NULL OR r.subject_entity_id = ANY(:entity_ids) OR r.object_entity_id = ANY(:entity_ids))
+  AND (:relation_types IS NULL OR r.canonical_type = ANY(:relation_types))
+  AND (:semantic_mode IS NULL OR r.semantic_mode = :semantic_mode)
+ORDER BY distance ASC
+LIMIT :top_k
+"""),
+            {
+                "query_embedding": query_embedding,
+                "min_confidence": min_confidence,
+                "entity_ids": [str(e) for e in entity_ids] if entity_ids else None,
+                "relation_types": relation_types if relation_types else None,
+                "semantic_mode": semantic_mode,
+                "top_k": top_k,
+            },
+        )
+        rows = result.fetchall()
+        return [
+            RelationSummarySearchResult(
+                relation_id=UUID(str(r[0])),
+                subject_entity_id=UUID(str(r[1])),
+                object_entity_id=UUID(str(r[2])),
+                subject_canonical_name=str(r[3]),
+                object_canonical_name=str(r[4]),
+                canonical_type=str(r[5]),
+                summary=str(r[6]),
+                confidence=float(r[7]),
+                evidence_count=int(r[8]),
+                latest_evidence_at=r[9],
+                semantic_mode=str(r[10]),
+                summary_authority=float(r[7]) * math.log1p(int(r[8])),
+            )
+            for r in rows
+        ]

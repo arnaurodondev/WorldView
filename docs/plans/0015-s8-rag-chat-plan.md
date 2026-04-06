@@ -1132,11 +1132,12 @@ class EventsSearchResponse(BaseModel):
 
 ---
 
-### Wave C-3: Relation Summary ANN Search
+### Wave C-3: Relation Summary ANN Search ✅
 
 **Goal**: Add `POST /api/v1/search/relations` — HNSW ANN search on `relation_summaries.summary_embedding`.
 **Depends on**: none (table and HNSW index already exist from intelligence-migrations 0001)
 **Estimated effort**: 35–50 min
+**Status**: **DONE** — 2026-04-06 · 222 unit tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -1235,10 +1236,10 @@ class RelationSearchResponse(BaseModel):
 ---
 
 **Validation Gate (Wave C-3)**:
-- [ ] ruff check + mypy pass
-- [ ] Unit tests pass
-- [ ] Endpoint accessible and returns correct schema
-- [ ] `summary_authority` is computed in Python (not from DB column)
+- [x] ruff check + mypy pass
+- [x] Unit tests pass
+- [x] Endpoint accessible and returns correct schema
+- [x] `summary_authority` is computed in Python (not from DB column)
 
 ---
 
