@@ -156,3 +156,30 @@ class ContradictionDetailResponse(BaseModel):
 class ContradictionsListResponse(BaseModel):
     entity_id: UUID
     contradictions: list[ContradictionDetailResponse]
+
+
+# ── POST /api/v1/events/search ─────────────────────────────────────────────────
+
+
+class EventsSearchRequest(BaseModel):
+    entity_ids: list[UUID] = Field(default_factory=list)
+    event_types: list[str] = Field(default_factory=list)
+    date_from: date | None = None
+    date_to: date | None = None
+    top_k: int = Field(default=20, ge=1, le=100)
+
+
+class EventResponse(BaseModel):
+    event_id: UUID
+    event_type: str
+    event_subtype: str | None
+    subject_entity_id: UUID
+    event_date: datetime | None
+    event_text: str
+    structured_data: dict | None
+    extraction_confidence: float
+    doc_id: UUID | None
+
+
+class EventsSearchResponse(BaseModel):
+    events: list[EventResponse]
