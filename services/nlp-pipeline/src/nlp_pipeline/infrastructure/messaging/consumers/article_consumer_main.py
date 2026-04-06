@@ -116,20 +116,8 @@ async def main() -> None:
         group_id=settings.kafka_consumer_group,
         topics=[settings.topic_article_stored],
     )
-    consumer = ArticleProcessingConsumer(
-        config=article_config,
-        settings=settings,
-        nlp_session_factory=nlp_sf,
-        intelligence_session_factory=intel_sf,
-        storage=None,
-        watchlist_cache=watchlist_cache,
-        ner_client=ner_client,
-        embedding_client=embedding_client,
-        extraction_client=extraction_client,
-        backpressure=bp,
-    )
-
-    # Optional: configure MinIO storage
+    # Optional: configure MinIO storage (article downloads + chunk text upload)
+    _object_storage = None
     try:
         from storage.factory import build_object_storage  # type: ignore[import-untyped]
         from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -139,10 +127,33 @@ async def main() -> None:
             access_key=settings.storage_access_key,
             secret_key=settings.storage_secret_key,
         )
-        storage = build_object_storage(settings=storage_settings)
-        consumer._storage = storage  # type: ignore[attr-defined]
+        _object_storage = build_object_storage(settings=storage_settings)
     except Exception:
         log.warning("minio_not_configured_article_downloads_disabled", exc_info=True)
+
+    _chunk_text_store = None
+    if _object_storage is not None:
+        try:
+            from nlp_pipeline.infrastructure.storage.chunk_text_store import MinIOChunkTextStore
+
+            _chunk_text_store = MinIOChunkTextStore(_object_storage, settings.chunk_bucket)
+            log.info("chunk_text_store_configured", bucket=settings.chunk_bucket)
+        except Exception:
+            log.warning("chunk_text_store_init_failed", exc_info=True)
+
+    consumer = ArticleProcessingConsumer(
+        config=article_config,
+        settings=settings,
+        nlp_session_factory=nlp_sf,
+        intelligence_session_factory=intel_sf,
+        storage=_object_storage,
+        watchlist_cache=watchlist_cache,
+        ner_client=ner_client,
+        embedding_client=embedding_client,
+        extraction_client=extraction_client,
+        backpressure=bp,
+        chunk_text_store=_chunk_text_store,
+    )
 
     try:
         consumer_task = asyncio.create_task(consumer.run())

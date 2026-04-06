@@ -7,8 +7,10 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import (
     EnhancedChunkSearchUseCase,
+    _chunk_text_cache_key,
     _embed_cache_key,
 )
 
@@ -27,6 +29,7 @@ def _make_raw_result(
     score: float = 0.87,
     heading_path: str | None = "Item 2 > Revenue",
     section_type: str | None = "financial",
+    chunk_text_key: str | None = None,
 ) -> dict:
     return {
         "chunk_id": chunk_id,
@@ -37,7 +40,24 @@ def _make_raw_result(
         "score": score,
         "section_type": section_type,
         "heading_path": heading_path,
+        "chunk_text_key": chunk_text_key,
     }
+
+
+def _make_chunk_text_store(
+    texts: dict[uuid.UUID, str] | None = None,
+    fail: bool = False,
+) -> ChunkTextStorePort:
+    store = MagicMock(spec=ChunkTextStorePort)
+    if fail:
+        store.get_batch = AsyncMock(side_effect=Exception("MinIO down"))
+    else:
+
+        async def _get_batch(key_map: dict) -> dict:
+            return {cid: (texts or {}).get(cid, "") for cid in key_map}
+
+        store.get_batch = AsyncMock(side_effect=_get_batch)
+    return store
 
 
 def _make_use_case(
@@ -49,6 +69,8 @@ def _make_use_case(
     meta_map: dict | None = None,
     valkey_cached_vec: str | None = None,
     embed_result: list[float] | None = None,
+    chunk_text_store: ChunkTextStorePort | None = None,
+    valkey_cached_text: bytes | None = None,
 ) -> EnhancedChunkSearchUseCase:
     ann_repo = AsyncMock()
     ann_repo.ann_search = AsyncMock(
@@ -63,7 +85,12 @@ def _make_use_case(
     canon_repo.batch_get = AsyncMock(return_value=canon_map or {})
 
     valkey = AsyncMock()
-    valkey.get = AsyncMock(return_value=valkey_cached_vec)
+
+    # Return embed cache miss by default; allow text cache to be set separately
+    def _valkey_get(key: str) -> object:
+        return valkey_cached_vec if key.startswith("s6:v1:emb:") else valkey_cached_text
+
+    valkey.get = AsyncMock(side_effect=_valkey_get)
     valkey.set = AsyncMock()
 
     emb_client = MagicMock()
@@ -75,6 +102,7 @@ def _make_use_case(
         canonical_entity_repo=canon_repo,
         valkey=valkey,
         embedding_client=emb_client,
+        chunk_text_store=chunk_text_store,
     )
 
 
@@ -222,3 +250,112 @@ class TestEmbedCacheKey:
 
     def test_different_text_different_key(self) -> None:
         assert _embed_cache_key("apple") != _embed_cache_key("google")
+
+
+@pytest.mark.unit
+class TestChunkTextCacheKey:
+    def test_key_format(self) -> None:
+        cid = uuid.UUID("018f1e2a-0000-7000-8000-000000000010")
+        key = _chunk_text_cache_key(cid)
+        assert key == f"nlp:v1:chunk_text:{cid}"
+
+
+@pytest.mark.unit
+class TestEnhancedChunkSearchTextFetch:
+    """Tests for the MinIO chunk text fetch path."""
+
+    @pytest.mark.asyncio
+    async def test_text_populated_from_minio_when_key_present(self) -> None:
+        """When chunk_text_key is in the result, text comes from the store."""
+        text_key = f"nlp-pipeline/chunk-text/{_DOC_ID}/{_CHUNK_ID}/body/v1.txt"
+        raw = [_make_raw_result(chunk_text_key=text_key)]
+
+        store = _make_chunk_text_store(texts={_CHUNK_ID: "Apple reported strong Q3 earnings."})
+        uc = _make_use_case(ann_results=raw, chunk_text_store=store)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert len(results) == 1
+        assert results[0].text == "Apple reported strong Q3 earnings."
+
+    @pytest.mark.asyncio
+    async def test_text_falls_back_to_heading_path_when_no_key(self) -> None:
+        """When chunk_text_key is None, text falls back to heading_path."""
+        raw = [_make_raw_result(chunk_text_key=None, heading_path="Item 1A > Risk Factors")]
+
+        store = _make_chunk_text_store()
+        uc = _make_use_case(ann_results=raw, chunk_text_store=store)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert results[0].text == "Item 1A > Risk Factors"
+        # key_map is empty (no chunk_text_key) → early return, get_batch never called
+        store.get_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_text_served_from_valkey_cache(self) -> None:
+        """Cached chunk text is returned without calling get_batch."""
+        text_key = f"nlp-pipeline/chunk-text/{_DOC_ID}/{_CHUNK_ID}/body/v1.txt"
+        raw = [_make_raw_result(chunk_text_key=text_key)]
+
+        store = MagicMock(spec=ChunkTextStorePort)
+        store.get_batch = AsyncMock(return_value={})
+
+        cached_text = b"Cached: Apple Q3 beat expectations."
+        uc = _make_use_case(ann_results=raw, chunk_text_store=store, valkey_cached_text=cached_text)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert results[0].text == "Cached: Apple Q3 beat expectations."
+        # all chunks resolved from Valkey → uncached is empty → get_batch never called
+        store.get_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_failure_falls_back_gracefully(self) -> None:
+        """get_batch failure must not raise; text falls back to heading_path."""
+        text_key = f"nlp-pipeline/chunk-text/{_DOC_ID}/{_CHUNK_ID}/body/v1.txt"
+        raw = [_make_raw_result(chunk_text_key=text_key, heading_path="Fallback heading")]
+
+        store = _make_chunk_text_store(fail=True)
+        uc = _make_use_case(ann_results=raw, chunk_text_store=store)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert results[0].text == "Fallback heading"  # graceful fallback
+
+    @pytest.mark.asyncio
+    async def test_no_store_leaves_text_as_heading_path(self) -> None:
+        """When chunk_text_store is None, text is heading_path (original behaviour)."""
+        raw = [_make_raw_result(chunk_text_key="some/key", heading_path="My Heading")]
+        uc = _make_use_case(ann_results=raw, chunk_text_store=None)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert results[0].text == "My Heading"
+
+    @pytest.mark.asyncio
+    async def test_section_granularity_skips_minio(self) -> None:
+        """Section results (granularity='section') are never fetched from MinIO."""
+        raw = [
+            {
+                "chunk_id": _CHUNK_ID,
+                "doc_id": _DOC_ID,
+                "section_id": _SECTION_ID,
+                "granularity": "section",
+                "text": "Section heading",
+                "score": 0.80,
+                "section_type": "body",
+                "heading_path": "Section heading",
+                "chunk_text_key": None,
+            }
+        ]
+
+        store = MagicMock(spec=ChunkTextStorePort)
+        store.get_batch = AsyncMock(return_value={})
+        uc = _make_use_case(ann_results=raw, chunk_text_store=store)
+
+        results, _, _ = await uc.execute(query_text=None, query_embedding=_DUMMY_VEC)
+
+        assert results[0].text == "Section heading"
+        # sections have no chunk_text_key → key_map is empty → get_batch never called
+        store.get_batch.assert_not_awaited()

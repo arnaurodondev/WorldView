@@ -3,8 +3,12 @@
 Executes ANN queries against nlp_db using pgvector cosine distance operator
 ``<=>`` on pre-built HNSW indexes (idx_chunk_emb_hnsw / idx_section_emb_hnsw).
 
-Text is populated from ``chunks.heading_path`` because chunk text is not stored
-in nlp_db (known limitation — see enhanced_chunk_search module docstring).
+Chunk results include ``chunk_text_key`` — a MinIO object key populated by
+Block 7 during document processing.  The search use case uses this key to
+fetch full chunk text from MinIO (via ``ChunkTextStorePort``).
+
+Section results have no ``chunk_text_key`` (sections are not stored as objects);
+their ``text`` field falls back to ``sections.title`` (heading_path) or ``""``.
 """
 
 from __future__ import annotations
@@ -110,6 +114,7 @@ class ChunkANNRepository:
                 c.doc_id,
                 c.section_id,
                 c.heading_path,
+                c.chunk_text_key,
                 s.section_type,
                 1 - (ce.embedding <=> :vec::vector) AS score
             FROM chunk_embeddings ce
@@ -136,6 +141,7 @@ class ChunkANNRepository:
                 "score": float(row.score),
                 "section_type": row.section_type,
                 "heading_path": row.heading_path,
+                "chunk_text_key": row.chunk_text_key,
             }
             for row in rows
         ]

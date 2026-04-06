@@ -33,22 +33,28 @@ from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-
 class _MockNERClient:
     """Returns one organization mention per call, deterministically."""
 
-    async def extract_entities(self, inp: Any) -> Any:
+    async def batch_extract_entities(self, inputs: list[Any]) -> list[Any]:
         from ml_clients.dataclasses import EntityMention as MLMention  # type: ignore[import-not-found]
         from ml_clients.dataclasses import NEROutput  # type: ignore[import-not-found]
 
-        if not inp.text.strip():
-            return NEROutput(mentions=[])
-        return NEROutput(mentions=[MLMention(text="TestCorp", label="organization", start=0, end=8, score=0.95)])
+        results = []
+        for inp in inputs:
+            if not inp.text.strip():
+                results.append(NEROutput(mentions=[]))
+            else:
+                results.append(
+                    NEROutput(mentions=[MLMention(text="TestCorp", label="organization", start=0, end=8, score=0.95)])
+                )
+        return results
 
 
 class _MockZeroNERClient:
     """Returns no mentions — zero-NER scenario."""
 
-    async def extract_entities(self, inp: Any) -> Any:
+    async def batch_extract_entities(self, inputs: list[Any]) -> list[Any]:
         from ml_clients.dataclasses import NEROutput  # type: ignore[import-not-found]
 
-        return NEROutput(mentions=[])
+        return [NEROutput(mentions=[]) for _ in inputs]
 
 
 class _MockEmbeddingClient:
@@ -242,7 +248,9 @@ class TestFullPipeline:
                 stack.enter_context(p)
             await consumer.process_message(key=None, value=_make_event(), headers={})
 
-        _nlp_sess.commit.assert_called_once()
+        # Two commits on the nlp session factory: main pipeline + best-effort
+        # source-metadata write (_write_source_metadata, added in Wave B-1)
+        assert _nlp_sess.commit.await_count == 2
 
 
 @pytest.mark.integration

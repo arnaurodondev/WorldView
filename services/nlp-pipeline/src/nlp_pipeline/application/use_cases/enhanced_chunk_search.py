@@ -1,13 +1,16 @@
 """Enhanced chunk search use case (PLAN-0015-B Wave B-3).
 
 Combines HNSW ANN vector search on chunk/section embeddings with:
+  - Full chunk text fetched from MinIO via ``ChunkTextStorePort``
+    (Valkey-cached; key: ``nlp:v1:chunk_text:{chunk_id}``, TTL 1h)
   - Inline entity annotations from chunk_entity_mentions → entity_mentions
   - Citation metadata from document_source_metadata
   - Embedding caching via Valkey (key: s6:v1:emb:{sha256(text)}, TTL 1h)
 
-Known limitation: ``EnrichedChunkResult.text`` is populated from
-``heading_path or ""`` because chunk text is not persisted in nlp_db.
-A future migration will add chunk_text to the chunks table.
+Chunk results include full text when ``chunk_text_key`` is populated in the
+DB (set by Block 7 during document processing via ``MinIOChunkTextStore``).
+Section results return ``title`` (heading_path) or ``""`` — sections are not
+stored as MinIO objects.
 """
 
 from __future__ import annotations
@@ -24,7 +27,10 @@ if TYPE_CHECKING:
 
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
-    from nlp_pipeline.application.ports.repositories import DocumentSourceMetadataRepository
+    from nlp_pipeline.application.ports.repositories import (
+        ChunkTextStorePort,
+        DocumentSourceMetadataRepository,
+    )
     from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
     from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
 
@@ -66,7 +72,7 @@ class EnrichedChunkResult:
     doc_id: UUID
     section_id: UUID | None
     granularity: str  # "chunk" | "section"
-    text: str  # heading_path or "" until chunk text storage is added (see module docstring)
+    text: str  # full chunk text from MinIO; falls back to heading_path or ""
     score: float
     source_metadata: SourceMetadata
     entities: list[ChunkEntityAnnotation]
@@ -82,6 +88,10 @@ def _embed_cache_key(text: str) -> str:
     return f"s6:v1:emb:{digest}"
 
 
+def _chunk_text_cache_key(chunk_id: UUID) -> str:
+    return f"nlp:v1:chunk_text:{chunk_id}"
+
+
 class EnhancedChunkSearchUseCase:
     """Search chunks/sections via HNSW ANN with entity + citation enrichment.
 
@@ -91,6 +101,9 @@ class EnhancedChunkSearchUseCase:
     Dependency injection pattern follows :class:`QueryEntityResolverUseCase`:
     the embedding_client is optional — when absent, ``query_embedding`` MUST be
     provided in :meth:`execute` (pre-computed by the caller).
+
+    When ``chunk_text_store`` is provided, full chunk text is fetched from MinIO
+    for each result (Valkey-cached at ``nlp:v1:chunk_text:{chunk_id}``).
     """
 
     def __init__(
@@ -100,12 +113,14 @@ class EnhancedChunkSearchUseCase:
         canonical_entity_repo: CanonicalEntityRepository,
         valkey: Any | None = None,  # redis.asyncio.Redis
         embedding_client: EmbeddingClient | None = None,
+        chunk_text_store: ChunkTextStorePort | None = None,
     ) -> None:
         self._ann = chunk_ann_repo
         self._meta = source_metadata_repo
         self._canon = canonical_entity_repo
         self._valkey = valkey
         self._emb = embedding_client
+        self._chunk_text_store = chunk_text_store
 
     async def execute(
         self,
@@ -171,6 +186,9 @@ class EnhancedChunkSearchUseCase:
                     )
                 )
 
+        # ── Chunk text fetch from MinIO (with Valkey cache) ──────────────────
+        text_map = await self._fetch_chunk_texts(raw_results)
+
         # ── Assemble results ─────────────────────────────────────────────────
         results: list[EnrichedChunkResult] = []
         for r in raw_results:
@@ -186,13 +204,15 @@ class EnhancedChunkSearchUseCase:
                 if doc_meta
                 else SourceMetadata()
             )
+            # text_map wins; fall back to heading_path (sections) or ""
+            text = text_map.get(r["chunk_id"]) or r.get("text") or ""
             results.append(
                 EnrichedChunkResult(
                     chunk_id=r["chunk_id"],
                     doc_id=r["doc_id"],
                     section_id=r.get("section_id"),
                     granularity=r["granularity"],
-                    text=r.get("text") or "",
+                    text=text,
                     score=float(r["score"]),
                     source_metadata=src,
                     entities=entity_map.get(str(r["chunk_id"]), []),
@@ -202,6 +222,61 @@ class EnhancedChunkSearchUseCase:
             )
 
         return results, total_searched, embedding_model
+
+    async def _fetch_chunk_texts(self, raw_results: list[dict[str, Any]]) -> dict[UUID, str]:
+        """Fetch chunk text for results that have a ``chunk_text_key``.
+
+        Checks Valkey cache first; falls back to ``_chunk_text_store.get_batch()``.
+        Section results (no ``chunk_text_key``) are silently skipped.
+
+        Returns a mapping of chunk_id → text for successfully fetched chunks.
+        """
+        if self._chunk_text_store is None:
+            return {}
+
+        key_map: dict[UUID, str] = {}
+        for r in raw_results:
+            text_key = r.get("chunk_text_key")
+            if text_key and r.get("granularity") == "chunk":
+                key_map[r["chunk_id"]] = text_key
+
+        if not key_map:
+            return {}
+
+        text_map: dict[UUID, str] = {}
+        uncached: dict[UUID, str] = {}
+
+        for chunk_id, obj_key in key_map.items():
+            cache_key = _chunk_text_cache_key(chunk_id)
+            if self._valkey is not None:
+                try:
+                    cached = await self._valkey.get(cache_key)
+                    if cached:
+                        text_map[chunk_id] = cached.decode() if isinstance(cached, bytes) else str(cached)
+                        continue
+                except Exception:
+                    _log.warning("chunk_text_cache_read_failed", chunk_id=str(chunk_id), exc_info=True)  # type: ignore[no-any-return]
+            uncached[chunk_id] = obj_key
+
+        if uncached:
+            try:
+                fetched = await self._chunk_text_store.get_batch(uncached)
+                text_map.update(fetched)
+
+                if self._valkey is not None:
+                    for chunk_id, text in fetched.items():
+                        try:
+                            await self._valkey.set(
+                                _chunk_text_cache_key(chunk_id),
+                                text,
+                                ex=_EMBED_CACHE_TTL,
+                            )
+                        except Exception:
+                            _log.warning("chunk_text_cache_write_failed", chunk_id=str(chunk_id), exc_info=True)  # type: ignore[no-any-return]
+            except Exception:
+                _log.warning("chunk_text_fetch_batch_failed", exc_info=True)  # type: ignore[no-any-return]
+
+        return text_map
 
     async def _resolve_embedding(
         self,

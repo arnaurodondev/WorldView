@@ -12,6 +12,7 @@ from nlp_pipeline.application.blocks.embeddings import (
     chunk_section,
     run_embeddings_block,
 )
+from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
 from nlp_pipeline.domain.models import Section
 
 
@@ -214,3 +215,99 @@ class TestRunEmbeddingsBlock:
         )
 
         assert len(chunks) >= 1
+
+
+@pytest.mark.unit
+class TestRunEmbeddingsBlockChunkTextStore:
+    """Tests for the chunk_text_store integration in Block 7."""
+
+    def _make_text_store(self, fail: bool = False) -> ChunkTextStorePort:
+        store = MagicMock(spec=ChunkTextStorePort)
+        if fail:
+            store.put = AsyncMock(side_effect=Exception("MinIO unavailable"))
+        else:
+
+            async def _put(chunk_id: object, doc_id: object, text: object) -> str:
+                return f"nlp-pipeline/chunk-text/{doc_id}/{chunk_id}/body/v1.txt"
+
+            store.put = AsyncMock(side_effect=_put)
+        return store
+
+    @pytest.mark.asyncio
+    async def test_chunk_text_keys_set_when_store_provided(self) -> None:
+        """When chunk_text_store is provided, all chunks get text_key set."""
+        client = _make_embedding_client()
+        sections = [_make_section("Apple beats earnings. Revenue grew. Stock rallied.")]
+        store = self._make_text_store()
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=store,
+        )
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.text_key is not None
+            assert "nlp-pipeline/chunk-text" in chunk.text_key
+
+    @pytest.mark.asyncio
+    async def test_chunk_text_keys_none_without_store(self) -> None:
+        """When chunk_text_store is None, text_key is never set on chunks."""
+        client = _make_embedding_client()
+        sections = [_make_section("Apple beats earnings. Revenue grew.")]
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=None,
+        )
+
+        for chunk in chunks:
+            assert chunk.text_key is None
+
+    @pytest.mark.asyncio
+    async def test_upload_failure_does_not_raise(self) -> None:
+        """MinIO upload failure must not propagate — chunk is returned with text_key=None."""
+        client = _make_embedding_client()
+        sections = [_make_section("Revenue grew. Apple stock rose.")]
+        store = self._make_text_store(fail=True)
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=store,
+        )
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.text_key is None  # upload failed, key not set
+
+    @pytest.mark.asyncio
+    async def test_store_called_for_all_tiers(self) -> None:
+        """Text is uploaded even when generate_chunk_embeddings=False (LIGHT tier)."""
+        client = _make_embedding_client()
+        sections = [_make_section("Short article text. Only one sentence.")]
+        store = self._make_text_store()
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,  # LIGHT tier
+            chunk_text_store=store,
+        )
+
+        assert store.put.await_count == len(chunks)
+        for chunk in chunks:
+            assert chunk.text_key is not None

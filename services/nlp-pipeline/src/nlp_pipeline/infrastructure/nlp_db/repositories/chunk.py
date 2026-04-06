@@ -36,6 +36,7 @@ class ChunkRepository:
                 sentence_end_idx=chunk.sentence_end_idx,
                 speaker=chunk.speaker,
                 heading_path=chunk.heading_path,
+                chunk_text_key=chunk.text_key,
             )
             .on_conflict_do_nothing(index_elements=["chunk_id"])
         )

@@ -3,11 +3,14 @@
 Produces:
   - Section embeddings for ALL routing tiers.
   - Chunk embeddings for MEDIUM/DEEP only (via should_generate_chunk_embeddings).
+  - Chunk text uploads to MinIO (ALL tiers, best-effort via ChunkTextStorePort).
   - Failed embeddings → EmbeddingPendingEntry (never raises on partial failure).
 """
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import re
 from typing import TYPE_CHECKING
 
@@ -24,6 +27,7 @@ if TYPE_CHECKING:
 
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
+    from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.domain.models import Section
 
 
@@ -178,6 +182,34 @@ async def _embed_text(
     return None
 
 
+async def _upload_chunk_texts(
+    chunks: list[Chunk],
+    chunk_text_store: ChunkTextStorePort,
+) -> list[Chunk]:
+    """Upload chunk texts to MinIO in parallel (best-effort).
+
+    For each chunk, attempts ``chunk_text_store.put()`` and returns an updated
+    Chunk with ``text_key`` set.  Individual failures are logged and swallowed —
+    the chunk is returned unchanged (``text_key=None``).
+    """
+
+    async def _upload_one(chunk: Chunk) -> Chunk:
+        if not chunk.text:
+            return chunk
+        try:
+            key = await chunk_text_store.put(chunk.chunk_id, chunk.doc_id, chunk.text)
+            return dataclasses.replace(chunk, text_key=key)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "chunk_text_upload_failed",
+                chunk_id=str(chunk.chunk_id),
+                error=str(exc),
+            )
+            return chunk
+
+    return list(await asyncio.gather(*[_upload_one(c) for c in chunks]))
+
+
 async def run_embeddings_block(
     sections: list[Section],
     *,
@@ -187,6 +219,7 @@ async def run_embeddings_block(
     generate_chunk_embeddings: bool,
     max_tokens: int = CHUNK_MAX_TOKENS,
     overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
+    chunk_text_store: ChunkTextStorePort | None = None,
 ) -> tuple[
     list[Chunk],
     list[tuple[UUID, list[float]]],  # (chunk_id, embedding)
@@ -198,6 +231,9 @@ async def run_embeddings_block(
     Section embeddings are produced for ALL routing tiers.
     Chunk embeddings are produced only when ``generate_chunk_embeddings=True``
     (MEDIUM/DEEP tiers — determined by the caller via suppression gate).
+
+    When ``chunk_text_store`` is provided, chunk text is uploaded to MinIO
+    for ALL routing tiers (best-effort; failures do not raise).
 
     Failed embeddings are recorded as EmbeddingPendingEntry entries; they are
     never re-raised to the caller.
@@ -260,5 +296,9 @@ async def run_embeddings_block(
                         created_at=now,
                     ),
                 )
+
+    # ── Chunk text upload (ALL tiers, best-effort) ────────────────────────
+    if chunk_text_store is not None and all_chunks:
+        all_chunks = await _upload_chunk_texts(all_chunks, chunk_text_store)
 
     return all_chunks, chunk_embeddings, section_embeddings, pending_failures
