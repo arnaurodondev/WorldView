@@ -157,3 +157,197 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         llm.embed.assert_awaited_once()
         emb_repo.upsert.assert_awaited_once()
+
+
+# ── T-C-4-01: Earnings event insertion ───────────────────────────────────────
+
+_EARNINGS_RECORD = {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "section": "earnings_history",
+    "period_end": "2024-09-30T00:00:00",
+    "period_type": "quarterly",
+    "data": {"epsActual": 1.64, "epsEstimate": 1.60, "revenueActual": 94900.0},
+    "source": "eodhd",
+    "ingested_at": "2024-10-01T00:00:00",
+}
+
+
+def _make_earnings_http(status: int = 200, records: list | None = None) -> AsyncMock:
+    """Return an AsyncMock http_client whose .get() yields the given earnings response."""
+    resp = MagicMock()
+    resp.status_code = status
+    if records is None:
+        records = [_EARNINGS_RECORD]
+    resp.json = MagicMock(return_value={"security_id": str(_ENTITY_ID), "records": records})
+    http = AsyncMock()
+    http.get = AsyncMock(return_value=resp)
+    return http
+
+
+def _make_session_for_earnings(dedup_found: bool = False) -> AsyncMock:
+    """Return an AsyncMock session.
+
+    First execute call (dedup SELECT) returns a row or None based on *dedup_found*.
+    Second execute call (INSERT) returns a plain MagicMock.
+    """
+    dedup_result = MagicMock()
+    dedup_result.fetchone.return_value = (1,) if dedup_found else None
+    insert_result = MagicMock()
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[dedup_result, insert_result])
+    return session
+
+
+def _make_worker_bare() -> object:
+    from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+    sf = MagicMock()
+    llm = AsyncMock()
+    return FundamentalsRefreshWorker(sf, llm, "http://market-data:8003")
+
+
+class TestEarningsEventInsertion:
+    """Tests for FundamentalsRefreshWorker._insert_earnings_events (T-C-4-01)."""
+
+    def test_earnings_event_inserted(self) -> None:
+        """New earnings record (dedup SELECT returns nothing) → INSERT executed."""
+        http = _make_earnings_http()
+        session = _make_session_for_earnings(dedup_found=False)
+        worker = _make_worker_bare()
+
+        count = asyncio.get_event_loop().run_until_complete(
+            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
+        )
+
+        assert count == 1
+        # First call = dedup SELECT, second call = INSERT
+        assert session.execute.call_count == 2
+
+    def test_earnings_event_idempotent(self) -> None:
+        """Existing earnings record (dedup SELECT returns row) → INSERT skipped, count=0."""
+        http = _make_earnings_http()
+        session = _make_session_for_earnings(dedup_found=True)
+        worker = _make_worker_bare()
+
+        count = asyncio.get_event_loop().run_until_complete(
+            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
+        )
+
+        assert count == 0
+        # Only the dedup SELECT; no INSERT
+        assert session.execute.call_count == 1
+
+    def test_earnings_s3_404_skipped(self) -> None:
+        """S3 returns 404 → no DB execute, count=0, no error raised."""
+        http = _make_earnings_http(status=404)
+        session = AsyncMock()
+        worker = _make_worker_bare()
+
+        count = asyncio.get_event_loop().run_until_complete(
+            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
+        )
+
+        assert count == 0
+        session.execute.assert_not_awaited()
+
+
+# ── T-C-4-02: Sector/industry relation upsert ────────────────────────────────
+
+_SECTOR_ENTITY_ID = UUID("0195daad-a008-7008-8008-000000000008")  # Information Technology seed ID
+_INDUSTRY_ENTITY_ID = UUID("0195daad-b013-7013-8013-000000000013")  # Software & Services seed ID
+
+
+def _make_profile_http(status: int = 200, gic_sector: str = "Information Technology") -> AsyncMock:
+    """Return an AsyncMock http_client whose .get() yields the given company-profile response."""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json = MagicMock(
+        return_value={
+            "security_id": str(_ENTITY_ID),
+            "records": [
+                {
+                    "id": "00000000-0000-0000-0000-000000000002",
+                    "section": "company_profile",
+                    "period_end": "2024-10-01T00:00:00",
+                    "period_type": "snapshot",
+                    "data": {"GicSector": gic_sector, "GicGroup": "Software & Services"},
+                    "source": "eodhd",
+                    "ingested_at": "2024-10-01T00:00:00",
+                }
+            ],
+        }
+    )
+    http = AsyncMock()
+    http.get = AsyncMock(return_value=resp)
+    return http
+
+
+def _make_sector_repos(sector_found: bool = True, industry_found: bool = True) -> tuple:
+    """Return (relation_repo, evidence_repo, entity_repo) mocks."""
+    relation_repo = AsyncMock()
+    relation_repo.upsert = AsyncMock(return_value=UUID("00000000-0000-0000-0000-000000000010"))
+    evidence_repo = AsyncMock()
+    evidence_repo.insert_raw = AsyncMock()
+    entity_repo = AsyncMock()
+    entity_repo.find_by_name_and_type = AsyncMock(
+        side_effect=lambda name, typ: (
+            _SECTOR_ENTITY_ID
+            if typ == "sector" and sector_found
+            else (_INDUSTRY_ENTITY_ID if typ == "industry_group" and industry_found else None)
+        )
+    )
+    return relation_repo, evidence_repo, entity_repo
+
+
+class TestSectorRelationUpsert:
+    """Tests for FundamentalsRefreshWorker._upsert_sector_relations (T-C-4-02)."""
+
+    def test_sector_relation_upserted(self) -> None:
+        """Valid sector + industry → relation_repo.upsert and evidence_repo.insert_raw called."""
+        http = _make_profile_http()
+        relation_repo, evidence_repo, entity_repo = _make_sector_repos()
+        worker = _make_worker_bare()
+
+        count = asyncio.get_event_loop().run_until_complete(
+            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+        )
+
+        assert count == 2  # is_in_sector + is_in_industry
+        assert relation_repo.upsert.await_count == 2
+        assert evidence_repo.insert_raw.await_count == 2
+        # Verify canonical_type args: sector first, industry second
+        sector_call_kwargs = relation_repo.upsert.call_args_list[0].kwargs
+        assert sector_call_kwargs["canonical_type"] == "is_in_sector"
+        industry_call_kwargs = relation_repo.upsert.call_args_list[1].kwargs
+        assert industry_call_kwargs["canonical_type"] == "is_in_industry"
+
+    def test_sector_entity_not_found_skipped(self) -> None:
+        """Sector/industry not in canonical_entities → no relation upsert, count=0, no error."""
+        http = _make_profile_http(gic_sector="Unknown Sector XYZ")
+        relation_repo, evidence_repo, entity_repo = _make_sector_repos(sector_found=False, industry_found=False)
+        worker = _make_worker_bare()
+
+        count = asyncio.get_event_loop().run_until_complete(
+            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+        )
+
+        assert count == 0
+        relation_repo.upsert.assert_not_awaited()
+        evidence_repo.insert_raw.assert_not_awaited()
+
+    def test_sector_relation_idempotent(self) -> None:
+        """Second run with same sector → relation_repo.upsert called again (advisory lock upsert)."""
+        http = _make_profile_http()
+        relation_repo, evidence_repo, entity_repo = _make_sector_repos()
+        worker = _make_worker_bare()
+
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(
+            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+        )
+        loop.run_until_complete(
+            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+        )
+
+        # Advisory-lock upsert is called on every run (idempotency handled at DB level)
+        assert relation_repo.upsert.await_count == 4  # 2 relations x 2 runs

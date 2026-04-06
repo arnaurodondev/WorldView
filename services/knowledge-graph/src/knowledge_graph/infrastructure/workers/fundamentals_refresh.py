@@ -9,13 +9,19 @@ Source text: calls S3 (market-data service) REST API:
 
 Builds narrative via ``build_fundamentals_narrative()`` (deterministic, no LLM).
 S3 down → skip entity (retry next cycle — next_refresh_at not updated).
+
+Wave C-4 additions:
+  GET /api/v1/fundamentals/{id}/earnings  → insert earnings events (idempotent)
+  GET /api/v1/fundamentals/{id}/company-profile → upsert is_in_sector / is_in_industry
 """
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.utils.fundamentals_narrative import build_fundamentals_narrative
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
@@ -30,6 +36,13 @@ if TYPE_CHECKING:
     import httpx
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+        RelationEvidenceRepository,
+    )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -38,9 +51,29 @@ _REFRESH_INTERVAL_DAYS = 30
 _BATCH_LIMIT = 50
 _EMBED_MODEL_ID = "nomic-embed-text"
 
+# Relation type constants (from relation_type_registry seed in migration 0002)
+_IS_IN_SECTOR_TYPE = "is_in_sector"
+_IS_IN_INDUSTRY_TYPE = "is_in_industry"
+_EARNINGS_EVENT_TYPE = "earnings_release"
+
+# Sector/industry relation metadata (hardcoded from decay_class_config + registry seeds)
+# is_in_sector: RELATION_STATE / PERMANENT / alpha=0.0 / base_confidence=0.90
+_SECTOR_SEMANTIC_MODE = "RELATION_STATE"
+_SECTOR_DECAY_CLASS = "PERMANENT"
+_SECTOR_DECAY_ALPHA = 0.000000
+_SECTOR_BASE_CONFIDENCE = 0.90
+# is_in_industry: RELATION_STATE / DURABLE / alpha=0.000950 / base_confidence=0.85
+_INDUSTRY_DECAY_CLASS = "DURABLE"
+_INDUSTRY_DECAY_ALPHA = 0.000950
+_INDUSTRY_BASE_CONFIDENCE = 0.85
+
 
 class FundamentalsRefreshWorker:
     """Refreshes fundamentals+OHLCV embeddings for ticker entities (Worker 13D-3).
+
+    Wave C-4 extensions:
+    - Inserts earnings events from S3 /fundamentals/{id}/earnings (idempotent).
+    - Upserts is_in_sector / is_in_industry relations from company-profile data.
 
     Args:
         session_factory: Read/write sessionmaker for intelligence_db.
@@ -62,69 +95,382 @@ class FundamentalsRefreshWorker:
         self._http = http_client
 
     async def run(self) -> None:
-        """Refresh fundamentals embeddings due for refresh."""
+        """Refresh fundamentals embeddings due for refresh.
+
+        Per entity (ticker only):
+          1. Insert any new earnings events from S3 (idempotent).
+          2. Upsert is_in_sector / is_in_industry relations from company profile.
+          3. Rebuild fundamentals embedding (existing behaviour — skips on S3 error).
+        """
+        import httpx as _httpx
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
             EntityEmbeddingStateRepository,
         )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        own_http = self._http is None
+        http = self._http or _httpx.AsyncClient(timeout=15.0)
 
         refreshed = 0
         skipped = 0
-        async with self._sf() as session:
-            emb_repo = EntityEmbeddingStateRepository(session)
-            due = await emb_repo.get_due_for_refresh(VIEW_FUNDAMENTALS, _BATCH_LIMIT)
+        earnings_inserted = 0
+        relations_upserted = 0
 
-            for row in due:
-                entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
-                ticker: str | None = row.get("ticker")  # type: ignore[assignment]
-                if not ticker:
-                    skipped += 1
-                    continue
+        try:
+            async with self._sf() as session:
+                emb_repo = EntityEmbeddingStateRepository(session)
+                relation_repo = RelationRepository(session)
+                evidence_repo = RelationEvidenceRepository(session)
+                entity_repo = CanonicalEntityRepository(session)
 
-                narrative = await self._build_fundamentals_narrative(entity_id, str(ticker), row)
-                if narrative is None:
-                    logger.warning(  # type: ignore[no-any-return]
-                        "fundamentals_refresh_market_data_unavailable",
-                        entity_id=str(entity_id),
-                        ticker=ticker,
+                due = await emb_repo.get_due_for_refresh(VIEW_FUNDAMENTALS, _BATCH_LIMIT)
+
+                for row in due:
+                    entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
+                    ticker: str | None = row.get("ticker")  # type: ignore[assignment]
+                    if not ticker:
+                        skipped += 1
+                        continue
+
+                    canonical_name = str(row.get("canonical_name", ticker))
+
+                    # --- Step 1: Earnings events (independent of embedding refresh) ---
+                    count = await self._insert_earnings_events(
+                        http, session, entity_id, entity_id, str(ticker), canonical_name
                     )
-                    continue  # Don't update next_refresh_at — will retry next cycle
+                    earnings_inserted += count
 
-                source_hash = sha256_hex(narrative)
-                from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+                    # --- Step 2: Sector/industry relations (independent) ---
+                    count = await self._upsert_sector_relations(
+                        http, entity_id, entity_id, relation_repo, evidence_repo, entity_repo
+                    )
+                    relations_upserted += count
 
-                inp = EmbeddingInput(text=narrative, model_id=_EMBED_MODEL_ID)
-                outputs = await self._llm.embed([inp], entity_id=entity_id)
-                embedding = outputs[0].embedding if outputs else None
+                    # --- Step 3: Embedding refresh (existing behaviour) ---
+                    narrative = await self._build_fundamentals_narrative(entity_id, str(ticker), row, http)
+                    if narrative is None:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "fundamentals_refresh_market_data_unavailable",
+                            entity_id=str(entity_id),
+                            ticker=ticker,
+                        )
+                        continue  # Don't update next_refresh_at — will retry next cycle
 
-                await emb_repo.upsert(
-                    entity_id,
-                    VIEW_FUNDAMENTALS,
-                    embedding=embedding,
-                    model_id=_EMBED_MODEL_ID if embedding else None,
-                    source_text=narrative,
-                    source_hash=source_hash,
-                    next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
-                )
-                refreshed += 1
+                    source_hash = sha256_hex(narrative)
+                    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
-            await session.commit()
+                    inp = EmbeddingInput(text=narrative, model_id=_EMBED_MODEL_ID)
+                    outputs = await self._llm.embed([inp], entity_id=entity_id)
+                    embedding = outputs[0].embedding if outputs else None
+
+                    await emb_repo.upsert(
+                        entity_id,
+                        VIEW_FUNDAMENTALS,
+                        embedding=embedding,
+                        model_id=_EMBED_MODEL_ID if embedding else None,
+                        source_text=narrative,
+                        source_hash=source_hash,
+                        next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                    )
+                    refreshed += 1
+
+                await session.commit()
+        finally:
+            if own_http:
+                await http.aclose()
 
         logger.info(  # type: ignore[no-any-return]
             "fundamentals_refresh_worker_complete",
             refreshed=refreshed,
             skipped_non_ticker=skipped,
+            earnings_events_inserted=earnings_inserted,
+            relations_upserted=relations_upserted,
         )
+
+    # ── T-C-4-01: Earnings event insertion ───────────────────────────────────
+
+    async def _insert_earnings_events(
+        self,
+        http: httpx.AsyncClient,
+        session: AsyncSession,
+        entity_id: UUID,
+        instrument_id: UUID,
+        ticker: str,
+        canonical_name: str,
+    ) -> int:
+        """Fetch earnings history and insert new events into the ``events`` table.
+
+        Idempotent: checks for existing event by (entity_id, quarter, fiscal_year)
+        before inserting.  Returns the count of newly inserted events.
+
+        Error handling:
+        - HTTP 404 → log debug, return 0 (no earnings data stored).
+        - HTTP 5xx or network error → log warning, return 0 (retry next cycle).
+        """
+        from datetime import UTC, datetime
+
+        from sqlalchemy import text
+
+        try:
+            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/earnings")
+            if resp.status_code == 404:
+                logger.debug(  # type: ignore[no-any-return]
+                    "earnings_not_found", entity_id=str(entity_id), ticker=ticker
+                )
+                return 0
+            if resp.status_code != 200:
+                logger.warning(  # type: ignore[no-any-return]
+                    "earnings_fetch_error",
+                    entity_id=str(entity_id),
+                    ticker=ticker,
+                    status_code=resp.status_code,
+                )
+                return 0
+            resp_data: dict[str, Any] = resp.json()
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "earnings_fetch_exception", entity_id=str(entity_id), ticker=ticker, error=str(exc)
+            )
+            return 0
+
+        records: list[dict[str, Any]] = resp_data.get("records") or []
+        inserted = 0
+
+        for record in records:
+            data: dict[str, Any] = record.get("data") or {}
+            period_type_str = str(record.get("period_type", "quarterly"))
+            period_end_str = record.get("period_end")
+
+            # Parse period_end date — skip record if unparseable
+            try:
+                period_end = datetime.fromisoformat(str(period_end_str))
+                if period_end.tzinfo is None:
+                    period_end = period_end.replace(tzinfo=UTC)
+            except (ValueError, TypeError):
+                continue
+
+            # Derive quarter and fiscal year from period_end
+            quarter_num = (period_end.month - 1) // 3 + 1
+            quarter_str = f"Q{quarter_num}"
+            fiscal_year = period_end.year
+
+            event_subtype = (
+                "annual" if "annual" in period_type_str.lower() or "yearly" in period_type_str.lower() else "quarterly"
+            )
+
+            # Idempotency check — skip if event already recorded for this quarter/year
+            existing = await session.execute(
+                text("""
+SELECT 1 FROM events
+WHERE subject_entity_id = :entity_id
+  AND event_type        = 'earnings_release'
+  AND structured_data->>'quarter'      = :quarter
+  AND structured_data->>'fiscal_year'  = :fiscal_year
+"""),
+                {
+                    "entity_id": str(entity_id),
+                    "quarter": quarter_str,
+                    "fiscal_year": str(fiscal_year),
+                },
+            )
+            if existing.fetchone() is not None:
+                continue
+
+            # Extract earnings fields (try camelCase first, then snake_case fallback)
+            eps_actual = _get_float(data, "epsActual", "eps_actual")
+            eps_estimate = _get_float(data, "epsEstimate", "eps_estimate")
+            revenue_actual = _get_float(data, "revenueActual", "revenue_actual")
+            revenue_estimate = _get_float(data, "revenueEstimate", "revenue_estimate")
+
+            beat: bool | None = None
+            if eps_actual is not None and eps_estimate is not None:
+                beat = eps_actual >= eps_estimate
+
+            # Build event_text
+            if eps_actual is not None and eps_estimate is not None:
+                event_text = (
+                    f"{canonical_name} reported {quarter_str} FY{fiscal_year} "
+                    f"EPS of ${eps_actual:.2f} vs. estimate ${eps_estimate:.2f}"
+                )
+            else:
+                event_text = f"{canonical_name} earnings data for {quarter_str} FY{fiscal_year}"
+
+            structured_data_dict: dict[str, Any] = {
+                "eps_actual": eps_actual,
+                "eps_estimate": eps_estimate,
+                "revenue_actual": revenue_actual,
+                "revenue_estimate": revenue_estimate,
+                "quarter": quarter_str,
+                "fiscal_year": fiscal_year,
+                "beat": beat,
+            }
+
+            event_id = new_uuid7()
+            doc_id = new_uuid7()  # Synthetic document ID (no real document for earnings data)
+
+            await session.execute(
+                text("""
+INSERT INTO events (
+    event_id, doc_id, event_type, event_subtype, subject_entity_id,
+    event_date, event_text, structured_data, extraction_confidence, source_type
+) VALUES (
+    :event_id, :doc_id, 'earnings_release', :event_subtype, :entity_id,
+    :event_date, :event_text, :structured_data, 0.95, 'earnings_data'
+)
+ON CONFLICT DO NOTHING
+"""),
+                {
+                    "event_id": str(event_id),
+                    "doc_id": str(doc_id),
+                    "event_subtype": event_subtype,
+                    "entity_id": str(entity_id),
+                    "event_date": period_end,
+                    "event_text": event_text,
+                    "structured_data": json.dumps(structured_data_dict),
+                },
+            )
+            inserted += 1
+
+        return inserted
+
+    # ── T-C-4-02: Sector/industry relation upsert ────────────────────────────
+
+    async def _upsert_sector_relations(
+        self,
+        http: httpx.AsyncClient,
+        entity_id: UUID,
+        instrument_id: UUID,
+        relation_repo: RelationRepository,
+        evidence_repo: RelationEvidenceRepository,
+        entity_repo: CanonicalEntityRepository,
+    ) -> int:
+        """Fetch company profile and upsert is_in_sector / is_in_industry relations.
+
+        Uses the existing advisory-lock upsert path (``RelationRepository.upsert``).
+        Returns the count of relation rows upserted (0-2 per entity).
+
+        Error handling:
+        - HTTP 404 → log debug, return 0.
+        - HTTP 5xx / network error → log warning, return 0.
+        - Sector/industry not in ``canonical_entities`` → log warning, skip that relation.
+        """
+        try:
+            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/company-profile")
+            if resp.status_code == 404:
+                logger.debug(  # type: ignore[no-any-return]
+                    "company_profile_not_found", entity_id=str(entity_id)
+                )
+                return 0
+            if resp.status_code != 200:
+                logger.warning(  # type: ignore[no-any-return]
+                    "company_profile_fetch_error",
+                    entity_id=str(entity_id),
+                    status_code=resp.status_code,
+                )
+                return 0
+            resp_data: dict[str, Any] = resp.json()
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "company_profile_fetch_exception", entity_id=str(entity_id), error=str(exc)
+            )
+            return 0
+
+        records: list[dict[str, Any]] = resp_data.get("records") or []
+        if not records:
+            return 0
+
+        profile_data: dict[str, Any] = records[0].get("data") or {}
+
+        # Extract sector/industry — prefer GICS names (GicSector/GicGroup match seed entity names)
+        sector_name: str | None = (
+            profile_data.get("GicSector") or profile_data.get("Sector") or profile_data.get("sector")
+        )
+        industry_name: str | None = (
+            profile_data.get("GicGroup") or profile_data.get("Industry") or profile_data.get("industry")
+        )
+
+        now = utc_now()
+        upserted = 0
+
+        # --- is_in_sector ---
+        if sector_name:
+            sector_entity_id = await entity_repo.find_by_name_and_type(str(sector_name), "sector")
+            if sector_entity_id is None:
+                logger.warning(  # type: ignore[no-any-return]
+                    "sector_entity_not_found",
+                    entity_id=str(entity_id),
+                    sector_name=str(sector_name),
+                )
+            else:
+                await relation_repo.upsert(
+                    subject_entity_id=entity_id,
+                    object_entity_id=sector_entity_id,
+                    canonical_type=_IS_IN_SECTOR_TYPE,
+                    semantic_mode=_SECTOR_SEMANTIC_MODE,
+                    decay_class=_SECTOR_DECAY_CLASS,
+                    decay_alpha=_SECTOR_DECAY_ALPHA,
+                    base_confidence=_SECTOR_BASE_CONFIDENCE,
+                )
+                await evidence_repo.insert_raw(
+                    subject_entity_id=entity_id,
+                    object_entity_id=sector_entity_id,
+                    source_document_id=new_uuid7(),  # Synthetic doc ID (EODHD fundamentals pull)
+                    extraction_confidence=_SECTOR_BASE_CONFIDENCE,
+                    source_trust_weight=_SECTOR_BASE_CONFIDENCE,
+                    evidence_date=now,
+                    canonical_type=_IS_IN_SECTOR_TYPE,
+                )
+                upserted += 1
+
+        # --- is_in_industry ---
+        if industry_name:
+            industry_entity_id = await entity_repo.find_by_name_and_type(str(industry_name), "industry_group")
+            if industry_entity_id is None:
+                logger.warning(  # type: ignore[no-any-return]
+                    "industry_entity_not_found",
+                    entity_id=str(entity_id),
+                    industry_name=str(industry_name),
+                )
+            else:
+                await relation_repo.upsert(
+                    subject_entity_id=entity_id,
+                    object_entity_id=industry_entity_id,
+                    canonical_type=_IS_IN_INDUSTRY_TYPE,
+                    semantic_mode=_SECTOR_SEMANTIC_MODE,
+                    decay_class=_INDUSTRY_DECAY_CLASS,
+                    decay_alpha=_INDUSTRY_DECAY_ALPHA,
+                    base_confidence=_INDUSTRY_BASE_CONFIDENCE,
+                )
+                await evidence_repo.insert_raw(
+                    subject_entity_id=entity_id,
+                    object_entity_id=industry_entity_id,
+                    source_document_id=new_uuid7(),  # Synthetic doc ID
+                    extraction_confidence=_INDUSTRY_BASE_CONFIDENCE,
+                    source_trust_weight=_INDUSTRY_BASE_CONFIDENCE,
+                    evidence_date=now,
+                    canonical_type=_IS_IN_INDUSTRY_TYPE,
+                )
+                upserted += 1
+
+        return upserted
+
+    # ── Embedding helpers ─────────────────────────────────────────────────────
 
     async def _build_fundamentals_narrative(
         self,
         entity_id: UUID,
         ticker: str,
         entity_row: dict[str, Any],
+        http: httpx.AsyncClient,
     ) -> str | None:
         """Fetch market data and build the narrative string."""
-        import httpx
-
-        http = self._http or httpx.AsyncClient(timeout=10.0)
         try:
             fundamentals = await self._fetch_json(http, f"{self._market_data_url}/api/v1/fundamentals/{entity_id}")
             if fundamentals is None:
@@ -149,9 +495,6 @@ class FundamentalsRefreshWorker:
                 error=str(exc),
             )
             return None
-        finally:
-            if self._http is None:
-                await http.aclose()
 
     @staticmethod
     async def _fetch_json(http: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
@@ -172,3 +515,12 @@ def _safe_float(d: dict[str, Any], key: str) -> float | None:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _get_float(d: dict[str, Any], *keys: str) -> float | None:
+    """Try multiple key names in order, returning the first non-None float found."""
+    for key in keys:
+        val = _safe_float(d, key)
+        if val is not None:
+            return val
+    return None

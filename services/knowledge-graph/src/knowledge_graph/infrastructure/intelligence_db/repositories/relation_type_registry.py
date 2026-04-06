@@ -28,7 +28,7 @@ class RelationTypeRegistryRepository:
         """Step 1: exact-match lookup against canonical_type."""
         result = await self._session.execute(
             text("""
-SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence, decay_alpha_from_config.decay_alpha
+SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence, dcc.decay_alpha
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE rtr.canonical_type = :canonical_type
@@ -84,8 +84,10 @@ WHERE canonical_type = :canonical_type AND is_active = true
         result = await self._session.execute(
             text("""
 SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence,
+             dcc.decay_alpha,
        embedding <=> :query_embedding::vector AS cosine_distance
-FROM relation_type_registry
+FROM relation_type_registry rtr
+JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE is_active  = true
   AND embedding IS NOT NULL
 ORDER BY cosine_distance
@@ -99,7 +101,7 @@ LIMIT :limit
         row = result.fetchone()
         if not row:
             return None
-        cosine_distance = float(row[5])
+        cosine_distance = float(row[6])
         if cosine_distance > distance_threshold:
             return None
         return {
@@ -108,5 +110,6 @@ LIMIT :limit
             "semantic_mode": row[2],
             "decay_class": row[3],
             "base_confidence": float(row[4]),
+            "decay_alpha": float(row[5]),
             "cosine_distance": cosine_distance,
         }

@@ -9,7 +9,7 @@ class SemanticMode(StrEnum):
     """Two semantic modes that govern how evidence ages and contradictions resolve (PRD §6.7 Block 11).
 
     RELATION_STATE — active/inactive; event-triggered invalidation; decay via decay_class_config.
-    TEMPORAL_CLAIM — historically anchored; not validity-gated; fixed 30-day half-life (0.02310).
+    TEMPORAL_CLAIM — historically anchored; not validity-gated; decay via decay_class_config.
     """
 
     RELATION_STATE = "RELATION_STATE"
