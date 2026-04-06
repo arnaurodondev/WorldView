@@ -33,6 +33,7 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
     QueryIntent.RELATIONSHIP: ["supply chain", "subsidiaries", "owns", "acquired", "parent company"],
     QueryIntent.FINANCIAL_DATA: ["price", "p/e", "revenue", "earnings", "ratio", "ebitda"],
     QueryIntent.SIGNAL_INTEL: ["news", "announced", "filed", "reported", "allegations"],
+    QueryIntent.GENERAL: ["what is", "define", "how does", "tell me about", "explain what"],
     # FACTUAL_LOOKUP is the default — no keywords needed
 }
 
@@ -41,8 +42,10 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
 _CLASSIFICATION_PROMPT = (
     "You are a query intent classifier for a financial intelligence system.\n"
     "Classify the query into exactly one of: FACTUAL_LOOKUP, RELATIONSHIP, SIGNAL_INTEL,\n"
-    "FINANCIAL_DATA, COMPARISON, REASONING, PORTFOLIO.\n"
+    "FINANCIAL_DATA, COMPARISON, REASONING, PORTFOLIO, GENERAL.\n"
     "\n"
+    "Use GENERAL for ambiguous, educational, or open-ended questions not tied to a specific\n"
+    "entity or financial metric. Use FACTUAL_LOOKUP when a specific named entity is targeted.\n"
     "For COMPARISON queries with multiple entities, extract sub_questions (one per entity).\n"
     "For REASONING queries, rephrase as a standalone question using conversation context.\n"
     "\n"
@@ -68,6 +71,9 @@ _CLASSIFICATION_PROMPT = (
     '- "What is TSLA\'s current P/E ratio?" ->'
     ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
     '"rephrased_query":"What is Tesla\'s current price-to-earnings ratio?"}}\n'
+    '- "How do interest rates affect stock prices?" ->'
+    ' {{"intent":"GENERAL","sub_questions":[],'
+    '"rephrased_query":"How do interest rate changes affect equity valuations?"}}\n'
     "\n"
     "Query: {message}\n"
     "Conversation context: {history}\n"
