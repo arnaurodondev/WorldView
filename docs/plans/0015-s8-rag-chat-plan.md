@@ -67,10 +67,10 @@ Phase 4 (deferred — not in this plan):
 | B-2 | S6 entity resolve endpoint | ✅ done | 2026-04-05 |
 | B-3 | S6 enhanced chunk search | ✅ done | 2026-04-06 |
 | C-1 | S7 claims/search + contradictions | ✅ done | 2026-04-06 |
-| C-2 | S7 events/search | pending | — |
-| C-3 | S7 relation ANN search | pending | — |
+| C-2 | S7 events/search | done | 2026-04-06 |
+| C-3 | S7 relation ANN search | done | 2026-04-06 |
 | C-4 | S7 FundamentalsWorker enhancements | done | 2026-04-06 |
-| D-1 | S8 domain layer | pending | — |
+| D-1 | S8 domain layer | done | 2026-04-06 |
 | D-2 | S8 rag_db infrastructure | pending | — |
 | D-3 | S8 service scaffold + config | pending | — |
 | D-4 | S8 conversation management CRUD | pending | — |
@@ -1345,11 +1345,12 @@ used in pipeline waves (E, F) call those new S6/S7 endpoints.
 
 ---
 
-### Wave D-1: S8 Domain Layer
+### Wave D-1: S8 Domain Layer ✅
 
 **Goal**: Define all domain entities, enums, errors, and value objects for S8. No infrastructure imports.
 **Depends on**: none (pure domain)
 **Estimated effort**: 35–50 min
+**Status**: **DONE** — 2026-04-06 · 15 tests pass · ruff + mypy clean
 **Architecture layer**: domain
 
 **Pre-read**:
@@ -1527,9 +1528,9 @@ class PIIDetectedError(RagError): pass
 ---
 
 **Validation Gate (Wave D-1)**:
-- [ ] ruff check + mypy (strict) pass on `services/rag-chat/src/rag_chat/domain/`
-- [ ] No imports from `infrastructure/`, `application/`, or third-party libs in domain files
-- [ ] All 8 unit tests pass
+- [x] ruff check + mypy (strict) pass on `services/rag-chat/src/rag_chat/domain/`
+- [x] No imports from `infrastructure/`, `application/`, or third-party libs in domain files
+- [x] All 8 unit tests pass (15 written — additional coverage for recency score + thread properties)
 
 ---
 

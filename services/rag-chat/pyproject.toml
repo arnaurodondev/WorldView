@@ -29,3 +29,12 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag_chat"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast, isolated unit tests",
+    "integration: tests that require running infrastructure",
+    "contract: Avro/schema contract tests",
+    "e2e: full end-to-end tests",
+]
