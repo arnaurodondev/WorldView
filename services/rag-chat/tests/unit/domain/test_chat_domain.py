@@ -128,8 +128,8 @@ class TestDateRange:
 
 
 class TestQueryIntent:
-    def test_all_7_values_accessible(self) -> None:
-        """All 7 QueryIntent values are present."""
+    def test_all_8_values_accessible(self) -> None:
+        """All 8 QueryIntent values are present (7 original + GENERAL added in PRD-0016)."""
         from rag_chat.domain.enums import QueryIntent
 
         expected = {
@@ -140,6 +140,7 @@ class TestQueryIntent:
             "COMPARISON",
             "REASONING",
             "PORTFOLIO",
+            "GENERAL",  # added PRD-0016 Wave A-1
         }
         actual = {v.value for v in QueryIntent}
         assert actual == expected

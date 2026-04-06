@@ -56,7 +56,7 @@ LLM provider fallback, streaming response delivery, citation injection, response
     "contradictions": list,      # detected contradictions across sources
     "thread_id": UUID | None,
     "message_id": UUID | None,
-    "intent": str,               # FACTUAL_LOOKUP, COMPARISON, etc.
+    "intent": str,               # FACTUAL_LOOKUP | GENERAL | COMPARISON | FINANCIAL_DATA | PORTFOLIO | REASONING | RELATIONSHIP | SIGNAL_INTEL
     "provider": str,             # deepinfra | openrouter | ollama
     "latency_ms": int
 }
