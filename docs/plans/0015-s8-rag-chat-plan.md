@@ -1853,11 +1853,12 @@ rag-chat:
 
 ---
 
-### Wave D-4: Conversation Management CRUD
+### Wave D-4: Conversation Management CRUD ✅
 
 **Goal**: Implement thread/message use cases and `/threads` API endpoints.
 **Depends on**: D-3 (UoW dependency injection wired in app.py)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-06 · 43 unit tests pass · ruff + mypy clean
 **Architecture layer**: application + API
 
 **Pre-read**:
@@ -1963,9 +1964,9 @@ class MessageResponse(BaseModel):
 ---
 
 **Validation Gate (Wave D-4)**:
-- [ ] ruff check + mypy pass
-- [ ] All 9 domain + thread use case tests pass
-- [ ] Thread endpoints accessible and returning correct schemas
+- [x] ruff check + mypy pass
+- [x] All 9 domain + thread use case tests pass
+- [x] Thread endpoints accessible and returning correct schemas
 
 ---
 
