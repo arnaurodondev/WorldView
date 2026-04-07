@@ -17,7 +17,7 @@ from pathlib import Path
 
 import fastavro  # type: ignore[import-untyped]
 import pytest
-from alert.infrastructure.messaging.schemas.email_sent import (
+from alert.infrastructure.messaging.email_sent_event import (
     EMAIL_SENT_TOPIC,
     serialize_email_sent,
 )

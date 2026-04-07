@@ -17,13 +17,15 @@ from portfolio.api.schemas import (
     BatchEntityLookupResponse,
     HoldingContextItem,
     PortfolioContextResponse,
+    UserInternalResponse,
     WatcherInfo,
     WatchersByEntityResponse,
     WatchlistContextItem,
     WatchlistEntitiesResponse,
 )
 from portfolio.application.use_cases.portfolio_context import PortfolioContextUseCase
-from portfolio.domain.errors import UserNotFoundError
+from portfolio.application.use_cases.user import GetUserUseCase
+from portfolio.domain.errors import EntityNotFoundError
 
 internal_router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
@@ -97,7 +99,7 @@ async def get_portfolio_context(
     uc = PortfolioContextUseCase()
     try:
         dto = await uc.execute(user_id, tenant_id, uow)
-    except UserNotFoundError as exc:
+    except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return PortfolioContextResponse(
@@ -122,4 +124,32 @@ async def get_portfolio_context(
             for w in dto.watchlist
         ],
         total_positions=dto.total_positions,
+    )
+
+
+@internal_router.get("/users/{user_id}", response_model=UserInternalResponse)
+async def get_user_for_digest(
+    user_id: UUID,
+    _auth: InternalAuthDep,
+    uow: ReadUoWDep,
+    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+) -> UserInternalResponse:
+    """Return user email for S10 email digest delivery (PRD-0016 §6.2).
+
+    Used by S10 EmailScheduler when ``email_preferences.email_address`` is null.
+    Auth: X-Internal-Token (service-to-service, hmac.compare_digest).
+    Returns 404 if the user is not found in the tenant.
+    """
+    uc = GetUserUseCase()
+    try:
+        user = await uc.execute(user_id, x_tenant_id, uow)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return UserInternalResponse(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        email_address=user.email,
+        username=user.email,  # S1 uses email as username; extend when username field added
+        created_at=user.created_at,
     )

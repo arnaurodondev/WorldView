@@ -174,3 +174,40 @@ async def delete_thread(thread_id: str, request: Request) -> Any:
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Email preferences ─────────────────────────────────────────────────────────
+
+
+@router.get("/email/preferences")
+async def get_email_preferences(request: Request) -> Any:
+    """Proxy GET /api/v1/email/preferences → S10 Alert service.
+
+    Passes X-Tenant-Id and X-User-Id headers derived from the JWT payload
+    so S10 can enforce per-user isolation.
+    """
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.alert.get(
+        "/api/v1/email/preferences",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.put("/email/preferences")
+async def update_email_preferences(request: Request) -> Any:
+    """Proxy PUT /api/v1/email/preferences → S10 Alert service.
+
+    Passes request body unchanged; forwards X-Tenant-Id and X-User-Id headers.
+    S10 returns 400 on invalid preference values (e.g., send_day_of_week > 6).
+    """
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.alert.put(
+        "/api/v1/email/preferences",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

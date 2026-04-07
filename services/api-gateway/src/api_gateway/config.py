@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     nlp_pipeline_url: str = "http://localhost:8006"
     knowledge_graph_url: str = "http://localhost:8007"
     rag_chat_url: str = "http://localhost:8008"
+    alert_url: str = "http://localhost:8010"
 
     # Rate limiting
     rate_limit_requests: int = 100

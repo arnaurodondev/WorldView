@@ -25,7 +25,7 @@ from alert.infrastructure.clients.s8_client import BriefingClientError
 from alert.infrastructure.db.models import EmailLogModel, OutboxEventModel
 from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
 from alert.infrastructure.email.template import render_digest_email
-from alert.infrastructure.messaging.schemas.email_sent import EMAIL_SENT_TOPIC, serialize_email_sent
+from alert.infrastructure.messaging.email_sent_event import EMAIL_SENT_TOPIC, serialize_email_sent
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
