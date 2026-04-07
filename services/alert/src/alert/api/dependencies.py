@@ -11,7 +11,6 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
-from alert.infrastructure.db.repositories.dlq import DLQRepository
 
 # ── Database session (write) ─────────────────────────────────────────────────
 
@@ -47,11 +46,14 @@ async def extract_tenant_user(
 ) -> tuple[UUID, UUID]:
     """Extract and validate X-Tenant-ID and X-User-ID headers.
 
-    Returns:
+    Returns
+    -------
         ``(tenant_id, user_id)`` as UUIDs.
 
-    Raises:
+    Raises
+    ------
         HTTPException 401: If either header is absent or not a valid UUID.
+
     """
     if not x_tenant_id or not x_user_id:
         raise HTTPException(status_code=401, detail="X-Tenant-ID and X-User-ID headers required")
@@ -88,6 +90,8 @@ AdminAuthDep = Annotated[None, Depends(verify_admin_token)]
 
 def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_db_session)]) -> DLQAdminUseCase:
     """Build a DLQAdminUseCase for the current request session."""
+    from alert.infrastructure.db.repositories.dlq import DLQRepository
+
     return DLQAdminUseCase(DLQRepository(session))
 
 

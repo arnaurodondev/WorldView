@@ -65,6 +65,9 @@ class ExecuteContentTaskUseCase:
     - **Repository factories** (``adapter_state_factory``, ``fetch_log_factory``,
       ``outbox_factory``): callables that accept a DB session and return
       the corresponding port implementation.
+    - **task_factory**: callable that accepts a DB session and returns a
+      ``TaskPort``.  Used to update task status *inside* the advisory-lock
+      transaction so the status write is atomic with the data write (D-9).
     - **bronze**: pre-built ``BronzeStoragePort`` for MinIO writes.
     - **adapter_builder**: callable that constructs a ``SourceAdapterPort``
       for a given source type + dedup function, encapsulating all client
@@ -81,6 +84,7 @@ class ExecuteContentTaskUseCase:
         fetch_log_factory: Callable[[Any], FetchLogPort],
         outbox_factory: Callable[[Any], OutboxPort],
         adapter_builder: Callable[[SourceType, Callable[[str], Awaitable[bool]]], SourceAdapterPort],
+        task_factory: Callable[[Any], TaskPort] | None = None,
     ) -> None:
         self._write_factory = write_factory
         self._settings = settings
@@ -89,6 +93,7 @@ class ExecuteContentTaskUseCase:
         self._fetch_log_factory = fetch_log_factory
         self._outbox_factory = outbox_factory
         self._adapter_builder = adapter_builder
+        self._task_factory = task_factory
 
     async def execute(
         self,
@@ -154,8 +159,17 @@ class ExecuteContentTaskUseCase:
             pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
         ):
             if not acquired:
-                task.succeed()
-                await task_repo.update_status(task.id, task.status)
+                # Another worker holds the lock — treat as success (no duplicates written).
+                # Write the status to DB before mutating domain object (same pattern as below).
+                from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+                if self._task_factory is not None:
+                    inner_task_repo = self._task_factory(session)
+                    await inner_task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    await session.commit()
+                else:
+                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                task.succeed()  # Domain object updated after DB write
                 return None
 
             fetch_log_repo = self._fetch_log_factory(session)
@@ -185,11 +199,25 @@ class ExecuteContentTaskUseCase:
                     last_watermark=now,
                     last_run_at=now,
                 )
-                await session.commit()
 
-        # 5. Mark task SUCCEEDED
-        task.succeed()
-        await task_repo.update_status(task.id, task.status)
+            # 5. Mark task SUCCEEDED *inside* the advisory-lock transaction (D-9).
+            #
+            # Write the status to the DB BEFORE mutating the domain object.
+            # This way, if session.commit() fails, task.status is still RUNNING
+            # and the outer execute() error handler can safely call task.fail().
+            # The domain object is only updated AFTER the commit succeeds.
+            #
+            # Pattern: write-then-commit-then-mutate (not mutate-then-commit).
+            from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+            if self._task_factory is not None:
+                inner_task_repo = self._task_factory(session)
+                await inner_task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            else:
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            await session.commit()
+            # Commit succeeded — safe to mutate domain object in memory
+            task.succeed()
 
         return summary
 

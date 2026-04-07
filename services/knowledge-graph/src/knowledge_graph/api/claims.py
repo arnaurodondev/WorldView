@@ -15,9 +15,6 @@ from knowledge_graph.api.schemas import (
     ClaimsSearchResponse,
 )
 from knowledge_graph.application.use_cases.claim_search import ArticleClaimSearchUseCase
-from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
-    ClaimRepository,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["claims"])
@@ -35,6 +32,10 @@ async def search_claims(
     Returns claims ordered by ``extraction_confidence DESC``.
     At most 10 entity IDs accepted per request.
     """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
+        ClaimRepository,
+    )
+
     claim_repo = ClaimRepository(session)
     results = await ArticleClaimSearchUseCase().execute(
         claim_repo=claim_repo,  # type: ignore[arg-type]

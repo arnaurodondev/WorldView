@@ -26,6 +26,7 @@ def app():
     # Set mock state (ASGI transport does not trigger lifespan)
     settings = MagicMock()
     settings.admin_token = "test-admin-token"  # noqa: S105
+    settings.internal_service_token = "test-internal-secret"  # noqa: S105
 
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock()

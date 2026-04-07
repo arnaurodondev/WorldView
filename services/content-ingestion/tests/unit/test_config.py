@@ -134,8 +134,8 @@ class TestFlatSecretsUnaffected:
 class TestSchedulerWorkerDefaults:
     def test_scheduler_worker_defaults(self) -> None:
         s = _make_settings()
-        # Read replica
-        assert s.db_url_read == ""
+        # Read replica (SecretStr — compare via get_secret_value)
+        assert s.db_url_read.get_secret_value() == ""
         # Scheduler
         assert s.scheduler_tick_interval_seconds == 60.0
         assert s.scheduler_max_tasks_per_tick == 100
@@ -149,8 +149,8 @@ class TestSchedulerWorkerDefaults:
     def test_db_url_read_fallback_is_valid_empty(self) -> None:
         """Empty db_url_read is valid — session factory handles fallback to db_url."""
         s = _make_settings()
-        assert s.db_url_read == ""
-        assert s.db_url != ""
+        assert s.db_url_read.get_secret_value() == ""
+        assert s.db_url.get_secret_value() != ""
 
     def test_scheduler_worker_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CONTENT_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS", "30.0")
@@ -161,4 +161,4 @@ class TestSchedulerWorkerDefaults:
         assert s.scheduler_tick_interval_seconds == 30.0
         assert s.worker_batch_size == 10
         assert s.worker_concurrency == 4
-        assert s.db_url_read == "postgresql+asyncpg://read-replica:5432/db"
+        assert s.db_url_read.get_secret_value() == "postgresql+asyncpg://read-replica:5432/db"

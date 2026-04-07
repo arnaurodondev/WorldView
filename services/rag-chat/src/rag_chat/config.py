@@ -11,6 +11,8 @@ Example::
 
 from __future__ import annotations
 
+import structlog
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,8 +32,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ── Database (R23 dual-URL) ───────────────────────────────────────────────
-    database_url: str  # RAG_CHAT_DATABASE_URL — write primary
-    database_url_read: str | None = None  # RAG_CHAT_DATABASE_URL_READ — read replica
+    database_url: SecretStr  # RAG_CHAT_DATABASE_URL — write primary
+    database_url_read: SecretStr | None = None  # RAG_CHAT_DATABASE_URL_READ — read replica
 
     # ── Database pool sizing ──────────────────────────────────────────────────
     db_pool_size: int = 10
@@ -78,6 +80,19 @@ class Settings(BaseSettings):
     log_json: bool = True
     otlp_endpoint: str = ""
     service_name: str = "rag-chat"
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        if "postgres:postgres" in self.database_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "RAG_CHAT_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self
 
 
 __all__ = ["Settings"]

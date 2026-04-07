@@ -27,7 +27,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.port == 8002
     assert s.host == Settings.model_fields["host"].default
     assert s.debug is False
-    assert "postgresql" in s.database_url
+    assert "postgresql" in s.database_url.get_secret_value()
     assert s.eodhd_api_key == "demo"
     assert s.eodhd_base_url == "https://eodhd.com/api"
     assert s.storage_bucket == "market-ingestion"

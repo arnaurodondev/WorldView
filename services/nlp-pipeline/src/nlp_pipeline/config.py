@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,16 +26,18 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # nlp_db — owned, Alembic enabled
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db"
-    database_url_read: str = ""
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db")
+    database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
     db_max_overflow_read: int = 30
 
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
-    intelligence_database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
-    intelligence_database_url_read: str = ""
+    intelligence_database_url: SecretStr = SecretStr(
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+    )
+    intelligence_database_url_read: SecretStr = SecretStr("")
     intelligence_db_pool_size: int = 10
     intelligence_db_max_overflow: int = 20
     intelligence_db_pool_size_read: int = 20
@@ -60,7 +64,7 @@ class Settings(BaseSettings):
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
-    embedding_model_id: str = "bge-large-en-v1.5"
+    embedding_model_id: str = "bge-large"
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
@@ -109,3 +113,22 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if any database_url still contains default superuser credentials (D-7)."""
+        for field_name, env_var in (
+            ("database_url", "NLP_PIPELINE_DATABASE_URL"),
+            ("intelligence_database_url", "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL"),
+        ):
+            url_val: SecretStr = getattr(self, field_name)
+            if "postgres:postgres" in url_val.get_secret_value():
+                structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                    "default_db_credentials_detected",
+                    field=field_name,
+                    message=(
+                        f"{env_var} still uses the default 'postgres:postgres' credentials. "
+                        "Set this env var to a secure database URL before deploying to production."
+                    ),
+                )
+        return self

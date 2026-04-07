@@ -28,7 +28,7 @@ def _build_factories(
     cfg = settings or Settings()  # type: ignore[call-arg]
 
     write_engine = create_async_engine(
-        cfg.database_url,
+        cfg.database_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -37,8 +37,9 @@ def _build_factories(
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(write_engine, expire_on_commit=False)
 
-    read_url: str = getattr(cfg, "database_url_read", "") or cfg.database_url
-    if read_url == cfg.database_url:
+    _write_url = cfg.database_url.get_secret_value()
+    read_url: str = getattr(cfg, "database_url_read", "") or _write_url
+    if read_url == _write_url:
         read_factory = write_factory
     else:
         read_engine = create_async_engine(

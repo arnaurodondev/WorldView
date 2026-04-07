@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -27,8 +28,8 @@ class _FakeSettings:
         db_pool_size_read: int = 5,
         db_max_overflow_read: int = 10,
     ) -> None:
-        self.database_url = database_url
-        self.database_url_read = database_url_read
+        self.database_url = SecretStr(database_url)
+        self.database_url_read = SecretStr(database_url_read)
         self.db_pool_size = db_pool_size
         self.db_max_overflow = db_max_overflow
         self.db_pool_size_read = db_pool_size_read

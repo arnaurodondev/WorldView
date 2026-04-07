@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import structlog
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,8 +72,8 @@ class Settings(BaseSettings):
     newsapi_key: str = ""
 
     # ── Database ──────────────────────────────────────────────────────────────
-    db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
-    db_url_read: str = ""  # Falls back to db_url if empty (R23)
+    db_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db")
+    db_url_read: SecretStr = SecretStr("")  # Falls back to db_url if empty (R23)
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -136,3 +137,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if db_url still contains default superuser credentials (D-7).
+
+        Uses structlog so the warning is captured by the structured log pipeline
+        in production log aggregators (F-SEC-001).
+        """
+        if "postgres:postgres" in self.db_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "CONTENT_INGESTION_DB_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self

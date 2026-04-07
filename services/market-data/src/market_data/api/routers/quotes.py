@@ -7,7 +7,7 @@ making it an API-layer concern.  Use cases return raw domain ``Quote`` entities.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -15,8 +15,12 @@ from market_data.api.dependencies import get_quote_cache, get_quote_uc
 from market_data.api.schemas.quotes import BatchQuoteRequest, BatchQuoteResponse, QuoteResponse
 from market_data.application.use_cases.query_quotes import GetQuoteUseCase
 from market_data.domain.entities import Quote
-from market_data.infrastructure.cache.quote_cache import QuoteCache
 from observability.logging import get_logger  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from market_data.infrastructure.cache.quote_cache import QuoteCache
+else:
+    from market_data.infrastructure.cache.quote_cache import QuoteCache
 
 logger = get_logger(__name__)
 

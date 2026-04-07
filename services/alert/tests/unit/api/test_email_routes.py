@@ -66,7 +66,7 @@ def _default_pref(
 
 _GET_UC_PATH = "alert.api.email_routes.GetEmailPreferencesUseCase"
 _UPD_UC_PATH = "alert.api.email_routes.UpdateEmailPreferencesUseCase"
-_REPO_PATH = "alert.api.email_routes.EmailPreferenceRepository"
+_REPO_PATH = "alert.infrastructure.db.repositories.email_preference.EmailPreferenceRepository"
 
 
 # ── GET /api/v1/email/preferences ────────────────────────────────────────────

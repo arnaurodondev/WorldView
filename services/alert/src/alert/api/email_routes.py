@@ -21,7 +21,6 @@ from alert.application.use_cases.email_preferences import (
     GetEmailPreferencesUseCase,
     UpdateEmailPreferencesUseCase,
 )
-from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -43,6 +42,8 @@ async def get_email_preferences(
     Creates and persists default preferences if no row exists yet.
     Auth: ``X-Tenant-ID`` + ``X-User-ID`` headers.
     """
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
     tenant_id, user_id = tenant_user
     repo = EmailPreferenceRepository(session)
     pref = await GetEmailPreferencesUseCase(repo).execute(user_id, tenant_id)
@@ -72,6 +73,8 @@ async def update_email_preferences(
     Auth: ``X-Tenant-ID`` + ``X-User-ID`` headers.
     Errors: 400 for invalid day/hour (raised by domain invariant).
     """
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
     tenant_id, user_id = tenant_user
     repo = EmailPreferenceRepository(session)
 

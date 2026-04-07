@@ -6,17 +6,15 @@ R27: read-only UoW (read_factory) used for GET endpoints;
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request
 
-# RagUnitOfWork imported at module level so Annotated[RagUnitOfWork, ...]
-# type aliases are resolvable at runtime (required for FastAPI dependency injection).
-from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
-
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
 
 async def get_uow(request: Request) -> AsyncGenerator[RagUnitOfWork, None]:
@@ -55,6 +53,10 @@ async def get_auth_context(
         raise HTTPException(status_code=401, detail="Invalid UUID in auth headers") from exc
 
 
-UoWDep = Annotated[RagUnitOfWork, Depends(get_uow)]
-ReadUoWDep = Annotated[RagUnitOfWork, Depends(get_read_uow)]
+# D-1 / D-4: RagUnitOfWork is a concrete infra class; a proper application-layer
+# port (RagUnitOfWorkPort) will replace `Any` when D-4 is implemented.
+# Using Any here keeps the Annotated alias runtime-safe without importing infra
+# at module level (IG-LAYER-002 / R25).
+UoWDep = Annotated[Any, Depends(get_uow)]
+ReadUoWDep = Annotated[Any, Depends(get_read_uow)]
 AuthContextDep = Annotated[tuple[UUID, UUID], Depends(get_auth_context)]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -12,8 +13,8 @@ def _make_settings(*, read_url: str = "") -> object:
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
-        database_url_read=read_url,
+        database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"),
+        database_url_read=SecretStr(read_url),
         db_pool_size=10,
         db_max_overflow=20,
         db_pool_size_read=20,

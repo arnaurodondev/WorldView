@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -15,7 +16,7 @@ class TestBuildFactories:
         from types import SimpleNamespace
 
         return SimpleNamespace(
-            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/alert_db",
+            database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/alert_db"),
             database_url_read=read_url,
             db_pool_size=5,
             db_max_overflow=10,

@@ -57,7 +57,7 @@ def create_rag_session_factory(
         and the caller is responsible for disposing both.
     """
     write_engine = create_async_engine(
-        settings.database_url,
+        settings.database_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -69,8 +69,8 @@ def create_rag_session_factory(
         expire_on_commit=False,
     )
 
-    read_url = settings.database_url_read
-    if read_url is None or _same_db_endpoint(read_url, settings.database_url):
+    read_url = settings.database_url_read.get_secret_value() if settings.database_url_read is not None else None
+    if read_url is None or _same_db_endpoint(read_url, settings.database_url.get_secret_value()):
         # No separate read replica — share the write engine.
         read_engine = write_engine
         read_factory = write_factory
