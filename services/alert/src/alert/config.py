@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+import structlog
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +26,8 @@ class Settings(BaseSettings):
     port: int = 8010
 
     # ── Database ───────────────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alert_db"
-    database_url_read: str = ""
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/alert_db")
+    database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
@@ -81,9 +82,23 @@ class Settings(BaseSettings):
     s8_base_url: str = "http://rag-chat:8008"
     s8_internal_token: str = ""
     s1_internal_token: str = ""
+    s3_market_data_base_url: str = "http://market-data:8003"
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
     service_name: str = "alert"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        if "postgres:postgres" in self.database_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "ALERT_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self
