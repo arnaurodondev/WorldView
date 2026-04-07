@@ -17,12 +17,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import (
     get_available_metrics_uc,
+    get_screen_fields_uc,
     get_screen_instruments_uc,
     get_timeseries_uc,
 )
 from market_data.api.schemas.fundamental_metrics import (
     AvailableMetricsResponse,
     MetricDataPointResponse,
+    ScreenFieldResponse,
+    ScreenFieldsResponse,
     ScreenInstrumentResponse,
     ScreenRequest,
     ScreenResponse,
@@ -32,6 +35,7 @@ from market_data.application.ports.repositories import ScreenFilter
 from market_data.application.use_cases.query_fundamental_metrics import (
     GetAvailableFundamentalMetricsUseCase,
     GetFundamentalMetricsTimeseriesUseCase,
+    ScreenFieldsMetadataUseCase,
     ScreenInstrumentsUseCase,
 )
 
@@ -133,6 +137,33 @@ async def screen_instruments(
         ],
         count=len(results),
         total=total,
+    )
+
+
+@router.get("/fundamentals/screen/fields", response_model=ScreenFieldsResponse)
+async def get_screen_fields(
+    uc: ScreenFieldsMetadataUseCase = Depends(get_screen_fields_uc),  # type: ignore[assignment]
+) -> ScreenFieldsResponse:
+    """Return metadata for all screenable fields.
+
+    The frontend uses this to build the filter form dynamically (PRD-0017 §6.2).
+    Auth: none (public). Backed by Valkey cache; falls back to DB on miss.
+    """
+    fields = await uc.execute()
+    return ScreenFieldsResponse(
+        fields=[
+            ScreenFieldResponse(
+                name=f.name,
+                label=f.label,
+                type=f.field_type,
+                unit=f.unit,
+                description=f.description,
+                observed_min=f.observed_min,
+                observed_max=f.observed_max,
+                null_fraction=f.null_fraction,
+            )
+            for f in fields
+        ]
     )
 
 

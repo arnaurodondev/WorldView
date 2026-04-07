@@ -14,8 +14,10 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import and_, func, select
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
+from market_data.domain.entities import ScreenFieldMetadata
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
+from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
 
 if TYPE_CHECKING:
     from datetime import date
@@ -258,3 +260,38 @@ async def query_available_metrics(
     stmt = select(m.metric).where(m.instrument_id == instrument_id).distinct().order_by(m.metric)
     result: Any = await session.execute(stmt)
     return [row[0] for row in result.all()]
+
+
+async def query_screen_field_metadata(session: AsyncSession) -> list[ScreenFieldMetadata]:
+    """Return all rows from ``screen_field_metadata`` ordered by field_name.
+
+    Used as the DB fallback when the Valkey cache misses.
+    """
+    sfm = ScreenFieldMetadataModel
+    stmt = select(
+        sfm.field_name,
+        sfm.label,
+        sfm.field_type,
+        sfm.unit,
+        sfm.description,
+        sfm.observed_min,
+        sfm.observed_max,
+        sfm.null_fraction,
+    ).order_by(sfm.field_name)
+
+    result: Any = await session.execute(stmt)
+    rows = result.all()
+
+    return [
+        ScreenFieldMetadata(
+            name=row.field_name,
+            label=row.label,
+            field_type=row.field_type,
+            unit=row.unit,
+            description=row.description,
+            observed_min=float(row.observed_min) if row.observed_min is not None else None,
+            observed_max=float(row.observed_max) if row.observed_max is not None else None,
+            null_fraction=float(row.null_fraction) if row.null_fraction is not None else 0.0,
+        )
+        for row in rows
+    ]

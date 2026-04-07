@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from datetime import date
 
-    from market_data.application.ports.uow import UnitOfWork
+    from market_data.application.ports.uow import ReadOnlyUnitOfWork
     from market_data.domain.entities import OHLCVBar
     from market_data.domain.enums import Timeframe
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class GetOHLCVBarsUseCase:
     """Return OHLCV bars for an instrument within an optional date range."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(
@@ -31,7 +31,7 @@ class GetOHLCVBarsUseCase:
 class GetOHLCVBulkUseCase:
     """Bulk-fetch OHLCV bars for multiple instruments at once."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(
@@ -53,7 +53,7 @@ class GetOHLCVBulkUseCase:
 class GetAvailableTimeframesUseCase:
     """Return all timeframes with stored bars for the given instrument."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(self, instrument_id: str) -> list[Timeframe]:
@@ -63,7 +63,7 @@ class GetAvailableTimeframesUseCase:
 class GetOHLCVRangeUseCase:
     """Return date range metadata for an instrument/timeframe combination."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(

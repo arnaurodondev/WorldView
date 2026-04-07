@@ -4,9 +4,9 @@ title: Entity Screener + Similarity Search + Embedding View Fix + EODHD Descript
 prd: docs/specs/0017-entity-screener-similarity.md
 status: in-progress
 created: 2026-04-04
-updated: 2026-04-07
+updated: 2026-04-08
 total_waves: 11
-waves_done: 5
+waves_done: 6
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -140,16 +140,22 @@ waves_done: 5
 
 ---
 
-### Wave B-2: S3 — `GET /screen/fields` endpoint + Valkey cache + APScheduler job
+### Wave B-2: S3 — `GET /screen/fields` endpoint + Valkey cache + APScheduler job ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 380 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `ScreenFieldsMetadataUseCase` — reads from Valkey (`s3:screen:fields:v1`), fallback DB
-- [ ] `GET /api/v1/fundamentals/screen/fields` route (no auth, public)
-- [ ] APScheduler job refreshes Valkey every 6 hours
-- [ ] `screen_field_metadata` seeded with 12 static field definitions
-- [ ] Unit test: `test_screen_field_metadata_static`
+- [x] `ScreenFieldsMetadataUseCase` — reads from Valkey (`s3:screen:fields:v1`), fallback DB
+- [x] `GET /api/v1/fundamentals/screen/fields` route (no auth, public)
+- [x] `asyncio.create_task(_screen_fields_refresh_loop(...))` refreshes Valkey every 6 hours (no APScheduler dependency needed)
+- [x] `screen_field_metadata` seeded with 12 static field definitions via `_get_static_screen_fields()` in `app.py`
+- [x] Unit tests: cache hit/miss/empty-DB, route 12-fields, route empty, field shape
+
+**Notes**:
+- Background refresh uses `asyncio.create_task` + `asyncio.sleep(6*3600)` (no APScheduler)
+- Global TOPO-LIFESPAN architecture test updated: cache-warmer tasks are explicitly exempted (R22 targets consumers/dispatchers only, per PRD-0017 §6.2)
+- `PgScreenFieldMetadataRepository.upsert_batch()` write-side repo for background seed
+- `ScreenFieldsCache` Valkey implementation with fail-open pattern
 
 **Depends on**: B-1 (table + domain object)
 **Estimated effort**: 3h

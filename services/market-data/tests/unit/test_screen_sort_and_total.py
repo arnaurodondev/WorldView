@@ -1,4 +1,4 @@
-"""Unit tests for screener sort + total + instrument fields (PRD-0017 §6.8, Wave B-1).
+"""Unit tests for screener sort + total + instrument fields (PRD-0017 §6.8, Wave B-1/B-2).
 
 Tests:
 - test_screen_response_includes_instrument_fields
@@ -11,6 +11,12 @@ Tests:
 - test_screen_default_limit_and_offset
 - test_screen_limit_exceeds_max_returns_422
 - test_screen_offset_exceeds_max_returns_422
+Wave B-2:
+- test_screen_fields_use_case_cache_hit
+- test_screen_fields_use_case_cache_miss_db_fallback
+- test_screen_fields_use_case_cache_miss_empty_db
+- test_get_screen_fields_route_returns_12_fields
+- test_get_screen_fields_route_empty_returns_empty_list
 """
 
 from __future__ import annotations
@@ -22,9 +28,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from market_data.api.dependencies import get_screen_instruments_uc
+from market_data.api.dependencies import get_screen_fields_uc, get_screen_instruments_uc
 from market_data.api.routers import fundamental_metrics as metrics_router
 from market_data.application.ports.repositories import ScreenResult
+from market_data.application.use_cases.query_fundamental_metrics import ScreenFieldsMetadataUseCase
 from market_data.domain.entities import ScreenFieldMetadata
 
 pytestmark = pytest.mark.unit
@@ -311,3 +318,162 @@ def test_screen_instrument_fields_nullable() -> None:
     assert r["name"] is None
     assert r["exchange"] == "US"
     assert r["sector"] is None
+
+
+# ---------------------------------------------------------------------------
+# Wave B-2: ScreenFieldsMetadataUseCase unit tests
+# ---------------------------------------------------------------------------
+
+_SAMPLE_FIELDS = [
+    ScreenFieldMetadata(
+        name="pe_ratio",
+        label="P/E Ratio",
+        field_type="numeric",
+        unit="x",
+        description="Trailing P/E (TTM)",
+        observed_min=None,
+        observed_max=None,
+        null_fraction=0.0,
+    ),
+    ScreenFieldMetadata(
+        name="revenue_usd",
+        label="Revenue",
+        field_type="numeric",
+        unit="USD M",
+        description="Annual revenue (USD millions)",
+        observed_min=None,
+        observed_max=None,
+        null_fraction=0.0,
+    ),
+]
+
+
+def _make_cache(fields: list[ScreenFieldMetadata] | None) -> MagicMock:
+    cache = MagicMock()
+    cache.get_all = AsyncMock(return_value=fields)
+    cache.set_all = AsyncMock(return_value=None)
+    return cache
+
+
+def _make_uow_with_fields(fields: list[ScreenFieldMetadata]) -> MagicMock:
+    uow = MagicMock()
+    repo = MagicMock()
+    repo.get_screen_field_metadata = AsyncMock(return_value=fields)
+    uow.fundamental_metrics_query = repo
+    uow.__aenter__ = AsyncMock(return_value=uow)
+    uow.__aexit__ = AsyncMock(return_value=None)
+    return uow
+
+
+@pytest.mark.asyncio
+async def test_screen_fields_use_case_cache_hit() -> None:
+    """Cache hit: use case returns cached list and does NOT query DB."""
+    cache = _make_cache(_SAMPLE_FIELDS)
+    uow = _make_uow_with_fields([])
+    uc = ScreenFieldsMetadataUseCase(uow=uow, cache=cache)
+
+    result = await uc.execute()
+
+    assert result == _SAMPLE_FIELDS
+    cache.get_all.assert_awaited_once()
+    uow.fundamental_metrics_query.get_screen_field_metadata.assert_not_awaited()
+    cache.set_all.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_screen_fields_use_case_cache_miss_db_fallback() -> None:
+    """Cache miss: use case queries DB and warms cache with result."""
+    cache = _make_cache(None)  # cache miss
+    uow = _make_uow_with_fields(_SAMPLE_FIELDS)
+    uc = ScreenFieldsMetadataUseCase(uow=uow, cache=cache)
+
+    result = await uc.execute()
+
+    assert result == _SAMPLE_FIELDS
+    uow.fundamental_metrics_query.get_screen_field_metadata.assert_awaited_once()
+    cache.set_all.assert_awaited_once_with(_SAMPLE_FIELDS)
+
+
+@pytest.mark.asyncio
+async def test_screen_fields_use_case_cache_miss_empty_db() -> None:
+    """Cache miss + empty DB: returns empty list; does NOT call set_all (nothing to cache)."""
+    cache = _make_cache(None)
+    uow = _make_uow_with_fields([])
+    uc = ScreenFieldsMetadataUseCase(uow=uow, cache=cache)
+
+    result = await uc.execute()
+
+    assert result == []
+    cache.set_all.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Wave B-2: GET /fundamentals/screen/fields route tests
+# ---------------------------------------------------------------------------
+
+
+def _make_fields_app(mock_fields_uc: MagicMock) -> TestClient:
+    app = FastAPI(lifespan=_null_lifespan)
+    app.include_router(metrics_router.router, prefix="/api/v1")
+    app.dependency_overrides[get_screen_fields_uc] = lambda: mock_fields_uc
+    return TestClient(app)
+
+
+def _make_fields_uc(fields: list[ScreenFieldMetadata]) -> MagicMock:
+    uc = MagicMock()
+    uc.execute = AsyncMock(return_value=fields)
+    return uc
+
+
+def test_get_screen_fields_route_returns_12_fields() -> None:
+    """GET /screen/fields happy-path: returns list of field metadata objects."""
+    from market_data.app import _get_static_screen_fields
+
+    static_fields = _get_static_screen_fields()
+    client = _make_fields_app(_make_fields_uc(static_fields))
+
+    resp = client.get("/api/v1/fundamentals/screen/fields")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "fields" in body
+    assert len(body["fields"]) == 12
+    names = {f["name"] for f in body["fields"]}
+    assert "pe_ratio" in names
+    assert "current_ratio" in names
+    # Every field must have name, label, type, null_fraction
+    for field in body["fields"]:
+        assert "name" in field
+        assert "label" in field
+        assert "type" in field
+        assert "null_fraction" in field
+
+
+def test_get_screen_fields_route_empty_returns_empty_list() -> None:
+    """GET /screen/fields with no fields seeded returns empty list (not 404)."""
+    client = _make_fields_app(_make_fields_uc([]))
+
+    resp = client.get("/api/v1/fundamentals/screen/fields")
+
+    assert resp.status_code == 200
+    assert resp.json()["fields"] == []
+
+
+def test_get_screen_fields_field_shape() -> None:
+    """Each field response has the correct PRD-0017 §6.2 shape."""
+    client = _make_fields_app(_make_fields_uc(_SAMPLE_FIELDS))
+
+    resp = client.get("/api/v1/fundamentals/screen/fields")
+
+    assert resp.status_code == 200
+    fields = resp.json()["fields"]
+    assert fields[0] == {
+        "name": "pe_ratio",
+        "label": "P/E Ratio",
+        "type": "numeric",
+        "unit": "x",
+        "description": "Trailing P/E (TTM)",
+        "observed_min": None,
+        "observed_max": None,
+        "null_fraction": 0.0,
+    }
