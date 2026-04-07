@@ -4295,3 +4295,119 @@ for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
 **Prevention**: Code review checklist: reject any `aioredis.Redis` or `redis.asyncio.Redis` parameter type annotation in service code.
 
 **First seen**: PLAN-0016 Wave B-1 fix — S1Client, LLMProviderChain, HydeExpander all had `aioredis.Redis` instead of `ValkeyClient`.
+
+---
+
+## BP-105 — DLQ `original_event_id` Set to New UUID Instead of Kafka Event ID
+
+**Category**: Data correctness / infrastructure
+**Affected areas**: Any `dead_letter()` override in `BaseKafkaConsumer` subclasses
+
+**Symptom**: DLQ entries have an `original_event_id` that bears no relation to the original Kafka message. Operators cannot correlate a DLQ entry with the Kafka topic, the `processed_events` table, or Avro envelope to diagnose root cause.
+
+**Root cause**: `dead_letter()` override copies `dlq_id=common.ids.new_uuid7()` to both columns — `dlq_id` (correct, new PK) and `original_event_id` (wrong, should be `UUID(failure.event_id)`). The two fields have similar construction and are trivially confused.
+
+**Fix**: `original_event_id=UUID(failure.event_id)` where `failure.event_id` is the string event_id extracted from the Kafka envelope. Add a `try/except ValueError` fallback to generate a new UUID if `failure.event_id` is not a valid UUID string (defensive, should not happen in practice).
+
+**First seen**: QA-S4S5-INFRA-001 (2026-04-07), S5 `article_consumer.py:205`.
+
+---
+
+## BP-106 — `asyncio.shield()` Around Stop-Event Wait Leaks Background Tasks
+
+**Category**: Resource leak / asyncio
+**Affected areas**: Background scheduler loops, any `asyncio.wait_for` around an `asyncio.Event.wait()`
+
+**Symptom**: `asyncio.shield(self._stop_event.wait())` creates a detached background task that is never cancelled when `wait_for` raises `TimeoutError`. The coroutine lingers until the event fires, which may be long after the enclosing function has returned.
+
+**Root cause**: `asyncio.shield()` is intended to protect a coroutine from cancellation when the *parent* is cancelled. It does not protect against `TimeoutError` — `wait_for` will still raise, but the shielded inner coroutine continues executing independently. This creates an uncollected task and `ResourceWarning: coroutine was never awaited`.
+
+**Fix**: Remove `asyncio.shield()` — use `await asyncio.wait_for(self._stop_event.wait(), timeout=...)` directly. The `wait_for` timeout cancels the inner coroutine on timeout by default, which is the correct behaviour for a tick-loop sleep.
+
+**First seen**: QA-S4S5-INFRA-001 (2026-04-07), S4 `scheduler_main.py:63`.
+
+---
+
+## BP-107 — `asyncio.timeout` Wraps Semaphore Acquisition, Not Just Execution
+
+**Category**: Correctness / asyncio
+**Affected areas**: Worker processes using `asyncio.Semaphore` with `asyncio.timeout`
+
+**Symptom**: Tasks time out while waiting for a concurrency slot (semaphore), before they even begin executing. Timeout budget is consumed by queue wait time, not actual work.
+
+**Root cause**: Placing `asyncio.timeout(T)` outside `async with self._semaphore:` starts the timeout clock when the task *arrives at the semaphore*, not when it *acquires* the semaphore. If `worker_concurrency` tasks are all busy, the `(concurrency + 1)`th task times out after `T` seconds of waiting even though it never ran.
+
+**Fix**: Swap the nesting — acquire the semaphore first, then apply the timeout around the actual execution:
+```python
+async with self._semaphore:
+    try:
+        async with asyncio.timeout(self._task_timeout):
+            await self._execute_task(task)
+    except TimeoutError:
+        ...
+```
+
+**First seen**: QA-S4S5-INFRA-001 (2026-04-07), S4 `worker.py:_execute_with_semaphore`.
+
+---
+
+## BP-108 — Read Engine Not Disposed in Process Entrypoints (Dual-URL Split)
+
+**Category**: Resource leak / infrastructure
+**Affected areas**: All standalone process entrypoints that call `_build_factories()` (dispatcher_main, consumer_main, worker)
+
+**Symptom**: When `DATABASE_URL_READ` is set to a distinct endpoint, the read engine connection pool is never closed on shutdown. Under load, this exhausts PostgreSQL connection slots over time.
+
+**Root cause**: Entrypoints copy `_engine.dispose()` but forget the conditional `_read_engine.dispose()`. The `app.py` lifespan correctly checks `if read_engine is not engine: await read_engine.dispose()`, but this pattern is not replicated in standalone process entrypoints.
+
+**Fix**: Add after `await _engine.dispose()` in every process entrypoint:
+```python
+if _read_engine is not _engine:
+    await _read_engine.dispose()
+```
+Also update test mocks: `return_value=(mock_engine, mock_engine, ...)` rather than `(mock_engine, MagicMock(), ...)` so the condition is False and `MagicMock().dispose()` is never awaited.
+
+**First seen**: QA-S4S5-INFRA-001 (2026-04-07), S4/S5 dispatcher_main + S5 article_consumer_main.
+
+---
+
+## BP-109 — Non-Atomic `ZADD` + `EXPIRE` in Valkey LSH Index Leaves Immortal Keys
+
+**Category**: Data correctness / Valkey
+**Affected areas**: Any code that writes to Redis/Valkey sorted sets and then sets a TTL as two separate commands
+
+**Symptom**: If the process crashes or the Valkey connection drops between `ZADD` and `EXPIRE`, the sorted-set key exists with **no TTL**. These keys grow unbounded and are never evicted, consuming Valkey memory indefinitely.
+
+**Root cause**: `await redis.zadd(key, ...)` followed by `await redis.expire(key, ttl)` is not atomic. Any failure between the two leaves the key without a TTL.
+
+**Fix**: Use a Redis pipeline to batch both commands in a single round-trip:
+```python
+async with redis.pipeline(transaction=False) as pipe:
+    pipe.zadd(key, {member: score})
+    pipe.expire(key, ttl)
+    await pipe.execute()
+```
+Note: `transaction=False` (MULTI/EXEC not used) is sufficient here — the key is process-local per band; the atomicity concern is crash-between-commands, not concurrent writers.
+
+**First seen**: QA-S4S5-INFRA-001 (2026-04-07), S5 `lsh_client.py:index()`.
+
+---
+
+## BP-110 — Settings Re-Export Shim Not Staged Causes Mypy Pre-Commit Failures
+
+**Category**: Tooling / Pre-commit hooks
+**Affected areas**: Any service that splits config into `config.py` (canonical) + `infrastructure/config/settings.py` (re-export shim)
+
+**Symptom**: `mypy` passes when run directly (`mypy services/<service>/src --config-file mypy.ini`) but fails in the pre-commit hook with errors like `"RagChatSettings" has no attribute "database_url"` or `Argument 1 has incompatible type "RagChatSettings"; expected "Settings"`.
+
+**Root cause**: The pre-commit hook stashes ALL unstaged working-tree changes before running `mypy`. If `infrastructure/config/settings.py` (the shim that re-exports `Settings as RagChatSettings`) has unstaged working-tree changes — because it was refactored in a prior wave but not committed — the hook stashes it back to the committed version (which was the full class, not the shim). Mypy then sees two different types: `Settings` (from `rag_chat.config`) and `RagChatSettings` (from the committed full class), and treats them as incompatible.
+
+**Fix**: Before committing any wave that touches the settings type, stage `infrastructure/config/settings.py` explicitly, even if the wave didn't formally change it:
+```bash
+git add services/<service>/src/<service>/infrastructure/config/settings.py
+```
+Also ensure all files in the module that reference `RagChatSettings` use the same canonical import path (`from rag_chat.infrastructure.config.settings import RagChatSettings`) so mypy resolves both sides to the same type.
+
+**Prevention**: When introducing a `config.py` → `infrastructure/config/settings.py` shim in a wave, commit the shim in the same wave — do not leave it as an unstaged working-tree change.
+
+**First seen**: PLAN-0016 Wave B-2 (2026-04-07), rag-chat S8.
