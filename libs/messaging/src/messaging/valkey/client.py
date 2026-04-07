@@ -272,6 +272,48 @@ class ValkeyClient:
             await pubsub.unsubscribe(*channels)
             await pubsub.aclose()
 
+    # ── Sorted-set / pipeline ─────────────────────────────────────────────────
+
+    @asynccontextmanager  # type: ignore[misc]
+    async def pipeline(self, *, transaction: bool = False) -> Any:
+        """Async context manager that yields the underlying redis pipeline.
+
+        Allows callers to use sorted-set commands (zadd, zremrangebyscore,
+        zcard) and other pipelined operations not natively exposed by
+        :class:`ValkeyClient`.
+
+        Args:
+            transaction: If ``True``, wrap commands in a MULTI/EXEC block.
+                         Defaults to ``False`` (non-transactional pipeline).
+
+        Yields:
+            The ``redis.asyncio`` pipeline object.  Call ``await pipe.execute()``
+            inside the context to flush the buffered commands.
+
+        Example::
+
+            async with client.pipeline(transaction=False) as pipe:
+                pipe.zadd("myset", {"member": 1.0})
+                pipe.expire("myset", 60)
+                results = await pipe.execute()
+        """
+        async with self._redis.pipeline(transaction=transaction) as pipe:  # type: ignore[misc]
+            yield pipe
+
+    async def setex(self, key: str, seconds: int, value: str) -> None:
+        """Set *key* to *value* with an expiry of *seconds*.
+
+        Alias for ``set(key, value, ttl=seconds)`` provided for
+        backward-compatibility with callers using the ``redis.asyncio``
+        ``setex`` API.
+
+        Args:
+            key:     Valkey key.
+            seconds: TTL in seconds.
+            value:   String value to store.
+        """
+        await self._redis.set(key, value, ex=seconds)
+
     # ── Connection management ─────────────────────────────────────────────────
 
     async def ping(self) -> bool:

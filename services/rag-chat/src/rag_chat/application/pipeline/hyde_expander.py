@@ -21,8 +21,7 @@ import structlog
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
-    import redis.asyncio as aioredis
-
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from rag_chat.application.ports.embedding import EmbeddingPort
     from rag_chat.application.ports.llm_provider import LlmStreamProvider
 
@@ -62,7 +61,7 @@ class HydeExpander:
         self,
         llm_provider: LlmStreamProvider,
         embedding_client: EmbeddingPort,
-        valkey: aioredis.Redis,  # type: ignore[type-arg]
+        valkey: ValkeyClient,  # type: ignore[name-defined]
     ) -> None:
         self._llm = llm_provider
         self._embedder = embedding_client
@@ -84,9 +83,9 @@ class HydeExpander:
 
         cache_key = _hyde_cache_key(rephrased_query)
         try:
-            cached_bytes: bytes | None = await self._valkey.get(cache_key)
-            if cached_bytes is not None:
-                data = json.loads(cached_bytes)
+            cached: str | None = await self._valkey.get(cache_key)
+            if cached is not None:
+                data = json.loads(cached)
                 return data["text"], data["embedding"]
 
             # Generate hypothesis paragraph

@@ -115,6 +115,40 @@ class TestValkeyClientConstruction:
             assert hasattr(client, method), f"Missing method: {method}"
 
 
+class TestValkeyClientPipeline:
+    """ValkeyClient pipeline() and setex() surface-area tests (no live connection)."""
+
+    def test_pipeline_method_exists(self) -> None:
+        """pipeline() must be defined on ValkeyClient."""
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        assert hasattr(client, "pipeline"), "ValkeyClient is missing pipeline() method"
+
+    def test_pipeline_returns_async_context_manager(self) -> None:
+        """pipeline() must return an object with __aenter__ / __aexit__."""
+        import inspect
+
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        # The method is decorated with @asynccontextmanager so calling it yields an
+        # async context manager object — check without making a real connection.
+        cm = client.pipeline(transaction=False)
+        assert hasattr(cm, "__aenter__"), "pipeline() must return an async context manager"
+        assert hasattr(cm, "__aexit__"), "pipeline() must return an async context manager"
+        # Close the coroutine to avoid ResourceWarning
+        inspect.iscoroutine(cm)
+
+    def test_setex_method_exists(self) -> None:
+        """setex() alias must be defined on ValkeyClient."""
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        assert hasattr(client, "setex"), "ValkeyClient is missing setex() method"
+        assert callable(client.setex)
+
+    def test_close_method_exists(self) -> None:
+        """close() must be defined on ValkeyClient."""
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        assert hasattr(client, "close"), "ValkeyClient is missing close() method"
+        assert callable(client.close)
+
+
 class TestRootImport:
     def test_import_from_root(self) -> None:
         from messaging import (  # noqa: F401

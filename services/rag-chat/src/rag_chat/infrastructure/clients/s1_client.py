@@ -21,7 +21,7 @@ from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 if TYPE_CHECKING:
     from uuid import UUID
 
-    import redis.asyncio as aioredis
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -39,7 +39,7 @@ class S1Client(BaseUpstreamClient):
     def __init__(
         self,
         base_url: str,
-        valkey: aioredis.Redis,  # type: ignore[name-defined]
+        valkey: ValkeyClient,  # type: ignore[name-defined]
         timeout: float = 5.0,
     ) -> None:
         super().__init__(base_url=base_url, timeout=timeout)
