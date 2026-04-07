@@ -6,6 +6,7 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-07
 total_waves: 11
+waves_done: 3
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -71,24 +72,25 @@ total_waves: 11
 
 ---
 
-### Wave A-3: libs/ml-clients — `EntityDescriptionClient` Protocol + adapters
+### Wave A-3: libs/ml-clients — `EntityDescriptionClient` Protocol + adapters ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-07 · 52 tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] Add `EntityDescriptionClient` Protocol to `libs/ml-clients/src/ml_clients/`
-- [ ] Implement `GeminiDescriptionAdapter` (gemini-3.1-flash-lite via Google AI Studio)
-- [ ] Implement `NullDescriptionAdapter` (always returns None; for test/dev)
-- [ ] Cost tracking: Valkey counter `s7:desc:cost:{YYYY-MM}`; check cap before API call
-- [ ] Unit tests: `test_description_client_cost_cap`, `test_description_client_null_adapter`
+- [x] Add `EntityDescriptionClient` Protocol to `libs/ml-clients/src/ml_clients/`
+- [x] Implement `GeminiDescriptionAdapter` (gemini-3.1-flash-lite via Google AI Studio)
+- [x] Implement `NullDescriptionAdapter` (always returns None; for test/dev)
+- [x] Cost tracking: Valkey counter `s7:desc:cost:{YYYY-MM}`; check cap before API call
+- [x] Unit tests: `test_description_client_cost_cap`, `test_description_client_null_adapter`
 
 **Depends on**: none (parallel with A-2)
 **Estimated effort**: 4h
 **Files**:
 - `libs/ml-clients/src/ml_clients/description_client.py`
 - `libs/ml-clients/src/ml_clients/adapters/gemini_description.py`
-- `libs/ml-clients/src/ml_clients/adapters/null_description.py`
-- `libs/ml-clients/tests/unit/test_description_client.py`
+- `libs/ml-clients/src/ml_clients/__init__.py`
+- `libs/ml-clients/src/ml_clients/adapters/__init__.py`
+- `libs/ml-clients/tests/test_adapters.py`
 
 ---
 

@@ -8,7 +8,7 @@
 
 ## Overview
 
-`ml-clients` provides three structural Protocol interfaces and seven concrete adapter
+`ml-clients` provides four structural Protocol interfaces and eight concrete adapter
 implementations. It deliberately uses `typing.Protocol` (structural subtyping) rather than
 `ABC`/`abstractmethod` so that services can swap adapters transparently — the service code
 never imports from a concrete adapter module directly.
@@ -35,6 +35,7 @@ All services code against these interfaces, never against concrete adapter class
 | `EmbeddingClient` | `embed` | `async (inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]` | S6 NLP Pipeline |
 | `NERClient` | `extract_entities` | `async (inp: NERInput) -> NEROutput` | S6 NLP Pipeline |
 | `ExtractionClient` | `extract` | `async (inp: ExtractionInput) -> ExtractionOutput` | S6 NLP Pipeline, S7 Knowledge Graph |
+| `EntityDescriptionClient` | `generate_description` | `async (entity_id, canonical_name, entity_type, context_hints) -> str \| None` | S7 Knowledge Graph (`DefinitionRefreshWorker`) |
 
 All protocols are `@runtime_checkable`, so `isinstance(adapter, EmbeddingClient)` works at runtime.
 
@@ -69,8 +70,10 @@ containers (lists, dicts) are frozen by reference.
 | `GLiNERLocalAdapter` | `NERClient` | Local GLiNER model (in-process) | `urchade/gliner_large-v2.1` | `ml-clients[gliner]` |
 | `AnthropicExtractionAdapter` | `ExtractionClient` | Anthropic Messages API | `claude-sonnet-4-6` | `ml-clients[anthropic]` |
 | `GeminiExtractionAdapter` | `ExtractionClient` | Google GenAI API | `gemini-2.5-pro` | `ml-clients[gemini]` |
+| `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `ml-clients[gemini]` |
 | `ChatGPTExtractionAdapter` | `ExtractionClient` | OpenAI Chat Completions API | `gpt-5-mini` | `ml-clients[openai]` |
 | `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `DeepSeek R1 Distill 32B` | `ml-clients[openai]` |
+| `NullDescriptionAdapter` | `EntityDescriptionClient` | No-op (always returns None) | — | — |
 
 All adapters implement the error mapping contract:
 
