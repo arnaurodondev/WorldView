@@ -79,3 +79,26 @@ class PaginatedThreadsResponse(BaseModel):
 class DeleteThreadResponse(BaseModel):
     thread_id: UUID
     archived_at: datetime
+
+
+# ── Briefing schemas (T-B-2-03, PRD-0016 §6.2) ───────────────────────────────
+
+
+class BriefingRequest(BaseModel):
+    """Request body for POST /internal/v1/briefings (called by S10 email scheduler)."""
+
+    user_id: UUID
+    tenant_id: UUID
+    portfolio_context: dict[str, Any]
+    market_snapshots: list[dict[str, Any]] = Field(..., min_length=1)
+    active_signals: list[dict[str, Any]] = []
+    lookback_days: int = Field(7, ge=1, le=30)
+
+
+class BriefingResponse(BaseModel):
+    """Response from POST /internal/v1/briefings."""
+
+    narrative: str
+    risk_summary: dict[str, Any]
+    citations: list[dict[str, Any]] = []
+    generated_at: str

@@ -1,8 +1,83 @@
-"""Thin re-export shim — canonical settings live in infrastructure/config/settings.py."""
+"""Canonical service configuration for rag-chat (S8).
 
-from rag_chat.infrastructure.config.settings import RagChatSettings
+All values are sourced from environment variables via pydantic-settings.
+Environment prefix: ``RAG_CHAT_``
 
-# Alias so existing imports of ``from rag_chat.config import Settings`` keep working.
-Settings = RagChatSettings
+Example::
 
-__all__ = ["RagChatSettings", "Settings"]
+    RAG_CHAT_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/rag_db
+    RAG_CHAT_S1_INTERNAL_TOKEN=dev-token
+"""
+
+from __future__ import annotations
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Runtime configuration for the rag-chat service (S8)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="RAG_CHAT_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ── Server ────────────────────────────────────────────────────────────────
+    host: str = "0.0.0.0"
+    port: int = 8008
+    debug: bool = False
+
+    # ── Database (R23 dual-URL) ───────────────────────────────────────────────
+    database_url: str  # RAG_CHAT_DATABASE_URL — write primary
+    database_url_read: str | None = None  # RAG_CHAT_DATABASE_URL_READ — read replica
+
+    # ── Database pool sizing ──────────────────────────────────────────────────
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_size_read: int = 20
+    db_max_overflow_read: int = 30
+
+    # ── Valkey ────────────────────────────────────────────────────────────────
+    valkey_url: str = "redis://localhost:6379/0"
+
+    # ── Ollama (local LLM container) ──────────────────────────────────────────
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_classification_model: str = "qwen2.5:3b"
+    ollama_completion_model: str = "deepseek-r1:32b"  # emergency fallback only
+    ollama_reranker_model: str = "bge-reranker-v2-m3"
+
+    # ── LLM API providers (primary + fallback chain) ──────────────────────────
+    deepinfra_api_key: str | None = None  # primary: deepseek-r1-distill-qwen-32b
+    openrouter_api_key: str | None = None  # fallback: deepseek/deepseek-r1-distill-qwen-32b
+
+    # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
+    completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
+    completion_model: str = "deepseek-r1-distill-qwen-32b"  # RAG_CHAT_COMPLETION_MODEL
+
+    # ── Internal service auth (briefing endpoint) ─────────────────────────────
+    internal_service_token: str = ""  # RAG_CHAT_INTERNAL_SERVICE_TOKEN (required for /internal/)
+
+    # ── Upstream services ─────────────────────────────────────────────────────
+    s6_base_url: str = "http://nlp-pipeline:8006"
+    s7_base_url: str = "http://knowledge-graph:8007"
+    s3_base_url: str = "http://market-data:8003"
+    s1_base_url: str = "http://portfolio:8001"
+    s1_internal_token: str  # required — set via RAG_CHAT_S1_INTERNAL_TOKEN
+
+    # ── Feature flags ─────────────────────────────────────────────────────────
+    cypher_enabled: bool = False
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    rate_limit_per_tenant: int = 10  # requests per minute per tenant
+    upstream_timeout_seconds: float = 5.0
+
+    # ── Observability (STANDARDS.md §8.3) ────────────────────────────────────
+    log_level: str = "INFO"
+    log_json: bool = True
+    otlp_endpoint: str = ""
+    service_name: str = "rag-chat"
+
+
+__all__ = ["Settings"]

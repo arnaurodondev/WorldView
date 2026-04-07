@@ -18,10 +18,12 @@ import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from rag_chat.api import health as health_router
+from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
@@ -73,39 +75,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 3. DB session factory — R23 dual-URL
     from rag_chat.infrastructure.db.session import create_rag_session_factory
 
-    engine, write_factory, read_factory = create_rag_session_factory(
-        settings.rag_db_url,
-        settings.rag_db_url_read,
-    )
+    engine, read_engine, write_factory, read_factory = create_rag_session_factory(settings)
     app.state.engine = engine
+    app.state.read_engine = read_engine
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
 
-    # 4. Valkey / Redis client
-    import redis.asyncio as aioredis
-
-    valkey: aioredis.Redis = aioredis.Redis.from_url(  # type: ignore[type-arg]
-        settings.valkey_url,
-        decode_responses=False,
-    )
-    app.state.valkey = valkey
+    # 4. Valkey client
+    valkey_client = ValkeyClient(url=settings.valkey_url)
+    app.state.valkey = valkey_client
 
     # 5. Provider negative cache
     app.state.provider_cache = {}  # type: ignore[assignment]
 
     # 6. Build and wire the ChatOrchestrator
-    _wire_orchestrator(app, settings, valkey)
+    _wire_orchestrator(app, settings, valkey_client)
+
+    # 7. Build and wire the GenerateBriefingUseCase
+    _wire_briefing_uc(app, settings, valkey_client)
 
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
 
     # Shutdown — reverse order
-    await valkey.aclose()
+    await valkey_client.close()
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     log.info("rag_chat_stopped", service=settings.service_name)  # type: ignore[no-any-return]
 
 
-def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> None:
+def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
     """Build and attach the ChatOrchestrator to app.state."""
 
     from rag_chat.application.caching.completion_cache import CompletionCache
@@ -133,7 +133,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
     s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
     s1 = S1Client(
         base_url=settings.s1_base_url,
-        valkey=valkey,
+        valkey=valkey_client,
         timeout=settings.upstream_timeout_seconds,
     )
 
@@ -149,7 +149,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
         providers.append(OpenRouterCompletionAdapter(api_key=settings.openrouter_api_key))
     # Ollama is always the emergency fallback
     providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
-    llm_chain = LLMProviderChain(providers=providers, valkey=valkey)
+    llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client)
 
     # Embedding: use S6 embedding endpoint via a simple adapter
     class _S6EmbeddingAdapter:
@@ -167,8 +167,8 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
 
     orchestrator = ChatOrchestrator(
         validator=InputValidator(),
-        rate_limiter=RateLimiter(valkey=valkey, limit=settings.rate_limit_per_tenant),
-        cache=CompletionCache(valkey=valkey),
+        rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
+        cache=CompletionCache(valkey=valkey_client),
         get_thread_uc=GetThreadUseCase(),
         s6_client=s6,
         classifier=OllamaIntentClassifier(
@@ -179,7 +179,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
         hyde=HydeExpander(
             llm_provider=providers[-1],  # use Ollama for HyDE (lightweight)
             embedding_client=embedding_client,
-            valkey=valkey,
+            valkey=valkey_client,
         ),
         embedding_client=embedding_client,
         retrieval=ParallelRetrievalOrchestrator(
@@ -200,6 +200,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
         persistence=ChatPersistenceUseCase(),
     )
     app.state.chat_orchestrator = orchestrator
+    app.state.llm_chain = llm_chain
+
+
+def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
+    """Build and attach GenerateBriefingUseCase to app.state."""
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    app.state.briefing_uc = GenerateBriefingUseCase(
+        llm_chain=app.state.llm_chain,  # same chain as ChatOrchestrator
+        internal_service_token=settings.internal_service_token,
+        valkey=valkey_client,
+    )
 
 
 def create_app(settings: RagChatSettings | None = None) -> FastAPI:
@@ -224,5 +236,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(health_router.router)
     app.include_router(threads_router.router)
     app.include_router(chat_router.router)
+    app.include_router(briefings_router.router)
 
     return app
