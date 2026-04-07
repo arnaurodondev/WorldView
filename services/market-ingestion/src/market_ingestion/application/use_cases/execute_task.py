@@ -107,7 +107,7 @@ class ExecuteTaskUseCase:
         # ── Step 3: Canonicalize ─────────────────────────────────────────────
         try:
             canonical_bytes, row_count = self._canonicalize(task, fetch_result)
-        except (ProviderDataError, ValueError, KeyError) as exc:
+        except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
             log.error("canonicalize_fatal", error=str(exc))
             await self._persist_fail(task, ProviderDataError(str(exc)))
             raise ProviderDataError(str(exc)) from exc

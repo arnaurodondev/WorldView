@@ -754,3 +754,44 @@ async def test_invalid_state_transition_reraises() -> None:
         await uc.execute(task)
 
     assert exc_info.value is original_exc, "must re-raise the original exception"
+
+
+@pytest.mark.unit
+async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
+    """BP-113 regression: TypeError from None-valued OHLCV field must call _persist_fail.
+
+    EODHD intraday returns bars with None for volume; int(None) raises TypeError.
+    Before the fix, TypeError was not caught, so the task stayed RUNNING forever.
+    After the fix, TypeError is caught and _persist_fail is called.
+    """
+    import json
+
+    # Raw data with None volume — triggers int(None) in CanonicalOHLCVBar.from_dict
+    raw_with_none_volume = json.dumps(
+        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    # Use real serializer to trigger the actual TypeError path
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_volume)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    with pytest.raises(ProviderDataError):
+        await uc.execute(task)
+
+    # task.fail must have been called (BP-113 fix)
+    task.fail.assert_called_once()
