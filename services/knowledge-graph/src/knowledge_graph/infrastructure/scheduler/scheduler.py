@@ -187,7 +187,8 @@ def build_workers(
     }
 
     if llm_client is not None:
-        def_worker = DefinitionRefreshWorker(session_factory, llm_client)
+        description_client = _build_description_client(settings)
+        def_worker = DefinitionRefreshWorker(session_factory, llm_client, description_client)
         workers.update(
             {
                 "summary_generation": SummaryWorker(session_factory, llm_client),
@@ -205,3 +206,34 @@ def build_workers(
         )
 
     return workers
+
+
+def _build_description_client(settings: Settings) -> Any:
+    """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
+
+    - ``"gemini"`` → ``GeminiDescriptionAdapter`` with the configured API key and cost cap.
+    - anything else → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
+    """
+    import asyncio
+
+    from ml_clients.description_client import NullDescriptionAdapter  # type: ignore[import-untyped]
+
+    if settings.description_provider.lower() != "gemini":
+        return NullDescriptionAdapter()
+
+    api_key = settings.gemini_api_key.get_secret_value()
+    if not api_key:
+        logger.warning(  # type: ignore[no-any-return]
+            "description_client_gemini_key_missing",
+            message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
+        )
+        return NullDescriptionAdapter()
+
+    from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter  # type: ignore[import-untyped]
+
+    semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
+    return GeminiDescriptionAdapter(
+        api_key=api_key,
+        semaphore=semaphore,
+        max_monthly_usd=settings.description_max_monthly_usd,
+    )

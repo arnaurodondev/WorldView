@@ -94,23 +94,24 @@ waves_done: 3
 
 ---
 
-### Wave A-4: S7 — `DefinitionRefreshWorker` non-company description enhancement
+### Wave A-4: S7 — `DefinitionRefreshWorker` non-company description enhancement ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-07 · 251 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] Update `DefinitionRefreshWorker.__init__` — add `description_client: EntityDescriptionClient` param
-- [ ] Detect `entity_type != 'financial_instrument'` → call `generate_description()`
-- [ ] Fallback to deterministic template when client returns None
-- [ ] Scheduler wiring: inject `GeminiDescriptionAdapter` (prod) or `NullDescriptionAdapter` (dev)
-- [ ] Add env vars: `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER`, `KNOWLEDGE_GRAPH_GEMINI_API_KEY`, `KNOWLEDGE_GRAPH_DESCRIPTION_MAX_MONTHLY_USD`
-- [ ] Unit test: `test_description_fallback_on_none`
+- [x] Update `DefinitionRefreshWorker.__init__` — add `description_client: EntityDescriptionClient` param
+- [x] Detect `entity_type != 'financial_instrument'` → call `generate_description()`
+- [x] Fallback to deterministic template when client returns None
+- [x] Scheduler wiring: inject `GeminiDescriptionAdapter` (prod) or `NullDescriptionAdapter` (dev)
+- [x] Add env vars: `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER`, `KNOWLEDGE_GRAPH_GEMINI_API_KEY`, `KNOWLEDGE_GRAPH_DESCRIPTION_MAX_MONTHLY_USD`
+- [x] Unit test: `test_description_fallback_on_none` (+ 11 more covering all failure modes)
 
 **Depends on**: A-2 (ensure_rows_exist fix), A-3 (EntityDescriptionClient)
 **Estimated effort**: 3h
 **Files**:
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/definition_refresh.py`
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/email/scheduler.py` (or equivalent worker scheduler)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py`
+- `services/knowledge-graph/src/knowledge_graph/config.py`
 - `services/knowledge-graph/configs/dev.local.env.example`
 - `services/knowledge-graph/tests/unit/infrastructure/test_definition_refresh.py`
 

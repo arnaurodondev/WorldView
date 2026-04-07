@@ -88,7 +88,7 @@ Returns `0.0` when confidence is `null` (stale/unknown).
 | 13A | `ConfidenceWorker` | 15 min | 8 partitions | Processes unprocessed `relation_evidence_raw` grouped by `partition_key`; 4-step confidence formula; marks processed |
 | 13B | `ContradictionBatchWorker` | 30 min | 100 claims | Subject-based scan via `DISTINCT ON`; inserts `contradictions` rows idempotently (ON CONFLICT DO NOTHING) |
 | 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence_hash change detection (skip LLM if unchanged); LLM extraction via FallbackChainClient |
-| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'` |
+| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'`. For `financial_instrument`: uses EODHD source_text. For all other entity types: generates description via `EntityDescriptionClient` (gemini-3.1-flash-lite); falls back to deterministic template if API unavailable or cost cap exceeded (PRD-0017 §6.5) |
 | 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
 | 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
 | 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | LLM extraction for provisional entities; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
@@ -184,6 +184,10 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
 | `MARKET_DATA_BASE_URL` | `http://market-data:8003` | REST endpoint for fundamentals + OHLCV data (13D-3 worker) |
 | `GEMINI_API_KEY` | — | Gemini Flash Lite fallback for embedding/extraction |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER` | `none` | `"gemini"` \| `"none"` — set to `"gemini"` in production to enable LLM descriptions for non-company entities (PRD-0017 §6.5) |
+| `KNOWLEDGE_GRAPH_GEMINI_API_KEY` | — | Google AI Studio API key for `GeminiDescriptionAdapter` (required when `DESCRIPTION_PROVIDER=gemini`) |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_MAX_MONTHLY_USD` | `10.0` | Monthly cost cap (USD) for description generation; enforced via Valkey counter `s7:desc:cost:{YYYY-MM}` |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_GEMINI_CONCURRENCY` | `4` | Semaphore concurrency limit for Gemini description calls |
 | `KNOWLEDGE_GRAPH_LOG_LEVEL` | `INFO` | Log verbosity |
 | `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | JSON structured log output |
 | `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | — | OTel OTLP gRPC endpoint (optional) |
