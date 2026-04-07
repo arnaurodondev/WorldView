@@ -60,6 +60,7 @@ class Settings(BaseSettings):
 
     # ── Internal service auth (briefing endpoint) ─────────────────────────────
     internal_service_token: str = ""  # RAG_CHAT_INTERNAL_SERVICE_TOKEN (required for /internal/)
+    # NOTE: validated at startup — must be non-empty when any /internal/ route is active
 
     # ── Upstream services ─────────────────────────────────────────────────────
     s6_base_url: str = "http://nlp-pipeline:8006"
@@ -82,8 +83,20 @@ class Settings(BaseSettings):
     service_name: str = "rag-chat"
 
     @model_validator(mode="after")
-    def _warn_default_db_credentials(self) -> Settings:
-        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+    def _validate_startup(self) -> Settings:
+        """Warn at startup about missing required secrets and default credentials."""
+        if not self.internal_service_token:
+            # The GenerateBriefingUseCase guards against this at runtime (raises BriefingAuthError
+            # for any request when self._token is empty), but the endpoint will silently reject all
+            # calls. Set RAG_CHAT_INTERNAL_SERVICE_TOKEN before enabling /internal/v1/briefings.
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "internal_service_token_not_set",
+                message=(
+                    "RAG_CHAT_INTERNAL_SERVICE_TOKEN is not set. "
+                    "The /internal/v1/briefings endpoint will reject ALL requests (401). "
+                    "Set this env var to enable S10 email digest generation."
+                ),
+            )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

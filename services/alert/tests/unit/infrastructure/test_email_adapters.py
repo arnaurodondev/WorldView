@@ -28,6 +28,8 @@ def _settings(**overrides: object) -> Settings:
         "sendgrid_api_key": "sg_test_key",
         "smtp_host": "localhost",
         "smtp_port": 1025,
+        "s8_internal_token": "test-s8-token",
+        "s1_internal_token": "test-s1-token",
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]

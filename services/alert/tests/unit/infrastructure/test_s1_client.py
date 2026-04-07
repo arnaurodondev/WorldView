@@ -14,6 +14,8 @@ def _settings(**overrides: object) -> Settings:
     defaults = {
         "s1_portfolio_base_url": "http://s1:8001",
         "internal_service_token": "test-token",
+        "s8_internal_token": "test-s8-token",
+        "s1_internal_token": "test-s1-token",
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]

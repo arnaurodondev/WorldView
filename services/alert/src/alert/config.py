@@ -91,8 +91,26 @@ class Settings(BaseSettings):
     otlp_endpoint: str = ""
 
     @model_validator(mode="after")
-    def _warn_default_db_credentials(self) -> Settings:
-        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+    def _validate_startup(self) -> Settings:
+        """Warn at startup about missing required tokens and default credentials."""
+        if not self.s8_internal_token:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "s8_internal_token_not_set",
+                message=(
+                    "ALERT_S8_INTERNAL_TOKEN is not set. "
+                    "The EmailScheduler will fail to call S8 /internal/v1/briefings (401). "
+                    "Set this env var to enable email digest generation."
+                ),
+            )
+        if not self.s1_internal_token:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "s1_internal_token_not_set",
+                message=(
+                    "ALERT_S1_INTERNAL_TOKEN is not set. "
+                    "The EmailScheduler will fail to resolve user emails from S1. "
+                    "Set this env var to enable email digest delivery."
+                ),
+            )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

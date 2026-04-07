@@ -14,6 +14,7 @@ def settings() -> RagChatSettings:
     return RagChatSettings(
         database_url="postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
         s1_internal_token="test-token",
+        internal_service_token="test-internal-token",
         log_json=False,
         log_level="WARNING",
     )
