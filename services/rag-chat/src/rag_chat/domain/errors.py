@@ -68,3 +68,9 @@ class PIIDetectedError(RagError):
     """User input contains detected personally identifiable information."""
 
     error_code = "PII_DETECTED"
+
+
+class BriefingAuthError(DomainError):
+    """X-Internal-Token missing or invalid on the /internal/v1/briefings endpoint."""
+
+    error_code = "BRIEFING_AUTH_FAILED"

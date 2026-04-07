@@ -178,11 +178,12 @@ GENERAL intent has special routing (light ANN + LLM general knowledge + follow-u
 
 ---
 
-### Wave B-2: Internal Briefing Endpoint + Model Config Env Vars
+### Wave B-2: Internal Briefing Endpoint + Model Config Env Vars ✅
 
 **Goal**: Add `POST /internal/v1/briefings` endpoint with `X-Internal-Token` auth; add `RAG_CHAT_COMPLETION_MODEL` and `RAG_CHAT_COMPLETION_PROVIDER` config fields; EMAIL_DEEP_BRIEF prompt mode.
 **Depends on**: Wave A-1
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-04-07 · 288 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -196,10 +197,10 @@ GENERAL intent has special routing (light ANN + LLM general knowledge + follow-u
 | T-B-2-06 | Unit tests: auth check, briefing use case, rate limit enforcement | test | `services/rag-chat/tests/unit/api/test_briefings.py` | Auth failure = 401; valid token = 200; rate limit = 429 |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/rag-chat/tests -m "unit" -v` passes
-- [ ] Security: `hmac.compare_digest` used (not `==`) for token comparison
-- [ ] No hardcoded tokens (env var only)
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest services/rag-chat/tests -m "unit" -v` passes (288 tests)
+- [x] Security: `hmac.compare_digest` used (not `==`) for token comparison
+- [x] No hardcoded tokens (env var only)
 
 ---
 
