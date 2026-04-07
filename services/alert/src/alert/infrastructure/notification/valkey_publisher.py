@@ -30,12 +30,15 @@ class ValkeyNotificationPublisher:
         """Publish *payload* to the user's Valkey channel.
 
         Args:
+        ----
             user_id: Target user's UUID.
             payload: Notification payload serialised as JSON.
 
         Note:
+        ----
             Best-effort: if the user has no active WebSocket subscription the
             message is silently dropped.  Exceptions are logged and suppressed.
+
         """
         channel = f"alert:{user_id}"
         try:

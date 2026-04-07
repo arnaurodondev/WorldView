@@ -120,7 +120,7 @@ class CreateWatchlistUseCase:
                 WatchlistCreated.EVENT_TYPE,
                 watchlist_created_to_dict(event),
                 cmd.tenant_id,
-            )
+            ),
         )
         await uow.commit()
         logger.info("watchlist_created", watchlist_id=str(watchlist.id), user_id=str(cmd.user_id))
@@ -168,7 +168,7 @@ class DeleteWatchlistUseCase:
                 WatchlistDeleted.EVENT_TYPE,
                 watchlist_deleted_to_dict(event),
                 cmd.tenant_id,
-            )
+            ),
         )
         await uow.commit()
         logger.info("watchlist_deleted", watchlist_id=str(cmd.watchlist_id))
@@ -200,7 +200,7 @@ class AddWatchlistMemberUseCase:
         existing = await uow.watchlist_members.get(cmd.watchlist_id, cmd.entity_id)
         if existing is not None:
             raise WatchlistMemberAlreadyExistsError(
-                f"Entity {cmd.entity_id} is already in watchlist {cmd.watchlist_id}"
+                f"Entity {cmd.entity_id} is already in watchlist {cmd.watchlist_id}",
             )
 
         member = WatchlistMember(
@@ -224,7 +224,7 @@ class AddWatchlistMemberUseCase:
                 WatchlistItemAdded.EVENT_TYPE,
                 watchlist_item_added_to_dict(event),
                 cmd.tenant_id,
-            )
+            ),
         )
         # Commit before cache invalidation so stale cache entries are only evicted
         # after the DB write is durable (M-005: cache invalidation ordering).
@@ -275,7 +275,7 @@ class RemoveWatchlistMemberUseCase:
                 WatchlistItemDeleted.EVENT_TYPE,
                 watchlist_item_deleted_to_dict(event),
                 cmd.tenant_id,
-            )
+            ),
         )
         # Commit before cache invalidation so stale cache entries are only evicted
         # after the DB write is durable (M-005: cache invalidation ordering).

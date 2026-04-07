@@ -33,12 +33,15 @@ class SendGridEmailAdapter:
     ) -> str:
         """Send an email via SendGrid.
 
-        Returns:
+        Returns
+        -------
             The SendGrid message ID from the ``X-Message-Id`` response header,
             or an empty string if the header is absent.
 
-        Raises:
+        Raises
+        ------
             EmailProviderError: On any non-2xx HTTP response or transport error.
+
         """
         payload = {
             "personalizations": [{"to": [{"email": to}]}],

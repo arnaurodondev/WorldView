@@ -36,14 +36,14 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             select(WatchlistMemberModel).where(
                 WatchlistMemberModel.watchlist_id == watchlist_id,
                 WatchlistMemberModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
     async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]:
         result = await self._session.execute(
-            select(WatchlistMemberModel).where(WatchlistMemberModel.watchlist_id == watchlist_id)
+            select(WatchlistMemberModel).where(WatchlistMemberModel.watchlist_id == watchlist_id),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -55,7 +55,7 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             .where(
                 WatchlistMemberModel.entity_id == entity_id,
                 WatchlistModel.status == "active",
-            )
+            ),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -67,7 +67,7 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             .where(
                 WatchlistMemberModel.entity_id == entity_id,
                 WatchlistModel.status == "active",
-            )
+            ),
         )
         return [WatcherDTO(user_id=row[0], watchlist_id=row[1]) for row in result]
 
@@ -85,7 +85,7 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             .where(
                 WatchlistMemberModel.entity_id.in_(entity_ids),
                 WatchlistModel.status == "active",
-            )
+            ),
         )
         watchers: dict[UUID, list[WatcherDTO]] = defaultdict(list)
         for row in result:
@@ -110,7 +110,7 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             select(WatchlistMemberModel).where(
                 WatchlistMemberModel.watchlist_id == watchlist_id,
                 WatchlistMemberModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         if row is not None:

@@ -33,6 +33,7 @@ def render_digest_email(
     """Render the weekly digest email as (html_body, text_body).
 
     Args:
+    ----
         narrative: AI-generated narrative text from S8.
         risk_summary: Dict with ``top_risk_signals`` list (from S8 briefing).
         positions: List of portfolio position dicts, each with optional keys
@@ -43,7 +44,9 @@ def render_digest_email(
             and optional ``pe_ratio``, ``market_cap``, ``revenue_growth``.
 
     Returns:
+    -------
         Tuple of ``(html_body, text_body)``.
+
     """
     html_body = _render_html(narrative, risk_summary or {}, positions or [], citations or [], fundamentals or [])
     text_body = _render_text(narrative, risk_summary or {}, positions or [], citations or [], fundamentals or [])

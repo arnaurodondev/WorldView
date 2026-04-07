@@ -45,11 +45,14 @@ class SMTPEmailAdapter:
     ) -> str:
         """Send an email via SMTP.
 
-        Returns:
+        Returns
+        -------
             Empty string (SMTP does not return a provider message ID).
 
-        Raises:
+        Raises
+        ------
             EmailProviderError: On any SMTP protocol or connection error.
+
         """
         message = MIMEMultipart("alternative")
         message["Subject"] = subject

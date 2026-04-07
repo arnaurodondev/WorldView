@@ -38,7 +38,7 @@ class SqlAlchemyAlertPreferenceRepository(AlertPreferenceRepository):
             select(AlertPreferenceModel).where(
                 AlertPreferenceModel.user_id == user_id,
                 AlertPreferenceModel.tenant_id == tenant_id,
-            )
+            ),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -83,7 +83,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.tenant_id == tenant_id,
-            )
+            ),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -92,7 +92,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
@@ -115,7 +115,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         if row is not None:

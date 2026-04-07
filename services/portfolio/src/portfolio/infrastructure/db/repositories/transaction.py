@@ -43,7 +43,7 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
             select(TransactionModel).where(
                 TransactionModel.id == transaction_id,
                 TransactionModel.tenant_id == tenant_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
@@ -59,7 +59,7 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
                 TransactionModel.portfolio_id == portfolio_id,
                 TransactionModel.tenant_id == tenant_id,
                 TransactionModel.external_ref == external_ref,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
@@ -76,7 +76,7 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
             TransactionModel.tenant_id == tenant_id,
         )
         count_result = await self._session.execute(
-            select(func.count()).select_from(TransactionModel).where(*base_where)
+            select(func.count()).select_from(TransactionModel).where(*base_where),
         )
         total: int = count_result.scalar_one()
         result = await self._session.execute(select(TransactionModel).where(*base_where).limit(limit).offset(offset))

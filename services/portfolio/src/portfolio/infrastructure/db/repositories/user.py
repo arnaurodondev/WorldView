@@ -32,14 +32,14 @@ class SqlAlchemyUserRepository(UserRepository):
 
     async def get(self, user_id: UUID, tenant_id: UUID) -> User | None:
         result = await self._session.execute(
-            select(UserModel).where(UserModel.id == user_id, UserModel.tenant_id == tenant_id)
+            select(UserModel).where(UserModel.id == user_id, UserModel.tenant_id == tenant_id),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
     async def get_by_email(self, email: str, tenant_id: UUID) -> User | None:
         result = await self._session.execute(
-            select(UserModel).where(UserModel.email == email, UserModel.tenant_id == tenant_id)
+            select(UserModel).where(UserModel.email == email, UserModel.tenant_id == tenant_id),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None

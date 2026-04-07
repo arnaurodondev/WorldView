@@ -29,7 +29,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         topic = EVENT_TOPIC_MAP.get(row.event_type)
         if topic is None:
             raise ValueError(
-                f"No topic mapping for event_type={row.event_type!r}. Add it to EVENT_TOPIC_MAP in topics.py."
+                f"No topic mapping for event_type={row.event_type!r}. Add it to EVENT_TOPIC_MAP in topics.py.",
             )
         return OutboxRecord(
             id=row.id,
@@ -67,7 +67,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
                 (OutboxEventModel.lease_expires == None) | (OutboxEventModel.lease_expires < now),  # noqa: E711
             )
             .limit(batch_size)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True),
         )
         rows = list(result.scalars())
 
@@ -82,7 +82,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="published", published_at=_utc_now(), lease_owner=None, lease_expires=None)
+            .values(status="published", published_at=_utc_now(), lease_owner=None, lease_expires=None),
         )
 
     async def increment_attempts(self, record_id: UUID) -> None:
@@ -94,12 +94,12 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
                 status="pending",
                 lease_owner=None,
                 lease_expires=None,
-            )
+            ),
         )
 
     async def move_to_dead_letter(self, record_id: UUID) -> None:
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="dead_letter", lease_owner=None, lease_expires=None)
+            .values(status="dead_letter", lease_owner=None, lease_expires=None),
         )

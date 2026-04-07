@@ -48,7 +48,8 @@ if TYPE_CHECKING:
         """Protocol for constructing repos from a session."""
 
         def __call__(
-            self, session: AsyncSession
+            self,
+            session: AsyncSession,
         ) -> tuple[
             AlertSaveRepositoryPort,
             PendingAlertRepositoryPort,
@@ -181,11 +182,13 @@ class AlertFanoutUseCase:
     """Fan-out one intelligence event to all watching users.
 
     Args:
+    ----
         session_factory: SQLAlchemy async session factory for alert_db.
         watchlist_cache: Cache-aside wrapper for S1 watchlist lookups.
         notification_publisher: Real-time notification publisher port (Valkey pub/sub or in-process).
         dedup_window_seconds: Deduplication window length (default 300 s).
         alert_delivered_topic: Kafka topic for outbox events.
+
     """
 
     def __init__(
@@ -213,12 +216,15 @@ class AlertFanoutUseCase:
         """Fan-out one event to all watchers.
 
         Args:
+        ----
             event: Deserialized Kafka message value.
             topic: Source Kafka topic name.
             correlation_id: Optional tracing correlation ID.
 
         Returns:
+        -------
             :class:`FanoutResult` describing what happened.
+
         """
         # ── 1. Backfill suppression ──────────────────────────────────────────
         if _should_suppress(event, topic):
@@ -334,7 +340,7 @@ class AlertFanoutUseCase:
                         topic=self._alert_delivered_topic,
                         partition_key=str(user_uuid),
                         payload_avro=payload_avro,
-                    )
+                    ),
                 )
                 watcher_user_ids.append(user_uuid)
 

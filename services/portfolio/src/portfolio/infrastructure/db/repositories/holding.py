@@ -36,7 +36,7 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             select(HoldingModel).where(
                 HoldingModel.portfolio_id == portfolio_id,
                 HoldingModel.instrument_id == instrument_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None

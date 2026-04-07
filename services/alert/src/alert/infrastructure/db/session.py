@@ -47,10 +47,12 @@ def _build_factories(
 ) -> tuple[AsyncEngine, AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
     """Build write + read session factories from *settings*.
 
-    Returns:
+    Returns
+    -------
         ``(write_engine, read_engine, write_factory, read_factory)`` — caller owns
         both engines for disposal on shutdown.  When no read replica is configured,
         ``read_engine is write_engine``.
+
     """
     write_engine = create_async_engine(
         _get_url(settings.database_url),

@@ -39,10 +39,13 @@ def build_outbox_event_serializers(
     """Build a mapping of event_type → AvroSerializer.
 
     Args:
+    ----
         schema_registry_client: Confluent SchemaRegistryClient instance.
 
     Returns:
+    -------
         dict mapping event_type strings to AvroSerializer callables.
+
     """
     from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore[import-untyped]
 

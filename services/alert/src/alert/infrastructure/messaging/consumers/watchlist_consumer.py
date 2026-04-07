@@ -37,7 +37,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -54,10 +54,12 @@ class WatchlistConsumer(BaseKafkaConsumer[None]):
     """Consumes ``portfolio.watchlist.updated.v1`` and invalidates cache entries.
 
     Args:
+    ----
         config: Consumer configuration (group_id should be
             ``alert-service-watchlist-group``).
         watchlist_cache: Cache instance whose entries to invalidate.
         dedup_client: Optional Valkey client for event deduplication.
+
     """
 
     def __init__(
@@ -139,7 +141,6 @@ class WatchlistConsumer(BaseKafkaConsumer[None]):
             error=str(failure.last_error),
             attempt=failure.attempt,
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]

@@ -61,7 +61,7 @@ class PortfolioContextUseCase:
                         canonical_name=instrument.name if instrument else None,
                         quantity=h.quantity,
                         current_weight=0.0,
-                    )
+                    ),
                 )
 
         # --- Watchlist (deduplicated by entity_id) ---
@@ -81,7 +81,7 @@ class PortfolioContextUseCase:
                         ticker=None,
                         entity_id=m.entity_id,
                         canonical_name=None,
-                    )
+                    ),
                 )
 
         return PortfolioContextDTO(
