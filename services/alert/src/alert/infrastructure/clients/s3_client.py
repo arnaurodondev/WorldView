@@ -42,11 +42,14 @@ class S3MarketDataClient:
         """GET /api/v1/ohlcv/bulk — returns OHLCV records for held entities.
 
         Args:
+        ----
             entity_ids: List of entity UUIDs to fetch OHLCV for.
             days: Lookback window in days (default 7).
 
         Returns:
+        -------
             List of OHLCV record dicts, or empty list on failure.
+
         """
         if not entity_ids:
             return []
@@ -64,10 +67,13 @@ class S3MarketDataClient:
         """GET /api/v1/fundamentals — returns fundamental metrics for entities.
 
         Args:
+        ----
             entity_ids: List of entity UUIDs to fetch fundamentals for.
 
         Returns:
+        -------
             List of fundamentals dicts, or empty list on failure.
+
         """
         if not entity_ids:
             return []

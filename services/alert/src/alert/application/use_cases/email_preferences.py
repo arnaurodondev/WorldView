@@ -50,8 +50,10 @@ class GetEmailPreferencesUseCase:
     exists in the DB the default-constructed entity is upserted and returned.
 
     Args:
+    ----
         repo: EmailPreferenceRepositoryPort (pass the write repo so that
               first-access defaults are persisted).
+
     """
 
     def __init__(self, repo: EmailPreferenceRepositoryPort) -> None:

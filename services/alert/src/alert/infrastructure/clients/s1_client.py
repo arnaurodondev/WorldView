@@ -49,10 +49,12 @@ class S1Client:
     async def get_watchers_by_entity(self, entity_id: str) -> tuple[list[WatcherInfo], bool]:
         """GET /internal/v1/watchlists/by-entity/{entity_id} → (watchers, success).
 
-        Returns:
+        Returns
+        -------
             A 2-tuple ``(watchers, ok)`` where ``ok`` is ``True`` when the
             request succeeded (even if the entity has no watchers) and
             ``False`` on any network or HTTP error.
+
         """
         url = f"{self._base_url}/internal/v1/watchlists/by-entity/{entity_id}"
         data = await self._get_json(url)

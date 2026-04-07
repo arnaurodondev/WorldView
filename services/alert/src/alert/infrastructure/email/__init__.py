@@ -33,8 +33,10 @@ def build_email_provider(settings: Settings) -> EmailProvider:
     - ``sendgrid`` → :class:`SendGridEmailAdapter`
     - ``smtp``     → :class:`SMTPEmailAdapter`
 
-    Raises:
+    Raises
+    ------
         ValueError: If the configured provider name is not recognised.
+
     """
     provider = settings.email_provider.lower()
 
@@ -53,5 +55,5 @@ def build_email_provider(settings: Settings) -> EmailProvider:
         )
 
     raise ValueError(
-        f"Unknown email provider {settings.email_provider!r}. Supported values: 'resend', 'sendgrid', 'smtp'."
+        f"Unknown email provider {settings.email_provider!r}. Supported values: 'resend', 'sendgrid', 'smtp'.",
     )

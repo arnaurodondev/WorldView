@@ -33,11 +33,14 @@ class ResendEmailAdapter:
     ) -> str:
         """Send an email via Resend.
 
-        Returns:
+        Returns
+        -------
             The Resend message ID on success.
 
-        Raises:
+        Raises
+        ------
             EmailProviderError: On any non-2xx HTTP response or transport error.
+
         """
         payload = {
             "from": from_address,

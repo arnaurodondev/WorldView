@@ -54,6 +54,7 @@ class S8BriefingClient:
         """Request an AI-generated portfolio risk narrative from S8.
 
         Args:
+        ----
             user_id: The user whose portfolio is being briefed.
             tenant_id: Multi-tenant scope.
             portfolio_context: Portfolio context dict from S1.
@@ -62,12 +63,15 @@ class S8BriefingClient:
             lookback_days: Lookback period for news/signals (1-30).
 
         Returns:
+        -------
             The S8 response dict (``narrative``, ``risk_summary``,
             ``citations``, ``generated_at``).
 
         Raises:
+        ------
             BriefingClientError: On 401 (bad token), 503 (LLM unavailable),
                 or any transport failure.
+
         """
         url = f"{self._base_url}/internal/v1/briefings"
         payload: dict[str, Any] = {

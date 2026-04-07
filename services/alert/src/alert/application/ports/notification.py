@@ -24,10 +24,13 @@ class INotificationPublisher(Protocol):
         """Publish a real-time notification to a connected user.
 
         Args:
+        ----
             user_id: Target user's UUID.
             payload: Notification payload (serialised by the implementation).
 
         Note:
+        ----
             Implementations must silently no-op if the user is not reachable.
+
         """
         ...

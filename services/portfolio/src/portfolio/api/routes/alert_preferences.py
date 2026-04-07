@@ -96,7 +96,10 @@ async def set_entity_suppression(
 
 
 @router.delete(
-    "/suppressions/{entity_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, response_model=None
+    "/suppressions/{entity_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
 )
 async def remove_entity_suppression(
     entity_id: UUID,

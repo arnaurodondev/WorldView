@@ -33,7 +33,7 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
         "nlp.signal.detected.v1",
         "graph.state.changed.v1",
         "intelligence.contradiction.v1",
-    }
+    },
 )
 
 
@@ -44,7 +44,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -61,12 +61,14 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
     """Consumes intelligence topics and routes each event to fan-out.
 
     Args:
+    ----
         config: Consumer configuration.  ``topics`` should contain all
             three intelligence topic names; ``group_id`` should be
             ``alert-service-group``.
         fanout_use_case: :class:`AlertFanoutUseCase` instance to call for
             each received event.
         dedup_client: Optional Valkey client for event deduplication.
+
     """
 
     def __init__(
@@ -189,7 +191,6 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             error=str(failure.last_error),
             attempt=failure.attempt,
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]

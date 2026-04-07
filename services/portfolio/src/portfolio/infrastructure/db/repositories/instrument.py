@@ -44,7 +44,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
             select(InstrumentModel).where(
                 InstrumentModel.symbol == symbol,
                 InstrumentModel.exchange == exchange,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None

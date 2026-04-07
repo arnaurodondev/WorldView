@@ -54,7 +54,7 @@ class GetAlertPreferencesUseCase:
                         alert_type=alert_type,
                         enabled=True,
                         updated_at=utc_now(),
-                    )
+                    ),
                 )
         return preferences, suppressions
 
@@ -129,7 +129,7 @@ class RemoveEntitySuppressionUseCase:
         existing = await uow.entity_suppressions.get(cmd.user_id, cmd.entity_id)
         if existing is None:
             raise AlertPreferenceNotFoundError(
-                f"No suppression found for entity {cmd.entity_id} and user {cmd.user_id}"
+                f"No suppression found for entity {cmd.entity_id} and user {cmd.user_id}",
             )
         await uow.entity_suppressions.delete(cmd.user_id, cmd.entity_id)
         await uow.commit()

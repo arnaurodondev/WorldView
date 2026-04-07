@@ -39,7 +39,7 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
             select(PortfolioModel).where(
                 PortfolioModel.id == portfolio_id,
                 PortfolioModel.tenant_id == tenant_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
