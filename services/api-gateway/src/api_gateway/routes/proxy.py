@@ -210,3 +210,68 @@ async def update_email_preferences(request: Request) -> Any:
         headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Screener + Timeseries (PRD-0017 Wave C-1) ─────────────────────────────────
+
+
+@router.post("/fundamentals/screen")
+async def screen_instruments(request: Request) -> Any:
+    """Proxy POST /api/v1/fundamentals/screen → S3 Market Data.
+
+    Public endpoint (no auth headers forwarded).  S3 returns 400 for no filters,
+    422 for invalid metric/sort_by.
+    """
+    body = await request.body()
+    clients = _clients(request)
+    resp = await clients.market_data.post(
+        "/api/v1/fundamentals/screen",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/screen/fields")
+async def get_screen_fields(request: Request) -> Any:
+    """Proxy GET /api/v1/fundamentals/screen/fields → S3 Market Data.
+
+    Public endpoint. Returns screener field metadata (Valkey-backed, 6h refresh).
+    """
+    clients = _clients(request)
+    resp = await clients.market_data.get("/api/v1/fundamentals/screen/fields")
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/timeseries")
+async def get_fundamentals_timeseries(request: Request) -> Any:
+    """Proxy GET /api/v1/fundamentals/timeseries → S3 Market Data.
+
+    Forwards query parameters unchanged.
+    """
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/fundamentals/timeseries",
+        params=dict(request.query_params),
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Similar entities (PRD-0017 Wave C-1) ─────────────────────────────────────
+
+
+@router.post("/entities/similar")
+async def find_similar_entities(request: Request) -> Any:
+    """Proxy POST /api/v1/entities/similar → S7 Knowledge Graph.
+
+    Public endpoint. S7 returns 404 (entity not found), 422 (no embedding),
+    503 (pgvector unavailable).
+    """
+    body = await request.body()
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.post(
+        "/api/v1/entities/similar",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

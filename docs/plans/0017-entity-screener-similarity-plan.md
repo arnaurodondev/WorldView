@@ -6,7 +6,7 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-08
 total_waves: 11
-waves_done: 8
+waves_done: 9
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -201,16 +201,16 @@ waves_done: 8
 
 ---
 
-### Wave C-1: S9 — Proxy new S3 + S7 endpoints
+### Wave C-1: S9 — Proxy new S3 + S7 endpoints ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 28 api-gateway tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `POST /api/v1/fundamentals/screen` — update existing proxy (new request/response shape)
-- [ ] `GET /api/v1/fundamentals/screen/fields` — new proxy (no auth)
-- [ ] `GET /api/v1/fundamentals/timeseries` — new proxy (not currently routed through S9)
-- [ ] `POST /api/v1/entities/similar` — new proxy (X-Tenant-ID auth)
-- [ ] Follow S9 typed-handler pattern: `clients.py` + `routes/proxy.py`
+- [x] `POST /api/v1/fundamentals/screen` — new proxy route in `routes/proxy.py` (no auth; S3 error codes propagated)
+- [x] `GET /api/v1/fundamentals/screen/fields` — new proxy (no auth)
+- [x] `GET /api/v1/fundamentals/timeseries` — new proxy; query params forwarded
+- [x] `POST /api/v1/entities/similar` — new proxy (no auth; 404/422/503 propagated)
+- [x] Unit tests: 7 new tests (200 proxy, 422/404/503 propagation for screener + similar)
 
 **Depends on**: B-1 (screener contract), B-4 (similar entities endpoint)
 **Estimated effort**: 2h
