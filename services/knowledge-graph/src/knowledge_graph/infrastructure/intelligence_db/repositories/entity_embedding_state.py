@@ -2,12 +2,12 @@
 
 Uses raw SQL via ``text()`` — S7 does not own intelligence_db DDL.
 
-Each entity has exactly 3 rows in ``entity_embedding_state``:
-  - view_type = 'definition'
-  - view_type = 'narrative'
-  - view_type = 'fundamentals_ohlcv'
+View-row allocation per entity type (PRD-0017 §6.5):
+  - financial_instrument  → 3 rows: definition, narrative, fundamentals_ohlcv
+  - all other types       → 2 rows: definition, narrative only
 
-The three rows must be ensured to exist before any worker writes them.
+Non-company entities have no structured fundamentals data; creating a
+fundamentals_ohlcv row for them wastes storage and pollutes ANN results.
 """
 
 from __future__ import annotations
@@ -23,11 +23,31 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# View types — exactly 3 per entity
+# View type constants
 VIEW_DEFINITION = "definition"
 VIEW_NARRATIVE = "narrative"
 VIEW_FUNDAMENTALS = "fundamentals_ohlcv"
+
+# All 3 view types (for financial_instrument entities and internal iteration)
 ALL_VIEW_TYPES = (VIEW_DEFINITION, VIEW_NARRATIVE, VIEW_FUNDAMENTALS)
+
+# Non-company entities get only definition + narrative (no fundamentals data)
+COMPANY_VIEW_TYPES = ALL_VIEW_TYPES
+NON_COMPANY_VIEW_TYPES = (VIEW_DEFINITION, VIEW_NARRATIVE)
+
+# Entity types that receive fundamentals_ohlcv embeddings
+COMPANY_ENTITY_TYPES: frozenset[str] = frozenset({"financial_instrument"})
+
+
+def get_view_types_for_entity_type(entity_type: str) -> tuple[str, ...]:
+    """Return the view types to provision for a given entity type.
+
+    - ``financial_instrument`` → (definition, narrative, fundamentals_ohlcv)
+    - all other types          → (definition, narrative)
+    """
+    if entity_type in COMPANY_ENTITY_TYPES:
+        return COMPANY_VIEW_TYPES
+    return NON_COMPANY_VIEW_TYPES
 
 
 def sha256_hex(text_content: str) -> str:
@@ -110,7 +130,7 @@ WHERE entity_id = :entity_id AND view_type = :view_type
         }
 
     async def count_for_entity(self, entity_id: UUID) -> int:
-        """Count rows for an entity (should be exactly 3 after initialisation)."""
+        """Count rows for an entity (2 for non-company entities, 3 for financial_instrument)."""
         result = await self._session.execute(
             text("SELECT COUNT(*) FROM entity_embedding_state WHERE entity_id = :entity_id"),
             {"entity_id": str(entity_id)},
@@ -118,9 +138,15 @@ WHERE entity_id = :entity_id AND view_type = :view_type
         row = result.fetchone()
         return int(row[0]) if row else 0  # type: ignore[index]
 
-    async def ensure_rows_exist(self, entity_id: UUID) -> None:
-        """Ensure all 3 view-type rows exist for an entity (null embeddings ok)."""
-        for vt in ALL_VIEW_TYPES:
+    async def ensure_rows_exist(self, entity_id: UUID, entity_type: str) -> None:
+        """Ensure the correct view-type rows exist for an entity (null embeddings ok).
+
+        - ``financial_instrument``: 3 rows (definition, narrative, fundamentals_ohlcv)
+        - all other types:          2 rows (definition, narrative)
+
+        Uses ``ON CONFLICT DO NOTHING`` for idempotency.
+        """
+        for vt in get_view_types_for_entity_type(entity_type):
             await self._session.execute(
                 text("""
 INSERT INTO entity_embedding_state (entity_id, view_type, last_refreshed_at, refresh_count)

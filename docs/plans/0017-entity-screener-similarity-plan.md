@@ -50,24 +50,24 @@ total_waves: 11
 
 ---
 
-### Wave A-2: S7 — Fix `ensure_rows_exist()` entity type awareness
+### Wave A-2: S7 — Fix `ensure_rows_exist()` entity type awareness ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-07 · 7 new tests pass (239 total unit) · ruff + mypy clean
 
 **Tasks**:
-- [ ] Add `get_view_types_for_entity_type(entity_type: str) -> tuple[str, ...]` helper
-- [ ] `COMPANY_ENTITY_TYPES = frozenset({"financial_instrument"})`
-- [ ] Update `ensure_rows_exist(entity_id, entity_type)` — new signature requires `entity_type`
-- [ ] Update callers: `instrument_consumer_main.py`, `provisional_enrichment.py`
-- [ ] Unit tests: `test_ensure_rows_exist_company`, `test_ensure_rows_exist_non_company`, `test_ensure_rows_exist_all_entity_types`
+- [x] Add `get_view_types_for_entity_type(entity_type: str) -> tuple[str, ...]` helper
+- [x] `COMPANY_ENTITY_TYPES = frozenset({"financial_instrument"})`
+- [x] Update `ensure_rows_exist(entity_id, entity_type)` — new signature requires `entity_type`
+- [x] Update callers: `instrument_consumer.py`, `provisional_enrichment.py`
+- [x] Unit tests: `TestGetViewTypesForEntityType` (3 tests) + `TestEntityEmbeddingStateRepositoryEnsureRowsExist` (4 tests)
 
 **Depends on**: A-1 (data cleanup must run before fix is deployed)
 **Estimated effort**: 3h
 **Files**:
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/db/embedding_state.py` (or wherever `ensure_rows_exist` lives)
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/instrument_consumer_main.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/entity_embedding_state.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/instrument_consumer.py`
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py`
-- `services/knowledge-graph/tests/unit/`
+- `services/knowledge-graph/tests/unit/infrastructure/test_repositories.py`
 
 ---
 

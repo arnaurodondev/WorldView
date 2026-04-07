@@ -157,8 +157,8 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             # Step 3: LLM-generated supplementary aliases
             await self._add_llm_aliases(entity_id, canonical_name, ticker, description, alias_repo)
 
-            # Step 4: Ensure 3 embedding_state rows
-            await emb_repo.ensure_rows_exist(entity_id)
+            # Step 4: Ensure embedding_state rows (3 for financial_instrument)
+            await emb_repo.ensure_rows_exist(entity_id, "financial_instrument")
             await session.commit()
 
         # Step 5: Embed description as definition view (outside main txn)

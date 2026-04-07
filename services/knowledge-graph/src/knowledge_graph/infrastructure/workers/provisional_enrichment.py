@@ -6,7 +6,7 @@ Runs every 10 minutes.  Processes ``provisional_entity_queue`` rows with
      (canonical_name, entity_type, ticker, ISIN).
   2. INSERT into canonical_entities.
   3. INSERT mechanical aliases (canonical_name, ticker, ISIN if available).
-  4. INSERT 3 entity_embedding_state rows (definition + narrative + fundamentals).
+  4. INSERT 2-3 entity_embedding_state rows (financial_instrument: 3; others: 2).
   5. UPDATE provisional_entity_queue.status → 'resolved'.
   6. UPDATE relation_evidence_raw to clear entity_provisional flag.
   7. EMIT entity.canonical.created.v1 via outbox.
@@ -207,9 +207,9 @@ WHERE queue_id = :queue_id
                 continue  # Reject — collision with different entity
             await alias_repo.insert(entity_id, alias, normalized, "LLM", "provisional_enrichment")
 
-        # ---- Step 5: Ensure 3 entity_embedding_state rows ----
+        # ---- Step 5: Ensure entity_embedding_state rows (2 for non-company, 3 for financial_instrument) ----
         emb_repo = EntityEmbeddingStateRepository(session)
-        await emb_repo.ensure_rows_exist(entity_id)
+        await emb_repo.ensure_rows_exist(entity_id, entity_type)
 
         # ---- Step 6: Embed definition ----
         if canonical_name:
