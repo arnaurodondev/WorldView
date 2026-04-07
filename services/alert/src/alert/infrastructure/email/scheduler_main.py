@@ -53,7 +53,13 @@ async def _run_loop(settings: Settings) -> None:
 
     ap_scheduler = AsyncIOScheduler()
     # Fire at the top of every hour (minute=0) to check who needs a digest
-    ap_scheduler.add_job(scheduler.run, CronTrigger(minute=0), id="email_digest_hourly")
+    ap_scheduler.add_job(
+        scheduler.run,
+        CronTrigger(minute=0),
+        id="email_digest_hourly",
+        max_instances=1,  # prevent overlapping runs
+        coalesce=True,  # skip accumulated missed runs on restart
+    )
     ap_scheduler.start()
     log.info("email_scheduler_started")  # type: ignore[no-any-return]
 

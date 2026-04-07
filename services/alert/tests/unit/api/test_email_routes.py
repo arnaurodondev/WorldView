@@ -25,6 +25,8 @@ def _make_app() -> tuple[object, AsyncMock]:
         admin_token=_ADMIN_TOKEN,
         service_name="alert-unit-test",
         log_json=False,
+        s8_internal_token="test-s8-token",
+        s1_internal_token="test-s1-token",
     )
     app = create_app(settings)
 
