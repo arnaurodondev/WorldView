@@ -9,6 +9,8 @@ Dependencies are injected via port ABCs — no infrastructure imports at runtime
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING
@@ -130,8 +132,10 @@ class ProcessArticleUseCase:
         log.info("bronze_fetched", byte_size=len(raw_bytes))
 
         # 2. Clean text
+        # Unwrap S4 Bronze envelope (JSON with raw_b64) to get actual article bytes
+        article_bytes = _unwrap_bronze_envelope(raw_bytes)
         content_type = _guess_content_type(article.source_type)
-        cleaned_text = clean(raw_bytes, content_type)
+        cleaned_text = clean(article_bytes, content_type)
         word_count = len(cleaned_text.split()) if cleaned_text else 0
 
         # 3. Stage A: exact raw hash
@@ -263,6 +267,24 @@ class ProcessArticleUseCase:
             source_type=article.source_type,
             minio_silver_key=silver_key,
         )
+
+
+def _unwrap_bronze_envelope(raw_bytes: bytes) -> bytes:
+    """Extract the actual article bytes from an S4 Bronze envelope.
+
+    S4 content-ingestion wraps raw article bytes in a JSON envelope:
+        {"raw_b64": "<base64-encoded article bytes>", "url": ..., ...}
+
+    If raw_bytes is such an envelope, return the decoded article bytes.
+    Otherwise return raw_bytes unchanged (passthrough for legacy/direct formats).
+    """
+    try:
+        envelope = json.loads(raw_bytes)
+        if isinstance(envelope, dict) and "raw_b64" in envelope:
+            return base64.b64decode(envelope["raw_b64"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        pass
+    return raw_bytes
 
 
 def _guess_content_type(source_type: str) -> str:
