@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 def build_write_engine(settings: Settings) -> AsyncEngine:
     """Create the primary (read/write) async SQLAlchemy engine."""
     return create_async_engine(
-        settings.database_url,
+        settings.database_url.get_secret_value(),
         echo=settings.debug,
         pool_pre_ping=True,
         pool_size=20,
@@ -34,7 +34,8 @@ def build_read_engine(settings: Settings) -> AsyncEngine:
     Falls back to the primary database URL if ``read_replica_url`` is not
     configured on the settings object.
     """
-    read_url = getattr(settings, "read_replica_url", None) or settings.database_url
+    _replica = getattr(settings, "read_replica_url", None)
+    read_url = _replica.get_secret_value() if _replica is not None else settings.database_url.get_secret_value()
     return create_async_engine(
         read_url,
         echo=settings.debug,

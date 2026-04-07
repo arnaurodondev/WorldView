@@ -26,8 +26,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.host == "0.0.0.0"  # noqa: S104
     assert s.port == 8001
     assert s.debug is False
-    assert "portfolio_db" in s.database_url
-    assert s.database_url_read == ""  # R23: empty → fallback to database_url
+    assert "portfolio_db" in s.database_url.get_secret_value()
+    assert s.database_url_read.get_secret_value() == ""  # R23: empty → fallback to database_url
     assert s.db_pool_size == 10
     assert s.db_max_overflow == 20
     assert s.db_pool_size_read == 20

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -88,7 +89,7 @@ class TestBuildFactories:
         from content_ingestion.infrastructure.db.session import _build_factories
 
         settings = MagicMock()
-        settings.db_url = "postgresql+asyncpg://localhost/test"
+        settings.db_url = SecretStr("postgresql+asyncpg://localhost/test")
         settings.db_url_read = ""
 
         write_factory = MagicMock()
@@ -107,8 +108,8 @@ class TestBuildFactories:
         from content_ingestion.infrastructure.db.session import _build_factories
 
         settings = MagicMock()
-        settings.db_url = "postgresql+asyncpg://localhost/write"
-        settings.db_url_read = "postgresql+asyncpg://localhost/read"
+        settings.db_url = SecretStr("postgresql+asyncpg://localhost/write")
+        settings.db_url_read = SecretStr("postgresql+asyncpg://localhost/read")
 
         write_factory = MagicMock(name="write_factory")
         read_factory = MagicMock(name="read_factory")
@@ -128,7 +129,7 @@ class TestBuildFactories:
         from content_ingestion.infrastructure.db.session import _build_factories
 
         settings = MagicMock()
-        settings.db_url = "postgresql+asyncpg://localhost/test"
+        settings.db_url = SecretStr("postgresql+asyncpg://localhost/test")
         settings.db_url_read = ""
 
         _build_factories(settings)

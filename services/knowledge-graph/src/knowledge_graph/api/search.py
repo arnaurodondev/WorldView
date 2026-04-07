@@ -17,9 +17,6 @@ from knowledge_graph.api.schemas import (
 from knowledge_graph.application.use_cases.relation_summary_search import (
     RelationSummarySearchUseCase,
 )
-from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
-    RelationSummaryRepository,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
@@ -38,6 +35,10 @@ async def search_relations(
     ``summary_authority`` is computed at query time as
     ``confidence * log1p(evidence_count)`` — NOT a cached column.
     """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+        RelationSummaryRepository,
+    )
+
     repo = RelationSummaryRepository(session)
     results = await RelationSummarySearchUseCase().execute(
         repo=repo,  # type: ignore[arg-type]

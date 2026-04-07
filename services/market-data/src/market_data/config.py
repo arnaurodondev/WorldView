@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,10 +23,10 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db"
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db")
     # Optional read replica URL. When set, read-only API queries are routed to this
     # DB instance (e.g. a streaming replica). When unset, reads use database_url.
-    read_replica_url: str | None = None
+    read_replica_url: SecretStr | None = None
 
     # Kafka
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -43,3 +45,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        if "postgres:postgres" in self.database_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "MARKET_DATA_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self

@@ -21,9 +21,6 @@ from knowledge_graph.api.schemas import (
 from knowledge_graph.application.use_cases.contradiction_lookup import (
     EntityContradictionsUseCase,
 )
-from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
-    ClaimRepository,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["entities"])
@@ -46,6 +43,10 @@ async def get_entity_contradictions(
     Returns an empty ``contradictions`` list when no contradictions exist —
     this is NOT a 404.
     """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
+        ClaimRepository,
+    )
+
     claim_repo = ClaimRepository(session)
     contradictions = await EntityContradictionsUseCase().execute(
         claim_repo=claim_repo,  # type: ignore[arg-type]

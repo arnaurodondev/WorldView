@@ -65,7 +65,7 @@ def _build_intelligence_factories(
     _check_alembic_guard()
 
     write_engine = create_async_engine(
-        settings.intelligence_database_url,
+        settings.intelligence_database_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -78,8 +78,12 @@ def _build_intelligence_factories(
         expire_on_commit=False,
     )
 
-    read_url: str = settings.intelligence_database_url_read or settings.intelligence_database_url
-    if _same_db_endpoint(read_url, settings.intelligence_database_url):
+    read_url: str = (
+        settings.intelligence_database_url_read.get_secret_value()
+        if settings.intelligence_database_url_read
+        else settings.intelligence_database_url.get_secret_value()
+    )
+    if _same_db_endpoint(read_url, settings.intelligence_database_url.get_secret_value()):
         read_engine = write_engine
         read_factory = write_factory
     else:

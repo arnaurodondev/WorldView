@@ -151,8 +151,9 @@ class WorkerProcess:
     async def _execute_with_semaphore(self, task: ContentIngestionTask) -> None:
         """Acquire the concurrency semaphore then execute the task.
 
-        Semaphore is acquired first so that the timeout only measures actual
-        execution time, not time spent waiting for a concurrency slot.
+        Semaphore is acquired first so timeout only measures actual execution.
+        On timeout, the task is explicitly marked FAILED to avoid the 5-minute
+        lease-expiry delay before the scheduler can recover it.
         """
         async with self._semaphore:
             try:
@@ -165,6 +166,46 @@ class WorkerProcess:
                     worker_id=self._worker_id,
                     timeout=self._task_timeout,
                 )
+                # Mark the task as failed immediately so the scheduler
+                # doesn't have to wait for lease expiry to re-queue it.
+                await self._mark_task_timed_out(task)
+
+    async def _mark_task_timed_out(self, task: ContentIngestionTask) -> None:
+        """Write FAILED/RETRY status to DB for a timed-out task.
+
+        Opens a fresh write session (the original task session was rolled back
+        by the timeout cancellation).  If the task never reached RUNNING state
+        (timeout fired before task.start() completed), falls back to writing
+        RETRY directly via update_status so the domain state machine is not
+        violated.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        try:
+            async with self._write_factory() as session:
+                task_repo = TaskRepository(session)
+                new_status: IngestionTaskStatus
+                if task.status == IngestionTaskStatus.RUNNING:
+                    task.fail("task_timeout")  # increments attempt_count, sets RETRY or FAILED
+                    new_status = task.status
+                else:
+                    # Task never reached RUNNING (timeout fired very early); write RETRY directly
+                    new_status = IngestionTaskStatus.RETRY
+                await task_repo.update_status(task.id, new_status, error_detail="task_timeout")
+                await session.commit()
+                logger.info(
+                    "worker_task_timed_out_marked",
+                    task_id=str(task.id),
+                    new_status=new_status.value,
+                    worker_id=self._worker_id,
+                )
+        except Exception as exc:
+            # Best-effort — if this fails, lease expiry will recover the task
+            logger.error(
+                "worker_task_timeout_mark_failed",
+                task_id=str(task.id),
+                error=str(exc),
+            )
 
     async def _execute_task(self, task: ContentIngestionTask) -> None:
         """Execute a single claimed task through the pipeline.
@@ -186,6 +227,7 @@ class WorkerProcess:
             fetch_log_factory=FetchLogRepository,
             outbox_factory=OutboxRepository,
             adapter_builder=self._build_adapter,
+            task_factory=TaskRepository,  # D-9: atomic task-status + data commit
         )
         async with self._write_factory() as session:
             task_repo = TaskRepository(session)

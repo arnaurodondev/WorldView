@@ -13,14 +13,6 @@ from nlp_pipeline.application.ports.repositories import SignalsQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
-from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
-from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
-from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
-from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
-from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
-    SQLAlchemyDocumentSourceMetadataRepository,
-)
-from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
@@ -68,6 +60,8 @@ AdminAuthDep = Annotated[None, Depends(require_admin_token)]
 
 def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> DLQAdminUseCase:
     """Build a DLQAdminUseCase for the current request session."""
+    from nlp_pipeline.infrastructure.nlp_db.repositories.dlq import DLQRepository
+
     return DLQAdminUseCase(DLQRepository(session))
 
 
@@ -76,6 +70,8 @@ DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
 
 def get_signals_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> SignalsQueryPort:
     """Build a SqlaSignalsQueryRepo for the current request session (R25-compliant)."""
+    from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
+
     return SqlaSignalsQueryRepo(session)
 
 
@@ -91,6 +87,13 @@ def get_entity_resolver_use_case(
     ML clients (ner_client, embedding_client) are not available in the API
     process — stages 4 and 5 are skipped gracefully.
     """
+    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+
     valkey = getattr(request.app.state, "valkey", None)
     raw_valkey = valkey._redis if valkey is not None else None  # type: ignore[attr-defined]
     return QueryEntityResolverUseCase(
@@ -119,6 +122,14 @@ def get_chunk_search_use_case(
     """
     valkey = getattr(request.app.state, "valkey", None)
     raw_valkey = valkey._redis if valkey is not None else None  # type: ignore[attr-defined]
+    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
+    from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
+        SQLAlchemyDocumentSourceMetadataRepository,
+    )
+
     chunk_text_store = getattr(request.app.state, "chunk_text_store", None)
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(nlp_session),

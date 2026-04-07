@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import structlog
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,8 +25,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
-    database_url_read: str = ""
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db")
+    database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
@@ -94,3 +96,16 @@ class Settings(BaseSettings):
 
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        if "postgres:postgres" in self.database_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "KNOWLEDGE_GRAPH_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self

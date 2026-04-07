@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -12,14 +13,14 @@ def _make_nlp_settings(*, read_url: str = "") -> object:
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db",
-        database_url_read=read_url,
+        database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db"),
+        database_url_read=SecretStr(read_url),
         db_pool_size=5,
         db_max_overflow=10,
         db_pool_size_read=10,
         db_max_overflow_read=20,
-        intelligence_database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
-        intelligence_database_url_read="",
+        intelligence_database_url=SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"),
+        intelligence_database_url_read=SecretStr(""),
         intelligence_db_pool_size=5,
         intelligence_db_max_overflow=10,
         intelligence_db_pool_size_read=10,

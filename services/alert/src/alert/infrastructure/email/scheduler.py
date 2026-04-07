@@ -55,12 +55,14 @@ class EmailScheduler:
     """Orchestrates the weekly email digest per user.
 
     Args:
+    ----
         session_factory: Write-side async session factory for alert_db.
         email_provider: Adapter implementing ``EmailProvider`` protocol.
         settings: Service settings (from_address, provider name, etc.).
         s1_client: S1 portfolio service client (for user email lookup).
         s3_client: S3 market data client (OHLCV + fundamentals).
         s8_client: S8 RAG/Chat client (AI narrative generation).
+
     """
 
     def __init__(

@@ -15,9 +15,6 @@ from knowledge_graph.api.schemas import (
     EventsSearchResponse,
 )
 from knowledge_graph.application.use_cases.event_search import EventSearchUseCase
-from knowledge_graph.infrastructure.intelligence_db.repositories.event_repository import (
-    EventRepository,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["events"])
@@ -37,6 +34,10 @@ async def search_events(
     Omitting ``entity_ids`` (or passing an empty list) returns events
     across all entities subject to the other filters.
     """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.event_repository import (
+        EventRepository,
+    )
+
     event_repo = EventRepository(session)
     results = await EventSearchUseCase().execute(
         event_repo=event_repo,  # type: ignore[arg-type]

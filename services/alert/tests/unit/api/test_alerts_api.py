@@ -76,9 +76,9 @@ def _make_pending(user_id: UUID, alert_id: UUID) -> PendingAlert:
 
 # ── GET /api/v1/alerts/pending ────────────────────────────────────────────────
 
-# Patch paths target the api routes module where the repos are imported.
-_PENDING_REPO_PATH = "alert.api.routes.PendingAlertRepository"
-_ALERT_REPO_PATH = "alert.api.routes.AlertRepository"
+# Patch paths target the repository modules (repos are imported lazily inside functions).
+_PENDING_REPO_PATH = "alert.infrastructure.db.repositories.pending_alert.PendingAlertRepository"
+_ALERT_REPO_PATH = "alert.infrastructure.db.repositories.alert.AlertRepository"
 
 
 class TestGetPendingAlerts:

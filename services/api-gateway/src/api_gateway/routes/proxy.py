@@ -81,7 +81,6 @@ async def map_layers(request: Request) -> dict[str, Any]:
 @router.post("/chat")
 async def chat(request: Request) -> Any:
     """Proxy synchronous chat request to S8 RAG/Chat service."""
-
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)

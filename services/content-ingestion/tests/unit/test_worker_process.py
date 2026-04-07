@@ -221,6 +221,140 @@ class TestWorkerSemaphoreTimeout:
             await asyncio.sleep(1.0)
 
         worker._execute_task = _slow_execute  # type: ignore[assignment]
+        worker._mark_task_timed_out = AsyncMock()  # type: ignore[method-assign]
 
         # Should not raise — timeout is caught
         await worker._execute_with_semaphore(task)
+
+        # _mark_task_timed_out must be called on timeout
+        worker._mark_task_timed_out.assert_awaited_once_with(task)
+
+
+class TestWorkerTimeout:
+    @patch("content_ingestion.infrastructure.workers.worker._build_factories")
+    @patch("content_ingestion.infrastructure.workers.worker.create_valkey_client_from_url")
+    @patch("content_ingestion.infrastructure.workers.worker.build_object_storage")
+    @patch("content_ingestion.infrastructure.workers.worker.TaskRepository")
+    async def test_timeout_marks_task_as_failed(
+        self,
+        mock_task_repo_cls: MagicMock,
+        mock_storage: MagicMock,
+        mock_valkey: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        """When a RUNNING task times out, _mark_task_timed_out updates task status to RETRY/FAILED."""
+        from content_ingestion.infrastructure.workers.worker import WorkerProcess
+
+        mock_engine = MagicMock()
+        mock_session = AsyncMock()
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=mock_session_cm)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey.return_value = AsyncMock()
+
+        mock_repo = AsyncMock()
+        mock_task_repo_cls.return_value = mock_repo
+
+        settings = _make_settings()
+        worker = WorkerProcess(settings=settings)
+
+        # Task in RUNNING state (simulate that task.start() was already called)
+        task = _make_task()
+        task.start()  # CLAIMED → RUNNING
+
+        await worker._mark_task_timed_out(task)
+
+        # Task must be in RETRY or FAILED state after marking
+        assert task.status in (IngestionTaskStatus.RETRY, IngestionTaskStatus.FAILED)
+        # update_status must be called with the new status and error_detail
+        mock_repo.update_status.assert_awaited_once()
+        call_kwargs = mock_repo.update_status.await_args
+        assert call_kwargs.kwargs.get("error_detail") == "task_timeout" or (
+            len(call_kwargs.args) >= 3 and call_kwargs.args[2] == "task_timeout"
+        )
+        # Session must be committed
+        mock_session.commit.assert_awaited_once()
+
+    @patch("content_ingestion.infrastructure.workers.worker._build_factories")
+    @patch("content_ingestion.infrastructure.workers.worker.create_valkey_client_from_url")
+    @patch("content_ingestion.infrastructure.workers.worker.build_object_storage")
+    @patch("content_ingestion.infrastructure.workers.worker.TaskRepository")
+    async def test_timeout_marks_claimed_task_as_retry(
+        self,
+        mock_task_repo_cls: MagicMock,
+        mock_storage: MagicMock,
+        mock_valkey: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        """When a CLAIMED task (never reached RUNNING) times out, status is set to RETRY."""
+        from content_ingestion.infrastructure.workers.worker import WorkerProcess
+
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        mock_engine = MagicMock()
+        mock_session = AsyncMock()
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=mock_session_cm)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey.return_value = AsyncMock()
+
+        mock_repo = AsyncMock()
+        mock_task_repo_cls.return_value = mock_repo
+
+        settings = _make_settings()
+        worker = WorkerProcess(settings=settings)
+
+        # Task still in CLAIMED state (task.start() never called)
+        task = _make_task()
+        assert task.status == IngestionTaskStatus.CLAIMED
+
+        await worker._mark_task_timed_out(task)
+
+        # update_status must be called with RETRY and error_detail
+        mock_repo.update_status.assert_awaited_once()
+        call_args = mock_repo.update_status.await_args
+        # First positional arg after task_id is the new status
+        new_status = call_args.args[1]
+        assert new_status == IngestionTaskStatus.RETRY
+        assert call_args.kwargs.get("error_detail") == "task_timeout"
+        mock_session.commit.assert_awaited_once()
+
+    @patch("content_ingestion.infrastructure.workers.worker._build_factories")
+    @patch("content_ingestion.infrastructure.workers.worker.create_valkey_client_from_url")
+    @patch("content_ingestion.infrastructure.workers.worker.build_object_storage")
+    @patch("content_ingestion.infrastructure.workers.worker.TaskRepository")
+    async def test_timeout_mark_failure_is_best_effort(
+        self,
+        mock_task_repo_cls: MagicMock,
+        mock_storage: MagicMock,
+        mock_valkey: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        """If the DB write in _mark_task_timed_out fails, the error is logged and not re-raised."""
+        from content_ingestion.infrastructure.workers.worker import WorkerProcess
+
+        mock_engine = MagicMock()
+        mock_session = AsyncMock()
+        mock_session.commit.side_effect = RuntimeError("db write failed")
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock(return_value=mock_session_cm)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey.return_value = AsyncMock()
+
+        mock_repo = AsyncMock()
+        mock_task_repo_cls.return_value = mock_repo
+
+        settings = _make_settings()
+        worker = WorkerProcess(settings=settings)
+
+        task = _make_task()
+        task.start()  # CLAIMED → RUNNING
+
+        # Must not raise — error is best-effort
+        await worker._mark_task_timed_out(task)

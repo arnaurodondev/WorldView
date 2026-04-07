@@ -59,6 +59,7 @@ def serialize_email_sent(
     """Serialize an ``alert.email.sent`` event to schemaless Avro bytes.
 
     Args:
+    ----
         event_id: UUIDv7 string for this event.
         user_id: User who received the email.
         tenant_id: Tenant context.
@@ -70,7 +71,9 @@ def serialize_email_sent(
         provider_message_id: Optional provider-assigned message ID.
 
     Returns:
+    -------
         Schemaless Avro bytes suitable for ``OutboxEventModel.payload_avro``.
+
     """
     record = {
         "event_id": event_id,

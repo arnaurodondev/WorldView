@@ -10,7 +10,6 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
-from knowledge_graph.infrastructure.intelligence_db.repositories.dlq import DLQRepository
 
 # ── Database sessions ─────────────────────────────────────────────────────────
 
@@ -53,6 +52,8 @@ AdminAuthDep = Annotated[None, Depends(require_admin_token)]
 
 def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_session)]) -> DLQAdminUseCase:
     """Build a DLQAdminUseCase for the current request session."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.dlq import DLQRepository
+
     return DLQAdminUseCase(DLQRepository(session))
 
 

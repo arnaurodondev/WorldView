@@ -78,7 +78,10 @@ async def get_company_overview(
         _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/fundamentals"),
         _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/ohlcv", params={"limit": 90}),
         _checked_get(
-            clients.content_store, "content-store", "/v1/articles", params={"symbol": company_id, "limit": 10}
+            clients.content_store,
+            "content-store",
+            "/v1/articles",
+            params={"symbol": company_id, "limit": 10},
         ),
     )
     return {

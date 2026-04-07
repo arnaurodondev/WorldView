@@ -30,12 +30,6 @@ from knowledge_graph.application.use_cases.graph_query import (
     GetGraphStatsUseCase,
     ListRelationsUseCase,
 )
-from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-    CanonicalEntityRepository,
-)
-from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
-    RelationRepository,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["graph"])
@@ -100,6 +94,11 @@ async def get_entity_graph(
     Relations are filtered by ``min_confidence`` and optional ``semantic_mode``.
     ``summary_authority`` is computed at query time — NOT a cached column.
     """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         entity_repo = CanonicalEntityRepository(session)
@@ -138,6 +137,8 @@ async def list_relations(
     offset: int = Query(default=0, ge=0),
 ) -> RelationsListResponse:
     """Paginated, filtered relation list."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         relation_repo = RelationRepository(session)
@@ -166,6 +167,8 @@ async def list_relations(
 @router.get("/graph/stats", response_model=GraphStatsResponse)
 async def get_graph_stats(request: Request) -> GraphStatsResponse:
     """Return aggregate knowledge graph statistics."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         relation_repo = RelationRepository(session)

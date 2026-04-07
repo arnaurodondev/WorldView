@@ -51,7 +51,7 @@ def _build_factories(
         replica is configured, ``read_engine is write_engine``.
     """
     write_engine = create_async_engine(
-        settings.db_url,
+        settings.db_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -63,8 +63,10 @@ def _build_factories(
         expire_on_commit=False,
     )
 
-    read_url: str = settings.db_url_read or settings.db_url
-    if _same_db_endpoint(read_url, settings.db_url):
+    read_url: str = (
+        settings.db_url_read.get_secret_value() if settings.db_url_read else settings.db_url.get_secret_value()
+    )
+    if _same_db_endpoint(read_url, settings.db_url.get_secret_value()):
         read_engine = write_engine
         read_factory = write_factory
     else:
