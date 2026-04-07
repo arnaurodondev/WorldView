@@ -51,8 +51,8 @@ class Settings(BaseSettings):
 
     # Storage (S3/MinIO)
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str = "minioadmin"
-    storage_secret_key: str = "minioadmin"
+    storage_access_key: str  # Required — set KNOWLEDGE_GRAPH_STORAGE_ACCESS_KEY
+    storage_secret_key: str  # Required — set KNOWLEDGE_GRAPH_STORAGE_SECRET_KEY
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"

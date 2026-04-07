@@ -63,7 +63,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Database — write factory for fan-out (creates alerts, outbox events)
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     # Valkey — dedup + watchlist cache
     valkey = create_valkey_client_from_url(settings.valkey_url)

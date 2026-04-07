@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 import structlog
 
@@ -202,7 +203,7 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
                 session.add(
                     DeadLetterQueueModel(
                         dlq_id=common.ids.new_uuid7(),
-                        original_event_id=common.ids.new_uuid7(),
+                        original_event_id=UUID(failure.event_id),
                         topic=failure.topic,
                         payload_json=payload_json,
                         error_detail=str(failure.last_error),

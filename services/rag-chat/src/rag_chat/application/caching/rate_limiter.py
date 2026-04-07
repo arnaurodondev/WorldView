@@ -16,7 +16,7 @@ from rag_chat.domain.errors import RateLimitExceededError
 if TYPE_CHECKING:
     from uuid import UUID
 
-    import redis.asyncio as aioredis
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 _WINDOW_SECONDS = 60
 
@@ -25,11 +25,11 @@ class RateLimiter:
     """Per-tenant sliding-window rate limiter.
 
     Args:
-        valkey: An async Redis/Valkey client (``redis.asyncio.Redis``).
+        valkey: A :class:`~messaging.valkey.client.ValkeyClient` instance.
         limit:  Maximum requests allowed within the 60-second window.
     """
 
-    def __init__(self, valkey: aioredis.Redis, limit: int = 10) -> None:  # type: ignore[type-arg]
+    def __init__(self, valkey: ValkeyClient, limit: int = 10) -> None:
         self._valkey = valkey
         self._limit = limit
 

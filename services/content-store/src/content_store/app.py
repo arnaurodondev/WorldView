@@ -77,13 +77,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database — returns (engine, write_factory, read_factory) for R23 split
-    engine, write_factory, read_factory = _build_factories(settings)
+    # 3. Database — returns (engine, read_engine, write_factory, read_factory) for R23 split
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
 
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.engine = engine
+    app.state.read_engine = read_engine
 
     # 4. Object storage
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -116,8 +117,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Graceful shutdown — dispose DB engine and Valkey
+    # Graceful shutdown — dispose DB engine(s) and Valkey
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 
 

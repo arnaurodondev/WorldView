@@ -80,12 +80,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # 3. intelligence_db session factories — R23 dual factory (write + read)
-    engine, write_factory, read_factory = _build_intel_factories(settings)
+    engine, read_engine, write_factory, read_factory = _build_intel_factories(settings)
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.readonly_session_factory = read_factory
     app.state.engine = engine
+    app.state.read_engine = read_engine
 
     # 4. Admin token (DLQ endpoint auth)
     app.state.admin_token = getattr(settings, "admin_token", "")
@@ -95,6 +96,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await engine.dispose()
+        if read_engine is not engine:
+            await read_engine.dispose()
         log.info("knowledge_graph_stopped", service=settings.service_name)
 
 
@@ -111,7 +114,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
-    settings = settings or Settings()
+    settings = settings or Settings()  # type: ignore[call-arg]
 
     app = FastAPI(
         title="knowledge-graph",

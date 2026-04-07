@@ -108,7 +108,6 @@ def mock_app(mock_uow, mock_bronze):
         internal_service_token=INTERNAL_TOKEN,
     )
     mock_factory = AsyncMock()
-    app.state.session_factory = mock_factory
     app.state.write_factory = mock_factory
     app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()

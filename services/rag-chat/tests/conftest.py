@@ -12,7 +12,7 @@ from rag_chat.infrastructure.config.settings import RagChatSettings
 def settings() -> RagChatSettings:
     """Minimal settings suitable for unit tests (no real infra required)."""
     return RagChatSettings(
-        rag_db_url="postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
+        database_url="postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
         s1_internal_token="test-token",
         log_json=False,
         log_level="WARNING",

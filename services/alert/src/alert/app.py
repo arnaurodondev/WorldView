@@ -71,8 +71,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 3. Database — R23 dual factory (write + read)
     from alert.infrastructure.db.session import _build_factories
 
-    engine, write_factory, read_factory = _build_factories(settings)
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
     app.state.engine = engine
+    app.state.read_engine = read_engine
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
@@ -101,6 +102,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_manager = ConnectionManager()
     app.state.ws_manager = ws_manager
 
+    # 8. Kafka health producer (lightweight — for /readyz Kafka connectivity check)
+    from confluent_kafka import Producer as _KafkaProducer  # type: ignore[import-untyped]
+
+    kafka_health_producer = _KafkaProducer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    app.state.kafka_health_producer = kafka_health_producer
+
     log.info("service_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
 
@@ -108,6 +115,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await s1_client.close()
     await valkey.close()
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)  # type: ignore[no-any-return]
 
 

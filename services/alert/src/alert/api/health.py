@@ -46,7 +46,7 @@ async def readyz(request: Request) -> Response:
 
     # 2. Kafka (check producer metadata — lightweight)
     try:
-        producer = request.app.state.dispatcher._get_producer()
+        producer = request.app.state.kafka_health_producer
         # list_topics with short timeout — raises on connection failure
         await asyncio.get_event_loop().run_in_executor(None, lambda: producer.list_topics(timeout=2))
         checks["kafka"] = "ok"

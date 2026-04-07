@@ -31,20 +31,22 @@ def compute_raw_hash(raw_bytes: bytes) -> str:
 
 
 async def check_stage_a(
-    raw_bytes: bytes,
+    raw_bytes_or_hash: bytes | str,
     dedup_repo: DedupHashRepositoryPort,
 ) -> tuple[str, DeduplicationDecision | None]:
     """Run Stage A dedup: exact raw hash check.
 
     Args:
-        raw_bytes: Raw article content bytes.
+        raw_bytes_or_hash: Either raw bytes to hash, or a pre-computed hex hash string.
+            Pass a pre-computed hash (e.g. from the event's content_hash) to maintain
+            consistency with the upstream S4 service across the pipeline boundary.
         dedup_repo: Repository for hash lookups.
 
     Returns:
         Tuple of (raw_hash, decision_or_None). If decision is not None,
         the article is a duplicate and should be suppressed.
     """
-    raw_hash = compute_raw_hash(raw_bytes)
+    raw_hash = raw_bytes_or_hash if isinstance(raw_bytes_or_hash, str) else compute_raw_hash(raw_bytes_or_hash)
     existing_doc_id: UUID | None = await dedup_repo.check_exists("raw_sha256", raw_hash)
 
     if existing_doc_id is not None:

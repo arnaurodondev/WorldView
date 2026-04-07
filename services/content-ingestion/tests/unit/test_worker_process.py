@@ -67,8 +67,9 @@ class TestWorkerStop:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
-        mock_valkey.return_value = AsyncMock()
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey_instance = AsyncMock()
+        mock_valkey.return_value = mock_valkey_instance
 
         settings = _make_settings()
         worker = WorkerProcess(settings=settings)
@@ -95,6 +96,8 @@ class TestWorkerStop:
             await worker.run()
 
         assert call_count >= 2
+        # Valkey client must be closed after run() exits (F-QA-008)
+        mock_valkey_instance.close.assert_called_once()
 
 
 class TestWorkerClaimEmpty:
@@ -108,7 +111,7 @@ class TestWorkerClaimEmpty:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
         mock_valkey.return_value = AsyncMock()
 
         settings = _make_settings()
@@ -141,7 +144,7 @@ class TestWorkerExecuteTask:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         mock_factory = MagicMock(return_value=mock_session_cm)
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
         mock_valkey.return_value = AsyncMock()
 
         settings = _make_settings()
@@ -174,7 +177,7 @@ class TestWorkerClaimError:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
         mock_valkey.return_value = AsyncMock()
 
         settings = _make_settings()
@@ -203,7 +206,7 @@ class TestWorkerSemaphoreTimeout:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
         mock_valkey.return_value = AsyncMock()
 
         settings = _make_settings()

@@ -72,7 +72,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Only nlp_db write factory needed for outbox dispatch
-    nlp_engine, nlp_sf, _nlp_read_sf = _build_nlp_factories(settings)
+    nlp_engine, _nlp_read_engine, nlp_sf, _nlp_read_sf = _build_nlp_factories(settings)
     dispatcher = NLPPipelineOutboxDispatcher(settings=settings, session_factory=nlp_sf)
 
     try:

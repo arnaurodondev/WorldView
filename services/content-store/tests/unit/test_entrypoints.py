@@ -72,7 +72,7 @@ async def test_article_consumer_main_stop_before_run() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("storage.factory.build_object_storage", return_value=MagicMock()),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
@@ -111,7 +111,7 @@ async def test_article_consumer_main_graceful_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("storage.factory.build_object_storage", return_value=MagicMock()),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
@@ -154,7 +154,7 @@ async def test_article_consumer_main_timeout_cancels() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("storage.factory.build_object_storage", return_value=MagicMock()),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
@@ -198,7 +198,7 @@ async def test_article_consumer_main_lsh_client_used() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("storage.factory.build_object_storage", return_value=MagicMock()),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
@@ -251,7 +251,7 @@ async def test_dispatcher_main_stop_delegates() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "content_store.infrastructure.messaging.outbox.dispatcher.ContentStoreOutboxDispatcher",
@@ -280,7 +280,7 @@ async def test_dispatcher_main_cleanup() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "content_store.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "content_store.infrastructure.messaging.outbox.dispatcher.ContentStoreOutboxDispatcher",

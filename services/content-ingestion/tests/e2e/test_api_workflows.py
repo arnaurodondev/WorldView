@@ -182,7 +182,7 @@ async def test_admin_trigger_source_returns_202(e2e_client, admin_headers):
     )
     assert trigger_resp.status_code == 202
     data = trigger_resp.json()
-    assert data["status"] == "queued"
+    assert data["status"] == "triggered"
     assert data["source_id"] == source_id
 
 

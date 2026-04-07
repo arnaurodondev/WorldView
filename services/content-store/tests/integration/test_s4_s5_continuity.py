@@ -18,6 +18,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import select
 
 import common.ids  # type: ignore[import-untyped]
@@ -114,14 +115,13 @@ async def test_s4_to_s5_full_pipeline(session_factory, minio_storage, lsh_client
     # 3. Process through the S5 pipeline
     async with session_factory() as session:
         use_case = ProcessArticleUseCase(
-            session=session,
             document_repo=DocumentRepository(session),
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
             object_store=minio_storage,
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
-            silver_bucket=TEST_MINIO_SILVER_BUCKET,
+            silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
             output_topic="content.article.stored.v1",
             num_perm=128,
@@ -202,14 +202,13 @@ async def test_s4_backfill_flag_propagated(session_factory, minio_storage, lsh_c
 
     async with session_factory() as session:
         use_case = ProcessArticleUseCase(
-            session=session,
             document_repo=DocumentRepository(session),
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
             object_store=minio_storage,
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
-            silver_bucket=TEST_MINIO_SILVER_BUCKET,
+            silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
             num_perm=128,
         )

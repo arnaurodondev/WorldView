@@ -31,6 +31,7 @@ COPY --from=builder /build/services/alert/src /app/src
 COPY --from=builder /build/services/alert/alembic /app/alembic
 COPY --from=builder /build/services/alert/alembic.ini /app/alembic.ini
 
+COPY infra/kafka/schemas /app/infra/kafka/schemas
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/messaging/src:/app/libs/observability/src"
 ENV PYTHONDONTWRITEBYTECODE=1

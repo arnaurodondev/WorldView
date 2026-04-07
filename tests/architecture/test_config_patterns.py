@@ -239,6 +239,15 @@ def _check_observability_fields(svc: ServiceInfo) -> list[ArchViolation]:
 
 
 # ---------------------------------------------------------------------------
+# Baselines for services with known non-standard (but valid) config patterns
+# ---------------------------------------------------------------------------
+
+# Services in this set use a re-export shim in config.py instead of a direct
+# class definition.  All current violations have been resolved.
+_CFG_SETTINGS_CLASS_BASELINE: frozenset[str] = frozenset()
+
+
+# ---------------------------------------------------------------------------
 # Test classes
 # ---------------------------------------------------------------------------
 
@@ -248,6 +257,8 @@ class TestSettingsClass:
         """config.py must define a Settings class."""
         violations = []
         for svc in discover_services():
+            if svc.name in _CFG_SETTINGS_CLASS_BASELINE:
+                continue
             violations.extend(_check_settings_class(svc))
         assert_no_violations(violations, rule="CFG-SETTINGS-CLASS")
 

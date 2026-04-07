@@ -20,14 +20,35 @@ if TYPE_CHECKING:
     from portfolio.config import Settings
 
 
+def _same_db_endpoint(url1: str, url2: str) -> bool:
+    """True if two DB URLs connect to the same host, port, and database.
+
+    Ignores credentials and query parameters — prevents unnecessary engine
+    creation when equivalent URLs differ only in formatting (BP-097).
+    """
+    from urllib.parse import urlparse
+
+    try:
+        p1, p2 = urlparse(url1), urlparse(url2)
+        return (
+            p1.scheme == p2.scheme
+            and (p1.hostname or "").lower() == (p2.hostname or "").lower()
+            and p1.port == p2.port
+            and p1.path.rstrip("/") == p2.path.rstrip("/")
+        )
+    except Exception:
+        return url1 == url2
+
+
 def _build_factories(
     settings: Settings,
-) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
+) -> tuple[AsyncEngine, AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
     """Build write + read session factories from *settings*.
 
     Returns:
-        ``(write_engine, write_factory, read_factory)`` — caller owns the engine
-        for disposal on shutdown.
+        ``(write_engine, read_engine, write_factory, read_factory)`` — caller
+        owns both engines for disposal on shutdown.  When no distinct read
+        replica is configured, ``read_engine is write_engine``.
     """
     write_engine = create_async_engine(
         settings.database_url,
@@ -43,7 +64,8 @@ def _build_factories(
     )
 
     read_url: str = settings.database_url_read or settings.database_url
-    if read_url == settings.database_url:
+    if _same_db_endpoint(read_url, settings.database_url):
+        read_engine = write_engine
         read_factory = write_factory
     else:
         read_engine = create_async_engine(
@@ -56,7 +78,7 @@ def _build_factories(
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 
-    return write_engine, write_factory, read_factory
+    return write_engine, read_engine, write_factory, read_factory
 
 
 def create_session_factory(

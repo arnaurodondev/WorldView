@@ -46,12 +46,10 @@ def _make_app(*, s1_healthy: bool = True) -> FastAPI:
     app.state.session_factory = mock_factory
     app.state.ws_manager = ConnectionManager()
 
-    # Dispatcher (for Kafka readyz check)
+    # Kafka health producer (for /readyz Kafka connectivity check)
     mock_producer = MagicMock()
     mock_producer.list_topics = MagicMock(return_value=None)
-    mock_dispatcher = MagicMock()
-    mock_dispatcher._get_producer = MagicMock(return_value=mock_producer)
-    app.state.dispatcher = mock_dispatcher
+    app.state.kafka_health_producer = mock_producer
 
     # Valkey
     mock_valkey = AsyncMock()

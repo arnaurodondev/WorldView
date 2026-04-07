@@ -39,13 +39,13 @@ class TestLifespanHasDualFactories:
         mock_valkey: MagicMock,
         mock_build: MagicMock,
     ) -> None:
-        """Lifespan stores write_factory, read_factory, and session_factory alias."""
+        """Lifespan stores write_factory and read_factory."""
         from content_ingestion.app import create_app, lifespan
 
         mock_engine = AsyncMock()
         mock_write = MagicMock()
         mock_read = MagicMock()
-        mock_build.return_value = (mock_engine, mock_write, mock_read)
+        mock_build.return_value = (mock_engine, mock_engine, mock_write, mock_read)
         mock_valkey.return_value = AsyncMock()
 
         app = create_app()
@@ -53,7 +53,7 @@ class TestLifespanHasDualFactories:
         async with lifespan(app):
             assert app.state.write_factory is mock_write
             assert app.state.read_factory is mock_read
-            assert app.state.session_factory is mock_write  # backward compat alias
+            assert not hasattr(app.state, "session_factory")
 
 
 class TestLifespanNoTriggerFn:

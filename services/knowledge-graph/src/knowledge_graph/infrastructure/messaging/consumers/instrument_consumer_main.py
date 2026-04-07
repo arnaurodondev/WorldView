@@ -32,7 +32,7 @@ async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="knowledge-graph-instrument-consumer",
         level=settings.log_level,
@@ -52,7 +52,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
     # FallbackChainClient with no adapters — ML calls return None (graceful no-op)

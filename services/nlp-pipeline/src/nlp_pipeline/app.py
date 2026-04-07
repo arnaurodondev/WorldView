@@ -84,10 +84,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # 3. Database engines — R23 dual factory (write + read) for both DBs
-    nlp_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
-    intel_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
+    nlp_engine, nlp_read_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
+    intel_engine, intel_read_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
     app.state.nlp_engine = nlp_engine
+    app.state.nlp_read_engine = nlp_read_engine
     app.state.intel_engine = intel_engine
+    app.state.intel_read_engine = intel_read_engine
     app.state.nlp_session_factory = nlp_sf
     app.state.nlp_write_factory = nlp_sf
     app.state.nlp_read_factory = nlp_read_sf
@@ -130,7 +132,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Shutdown ──────────────────────────────────────────────────────────────
     await valkey.close()
     await nlp_engine.dispose()
+    if nlp_read_engine is not nlp_engine:
+        await nlp_read_engine.dispose()
     await intel_engine.dispose()
+    if intel_read_engine is not intel_engine:
+        await intel_read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 
 

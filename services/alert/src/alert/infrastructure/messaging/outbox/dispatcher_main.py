@@ -49,7 +49,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Use dual factory but only pass write_factory to dispatcher (R22, R23)
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
     dispatcher = AlertOutboxDispatcher(settings=settings, session_factory=write_factory)
 
     try:

@@ -85,11 +85,11 @@ async def test_article_consumer_main_two_engines_disposed() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
-            return_value=(mock_nlp_engine, MagicMock(), MagicMock()),
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "nlp_pipeline.infrastructure.intelligence_db.session._build_intelligence_factories",
-            return_value=(mock_intel_engine, MagicMock(), MagicMock()),
+            return_value=(mock_intel_engine, mock_intel_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("nlp_pipeline.infrastructure.valkey.watchlist_cache.WatchlistCache", return_value=MagicMock()),
@@ -128,11 +128,11 @@ async def test_article_consumer_main_graceful_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
-            return_value=(mock_nlp_engine, MagicMock(), MagicMock()),
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "nlp_pipeline.infrastructure.intelligence_db.session._build_intelligence_factories",
-            return_value=(mock_intel_engine, MagicMock(), MagicMock()),
+            return_value=(mock_intel_engine, mock_intel_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("nlp_pipeline.infrastructure.valkey.watchlist_cache.WatchlistCache", return_value=MagicMock()),
@@ -170,11 +170,11 @@ async def test_article_consumer_main_stop_pre_set() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
-            return_value=(mock_nlp_engine, MagicMock(), MagicMock()),
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "nlp_pipeline.infrastructure.intelligence_db.session._build_intelligence_factories",
-            return_value=(mock_intel_engine, MagicMock(), MagicMock()),
+            return_value=(mock_intel_engine, mock_intel_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("nlp_pipeline.infrastructure.valkey.watchlist_cache.WatchlistCache", return_value=MagicMock()),
@@ -275,7 +275,7 @@ async def test_dispatcher_main_cleanup() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
-            return_value=(mock_nlp_engine, MagicMock(), MagicMock()),
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.NLPPipelineOutboxDispatcher",
@@ -304,7 +304,7 @@ async def test_dispatcher_main_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
-            return_value=(mock_nlp_engine, MagicMock(), MagicMock()),
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "nlp_pipeline.infrastructure.messaging.outbox.dispatcher.NLPPipelineOutboxDispatcher",

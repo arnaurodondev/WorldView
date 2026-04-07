@@ -135,7 +135,10 @@ class ProcessArticleUseCase:
         word_count = len(cleaned_text.split()) if cleaned_text else 0
 
         # 3. Stage A: exact raw hash
-        raw_hash, stage_a_decision = await check_stage_a(raw_bytes, self._dedup_repo)
+        # Use the content_hash from the event (computed by S4 from original bytes).
+        # This ensures consistent deduplication across the S4→S5 pipeline boundary,
+        # independent of the bronze envelope format.
+        raw_hash, stage_a_decision = await check_stage_a(article.content_hash, self._dedup_repo)
         if stage_a_decision is not None:
             log.info("stage_a_duplicate", matched=str(stage_a_decision.matched_doc_id))
             return ProcessingSummary(

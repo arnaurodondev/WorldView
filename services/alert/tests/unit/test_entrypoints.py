@@ -72,7 +72,7 @@ def _intelligence_patches(
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("alert.infrastructure.clients.s1_client.S1Client", return_value=mock_s1),
@@ -258,7 +258,7 @@ async def test_dispatcher_main_cleanup() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "alert.infrastructure.messaging.outbox.dispatcher.AlertOutboxDispatcher",
@@ -288,7 +288,7 @@ async def test_dispatcher_main_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "alert.infrastructure.db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch(
             "alert.infrastructure.messaging.outbox.dispatcher.AlertOutboxDispatcher",

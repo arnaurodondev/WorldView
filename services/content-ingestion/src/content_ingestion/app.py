@@ -79,6 +79,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("content_ingestion.app")
 
+    # 1b. Security: warn on startup if auth tokens are not configured (F-SEC-006).
+    #     Prevents silent lock-out of admin/internal endpoints in misconfigured deployments.
+    if not settings.admin_token:
+        log.warning("security_admin_token_not_configured", detail="admin endpoints will reject all requests")
+    if not settings.internal_service_token:
+        log.warning("security_internal_token_not_configured", detail="internal endpoints will reject all requests")
+
     # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(
@@ -87,10 +94,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # 3. Database — dual session factory (R23: read/write split)
-    engine, write_factory, read_factory = _build_factories(settings)
-    session_factory = write_factory  # backward compat alias
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
     app.state.engine = engine
-    app.state.session_factory = session_factory
+    app.state.read_engine = read_engine
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.uow_factory = lambda: SqlaUnitOfWork(write_factory, read_factory)
@@ -131,6 +137,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await http_client.aclose()
     await valkey.close()
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 
 

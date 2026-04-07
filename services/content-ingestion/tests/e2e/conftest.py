@@ -174,7 +174,6 @@ def e2e_app(e2e_session_factory):
     from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
 
     app.state.settings = settings
-    app.state.session_factory = e2e_session_factory
     app.state.write_factory = e2e_session_factory
     app.state.read_factory = e2e_session_factory
     app.state.uow_factory = lambda: SqlaUnitOfWork(e2e_session_factory)

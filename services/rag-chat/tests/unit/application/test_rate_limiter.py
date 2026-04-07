@@ -19,7 +19,8 @@ _TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 @pytest.fixture()
 def fake_valkey() -> fakeredis.aioredis.FakeRedis:
-    return fakeredis.aioredis.FakeRedis(decode_responses=False)
+    # decode_responses=True matches ValkeyClient default
+    return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 class TestRateLimiter:
@@ -54,3 +55,11 @@ class TestRateLimiter:
         await limiter.check_and_increment(_TENANT_ID)
         expected_key = f"rag:v1:rl:{_TENANT_ID}"
         assert await fake_valkey.exists(expected_key)
+
+    async def test_rate_limiter_raises_on_exceeded(self, fake_valkey: fakeredis.aioredis.FakeRedis) -> None:
+        """RateLimitExceededError is raised with a descriptive message."""
+        limiter = RateLimiter(fake_valkey, limit=2)
+        await limiter.check_and_increment(_TENANT_ID)
+        await limiter.check_and_increment(_TENANT_ID)
+        with pytest.raises(RateLimitExceededError, match="Rate limit exceeded"):
+            await limiter.check_and_increment(_TENANT_ID)

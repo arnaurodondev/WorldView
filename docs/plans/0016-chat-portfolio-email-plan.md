@@ -218,11 +218,12 @@ S10 needs a provider-agnostic email interface, email_preferences table, email_lo
 
 ---
 
-### Wave C-1: Domain + DB Schema (EmailPreference + EmailLog)
+### Wave C-1: Domain + DB Schema (EmailPreference + EmailLog) ✅
 
 **Goal**: Create `EmailPreference` domain entity; Alembic migration for `email_preferences` + `email_log` tables; `EmailProvider` Protocol.
 **Depends on**: none
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-07 · 165 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -235,10 +236,10 @@ S10 needs a provider-agnostic email interface, email_preferences table, email_lo
 | T-C-1-05 | Unit tests: EmailPreference invariants, EmailProvider Protocol structural check | test | `services/alert/tests/unit/domain/test_email_preference.py` | Invalid day/hour raise ValueError; protocol satisfied by a stub |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/alert/tests -m "unit" -v` passes
-- [ ] Migration is forward-compatible
-- [ ] Domain layer has zero infrastructure imports
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest services/alert/tests -m "unit" -v` passes (165 tests)
+- [x] Migration is forward-compatible (new tables only; check constraints on day/hour)
+- [x] Domain layer has zero infrastructure imports
 
 ---
 

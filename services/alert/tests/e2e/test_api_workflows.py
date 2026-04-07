@@ -308,9 +308,12 @@ async def test_dlq_list_requires_admin_token(e2e_client: AsyncClient) -> None:
 
 async def test_dlq_list_empty_on_clean_db(
     e2e_client: AsyncClient,
+    e2e_db_session: AsyncSession,
     admin_headers: dict[str, str],
 ) -> None:
     """GET /admin/dlq on clean DB returns empty list."""
+    await e2e_db_session.execute(text("TRUNCATE dead_letter_queue CASCADE"))
+    await e2e_db_session.commit()
     resp = await e2e_client.get("/admin/dlq", headers=admin_headers)
     assert resp.status_code == 200
     data = resp.json()
@@ -324,6 +327,8 @@ async def test_dlq_seeded_entry_visible_to_admin(
     admin_headers: dict[str, str],
 ) -> None:
     """Seeded DLQ entry is visible via admin list endpoint."""
+    await e2e_db_session.execute(text("TRUNCATE dead_letter_queue CASCADE"))
+    await e2e_db_session.commit()
     dlq_id = uuid.uuid4()
     event_id = uuid.uuid4()
     await e2e_db_session.execute(
@@ -377,6 +382,10 @@ async def test_dlq_pagination(
     admin_headers: dict[str, str],
 ) -> None:
     """DLQ list endpoint respects limit/offset pagination."""
+    # Clear any DLQ entries written by concurrent Docker services before inserting test data
+    await e2e_db_session.execute(text("TRUNCATE dead_letter_queue CASCADE"))
+    await e2e_db_session.commit()
+
     for _ in range(5):
         await e2e_db_session.execute(
             text("""

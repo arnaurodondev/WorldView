@@ -38,7 +38,7 @@ class TestSchedulerProcessTick:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
 
         mock_uc_instance = AsyncMock()
         mock_uc_instance.execute.return_value = SchedulerTickResult(tasks_enqueued=2, sources_evaluated=5)
@@ -59,7 +59,7 @@ class TestSchedulerProcessStop:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
 
         settings = _make_settings()
         process = SchedulerProcess(settings=settings)
@@ -89,7 +89,7 @@ class TestSchedulerProcessTickError:
 
         mock_engine = MagicMock()
         mock_factory = MagicMock()
-        mock_build.return_value = (mock_engine, mock_factory, mock_factory)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
 
         mock_uc_instance = AsyncMock()
         mock_uc_instance.execute.side_effect = RuntimeError("db down")

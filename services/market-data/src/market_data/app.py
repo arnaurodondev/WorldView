@@ -149,10 +149,14 @@ def create_app() -> FastAPI:
 
         # DB check
         try:
-            sf = app.state.session_factory
-            async with sf() as session:
-                await session.execute(text("SELECT 1"))
-            checks["db"] = "ok"
+            sf = getattr(app.state, "session_factory", None)
+            if sf is not None:
+                async with sf() as session:
+                    await session.execute(text("SELECT 1"))
+                checks["db"] = "ok"
+            else:
+                checks["db"] = "not_ready"
+                all_ok = False
         except Exception as exc:
             _log.error("readyz_db_check_failed", error_type=type(exc).__name__, error=str(exc))
             checks["db"] = "error"
@@ -160,10 +164,14 @@ def create_app() -> FastAPI:
 
         # Valkey check
         try:
-            valkey = app.state.valkey_client
-            ok = await valkey.ping()
-            checks["valkey"] = "ok" if ok else "error"
-            if not ok:
+            valkey = getattr(app.state, "valkey_client", None)
+            if valkey is not None:
+                ok = await valkey.ping()
+                checks["valkey"] = "ok" if ok else "error"
+                if not ok:
+                    all_ok = False
+            else:
+                checks["valkey"] = "not_ready"
                 all_ok = False
         except Exception as exc:
             _log.error("readyz_valkey_check_failed", error_type=type(exc).__name__, error=str(exc))

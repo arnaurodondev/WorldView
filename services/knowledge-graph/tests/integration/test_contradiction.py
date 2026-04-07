@@ -27,15 +27,16 @@ async def _insert_claim(session, subject_id: uuid.UUID, claim_type: str, polarit
     result = await session.execute(
         text("""
 INSERT INTO claims (
-    subject_entity_id, claim_type, polarity,
+    doc_id, subject_entity_id, claim_type, polarity,
     claim_text, extraction_confidence, created_at
 ) VALUES (
-    :subject_id, :claim_type, :polarity,
+    :doc_id, :subject_id, :claim_type, :polarity,
     :claim_text, 0.85, :created_at
 )
 RETURNING claim_id
 """),
         {
+            "doc_id": str(uuid.uuid4()),
             "subject_id": str(subject_id),
             "claim_type": claim_type,
             "polarity": polarity,
@@ -67,12 +68,12 @@ async def test_opposing_claims_form_contradiction_link(session_factory) -> None:
             text("""
 INSERT INTO relation_evidence_raw (
     subject_entity_id, canonical_type, object_entity_id,
-    doc_id, source_type, extraction_confidence, source_weight,
-    evidence_date, semantic_mode
+    source_document_id, extraction_confidence, source_trust_weight,
+    evidence_date
 ) VALUES (
     :sub, 'analyst_rating', :obj,
-    gen_random_uuid(), 'eodhd_news', 0.85, 0.60,
-    now(), 'TEMPORAL_CLAIM'
+    gen_random_uuid(), 0.85, 0.60,
+    now()
 )
 RETURNING raw_id
 """),
@@ -152,11 +153,11 @@ async def test_contradiction_link_idempotent(session_factory) -> None:
             text("""
 INSERT INTO relation_evidence_raw (
     subject_entity_id, canonical_type, object_entity_id,
-    doc_id, source_type, extraction_confidence, source_weight,
-    evidence_date, semantic_mode
+    source_document_id, extraction_confidence, source_trust_weight,
+    evidence_date
 ) VALUES (
     :sub, 'price_target', :obj, gen_random_uuid(),
-    'eodhd_news', 0.80, 0.60, now(), 'TEMPORAL_CLAIM'
+    0.80, 0.60, now()
 )
 RETURNING raw_id
 """),

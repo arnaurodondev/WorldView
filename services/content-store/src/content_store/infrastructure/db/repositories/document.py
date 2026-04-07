@@ -24,7 +24,13 @@ class DocumentRepository(DocumentRepositoryPort):
         self._session = session
 
     async def create(self, doc: CanonicalDocument) -> None:
-        """Insert a new canonical document."""
+        """Insert a new canonical document.
+
+        Flushes immediately so that FK-referencing tables (dedup_hashes,
+        minhash_signatures) added in the same transaction can see this row.
+        SQLAlchemy 2.0.x does not auto-order inserts by FK without relationship()
+        declarations, so an explicit flush is required.
+        """
         self._session.add(
             DocumentModel(
                 doc_id=doc.id,
@@ -44,6 +50,7 @@ class DocumentRepository(DocumentRepositoryPort):
                 is_backfill=doc.is_backfill,
             )
         )
+        await self._session.flush()
 
     async def get_by_id(self, doc_id: UUID) -> DocumentModel | None:
         """Fetch a document by its primary key."""

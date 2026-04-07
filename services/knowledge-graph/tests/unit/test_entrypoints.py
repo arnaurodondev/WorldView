@@ -82,7 +82,7 @@ async def test_enriched_consumer_uses_ollama_base_url() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
@@ -122,7 +122,7 @@ async def test_enriched_consumer_graceful_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch("ml_clients.adapters.ollama_embedding.OllamaEmbeddingAdapter", return_value=MagicMock()),
@@ -163,7 +163,7 @@ async def test_entity_consumer_graceful_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
@@ -202,7 +202,7 @@ async def test_fundamentals_consumer_group_id_from_settings() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
@@ -253,7 +253,7 @@ async def test_instrument_consumer_group_id_from_settings() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
@@ -298,7 +298,7 @@ async def test_any_consumer_stop_pre_set() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
@@ -340,7 +340,7 @@ async def test_dispatcher_main_cleanup() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("confluent_kafka.Producer", return_value=MagicMock()),
         patch(
@@ -374,7 +374,7 @@ async def test_dispatcher_main_stop() -> None:
         patch("observability.get_logger", return_value=MagicMock()),
         patch(
             "knowledge_graph.infrastructure.intelligence_db.session._build_factories",
-            return_value=(mock_engine, MagicMock(), MagicMock()),
+            return_value=(mock_engine, mock_engine, MagicMock(), MagicMock()),
         ),
         patch("confluent_kafka.Producer", return_value=MagicMock()),
         patch(

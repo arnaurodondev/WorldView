@@ -11,6 +11,7 @@
 |------|-------|-------------|
 | **New feature/project** | `/prd` | Interactive PRD generation through discussion |
 | **Break PRD into tasks** | `/plan` | Generate implementation plans with waves |
+| **Audit/revise a PRD or plan** | `/revise-prd` | Check for staleness, inconsistencies, cross-PRD conflicts, stale codebase assumptions |
 | **Implement a wave/change** | `/implement` | Full pipeline: code → test → validate → review → commit |
 | **Review current changes** | `/review` | Structured code review with checklists and failure analysis |
 | **Fix a known bug** | `/fix-bug` | Diagnose, fix, test, update bug patterns |
