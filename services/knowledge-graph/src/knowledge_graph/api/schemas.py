@@ -213,3 +213,32 @@ class RelationSearchResultItem(BaseModel):
 
 class RelationSearchResponse(BaseModel):
     relations: list[RelationSearchResultItem]
+
+
+# ── POST /api/v1/entities/similar ─────────────────────────────────────────────
+
+
+class SimilarEntitiesRequest(BaseModel):
+    entity_id: UUID
+    top_k: int = Field(default=20, ge=1, le=50)
+    min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    include_competitors_only: bool = False
+
+
+class SimilarEntityResultItem(BaseModel):
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None = None
+    exchange: str | None = None
+    ann_similarity_score: float
+    competes_with_confidence: float | None = None
+    final_score: float
+    has_competes_with_relation: bool
+
+
+class SimilarEntitiesResponse(BaseModel):
+    entity_id: UUID
+    canonical_name: str
+    results: list[SimilarEntityResultItem]
+    total: int

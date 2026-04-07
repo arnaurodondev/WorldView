@@ -6,7 +6,7 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-08
 total_waves: 11
-waves_done: 7
+waves_done: 8
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -186,15 +186,15 @@ waves_done: 7
 
 ---
 
-### Wave B-4: S7 — `FindSimilarEntitiesUseCase` + `POST /api/v1/entities/similar` endpoint
+### Wave B-4: S7 — `FindSimilarEntitiesUseCase` + `POST /api/v1/entities/similar` endpoint ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 274 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `FindSimilarEntitiesUseCase.execute()` — ANN + competes_with boost algorithm (PRD §6.5)
-- [ ] `find_competes_with_batch()` — batch bidirectional relation query
-- [ ] `POST /api/v1/entities/similar` route — ReadUoWDep (R27), 404/422/503 errors
-- [ ] Unit tests: `test_similar_entities_final_score_with_boost`, `test_similar_entities_final_score_cap`
+- [x] `FindSimilarEntitiesUseCase.execute()` — ANN + competes_with boost algorithm (PRD §6.5)
+- [x] `find_competes_with_batch()` — batch bidirectional relation query (RelationRepositoryPort + RelationRepository)
+- [x] `POST /api/v1/entities/similar` route — ReadOnlyDbSessionDep (R27), 404/422/503 errors
+- [x] Unit tests: `test_similar_entities_final_score_with_boost`, `test_similar_entities_final_score_cap` (+ 9 more)
 
 **Depends on**: B-3 (ANN repository port)
 **Estimated effort**: 4h

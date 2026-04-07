@@ -386,6 +386,52 @@ LIMIT :limit OFFSET :offset
             total,
         )
 
+    async def find_competes_with_batch(
+        self,
+        entity_id: UUID,
+        candidate_ids: list[UUID],
+        min_confidence: float = 0.3,
+    ) -> dict[UUID, tuple[bool, float | None]]:
+        """Return a mapping of candidate_id → (has_competes_with, confidence).
+
+        Checks both directions: entity_id → candidate AND candidate → entity_id.
+        Uses ``ANY(:candidate_ids)`` to avoid N+1 queries.
+        Returns an empty dict when ``candidate_ids`` is empty.
+        """
+        if not candidate_ids:
+            return {}
+
+        result = await self._session.execute(
+            text("""
+SELECT
+    CASE
+        WHEN subject_entity_id = :entity_id THEN object_entity_id
+        ELSE subject_entity_id
+    END AS candidate_id,
+    confidence
+FROM relations
+WHERE canonical_type = 'competes_with'
+  AND (confidence IS NULL OR confidence >= :min_confidence)
+  AND (
+    (subject_entity_id = :entity_id AND object_entity_id = ANY(:candidate_ids))
+    OR
+    (object_entity_id = :entity_id AND subject_entity_id = ANY(:candidate_ids))
+  )
+"""),
+            {
+                "entity_id": str(entity_id),
+                "min_confidence": min_confidence,
+                "candidate_ids": [str(cid) for cid in candidate_ids],
+            },
+        )
+        rows = result.fetchall()
+        out: dict[UUID, tuple[bool, float | None]] = {}
+        for row in rows:
+            cid = UUID(str(row[0]))
+            confidence: float | None = float(row[1]) if row[1] is not None else None
+            out[cid] = (True, confidence)
+        return out
+
     async def get_stats(self) -> dict[str, object]:
         """Return aggregate graph statistics (API: GET /graph/stats)."""
         result = await self._session.execute(

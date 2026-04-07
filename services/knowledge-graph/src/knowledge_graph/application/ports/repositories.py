@@ -163,6 +163,22 @@ class RelationRepositoryPort(ABC):
     @abstractmethod
     async def get_stats(self) -> dict[str, Any]: ...
 
+    @abstractmethod
+    async def find_competes_with_batch(
+        self,
+        entity_id: UUID,
+        candidate_ids: list[UUID],
+        min_confidence: float = 0.3,
+    ) -> dict[UUID, tuple[bool, float | None]]:
+        """Return a mapping of candidate_id → (has_relation, confidence).
+
+        Checks both directions (entity_id → candidate AND candidate → entity_id).
+        Only candidates with an active ``competes_with`` relation meeting
+        ``min_confidence`` are included in the result dict.
+
+        Returns an empty dict when ``candidate_ids`` is empty.
+        """
+
 
 # ── Relation evidence repository port ────────────────────────────────────────
 

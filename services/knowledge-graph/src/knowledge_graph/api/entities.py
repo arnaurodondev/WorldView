@@ -1,22 +1,25 @@
-"""Entity-specific query endpoints (Wave C-1).
+"""Entity-specific query endpoints.
 
   GET /api/v1/entities/{entity_id}/contradictions
+  POST /api/v1/entities/similar
 
-Read-only endpoints backed by EntityContradictionsUseCase.
-Uses the read-replica session (R27).
+Read-only endpoints.  Uses the read-replica session (R27).
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
 from knowledge_graph.api.schemas import (
     ContradictionDetailResponse,
     ContradictionSideResponse,
     ContradictionsListResponse,
+    SimilarEntitiesRequest,
+    SimilarEntitiesResponse,
+    SimilarEntityResultItem,
 )
 from knowledge_graph.application.use_cases.contradiction_lookup import (
     EntityContradictionsUseCase,
@@ -74,4 +77,70 @@ async def get_entity_contradictions(
             )
             for c in contradictions
         ],
+    )
+
+
+@router.post("/entities/similar", response_model=SimilarEntitiesResponse)
+async def find_similar_entities(
+    body: SimilarEntitiesRequest,
+    session: ReadOnlyDbSessionDep,
+) -> SimilarEntitiesResponse:
+    """Return top-K similar financial instrument entities by embedding ANN.
+
+    - 404 if ``entity_id`` does not exist.
+    - 422 if the entity has no ``fundamentals_ohlcv`` embedding (e.g. non-financial entity).
+    - 503 if pgvector ANN is unavailable.
+
+    Uses the read-replica session (R27).
+    """
+    from knowledge_graph.application.use_cases.find_similar_entities import FindSimilarEntitiesUseCase
+    from knowledge_graph.domain.errors import EmbeddingNotAvailableError, EntityNotFoundError
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_ann import (
+        SqlalchemyEntityEmbeddingANNRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
+    entity_repo = CanonicalEntityRepository(session)
+    embedding_repo = SqlalchemyEntityEmbeddingANNRepository(session)
+    relation_repo = RelationRepository(session)
+
+    try:
+        entity_dict, results = await FindSimilarEntitiesUseCase().execute(
+            entity_repo=entity_repo,  # type: ignore[arg-type]
+            embedding_repo=embedding_repo,
+            relation_repo=relation_repo,  # type: ignore[arg-type]
+            entity_id=body.entity_id,
+            top_k=body.top_k,
+            min_score=body.min_score,
+            include_competitors_only=body.include_competitors_only,
+        )
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except EmbeddingNotAvailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("pgvector ANN error in find_similar_entities")
+        raise HTTPException(status_code=503, detail="Similarity search unavailable") from exc
+
+    return SimilarEntitiesResponse(
+        entity_id=body.entity_id,
+        canonical_name=str(entity_dict.get("canonical_name", "")),
+        results=[
+            SimilarEntityResultItem(
+                entity_id=r.entity_id,
+                canonical_name=r.canonical_name,
+                entity_type=r.entity_type,
+                ticker=r.ticker,
+                exchange=r.exchange,
+                ann_similarity_score=r.ann_similarity_score,
+                competes_with_confidence=r.competes_with_confidence,
+                final_score=r.final_score,
+                has_competes_with_relation=r.has_competes_with_relation,
+            )
+            for r in results
+        ],
+        total=len(results),
     )
