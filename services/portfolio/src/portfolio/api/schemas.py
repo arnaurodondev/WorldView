@@ -56,6 +56,16 @@ class UserResponse(BaseModel):
     created_at: datetime
 
 
+class UserInternalResponse(BaseModel):
+    """Response shape for GET /internal/v1/users/{user_id} (PRD-0016 §6.2)."""
+
+    user_id: UUID
+    tenant_id: UUID
+    email_address: str
+    username: str
+    created_at: datetime
+
+
 class PortfolioCreateRequest(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
     owner_user_id: UUID

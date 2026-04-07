@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nlp_pipeline=httpx.AsyncClient(base_url=settings.nlp_pipeline_url, timeout=timeout),
         knowledge_graph=httpx.AsyncClient(base_url=settings.knowledge_graph_url, timeout=timeout),
         rag_chat=httpx.AsyncClient(base_url=settings.rag_chat_url, timeout=timeout),
+        alert=httpx.AsyncClient(base_url=settings.alert_url, timeout=timeout),
     )
     app.state.clients = clients
 

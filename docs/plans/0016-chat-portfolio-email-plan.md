@@ -2,7 +2,7 @@
 id: PLAN-0016
 prd: PRD-0016
 title: "Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest"
-status: in-progress
+status: completed
 created: 2026-04-06
 updated: 2026-04-07
 plans: 5
@@ -369,11 +369,12 @@ S9 needs to proxy `/api/v1/email/preferences` to S10. S1 needs a new internal en
 
 ---
 
-### Wave E-1: S9 Email Preferences Route + S1 Internal User Endpoint
+### Wave E-1: S9 Email Preferences Route + S1 Internal User Endpoint ✅
 
 **Goal**: Add email preferences proxy route to S9; add `GET /internal/v1/users/{user_id}` to S1 with X-Internal-Token auth.
 **Depends on**: Wave C-3 (email prefs API exists)
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-07 · 14 portfolio + 7 api-gateway tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -385,9 +386,9 @@ S9 needs to proxy `/api/v1/email/preferences` to S10. S1 needs a new internal en
 | T-E-1-04 | Unit tests: S9 proxy route, S1 internal endpoint auth + 404 + response shape | test | relevant test files | Auth failure = 401; missing user = 404; correct response schema |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest` on affected services passes
-- [ ] Token comparison uses `hmac.compare_digest` (not `==`)
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest` on affected services passes
+- [x] Token comparison uses `hmac.compare_digest` (not `==`)
 
 ---
 

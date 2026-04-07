@@ -35,6 +35,7 @@ class ServiceClients:
     nlp_pipeline: httpx.AsyncClient
     knowledge_graph: httpx.AsyncClient
     rag_chat: httpx.AsyncClient
+    alert: httpx.AsyncClient
 
 
 async def _checked_get(
