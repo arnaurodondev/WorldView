@@ -106,6 +106,7 @@
 | [BP-112](#bp-112) | `claim_batch` never reclaims RUNNING tasks with expired leases — worker crash leaves tasks stuck permanently | Tasks remain in `running` state with `locked_until < NOW()` forever; no worker ever re-claims them because `claim_batch` only selects `PENDING`/`RETRY` | Fixed by adding `OR (status='running' AND locked_until < now)` to the CTE WHERE clause in `SqlaTaskRepository.claim_batch` |
 | [BP-113](#bp-113) | `TypeError` from None-valued OHLCV field not caught in `ExecuteTaskUseCase._canonicalize` — task stuck in running | EODHD intraday response may include `None` for `volume`; `int(None)` raises `TypeError` which is not in `except (ProviderDataError, ValueError, KeyError)`; `_persist_fail` never called; task stays RUNNING forever | Add `TypeError` to the exception tuple in `execute_task.py:110` |
 | [BP-119](#bp-119) | Avro schema defined as inline Python dict drifts from canonical `.avsc` file | Schema changes applied to `.avsc` are not reflected in the serializer (or vice versa); Avro contract tests may pass while the actual schema diverges silently | Always load schemas via `fastavro.schema.load_schema(path_to_avsc)` — never define Avro schemas as inline Python dicts |
+| [BP-120](#bp-120) | Post-commit hook failures silently suppressed — cache invalidation skipped with no retry path | Valkey/Redis outage during quote updates leaves stale cache; Kafka offset committed as if success; no mechanism to replay failed invalidation | S3 market-data UoW:131-137, S1 portfolio watchlist:229-236 — post-commit hooks suppress exceptions; see M-002/M-003 in QA-S1S2S3-2026-04-07 |
 
 ---
 
@@ -4572,3 +4573,30 @@ except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
 **Prevention**: Document that E2E tests requiring EODHD OHLCV bar data need a real API key. The demo key is only reliable for quotes and fundamentals under low concurrency.
 
 **First seen**: E2E investigation (2026-04-07), S2 market-ingestion full pipeline test.
+
+---
+
+## BP-120 — Post-Commit Hook Failures Silently Suppressed (Cache Invalidation Lost)
+
+**Date discovered**: 2026-04-07
+**Category**: Distributed Systems / Cache Consistency · **Severity**: MAJOR
+**Affected areas**: S3 market-data `UnitOfWork.commit()`, S1 portfolio watchlist use case
+
+**Symptom**: After a successful DB write and Kafka offset commit, the Valkey cache contains stale data with no mechanism to detect or repair it. Logs show `post_commit_hook_failed` warning but execution continues normally.
+
+**Root cause**: Post-commit hooks (cache invalidation coroutines) are executed in a `try/except Exception: logger.warning(...)` block inside `commit()`. If Valkey is unavailable during hook execution, the exception is suppressed, the Kafka offset is already committed, and the stale cache entry persists until the next TTL expiry or explicit write.
+
+**Evidence**:
+- `services/market-data/src/market_data/infrastructure/db/uow.py:131-137`
+- `services/portfolio/src/portfolio/application/use_cases/watchlist.py:229-236`
+
+**Distinguishing from BP-003/004**: This is not a test setup issue — it occurs in production when Valkey is down or slow.
+
+**Mitigation options**:
+1. **Option A** (strict): Re-raise hook exception → consumer retries the Kafka message → stale cache gap is bounded by retry backoff
+2. **Option B** (async repair): Persist hook failure to a dead-letter table → background job replays failed invalidations
+3. **Option C** (accept): Current behaviour — stale cache for up to TTL (5s for quotes, varies for watchlists). Only acceptable if downstream callers can tolerate stale reads.
+
+**Prevention**: When writing new post-commit hooks, explicitly document the consistency model. If the hook is critical (cache invalidation for a real-time feed), use Option A. If it's best-effort, document it and monitor `post_commit_hook_failed` counter.
+
+**First seen**: QA pass QA-S1S2S3-2026-04-07 (finding M-002/M-003).

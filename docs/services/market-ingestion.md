@@ -23,7 +23,7 @@ serve end-user queries, directly write to `market_data_db`.
 |--------|------|-------------|------|-------|
 | GET | `/healthz` | Liveness | — | — |
 | GET | `/readyz` | Readiness (DB + MinIO check) | — | — |
-| GET | `/metrics` | Prometheus metrics | — | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — | — |
 | POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | `X-Internal-Token` required | — |
 | POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | `X-Internal-Token` required | — |
 | GET | `/api/v1/ingest/status` | Current ingestion task status | — | — |

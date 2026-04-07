@@ -494,13 +494,21 @@ async def test_policies_does_not_require_token(app_with_overrides):
 
 
 @pytest.mark.asyncio
-async def test_metrics_does_not_require_token(app_with_overrides):
-    """GET /metrics must NOT require authentication (public observability endpoint)."""
+async def test_metrics_requires_internal_token(app_with_overrides):
+    """GET /metrics must require X-Internal-Token after M-004 (internal-only endpoint).
+
+    Updated: previously this endpoint was public; M-004 added InternalAuthDep to prevent
+    exposing internal metrics to unauthenticated callers.
+    """
     app, _ = app_with_overrides
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # No token → 401
         resp = await ac.get("/metrics")
-    assert resp.status_code == 200
+        assert resp.status_code == 401
+        # Valid token → 200
+        resp = await ac.get("/metrics", headers={"X-Internal-Token": _TEST_TOKEN})
+        assert resp.status_code == 200
 
 
 @pytest.mark.asyncio

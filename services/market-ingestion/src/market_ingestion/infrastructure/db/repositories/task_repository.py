@@ -12,6 +12,9 @@ from market_ingestion.application.ports.repositories import TaskRepository
 from market_ingestion.domain.entities.ingestion_task import IngestionTask
 from market_ingestion.domain.enums import DatasetType, IngestionTaskStatus, Provider
 from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
+from observability.logging import get_logger  # type: ignore[import-untyped]
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -159,7 +162,13 @@ class SqlaTaskRepository(TaskRepository):
     async def save(self, task: IngestionTask) -> None:
         stmt = (
             update(IngestionTaskModel)
-            .where(IngestionTaskModel.id == task.id)
+            .where(
+                IngestionTaskModel.id == task.id,
+                or_(
+                    IngestionTaskModel.locked_by == task.lease_owner,
+                    IngestionTaskModel.locked_by.is_(None),  # allow save when no owner (e.g., initial schedule)
+                ),
+            )
             .values(
                 status=task.status.value,
                 attempt=task.attempt_count,
@@ -174,7 +183,13 @@ class SqlaTaskRepository(TaskRepository):
                 completed_at=task.completed_at,
             )
         )
-        await self._w.execute(stmt)
+        result = await self._w.execute(stmt)
+        if cast("Any", result).rowcount == 0:
+            logger.warning(
+                "task_save_lease_mismatch",
+                task_id=task.id,
+                worker_id=task.lease_owner,
+            )
 
     async def claim_batch(
         self,

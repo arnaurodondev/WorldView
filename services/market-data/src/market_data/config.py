@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
 
+    # Internal service-to-service auth (M-004)
+    # Set MARKET_DATA_INTERNAL_SERVICE_TOKEN to a strong random secret in production.
+    # Used to protect the /metrics endpoint from public access.
+    internal_service_token: str = ""
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"
     log_level: str = "INFO"

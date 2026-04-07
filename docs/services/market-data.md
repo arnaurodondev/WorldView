@@ -22,7 +22,7 @@ or articles, perform NLP processing, manage portfolios.
 |--------|------|-------------|------------|
 | GET | `/healthz` | Liveness probe — always 200 | — |
 | GET | `/readyz` | Readiness (DB + Valkey + Storage + Kafka) | — |
-| GET | `/metrics` | Prometheus metrics (via middleware) | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — |
 | GET | `/api/v1/instruments` | List instruments — query params: `query`, `has_ohlcv`, `has_quotes`, `has_fundamentals`, `exchange`, `limit`, `offset` (all DB-side) | — |
 | GET | `/api/v1/instruments/symbol/{symbol}` | Instrument by symbol (query param: `exchange`) | — |
 | GET | `/api/v1/instruments/{instrument_id}` | Instrument detail by UUID | — |

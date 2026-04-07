@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from market_data.application.ports.cache import QuoteCachePort
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class QuoteCache:
+class QuoteCache(QuoteCachePort):
     """Cache-aside wrapper for quote data using Valkey.
 
     Key format: ``quote:v1:{instrument_id}``

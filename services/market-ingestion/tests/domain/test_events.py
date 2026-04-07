@@ -11,7 +11,7 @@ from market_ingestion.domain.events import (
 )
 from market_ingestion.domain.value_objects import ObjectRef
 
-_ULID_LEN = 26
+_UUID7_LEN = 36  # UUIDv7 hyphenated string length (migrated from ULID 2026-04-07)
 
 _BRONZE_REF = ObjectRef(
     bucket="bronze-data",
@@ -47,7 +47,7 @@ def _make_event(**kwargs: object) -> MarketDatasetFetched:
 def test_domain_event_auto_populated_event_id() -> None:
     evt = _make_event()
     assert isinstance(evt.event_id, str)
-    assert len(evt.event_id) == _ULID_LEN
+    assert len(evt.event_id) == _UUID7_LEN
 
 
 @pytest.mark.unit
@@ -213,11 +213,11 @@ def test_ingestion_task_scheduled_event_type() -> None:
 @pytest.mark.unit
 def test_internal_events_auto_populate_envelope() -> None:
     completed = IngestionTaskCompleted(task_id="t1", provider="eodhd", dataset_type="ohlcv", symbol="AAPL")
-    assert len(completed.event_id) == _ULID_LEN
+    assert len(completed.event_id) == _UUID7_LEN
     assert completed.occurred_at != ""
 
     scheduled = IngestionTaskScheduled(task_id="t2", provider="polygon", dataset_type="quotes", symbol="MSFT")
-    assert len(scheduled.event_id) == _ULID_LEN
+    assert len(scheduled.event_id) == _UUID7_LEN
 
 
 @pytest.mark.unit

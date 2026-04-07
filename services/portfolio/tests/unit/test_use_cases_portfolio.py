@@ -79,8 +79,66 @@ async def test_list_portfolios(uow: FakeUnitOfWork, active_tenant: Tenant, activ
     await create_uc.execute(CreatePortfolioCommand(tenant_id=active_tenant.id, owner_id=active_user.id, name="P2"), uow)
 
     list_uc = ListPortfoliosUseCase()
-    result = await list_uc.execute(active_user.id, active_tenant.id, uow)
-    assert len(result) == 2
+    items, total = await list_uc.execute(active_user.id, active_tenant.id, uow)
+    assert len(items) == 2
+    assert total == 2
+
+
+# ── N-005: Pagination tests ────────────────────────────────────────────────────
+# Audit note: ListPortfoliosUseCase already accepts limit/offset (default limit=100, offset=0)
+# and returns tuple[list[Portfolio], int] (items, total_count). Added explicit pagination
+# tests below. Other list use cases audited:
+#   - ListTransactionsUseCase: already has limit/offset with tuple return (portfolio_ops pattern)
+#   - FakePortfolioRepository.list_by_owner: supports limit/offset correctly
+#   - No missing pagination found in portfolio service list endpoints.
+
+
+@pytest.mark.asyncio
+async def test_list_portfolios_with_limit(uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User) -> None:
+    """ListPortfoliosUseCase with limit=3 returns at most 3 items from 5 created."""
+    create_uc = CreatePortfolioUseCase()
+    for i in range(5):
+        await create_uc.execute(
+            CreatePortfolioCommand(tenant_id=active_tenant.id, owner_id=active_user.id, name=f"Portfolio {i}"),
+            uow,
+        )
+
+    list_uc = ListPortfoliosUseCase()
+    items, total = await list_uc.execute(active_user.id, active_tenant.id, uow, limit=3)
+    assert len(items) == 3
+    assert total == 5  # total count reflects all available items
+
+
+@pytest.mark.asyncio
+async def test_list_portfolios_with_offset(uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User) -> None:
+    """ListPortfoliosUseCase with offset=2 skips first 2 items, returns remaining 3 from 5."""
+    create_uc = CreatePortfolioUseCase()
+    for i in range(5):
+        await create_uc.execute(
+            CreatePortfolioCommand(tenant_id=active_tenant.id, owner_id=active_user.id, name=f"Portfolio {i}"),
+            uow,
+        )
+
+    list_uc = ListPortfoliosUseCase()
+    items, total = await list_uc.execute(active_user.id, active_tenant.id, uow, offset=2)
+    assert len(items) == 3  # 5 total - 2 skipped
+    assert total == 5
+
+
+@pytest.mark.asyncio
+async def test_list_portfolios_limit_and_offset(uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User) -> None:
+    """ListPortfoliosUseCase with limit=2, offset=2 returns exactly 2 items (items 3-4 of 5)."""
+    create_uc = CreatePortfolioUseCase()
+    for i in range(5):
+        await create_uc.execute(
+            CreatePortfolioCommand(tenant_id=active_tenant.id, owner_id=active_user.id, name=f"Portfolio {i}"),
+            uow,
+        )
+
+    list_uc = ListPortfoliosUseCase()
+    items, total = await list_uc.execute(active_user.id, active_tenant.id, uow, limit=2, offset=2)
+    assert len(items) == 2
+    assert total == 5
 
 
 @pytest.mark.asyncio

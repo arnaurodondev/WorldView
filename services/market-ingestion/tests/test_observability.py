@@ -71,11 +71,20 @@ async def test_request_id_rejects_invalid_header(client) -> None:
     assert response.headers["x-request-id"] != "<script>alert(1)</script>"
 
 
-async def test_metrics_endpoint_returns_prometheus(client) -> None:
-    """GET /metrics should return prometheus text format."""
-    response = await client.get("/metrics")
+async def test_metrics_endpoint_returns_prometheus() -> None:
+    """GET /metrics returns prometheus text format when X-Internal-Token is provided (M-004)."""
+    from market_ingestion.api.dependencies import get_settings
+    from market_ingestion.config import Settings
+
+    _TOKEN = "observability-test-token"  # noqa: S105
+    test_app = create_app()
+    test_settings = Settings(internal_service_token=_TOKEN)  # type: ignore[call-arg]
+    test_app.dependency_overrides[get_settings] = lambda: test_settings
+
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/metrics", headers={"X-Internal-Token": _TOKEN})
+
+    test_app.dependency_overrides.clear()
     assert response.status_code == 200
-    # Prometheus content type
-    assert "text/plain" in response.headers.get("content-type", "") or "text/plain" in str(
-        response.headers.get("content-type", "")
-    )
+    assert "text/plain" in response.headers.get("content-type", "")

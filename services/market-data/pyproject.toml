@@ -38,6 +38,7 @@ asyncio_mode = "auto"
 addopts = "--import-mode=importlib"
 markers = [
     "unit: fast isolated unit tests",
+    "contract: schema and API contract validation tests (no containers needed)",
     "integration: tests requiring external containers (DB, Kafka, MinIO, Valkey)",
     "e2e: end-to-end tests requiring the full docker-compose stack",
     "live: tests that make real HTTP calls to external APIs (requires network + api key)",

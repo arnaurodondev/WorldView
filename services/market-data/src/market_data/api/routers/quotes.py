@@ -7,20 +7,16 @@ making it an API-layer concern.  Use cases return raw domain ``Quote`` entities.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import get_quote_cache, get_quote_uc
 from market_data.api.schemas.quotes import BatchQuoteRequest, BatchQuoteResponse, QuoteResponse
+from market_data.application.ports.cache import QuoteCachePort
 from market_data.application.use_cases.query_quotes import GetQuoteUseCase
 from market_data.domain.entities import Quote
 from observability.logging import get_logger  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from market_data.infrastructure.cache.quote_cache import QuoteCache
-else:
-    from market_data.infrastructure.cache.quote_cache import QuoteCache
 
 logger = get_logger(__name__)
 
@@ -44,7 +40,7 @@ def _to_quote_response(quote: Quote) -> QuoteResponse:
 async def _get_quote_cached(
     instrument_id: str,
     uc: GetQuoteUseCase,
-    cache: QuoteCache,
+    cache: QuoteCachePort,
 ) -> QuoteResponse | None:
     """Cache-aside fetch: check cache first, fall back to DB via use case."""
     cached = await cache.get(instrument_id)
@@ -65,7 +61,7 @@ async def _get_quote_cached(
 async def get_quotes_latest(
     instrument_ids: Annotated[list[str], Query(max_length=200)] = ...,  # type: ignore[assignment]  # F-SEC-006
     uc: Annotated[GetQuoteUseCase, Depends(get_quote_uc)] = ...,  # type: ignore[assignment]
-    cache: Annotated[QuoteCache, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
+    cache: Annotated[QuoteCachePort, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
 ) -> BatchQuoteResponse:
     """Return the latest quotes for a batch of instruments (via query params)."""
     result: dict[str, QuoteResponse | None] = {}
@@ -78,7 +74,7 @@ async def get_quotes_latest(
 async def get_quote(
     instrument_id: str,
     uc: Annotated[GetQuoteUseCase, Depends(get_quote_uc)] = ...,  # type: ignore[assignment]
-    cache: Annotated[QuoteCache, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
+    cache: Annotated[QuoteCachePort, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
 ) -> QuoteResponse:
     """Return the latest quote for a single instrument (cache-aside)."""
     response = await _get_quote_cached(instrument_id, uc, cache)
@@ -91,7 +87,7 @@ async def get_quote(
 async def get_quotes_batch(
     body: BatchQuoteRequest,
     uc: Annotated[GetQuoteUseCase, Depends(get_quote_uc)] = ...,  # type: ignore[assignment]
-    cache: Annotated[QuoteCache, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
+    cache: Annotated[QuoteCachePort, Depends(get_quote_cache)] = ...,  # type: ignore[assignment]
 ) -> BatchQuoteResponse:
     """Return the latest quotes for a batch of instruments (via POST body)."""
     result: dict[str, QuoteResponse | None] = {}
