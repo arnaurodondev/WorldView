@@ -22,38 +22,46 @@ _MIGRATION_DIR = Path(__file__).parent.parent.parent.parent / "alembic/versions"
 
 
 def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
-    """Extract column names from a CREATE TABLE statement in migration SQL."""
+    """Extract column names from CREATE TABLE + ALTER TABLE ADD COLUMN statements."""
+    columns: set[str] = set()
+
+    # ── CREATE TABLE ──────────────────────────────────────────────────────────
     pattern = rf"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+{table_name}\s*\("
     match = re.search(pattern, migration_text, re.IGNORECASE)
-    if not match:
-        return set()
+    if match:
+        # Walk forward counting parens to find the balanced closing paren
+        start = match.end()
+        depth = 1
+        pos = start
+        while pos < len(migration_text) and depth > 0:
+            if migration_text[pos] == "(":
+                depth += 1
+            elif migration_text[pos] == ")":
+                depth -= 1
+            pos += 1
 
-    # Walk forward counting parens to find the balanced closing paren
-    start = match.end()
-    depth = 1
-    pos = start
-    while pos < len(migration_text) and depth > 0:
-        if migration_text[pos] == "(":
-            depth += 1
-        elif migration_text[pos] == ")":
-            depth -= 1
-        pos += 1
+        body = migration_text[start : pos - 1]
+        for line in body.split("\n"):
+            line = line.strip().rstrip(",")
+            if not line:
+                continue
+            upper = line.upper()
+            # Skip constraint lines
+            if any(
+                upper.startswith(kw)
+                for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK", "REFERENCES")
+            ):
+                continue
+            parts = line.split()
+            if parts:
+                columns.add(parts[0].strip('"'))
 
-    body = migration_text[start : pos - 1]
-    columns: set[str] = set()
-    for line in body.split("\n"):
-        line = line.strip().rstrip(",")
-        if not line:
-            continue
-        upper = line.upper()
-        # Skip constraint lines
-        if any(
-            upper.startswith(kw) for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK", "REFERENCES")
-        ):
-            continue
-        parts = line.split()
-        if parts:
-            columns.add(parts[0].strip('"'))
+    # ── ALTER TABLE … ADD COLUMN ──────────────────────────────────────────────
+    # Handles: ALTER TABLE <name> ADD COLUMN [IF NOT EXISTS] <col_name> <type>
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+" rf"ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)"
+    for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+        columns.add(m.group(1))
+
     return columns
 
 

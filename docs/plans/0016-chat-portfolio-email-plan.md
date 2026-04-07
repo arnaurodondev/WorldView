@@ -4,7 +4,7 @@ prd: PRD-0016
 title: "Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest"
 status: in-progress
 created: 2026-04-06
-updated: 2026-04-06
+updated: 2026-04-07
 plans: 5
 waves: 11
 tasks: 44
@@ -88,11 +88,12 @@ S8 currently uses a single generic prompt for all 8 query intents. PRD-0016 requ
 
 ---
 
-### Wave A-2: ConversationContext + TurnSummary Domain Entities + DB Schema
+### Wave A-2: ConversationContext + TurnSummary Domain Entities + DB Schema ✅
 
 **Goal**: Define `ConversationContext` and `TurnSummary` in-memory domain entities; add `context_valkey_key` and `summary_valkey_key` nullable columns to the `messages` ORM model + Alembic migration.
 **Depends on**: Wave A-1
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-07 · 203 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -105,10 +106,10 @@ S8 currently uses a single generic prompt for all 8 query intents. PRD-0016 requ
 | T-A-2-05 | Unit tests: ConversationContext invariant, TurnSummary construction | test | `services/rag-chat/tests/unit/domain/test_context_entities.py` | Token budget enforcement tested; >6000 raises ValueError |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] Migration file is forward-compatible (new columns have `nullable=True`, no column removals)
-- [ ] `python -m pytest services/rag-chat/tests -m "unit" -v` passes
-- [ ] Run DDL alignment test if it exists for this service
+- [x] `ruff check` + `mypy` pass
+- [x] Migration file is forward-compatible (new columns have `nullable=True`, no column removals)
+- [x] `python -m pytest services/rag-chat/tests -m "unit" -v` passes
+- [x] Run DDL alignment test if it exists for this service
 
 ---
 
@@ -448,7 +449,7 @@ Sub-Plan A Wave A-1 → Wave B-2 (briefing endpoint) → Wave D-1 (scheduler orc
 ### Plan Status
 | Sub-Plan | Status | Waves Done | Waves Total |
 |----------|--------|-----------|-------------|
-| A: S8 Intent Prompts + Context Mgmt | in-progress | 1 | 3 |
+| A: S8 Intent Prompts + Context Mgmt | in-progress | 2 | 3 |
 | B: S8 GENERAL Intent + Briefing | pending | 0 | 2 |
 | C: S10 Email Provider + Prefs | pending | 0 | 3 |
 | D: S10 Scheduler + Digest | pending | 0 | 2 |
@@ -458,7 +459,7 @@ Sub-Plan A Wave A-1 → Wave B-2 (briefing endpoint) → Wave D-1 (scheduler orc
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
 |------|--------|-----------|-------------|----------|
 | A-1 | done | 5 | 5 | none |
-| A-2 | pending | 0 | 5 | A-1 |
+| A-2 | done | 5 | 5 | none |
 | A-3 | pending | 0 | 6 | A-2 |
 | B-1 | pending | 0 | 4 | A-1 |
 | B-2 | pending | 0 | 6 | A-1 |
