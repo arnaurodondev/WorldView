@@ -806,3 +806,194 @@ class TestDeepSeekExtractionAdapter:
 
         assert result.result == payload
         assert captured_kwargs[0]["base_url"] == "https://api.deepseek.com/v1"
+
+
+# ── NullDescriptionAdapter ────────────────────────────────────────────────────
+
+
+class TestNullDescriptionAdapter:
+    async def test_description_client_null_adapter(self) -> None:
+        """NullDescriptionAdapter.generate_description always returns None."""
+        from ml_clients.description_client import NullDescriptionAdapter
+
+        adapter = NullDescriptionAdapter()
+        result = await adapter.generate_description(
+            entity_id="some-uuid",
+            canonical_name="Jerome Powell",
+            entity_type="person",
+            context_hints={"role": "Fed Chair"},
+        )
+        assert result is None
+
+    async def test_null_adapter_satisfies_protocol(self) -> None:
+        """NullDescriptionAdapter is structurally compatible with EntityDescriptionClient."""
+        from ml_clients.description_client import EntityDescriptionClient, NullDescriptionAdapter
+
+        adapter = NullDescriptionAdapter()
+        assert isinstance(adapter, EntityDescriptionClient)
+
+
+# ── GeminiDescriptionAdapter ──────────────────────────────────────────────────
+
+
+class TestGeminiDescriptionAdapter:
+    @pytest.fixture
+    def _mock_cost_tracker_under_cap(self) -> AsyncMock:
+        """A cost tracker that reports $1.00 spent (well under $10 cap)."""
+        tracker = AsyncMock()
+        tracker.get.return_value = b"1.0"
+        tracker.incrbyfloat.return_value = 1.000075
+        return tracker
+
+    @pytest.fixture
+    def _mock_cost_tracker_over_cap(self) -> AsyncMock:
+        """A cost tracker that reports $10.00 spent (at cap)."""
+        tracker = AsyncMock()
+        tracker.get.return_value = b"10.0"
+        tracker.incrbyfloat.return_value = 10.000075
+        return tracker
+
+    def _make_genai_mock(self, response_text: str) -> tuple[MagicMock, MagicMock]:
+        """Return (mock_google, mock_genai) wired with a successful text response."""
+        mock_genai = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = response_text
+        mock_response.usage_metadata = None
+
+        mock_models_aio = AsyncMock()
+        mock_models_aio.generate_content = AsyncMock(return_value=mock_response)
+
+        mock_client = MagicMock()
+        mock_client.aio.models = mock_models_aio
+        mock_genai.Client.return_value = mock_client
+
+        mock_google = MagicMock()
+        mock_google.genai = mock_genai
+        return mock_google, mock_genai
+
+    async def test_description_client_cost_cap(
+        self,
+        semaphore: asyncio.Semaphore,
+        _mock_cost_tracker_over_cap: AsyncMock,
+    ) -> None:
+        """Monthly counter ≥ cap → generate_description returns None without API call."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=_mock_cost_tracker_over_cap,
+            max_monthly_usd=10.0,
+        )
+
+        result = await adapter.generate_description(
+            entity_id="entity-1",
+            canonical_name="Federal Reserve",
+            entity_type="organization",
+            context_hints={},
+        )
+
+        assert result is None
+        # The genai API must NOT have been called
+        _mock_cost_tracker_over_cap.get.assert_called_once()
+
+    async def test_valid_response_returns_description(
+        self,
+        semaphore: asyncio.Semaphore,
+        _mock_cost_tracker_under_cap: AsyncMock,
+    ) -> None:
+        """Successful API call returns the description text."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=_mock_cost_tracker_under_cap,
+            max_monthly_usd=10.0,
+        )
+
+        description_text = "The Federal Reserve is the central banking system of the United States."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result = await adapter.generate_description(
+                entity_id="entity-1",
+                canonical_name="Federal Reserve",
+                entity_type="organization",
+                context_hints={"country": "US"},
+            )
+
+        assert result == description_text
+        _mock_cost_tracker_under_cap.incrbyfloat.assert_called_once()
+
+    async def test_no_cost_tracker_skips_cap_check(self, semaphore: asyncio.Semaphore) -> None:
+        """With no cost_tracker, the adapter calls the API without any cap check."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
+        description_text = "Jerome Powell is the Chair of the Federal Reserve."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result = await adapter.generate_description(
+                entity_id="entity-2",
+                canonical_name="Jerome Powell",
+                entity_type="person",
+                context_hints={"role": "Fed Chair"},
+            )
+
+        assert result == description_text
+
+    async def test_retryable_gemini_error_raises_retryable(self, semaphore: asyncio.Semaphore) -> None:
+        """ResourceExhausted (quota) from Gemini maps to RetryableError."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
+
+        mock_genai = MagicMock()
+
+        class FakeResourceExhaustedError(Exception):
+            pass
+
+        FakeResourceExhaustedError.__name__ = "ResourceExhausted"
+
+        mock_models_aio = AsyncMock()
+        mock_models_aio.generate_content = AsyncMock(side_effect=FakeResourceExhaustedError("quota"))
+        mock_client = MagicMock()
+        mock_client.aio.models = mock_models_aio
+        mock_genai.Client.return_value = mock_client
+
+        mock_google = MagicMock()
+        mock_google.genai = mock_genai
+
+        with (
+            patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}),
+            pytest.raises(RetryableError),
+        ):
+            await adapter.generate_description(
+                entity_id="entity-3",
+                canonical_name="Germany",
+                entity_type="country",
+                context_hints={},
+            )
+
+    async def test_missing_package_raises_fatal(self, semaphore: asyncio.Semaphore) -> None:
+        """Missing google-genai package raises FatalError (not ImportError)."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
+        with patch.dict(sys.modules, {"google": None, "google.genai": None}), pytest.raises((FatalError, ImportError)):
+            await adapter.generate_description(
+                entity_id="entity-4",
+                canonical_name="Germany",
+                entity_type="country",
+                context_hints={},
+            )
+
+    async def test_adapter_satisfies_protocol(self, semaphore: asyncio.Semaphore) -> None:
+        """GeminiDescriptionAdapter is structurally compatible with EntityDescriptionClient."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+        from ml_clients.description_client import EntityDescriptionClient
+
+        adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
+        assert isinstance(adapter, EntityDescriptionClient)

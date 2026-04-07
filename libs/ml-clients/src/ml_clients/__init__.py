@@ -10,6 +10,7 @@ from ml_clients.dataclasses import (
     NERInput,
     NEROutput,
 )
+from ml_clients.description_client import EntityDescriptionClient, NullDescriptionAdapter
 from ml_clients.errors import FatalError, RetryableError
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 
@@ -17,6 +18,7 @@ __all__ = [
     "EmbeddingClient",
     "EmbeddingInput",
     "EmbeddingOutput",
+    "EntityDescriptionClient",
     "EntityMention",
     "ExtractionClient",
     "ExtractionInput",
@@ -26,5 +28,6 @@ __all__ = [
     "NERClient",
     "NERInput",
     "NEROutput",
+    "NullDescriptionAdapter",
     "RetryableError",
 ]
