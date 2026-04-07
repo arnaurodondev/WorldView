@@ -58,3 +58,40 @@ class DLQResolveRequest(BaseModel):
     """Request body for resolving a DLQ entry."""
 
     note: str = Field(default="", max_length=2000, description="Resolution note")
+
+
+# ── Email Preferences ─────────────────────────────────────────────────────────
+
+
+class EmailPreferencesResponse(BaseModel):
+    """Response schema for GET/PUT /api/v1/email/preferences."""
+
+    user_id: UUID
+    weekly_digest_enabled: bool
+    send_day_of_week: int = Field(ge=0, le=6)
+    send_hour_utc: int = Field(ge=0, le=23)
+    email_address: str | None
+    last_digest_sent_at: datetime | None
+
+
+class UpdateEmailPreferencesRequest(BaseModel):
+    """Request body for PUT /api/v1/email/preferences."""
+
+    weekly_digest_enabled: bool | None = None
+    send_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    send_hour_utc: int | None = Field(default=None, ge=0, le=23)
+    email_address: str | None = Field(default=..., description="Delivery address; null clears override")
+
+
+class DigestTriggerRequest(BaseModel):
+    """Request body for POST /admin/email/digest/trigger."""
+
+    user_id: UUID
+    tenant_id: UUID
+
+
+class DigestTriggerResponse(BaseModel):
+    """Response for POST /admin/email/digest/trigger."""
+
+    job_id: UUID
+    status: str = "queued"

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from alert.domain.entities import Alert, DeadLetterEntry, OutboxEvent, PendingAlert
+    from alert.domain.entities import Alert, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
 
 
 class DLQRepositoryPort(ABC):
@@ -73,3 +73,16 @@ class AlertSaveRepositoryPort(ABC):
 
     @abstractmethod
     async def save(self, alert: Alert) -> None: ...
+
+
+class EmailPreferenceRepositoryPort(ABC):
+    """Port for email preference read/write operations."""
+
+    @abstractmethod
+    async def get_by_user(self, user_id: UUID, tenant_id: UUID) -> EmailPreference | None: ...
+
+    @abstractmethod
+    async def upsert(self, pref: EmailPreference) -> None: ...
+
+    @abstractmethod
+    async def list_scheduled_users(self, day: int, hour: int) -> list[EmailPreference]: ...
