@@ -105,6 +105,48 @@
 | [BP-111](#bp-111) | EODHD demo key returns 0 OHLCV bars for AAPL — canonical NDJSON is empty | `result_ref_key` exists and canonical object is created, but it contains 0 lines; S3 ohlcv_consumer.materialized logs `bar_count=0` | Tests asserting `len(lines) > 0` or `bar_count > 0` must use `pytest.skip()` when empty, not fail; instrument creation (not bar count) is the reliable S2→S3 pipeline indicator |
 | [BP-112](#bp-112) | `claim_batch` never reclaims RUNNING tasks with expired leases — worker crash leaves tasks stuck permanently | Tasks remain in `running` state with `locked_until < NOW()` forever; no worker ever re-claims them because `claim_batch` only selects `PENDING`/`RETRY` | Fixed by adding `OR (status='running' AND locked_until < now)` to the CTE WHERE clause in `SqlaTaskRepository.claim_batch` |
 | [BP-113](#bp-113) | `TypeError` from None-valued OHLCV field not caught in `ExecuteTaskUseCase._canonicalize` — task stuck in running | EODHD intraday response may include `None` for `volume`; `int(None)` raises `TypeError` which is not in `except (ProviderDataError, ValueError, KeyError)`; `_persist_fail` never called; task stays RUNNING forever | Add `TypeError` to the exception tuple in `execute_task.py:110` |
+| [BP-119](#bp-119) | Avro schema defined as inline Python dict drifts from canonical `.avsc` file | Schema changes applied to `.avsc` are not reflected in the serializer (or vice versa); Avro contract tests may pass while the actual schema diverges silently | Always load schemas via `fastavro.schema.load_schema(path_to_avsc)` — never define Avro schemas as inline Python dicts |
+
+---
+
+## BP-119 — Avro Schema Inline Drift
+
+**Date discovered**: 2026-04-07
+**Service affected**: S10 Alert (`alert/infrastructure/messaging/email_sent_event.py`)
+
+### Symptom
+
+The serializer uses a hardcoded inline Python dict `_EMAIL_SENT_SCHEMA = {"type": "record", "name": "AlertEmailSentV1", ...}` instead of loading from `infra/kafka/schemas/alert.email.sent.v1.avsc`. When the canonical `.avsc` file is updated (e.g., adding a field), the inline dict is not updated, causing serialization to fail at runtime or produce invalid bytes silently.
+
+### Root cause
+
+The inline dict was written during initial implementation to avoid the `Path` calculation required to resolve the `.avsc` file path. The `.avsc` file and the inline dict are separate sources of truth that will diverge over time.
+
+### Fix
+
+Replace inline dicts with `fastavro.schema.load_schema(<path>)`:
+
+```python
+from pathlib import Path
+import fastavro.schema
+
+_SCHEMA_PATH = Path(__file__).parents[N] / "infra" / "kafka" / "schemas" / "<schema>.avsc"
+_PARSED_SCHEMA: Any = None
+
+def _get_parsed_schema() -> Any:
+    global _PARSED_SCHEMA
+    if _PARSED_SCHEMA is None:
+        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)
+    return _PARSED_SCHEMA
+```
+
+The `parents[N]` depth depends on the file's location relative to the repo root. Use `load_schema` (not `parse_schema`) — it resolves `$ref` includes automatically.
+
+### Prevention / AVRO-FILE-ONLY Rule
+
+**All Avro schemas MUST be stored in `infra/kafka/schemas/*.avsc`.** No service may define an Avro schema as an inline Python dict. Any serializer/deserializer that currently uses an inline dict must be migrated to `fastavro.schema.load_schema`. Enforce in code review by grepping for `parse_schema({"type": "record"` or `SCHEMA = {"type": "record"` patterns.
+
+**First seen**: PLAN-0016 Wave D-2 QA review (2026-04-07).
 
 ---
 
