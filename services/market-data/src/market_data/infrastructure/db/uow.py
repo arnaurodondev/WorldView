@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from market_data.application.ports.uow import UnitOfWork
+from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
 from market_data.infrastructure.db.repositories.failed_task_repo import PgFailedTaskRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_read_repo import PgFundamentalMetricsQueryRepository
 from market_data.infrastructure.db.repositories.fundamental_metrics_repo import PgFundamentalMetricsRepository
@@ -245,6 +245,75 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         return self.outbox_events
 
     # ── read-side repository accessors (use read/replica session) ─────────────
+
+    @property
+    def instruments_read(self) -> InstrumentRepository:
+        """Instrument repository bound to the read (replica) session."""
+        return PgInstrumentRepository(self._read())
+
+    @property
+    def securities_read(self) -> SecurityRepository:
+        """Security repository bound to the read (replica) session."""
+        return PgSecurityRepository(self._read())
+
+    @property
+    def ohlcv_read(self) -> OHLCVRepository:
+        """OHLCV repository bound to the read (replica) session."""
+        return PgOHLCVRepository(self._read())
+
+    @property
+    def quotes_read(self) -> QuoteRepository:
+        """Quote repository bound to the read (replica) session."""
+        return PgQuoteRepository(self._read())
+
+    @property
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+        return PgFundamentalsReadRepository(self._read())
+
+    @property
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
+        return PgFundamentalMetricsQueryRepository(self._read())
+
+
+class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
+    """Read-only Unit of Work backed by a single SQLAlchemy async read session.
+
+    This implementation is used by query use cases (R27) that only need
+    read-side access.  It never opens a write session and has no ``commit``
+    or ``rollback`` methods.
+
+    Args:
+        read_factory: ``async_sessionmaker`` for the replica (or primary) engine.
+    """
+
+    def __init__(self, read_factory: async_sessionmaker) -> None:
+        self._read_factory = read_factory
+        self._read_session: AsyncSession | None = None
+
+    # ── context manager ───────────────────────────────────────────────────────
+
+    async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
+        self._read_session = self._read_factory()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if self._read_session:
+            try:
+                await self._read_session.close()
+            except Exception as exc:
+                logger.warning("read_uow_close_failed", error=str(exc))
+
+    # ── session accessor ──────────────────────────────────────────────────────
+
+    def _read(self) -> AsyncSession:
+        if self._read_session is None:
+            msg = "ReadOnlyUnitOfWork not entered — use 'async with uow:' context manager"
+            raise RuntimeError(msg)
+        return self._read_session
+
+    # ── read-side repository accessors ────────────────────────────────────────
 
     @property
     def instruments_read(self) -> InstrumentRepository:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -11,6 +13,7 @@ import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from market_data.api.dependencies import InternalAuthDep
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -18,8 +21,183 @@ from observability.tracing import add_otel_middleware, configure_tracing  # type
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
 
 _VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
+# Refresh screen field metadata in Valkey every 6 hours (PRD-0017 §6.2).
+_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
+
+
+def _get_static_screen_fields() -> list:
+    """Return the 12 static ScreenFieldMetadata instances (PRD-0017 §6.5)."""
+    from market_data.domain.entities import ScreenFieldMetadata
+
+    return [
+        ScreenFieldMetadata(
+            name="pe_ratio",
+            label="P/E Ratio",
+            field_type="numeric",
+            unit="x",
+            description="Trailing P/E (TTM)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="revenue_usd",
+            label="Revenue",
+            field_type="numeric",
+            unit="USD M",
+            description="Annual revenue (USD millions)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="gross_margin_pct",
+            label="Gross Margin",
+            field_type="numeric",
+            unit="%",
+            description="Gross profit / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="net_margin_pct",
+            label="Net Margin",
+            field_type="numeric",
+            unit="%",
+            description="Net income / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="ev_ebitda",
+            label="EV/EBITDA",
+            field_type="numeric",
+            unit="x",
+            description="Enterprise value / EBITDA",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="debt_to_equity",
+            label="Debt/Equity",
+            field_type="numeric",
+            unit="x",
+            description="Total debt / shareholders equity",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_on_equity",
+            label="ROE",
+            field_type="numeric",
+            unit="%",
+            description="Net income / avg. equity x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="dividend_yield_pct",
+            label="Dividend Yield",
+            field_type="numeric",
+            unit="%",
+            description="Annual dividends / price x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="market_cap_usd",
+            label="Market Cap",
+            field_type="numeric",
+            unit="USD M",
+            description="Market capitalisation (USD millions)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="price_to_book",
+            label="Price/Book",
+            field_type="numeric",
+            unit="x",
+            description="Market price / book value per share",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="operating_margin_pct",
+            label="Operating Margin",
+            field_type="numeric",
+            unit="%",
+            description="Operating income / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="current_ratio",
+            label="Current Ratio",
+            field_type="numeric",
+            unit="x",
+            description="Current assets / current liabilities",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+    ]
+
+
+async def _do_screen_fields_refresh(
+    write_factory: async_sessionmaker,
+    valkey_client: ValkeyClient,
+    log: object,
+) -> None:
+    """Upsert 12 static field definitions to DB and warm Valkey cache (PRD-0017 §6.2)."""
+    from common.time import utc_now  # type: ignore[import-untyped]
+    from market_data.infrastructure.cache.screen_fields_cache import ScreenFieldsCache
+    from market_data.infrastructure.db.repositories.screen_field_metadata_repo import (
+        PgScreenFieldMetadataRepository,
+    )
+
+    fields = _get_static_screen_fields()
+    now = utc_now()
+
+    async with write_factory() as session:
+        repo = PgScreenFieldMetadataRepository(session)
+        await repo.upsert_batch(fields, now)
+        await session.commit()
+
+    cache = ScreenFieldsCache(valkey_client)
+    await cache.set_all(fields)
+
+    log.info("screen_fields_refreshed", field_count=len(fields))  # type: ignore[attr-defined]
+
+
+async def _screen_fields_refresh_loop(
+    write_factory: async_sessionmaker,
+    valkey_client: ValkeyClient,
+    log: object,
+) -> None:
+    """Background task: seed + refresh screen field metadata every 6 hours."""
+    while True:
+        try:
+            await _do_screen_fields_refresh(write_factory, valkey_client, log)
+        except Exception as exc:
+            log.error("screen_fields_refresh_error", error=str(exc))  # type: ignore[attr-defined]
+        await asyncio.sleep(_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -80,8 +258,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey_client = valkey_client
 
     from market_data.infrastructure.cache.quote_cache import QuoteCache
+    from market_data.infrastructure.cache.screen_fields_cache import ScreenFieldsCache
 
     app.state.quote_cache = QuoteCache(valkey_client)
+    app.state.screen_fields_cache = ScreenFieldsCache(valkey_client)
 
     # 6. Object storage
     object_storage = None
@@ -102,8 +282,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("object_storage_init_failed_degrading")
     app.state.object_storage = object_storage
 
+    # 7. Background task: seed screen field metadata to DB + Valkey, then refresh every 6h
+    refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
+
     log.info("service_started", service=settings.service_name)
     yield
+
+    refresh_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await refresh_task
 
     await valkey_client.close()
     await write_engine.dispose()
@@ -201,7 +388,10 @@ def create_app() -> FastAPI:
         return {"status": "ok", "checks": checks}
 
     @app.get("/metrics")
-    async def metrics_endpoint() -> Response:
+    async def metrics_endpoint(
+        _auth: InternalAuthDep,
+    ) -> Response:
+        """Prometheus metrics — requires X-Internal-Token (M-004)."""
         data = prometheus_client.generate_latest()
         return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 

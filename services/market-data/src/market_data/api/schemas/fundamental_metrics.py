@@ -73,3 +73,22 @@ class AvailableMetricsResponse(BaseModel):
 
     instrument_id: str
     metrics: list[str]
+
+
+class ScreenFieldResponse(BaseModel):
+    """Metadata for a single screenable fundamental metric field (PRD-0017 §6.2)."""
+
+    name: str
+    label: str
+    type: str
+    unit: str | None = None
+    description: str | None = None
+    observed_min: float | None = None
+    observed_max: float | None = None
+    null_fraction: float
+
+
+class ScreenFieldsResponse(BaseModel):
+    """Response for GET /fundamentals/screen/fields."""
+
+    fields: list[ScreenFieldResponse]

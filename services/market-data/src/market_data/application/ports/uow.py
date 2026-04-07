@@ -4,10 +4,15 @@
 accesses under a single database transaction and provides an
 ``collect_event`` mechanism to accumulate domain events for outbox dispatch
 after commit.
+
+``ReadOnlyUnitOfWork`` provides a lighter context manager that exposes only
+the read-side repositories (R27 — query use cases must not depend on the
+write-capable UoW).
 """
 
 from __future__ import annotations
 
+import abc
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -171,3 +176,64 @@ class UnitOfWork(ABC):
         exc_tb: object | None,
     ) -> None:
         """Exit the async context — rollback on exception, close sessions."""
+
+
+class ReadOnlyUnitOfWork(abc.ABC):
+    """Read-only UoW for query use cases (R27).
+
+    Exposes only the read-side repositories so query use cases cannot
+    accidentally perform writes or event collection.  This also makes it
+    safe to back the read side exclusively by a replica session.
+
+    Usage::
+
+        async with read_uow_factory() as uow:
+            instrument = await uow.instruments_read.find_by_id(instrument_id)
+    """
+
+    # ── read-side repository accessors ────────────────────────────────────────
+
+    @property
+    @abc.abstractmethod
+    def instruments_read(self) -> InstrumentRepository:
+        """Instrument repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def securities_read(self) -> SecurityRepository:
+        """Security repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def ohlcv_read(self) -> OHLCVRepository:
+        """OHLCV repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def quotes_read(self) -> QuoteRepository:
+        """Quote repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def fundamentals_read(self) -> FundamentalsReadRepository:
+        """Fundamentals read repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
+        """Fundamental metrics query repository bound to the read (replica) session."""
+
+    # ── context manager ───────────────────────────────────────────────────────
+
+    @abc.abstractmethod
+    async def __aenter__(self) -> ReadOnlyUnitOfWork:
+        """Enter the async context — open the read session."""
+
+    @abc.abstractmethod
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
+        """Exit the async context — close the read session."""

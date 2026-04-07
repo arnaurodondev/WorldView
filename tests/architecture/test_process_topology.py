@@ -360,7 +360,12 @@ class TestNoLifespanEmbedding:
     """app.py must not start background processing loops inside lifespan (R22)."""
 
     def test_app_lifespan_has_no_background_tasks(self) -> None:
-        """No asyncio.create_task() calls must appear inside app.py lifespan."""
+        """Consumer/dispatcher asyncio.create_task() calls must not appear inside app.py lifespan.
+
+        Lightweight, read-only in-process tasks (e.g. cache-warmer refresh loops)
+        are intentionally exempt — R22 targets Kafka consumers and outbox dispatchers
+        only (see PRD-0017 §6.2 and services/market-data/tests/unit/test_app_lifespan.py).
+        """
         violations: list[ArchViolation] = []
         for svc in discover_services():
             app_py = svc.pkg_dir / "app.py"

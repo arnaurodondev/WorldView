@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         Instrument,
         OHLCVBar,
         Quote,
+        ScreenFieldMetadata,
         Security,
     )
     from market_data.domain.enums import FundamentalsSection, Timeframe
@@ -410,3 +411,7 @@ class FundamentalMetricsQueryRepository(ABC):
     @abstractmethod
     async def get_available_metrics(self, instrument_id: str) -> list[str]:
         """Return all distinct metric names available for an instrument."""
+
+    @abstractmethod
+    async def get_screen_field_metadata(self) -> list[ScreenFieldMetadata]:
+        """Return all rows from ``screen_field_metadata`` (DB fallback for cache miss)."""

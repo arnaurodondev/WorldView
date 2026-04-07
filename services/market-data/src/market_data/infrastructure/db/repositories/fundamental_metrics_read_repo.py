@@ -18,6 +18,7 @@ from market_data.application.ports.repositories import (
 from market_data.infrastructure.db.repositories.fundamental_metrics_query import (
     query_available_metrics,
     query_screen,
+    query_screen_field_metadata,
     query_timeseries,
 )
 
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from datetime import date
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from market_data.domain.entities import ScreenFieldMetadata
 
 
 class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
@@ -73,3 +76,6 @@ class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
 
     async def get_available_metrics(self, instrument_id: str) -> list[str]:
         return await query_available_metrics(self._session, instrument_id)
+
+    async def get_screen_field_metadata(self) -> list[ScreenFieldMetadata]:
+        return await query_screen_field_metadata(self._session)
