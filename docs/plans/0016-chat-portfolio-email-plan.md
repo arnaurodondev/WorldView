@@ -466,23 +466,42 @@ Sub-Plan A Wave A-1 → Wave B-2 (briefing endpoint) → Wave D-1 (scheduler orc
 ### Plan Status
 | Sub-Plan | Status | Waves Done | Waves Total |
 |----------|--------|-----------|-------------|
-| A: S8 Intent Prompts + Context Mgmt | in-progress | 2 | 3 |
-| B: S8 GENERAL Intent + Briefing | pending | 0 | 2 |
-| C: S10 Email Provider + Prefs | pending | 0 | 3 |
-| D: S10 Scheduler + Digest | pending | 0 | 2 |
-| E: S9 Gateway + S1 Endpoint | pending | 0 | 1 |
+| A: S8 Intent Prompts + Context Mgmt | done | 3 | 3 |
+| B: S8 GENERAL Intent + Briefing | done | 2 | 2 |
+| C: S10 Email Provider + Prefs | done | 3 | 3 |
+| D: S10 Scheduler + Digest | done | 2 | 2 |
+| E: S9 Gateway + S1 Endpoint | done | 1 | 1 |
 
 ### Wave Status
 | Wave | Status | Tasks Done | Tasks Total | Blockers |
 |------|--------|-----------|-------------|----------|
 | A-1 | done | 5 | 5 | none |
 | A-2 | done | 5 | 5 | none |
-| A-3 | pending | 0 | 6 | A-2 |
-| B-1 | pending | 0 | 4 | A-1 |
-| B-2 | pending | 0 | 6 | A-1 |
-| C-1 | pending | 0 | 5 | none |
-| C-2 | pending | 0 | 6 | C-1 |
-| C-3 | pending | 0 | 6 | C-1 |
-| D-1 | pending | 0 | 5 | B-2, C-1 |
-| D-2 | pending | 0 | 6 | D-1 |
-| E-1 | pending | 0 | 4 | C-3 |
+| A-3 | done | 6 | 6 | none |
+| B-1 | done | 4 | 4 | none |
+| B-2 | done | 6 | 6 | none |
+| C-1 | done | 5 | 5 | none |
+| C-2 | done | 6 | 6 | none |
+| C-3 | done | 6 | 6 | none |
+| D-1 | done | 5 | 5 | none |
+| D-2 | done | 6 | 6 | none |
+| E-1 | done | 4 | 4 | none |
+
+### Post-QA Fixes (2026-04-07)
+
+Applied after full QA pass. All 275 alert + 21 rag-chat briefing unit tests pass; ruff + mypy clean.
+
+| Finding | Fix |
+|---------|-----|
+| B-01: No crash recovery for in-flight emails | Outbox-first pattern: `_create_pending_log` before send, `_finalize_sent`/`_finalize_failed` after |
+| C-01: R25 layer violation in email_routes.py | Moved infra imports to DI factories in `dependencies.py` |
+| C-02: user_id not globally unique in email_preferences | Added UNIQUE(tenant_id, user_id) constraint via migration 0003 |
+| C-03: No dedup guard for duplicate digest sends | `list_scheduled_users` filters users sent within 23h via `last_digest_sent_at` |
+| C-04: Avro schema defined as inline dict (BP-119) | `email_sent_event.py` now loads schema from `.avsc` via `fastavro.schema.load_schema` |
+| M-01: S1Client used private `_base_url` attribute | Added `get_user_email(user_id)` public method |
+| M-02: email_address field lacks EmailStr validation | Changed to `EmailStr \| None` in Pydantic schemas |
+| M-03: CRLF not stripped in plain-text renderer | Added `_sanitize()` in template.py |
+| M-04: ContextManager no shutdown + no Valkey circuit breaker | Added `shutdown()` + circuit breaker (_CACHE_FAILURE_THRESHOLD=5) |
+| M-05: No isinstance guard on S8 briefing response | Added `isinstance(raw, dict)` check before accessing briefing keys |
+| M-06: HHI tests only test 1 position | Added parametrized test with 1/2/3/4 equal + dominant positions |
+| N-04: `session.commit()` called in route handlers | Moved to `await self._repo.commit()` inside use cases |

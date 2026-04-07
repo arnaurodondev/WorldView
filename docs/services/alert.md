@@ -1,7 +1,7 @@
 # S10 · Alert Service
 
 > **Owner**: Alert domain · **Database**: `alert_db` · **Port**: 8010
-> **Status**: Mature (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge)
+> **Status**: Mature (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge; ✅ PLAN-0016 complete — Email digest, preferences, scheduler, Avro outbox)
 
 ---
 
@@ -23,6 +23,9 @@
 | GET | `/api/v1/alerts` | List alerts for the current user | fast |
 | GET | `/api/v1/alerts/pending` | Pending (undelivered) alerts for the current user | fast |
 | WebSocket | `/ws/alerts` | Real-time alert stream | — |
+| GET | `/api/v1/email/preferences` | Get email digest preferences (X-Tenant-ID + X-User-ID required) | — |
+| PUT | `/api/v1/email/preferences` | Update email digest preferences | — |
+| POST | `/admin/email/digest/trigger` | Manually trigger digest for a user (X-Admin-Token required) | — |
 
 ---
 
@@ -41,12 +44,18 @@
 | Topic | Event Type | Key | Description |
 |-------|-----------|-----|-------------|
 | `alert.delivered.v1` | `AlertDeliveredV1` | `user_id` | Confirmation that alert was delivered to a user |
+| `alert.email.sent.v1` | `AlertEmailSentV1` | `user_id` | Email digest sent; schema at `infra/kafka/schemas/alert.email.sent.v1.avsc` |
 
 ---
 
 ## Database Schema
 
 Migration: `alembic/versions/0001_create_alert_db.py`
+
+Migration history:
+- `0001_create_alert_db.py` — initial schema
+- `0002_add_email_tables.py` — email_preferences + email_log
+- `0003_email_idempotency_fixes.py` — UNIQUE(tenant_id, user_id) on email_preferences + updated_at on email_log
 
 ```sql
 -- alert_db
@@ -118,6 +127,38 @@ CREATE TABLE outbox_events (
     failed_at      TIMESTAMPTZ
 );
 CREATE INDEX idx_outbox_s10_pending ON outbox_events (created_at) WHERE status = 'pending';
+
+-- Email digest preferences (one row per user per tenant).
+CREATE TABLE email_preferences (
+    user_id          UUID        NOT NULL,
+    tenant_id        UUID        NOT NULL,
+    weekly_digest_enabled BOOLEAN NOT NULL DEFAULT true,
+    send_day_of_week  INT         NOT NULL DEFAULT 6,   -- Monday=0, Sunday=6
+    send_hour_utc     INT         NOT NULL DEFAULT 8,   -- 0-23
+    email_address     TEXT,                              -- override; NULL → S1 fallback
+    last_digest_sent_at TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ,
+    PRIMARY KEY (user_id),
+    CONSTRAINT uq_email_prefs_tenant_user UNIQUE (tenant_id, user_id),
+    CONSTRAINT chk_send_day CHECK (send_day_of_week BETWEEN 0 AND 6),
+    CONSTRAINT chk_send_hour CHECK (send_hour_utc BETWEEN 0 AND 23)
+);
+
+-- Email delivery audit log; outbox-first: pending_send inserted BEFORE send attempt.
+CREATE TABLE email_log (
+    log_id              UUID        PRIMARY KEY,
+    user_id             UUID        NOT NULL,
+    tenant_id           UUID        NOT NULL,
+    email_type          VARCHAR(50) NOT NULL DEFAULT 'weekly_digest',
+    sent_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    provider            VARCHAR(50) NOT NULL,
+    status              VARCHAR(20) NOT NULL DEFAULT 'pending_send',
+    updated_at          TIMESTAMPTZ,
+    error_detail        TEXT,
+    provider_message_id TEXT
+);
+-- status values: pending_send | sent | failed | skipped
 
 -- Poison-pill events that exhausted retries.
 CREATE TABLE dead_letter_queue (
@@ -204,7 +245,21 @@ The floor division over `alert_dedup_window_seconds` (default 3600) groups event
 | `ALERT_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Confluent Schema Registry |
 | `ALERT_VALKEY_URL` | `redis://localhost:6379/0` | Valkey connection |
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 Portfolio service base URL |
-| `ALERT_INTERNAL_SERVICE_TOKEN` | `""` | Service-to-service auth token |
+| `ALERT_INTERNAL_SERVICE_TOKEN` | `""` | Service-to-service auth token (callers use this to call S10) |
+| `ALERT_S1_INTERNAL_TOKEN` | `""` | Token S10 uses to call S1 internal endpoints |
+| `ALERT_S8_INTERNAL_TOKEN` | `""` | Token S10 uses to call S8 briefing endpoint |
+| `ALERT_S1_BASE_URL` | `http://localhost:8001` | S1 portfolio service base URL |
+| `ALERT_S3_BASE_URL` | `http://localhost:8003` | S3 market data service base URL |
+| `ALERT_S8_BASE_URL` | `http://localhost:8008` | S8 RAG/Chat service base URL |
+| `ALERT_EMAIL_PROVIDER` | `smtp` | Email adapter: `resend`, `sendgrid`, `smtp` |
+| `ALERT_EMAIL_FROM_ADDRESS` | `""` | From address for all digest emails |
+| `ALERT_RESEND_API_KEY` | `""` | Resend API key (only if EMAIL_PROVIDER=resend) |
+| `ALERT_SENDGRID_API_KEY` | `""` | SendGrid API key (only if EMAIL_PROVIDER=sendgrid) |
+| `ALERT_SMTP_HOST` | `""` | SMTP host (only if EMAIL_PROVIDER=smtp) |
+| `ALERT_SMTP_PORT` | `587` | SMTP port |
+| `ALERT_SMTP_USERNAME` | `""` | SMTP username |
+| `ALERT_SMTP_PASSWORD` | `""` | SMTP password |
+| `ALERT_ADMIN_TOKEN` | `""` | Admin token for /admin/* routes |
 | `ALERT_WATCHLIST_CACHE_TTL_SECONDS` | `300` | Valkey entity→subscriber cache TTL |
 | `ALERT_ALERT_DEDUP_WINDOW_SECONDS` | `3600` | Dedup key time bucket size |
 | `ALERT_PENDING_ALERT_TTL_DAYS` | `7` | Max age for undelivered pending alerts |
