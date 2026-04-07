@@ -13,7 +13,8 @@ from alert.domain.email_provider import EmailProviderError
 from alert.domain.entities import EmailPreference
 from alert.infrastructure.clients.s3_client import S3MarketDataClient
 from alert.infrastructure.clients.s8_client import BriefingClientError, S8BriefingClient
-from alert.infrastructure.email.scheduler import EmailScheduler, _render_stub
+from alert.infrastructure.email.scheduler import EmailScheduler
+from alert.infrastructure.email.template import render_digest_email
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -469,23 +470,26 @@ class TestEmailScheduler:
         assert len(skipped) >= 1
 
 
-# ── _render_stub ──────────────────────────────────────────────────────────────
+# ── render_digest_email (smoke tests from scheduler context) ─────────────────
 
 
-class TestRenderStub:
+class TestRenderDigestEmailSmoke:
+    """Minimal smoke tests — comprehensive coverage lives in test_email_template.py."""
+
     @pytest.mark.unit
     def test_renders_narrative_in_html(self) -> None:
-        html, _text = _render_stub("Portfolio risk is high.")
+        html, _text = render_digest_email(narrative="Portfolio risk is high.")
         assert "Portfolio risk is high." in html
         assert "<html>" in html
 
     @pytest.mark.unit
-    def test_empty_narrative_uses_placeholder(self) -> None:
-        html, text = _render_stub("")
-        assert "in progress" in html.lower() or "details" in text.lower()
+    def test_empty_narrative_still_renders(self) -> None:
+        html, text = render_digest_email(narrative="")
+        assert isinstance(html, str) and len(html) > 0
+        assert isinstance(text, str) and len(text) > 0
 
     @pytest.mark.unit
     def test_returns_tuple_of_two_strings(self) -> None:
-        html, text = _render_stub("test")
+        html, text = render_digest_email(narrative="test")
         assert isinstance(html, str)
         assert isinstance(text, str)

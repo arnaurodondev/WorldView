@@ -22,8 +22,10 @@ import structlog
 
 from alert.domain.email_provider import EmailProviderError
 from alert.infrastructure.clients.s8_client import BriefingClientError
-from alert.infrastructure.db.models import EmailLogModel
+from alert.infrastructure.db.models import EmailLogModel, OutboxEventModel
 from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+from alert.infrastructure.email.template import render_digest_email
+from alert.infrastructure.messaging.schemas.email_sent import EMAIL_SENT_TOPIC, serialize_email_sent
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
@@ -146,6 +148,7 @@ class EmailScheduler:
         # ── 3. Request AI narrative (best-effort — degrade on S8 failure) ───
         portfolio_context: dict[str, Any] = {}
         narrative = ""
+        briefing: dict[str, Any] | None = None
         try:
             briefing = await self._s8.request_briefing(
                 user_id=user_id,
@@ -160,10 +163,18 @@ class EmailScheduler:
                 user_id=str(user_id),
             )
 
-        # ── 4. Render email (stub — full template in Wave D-2) ───────────────
-        html_body, text_body = _render_stub(narrative)
+        # ── 4. Render email (full template — Wave D-2) ──────────────────────
+        risk_summary = briefing.get("risk_summary", {}) if briefing is not None else {}
+        citations = briefing.get("citations", []) if briefing is not None else []
+        html_body, text_body = render_digest_email(
+            narrative=narrative,
+            risk_summary=risk_summary if isinstance(risk_summary, dict) else {},
+            citations=citations if isinstance(citations, list) else [],
+            positions=[],  # Wave D-2+: populated from S1 portfolio context
+            fundamentals=[],  # Wave D-2+: populated from S3 fundamentals data
+        )
 
-        # ── 5. Send with exponential-backoff retry ───────────────────────────
+        # ── 5. Send with exponential-backoff retry + outbox event ───────────
         await self._send_with_retry(user_id, tenant_id, email_address, html_body, text_body)
 
     async def _resolve_user_email(self, user_id: UUID) -> str | None:
@@ -234,7 +245,7 @@ class EmailScheduler:
                 if attempt < len(_RETRY_DELAYS):
                     await asyncio.sleep(_RETRY_DELAYS[attempt])
 
-        # All attempts exhausted
+        # All attempts exhausted — log failure, no outbox event (send never succeeded)
         await self._log_result(user_id, tenant_id, "failed", error_detail=last_error)
         logger.error(  # type: ignore[no-any-return]
             "email_scheduler.digest_failed",
@@ -251,13 +262,19 @@ class EmailScheduler:
         provider_message_id: str | None = None,
         error_detail: str | None = None,
     ) -> None:
-        """Insert an email_log row recording the send outcome."""
+        """Insert email_log + outbox event (on success) in a single transaction.
+
+        For status='sent' an ``alert.email.sent.v1`` outbox row is written
+        atomically alongside the log row — this is the transactional outbox
+        pattern (no dual-write risk).
+        """
+        now = utc_now()
         row = EmailLogModel(
             log_id=new_uuid7(),
             user_id=user_id,
             tenant_id=tenant_id,
             email_type=_EMAIL_TYPE,
-            sent_at=utc_now(),
+            sent_at=now,
             provider=self._settings.email_provider,
             provider_message_id=provider_message_id,
             status=status,
@@ -265,21 +282,25 @@ class EmailScheduler:
         )
         async with self._sf() as session:
             session.add(row)
+            if status == "sent":
+                event_id = str(new_uuid7())
+                now_iso = now.isoformat()
+                payload = serialize_email_sent(
+                    event_id=event_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    email_type=_EMAIL_TYPE,
+                    provider=self._settings.email_provider,
+                    sent_at=now_iso,
+                    subject=_DIGEST_SUBJECT,
+                    occurred_at=now_iso,
+                    provider_message_id=provider_message_id,
+                )
+                outbox_row = OutboxEventModel(
+                    event_id=new_uuid7(),
+                    topic=EMAIL_SENT_TOPIC,
+                    partition_key=str(user_id),
+                    payload_avro=payload,
+                )
+                session.add(outbox_row)
             await session.commit()
-
-
-# ---------------------------------------------------------------------------
-# Stub template (replaced by full renderer in Wave D-2)
-# ---------------------------------------------------------------------------
-
-
-def _render_stub(narrative: str) -> tuple[str, str]:
-    """Minimal HTML/text stub — full template rendered in Wave D-2."""
-    html = (
-        "<html><body>"
-        "<h1>Your Weekly Portfolio Risk Digest</h1>"
-        f"<p>{narrative or 'Digest generation in progress. Please check back later.'}</p>"
-        "</body></html>"
-    )
-    text = narrative or "Weekly Portfolio Risk Digest — check the app for details."
-    return html, text
