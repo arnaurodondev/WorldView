@@ -792,6 +792,38 @@ services:
     # entrypoint.sh: 1) alembic upgrade head 2) run seed SQL 3) populate embeddings (non-blocking)
     restart: "no"
 
+  # ── Ollama — embedding / LLM inference ────────────────────────────────────
+  ollama:
+    image: ollama/ollama:0.6.7
+    profiles: [intelligence-test, all]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── GLiNER server — NER inference ──────────────────────────────────────────
+  gliner-server:
+    build:
+      context: ../gliner
+      dockerfile: Dockerfile
+    profiles: [intelligence-test, all]
+    ports:
+      - "8090:8080"
+    environment:
+      GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   # ── NLP Pipeline (S6) ──────────────────────────────────────────────────────
   nlp-pipeline-migrate:
     build:
@@ -875,6 +907,10 @@ services:
       minio-init-test:
         condition: service_completed_successfully
       valkey:
+        condition: service_healthy
+      gliner-server:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
@@ -1191,3 +1227,4 @@ services:
 
 volumes:
   pgadmin_data:
+  ollama_data:
