@@ -34,12 +34,12 @@ if TYPE_CHECKING:
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.ports.embedding import EmbeddingPort
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.application.ports.upstream_clients import S6Port
     from rag_chat.application.security.input_validator import InputValidator
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
     from rag_chat.domain.entities.chat import ChatRequest
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
     from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -109,7 +109,7 @@ class ChatOrchestrator:
     async def execute_streaming(
         self,
         request: ChatRequest,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
     ) -> AsyncGenerator[dict[str, str], None]:
         """Run the full 13-step pipeline, yielding SSE events as they occur."""
         start = datetime.now(tz=UTC)
@@ -253,7 +253,7 @@ class ChatOrchestrator:
     async def execute_sync(
         self,
         request: ChatRequest,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
     ) -> dict:
         """Run the full pipeline synchronously — collects all SSE events and returns final answer."""
         answer = ""

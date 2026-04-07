@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.domain.entities.conversation import ConversationThread
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
 _MAX_LIMIT = 100
 
@@ -23,7 +23,7 @@ class ListThreadsUseCase:
 
     async def execute(
         self,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
         user_id: UUID,
         tenant_id: UUID,
         limit: int = 20,

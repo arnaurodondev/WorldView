@@ -137,3 +137,47 @@ class TestThreadRepository:
         assert threads == []
         # Verify WHERE clause includes archived_at IS NULL by checking execute was called
         assert mock_session.execute.call_count == 2
+
+
+class TestRagUnitOfWorkPortCompliance:
+    """D-4: RagUnitOfWork must structurally satisfy RagUnitOfWorkPort (R25 compliance).
+
+    Use cases now depend on RagUnitOfWorkPort (Protocol), not the concrete class.
+    This test guards against accidental removal of required members.
+    """
+
+    def test_rag_uow_has_threads_property(self) -> None:
+        """RagUnitOfWork class must define a `threads` property (RagUnitOfWorkPort)."""
+        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+
+        # Check at class level — `threads` is a property that requires __aenter__
+        assert hasattr(RagUnitOfWork, "threads"), "RagUnitOfWork class missing `threads` (RagUnitOfWorkPort)"
+
+    def test_rag_uow_has_messages_property(self) -> None:
+        """RagUnitOfWork class must define a `messages` property (RagUnitOfWorkPort)."""
+        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+
+        assert hasattr(RagUnitOfWork, "messages"), "RagUnitOfWork class missing `messages` (RagUnitOfWorkPort)"
+
+    def test_rag_uow_has_commit_method(self) -> None:
+        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+
+        assert callable(RagUnitOfWork.commit), "RagUnitOfWork missing callable `commit` (RagUnitOfWorkPort)"
+
+    def test_rag_uow_has_rollback_method(self) -> None:
+        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+
+        assert callable(RagUnitOfWork.rollback), "RagUnitOfWork missing callable `rollback` (RagUnitOfWorkPort)"
+
+    def test_use_cases_import_from_application_port_not_infra(self) -> None:
+        """All thread-related use cases must import RagUnitOfWorkPort, not RagUnitOfWork (D-4)."""
+        from pathlib import Path
+
+        use_cases_dir = Path(__file__).parents[4] / "src" / "rag_chat" / "application" / "use_cases"
+        infra_import = "from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork"
+        violations = []
+        for py_file in use_cases_dir.rglob("*.py"):
+            content = py_file.read_text()
+            if infra_import in content:
+                violations.append(py_file.name)
+        assert not violations, f"Use cases importing RagUnitOfWork from infra (R25 violation): {violations}"

@@ -9,8 +9,8 @@ from rag_chat.domain.errors import ThreadNotFoundError
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.domain.entities.conversation import ConversationThread
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
 
 class GetThreadUseCase:
@@ -23,7 +23,7 @@ class GetThreadUseCase:
 
     async def execute(
         self,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
         thread_id: UUID,
         user_id: UUID,
         tenant_id: UUID | None = None,

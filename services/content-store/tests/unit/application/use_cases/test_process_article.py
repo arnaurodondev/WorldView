@@ -47,7 +47,7 @@ def _make_use_case(
     dedup_repo: AsyncMock | None = None,
     minhash_repo: AsyncMock | None = None,
     outbox_repo: AsyncMock | None = None,
-    object_store: AsyncMock | None = None,
+    bronze_store: AsyncMock | None = None,
     silver_storage: AsyncMock | None = None,
     lsh_client: AsyncMock | None = None,
 ) -> ProcessArticleUseCase:
@@ -56,7 +56,7 @@ def _make_use_case(
         dedup_repo=dedup_repo or AsyncMock(),
         minhash_repo=minhash_repo or AsyncMock(),
         outbox_repo=outbox_repo or AsyncMock(),
-        object_store=object_store or AsyncMock(),
+        bronze_store=bronze_store or AsyncMock(),
         bronze_bucket="worldview-bronze",
         silver_storage=silver_storage or _make_silver_storage(),
         lsh_client=lsh_client or AsyncMock(),
@@ -73,7 +73,7 @@ class TestProcessArticleUseCase:
         store = AsyncMock()
         store.get_bytes.return_value = b"<html><body>Hello</body></html>"
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store)
         article = _make_article()
         summary = await uc.execute(article)
 
@@ -91,7 +91,7 @@ class TestProcessArticleUseCase:
         store = AsyncMock()
         store.get_bytes.return_value = b"<html><body>Hello World</body></html>"
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is True
@@ -127,7 +127,7 @@ class TestProcessArticleUseCase:
             document_repo=document_repo,
             minhash_repo=minhash_repo,
             outbox_repo=outbox_repo,
-            object_store=store,
+            bronze_store=store,
             silver_storage=silver_storage,
             lsh_client=lsh_client,
         )
@@ -175,7 +175,7 @@ class TestProcessArticleUseCase:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article())
@@ -206,7 +206,7 @@ class TestProcessArticleUseCase:
             stage="stage_c",
         )
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store, lsh_client=lsh_client)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store, lsh_client=lsh_client)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is True
@@ -235,7 +235,7 @@ class TestProcessArticleUseCase:
             stage="stage_c",
         )
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store, lsh_client=lsh_client)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store, lsh_client=lsh_client)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is False
@@ -266,7 +266,7 @@ class TestProcessArticleUseCase:
         outbox_repo = AsyncMock()
         uc = _make_use_case(
             dedup_repo=dedup_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
             outbox_repo=outbox_repo,
         )
@@ -323,7 +323,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at="invalid-date"))
@@ -356,7 +356,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at="2026-03-27T10:00:00Z"))
@@ -389,7 +389,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at=None))
