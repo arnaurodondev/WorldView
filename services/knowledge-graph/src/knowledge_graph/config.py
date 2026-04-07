@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     worker_embedding_refresh_interval_s: int = 10800  # 3 h
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
 
+    # Entity description generation (PRD-0017 §6.5 — DefinitionRefreshWorker)
+    description_provider: str = "none"  # "gemini" | "none"
+    gemini_api_key: SecretStr = SecretStr("")
+    description_max_monthly_usd: float = 10.0
+    description_gemini_concurrency: int = 4
+
     # Market data service (used by Worker 13D-3)
     market_data_base_url: str = "http://market-data:8003"
 
