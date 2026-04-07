@@ -115,7 +115,7 @@ async def trigger_source(
     result = await uc.execute(source_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    return TriggerResponse(source_id=result.source_id, task_id=result.task_id)
+    return TriggerResponse(source_id=result.source_id, task_id=result.task_id, status="triggered")
 
 
 @router.get("/status", response_model=StatusResponse)

@@ -274,10 +274,7 @@ def test_events_new_columns_are_nullable(conn: sa.engine.Connection) -> None:
 def test_events_composite_index_exists(conn: sa.engine.Connection) -> None:
     """Migration 0002 creates ix_events_entity_type_date index on events parent table."""
     result = conn.execute(
-        text(
-            "SELECT indexname FROM pg_indexes "
-            "WHERE tablename = 'events' AND indexname = 'ix_events_entity_type_date'"
-        )
+        text("SELECT indexname FROM pg_indexes WHERE tablename = 'events' AND indexname = 'ix_events_entity_type_date'")
     )
     assert result.fetchone() is not None, "ix_events_entity_type_date index missing from events"
 

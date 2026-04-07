@@ -30,7 +30,7 @@ async def main() -> None:
         build_workers,
     )
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="knowledge-graph-scheduler",
         level=settings.log_level,
@@ -50,7 +50,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     # LLM workers use stubs when no adapters are configured (matches original app.py behaviour)
     workers = build_workers(settings, write_factory, llm_client=None)

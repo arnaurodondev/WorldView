@@ -114,7 +114,7 @@ class SourceListResponse(BaseModel):
 class SourceCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     source_type: str = Field(..., min_length=1, max_length=50)
-    config: dict[str, str | int | bool] = Field(default_factory=dict)
+    config: dict[str, str | int | bool | list[str | int | bool]] = Field(default_factory=dict)
     enabled: bool = True
 
     @field_validator("source_type")
@@ -132,7 +132,7 @@ class SourceCreateRequest(BaseModel):
 class SourceUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=200)
     enabled: bool | None = None
-    config: dict[str, str | int | bool] | None = None
+    config: dict[str, str | int | bool | list[str | int | bool]] | None = None
 
 
 class TriggerResponse(BaseModel):

@@ -20,7 +20,6 @@ def mock_app():
         minio_bucket="test-bucket",
     )
     mock_factory = AsyncMock()
-    app.state.session_factory = mock_factory
     app.state.write_factory = mock_factory
     app.state.read_factory = mock_factory
     app.state.valkey = AsyncMock()
@@ -51,7 +50,7 @@ class TestHealthEndpoint:
         async def _fake_session():
             yield mock_session
 
-        mock_app.state.session_factory = _fake_session
+        mock_app.state.write_factory = _fake_session
         mock_app.state.valkey.ping = AsyncMock()
         mock_app.state.storage.exists = AsyncMock(return_value=False)
 
@@ -71,7 +70,7 @@ class TestHealthEndpoint:
             raise RuntimeError("DB down")
             yield  # unreachable but required by asynccontextmanager
 
-        mock_app.state.session_factory = _failing_session
+        mock_app.state.write_factory = _failing_session
         mock_app.state.valkey.ping = AsyncMock()
         mock_app.state.storage.exists = AsyncMock()
 

@@ -27,6 +27,11 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.port == 8001
     assert s.debug is False
     assert "portfolio_db" in s.database_url
+    assert s.database_url_read == ""  # R23: empty → fallback to database_url
+    assert s.db_pool_size == 10
+    assert s.db_max_overflow == 20
+    assert s.db_pool_size_read == 20
+    assert s.db_max_overflow_read == 30
     assert s.kafka_bootstrap_servers == "localhost:9092"
     assert s.schema_registry_url == "http://localhost:8081"
     assert s.kafka_auto_register_schemas is True

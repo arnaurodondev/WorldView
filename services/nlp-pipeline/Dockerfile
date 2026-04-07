@@ -35,6 +35,7 @@ COPY --from=builder /build/services/nlp-pipeline/src /app/src
 COPY --from=builder /build/services/nlp-pipeline/alembic /app/alembic
 COPY --from=builder /build/services/nlp-pipeline/alembic.ini /app/alembic.ini
 
+COPY infra/kafka/schemas /app/infra/kafka/schemas
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src"
 ENV PYTHONDONTWRITEBYTECODE=1

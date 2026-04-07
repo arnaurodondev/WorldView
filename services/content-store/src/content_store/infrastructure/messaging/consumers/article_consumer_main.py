@@ -53,7 +53,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Database — write factory only (consumer writes processed_events + outbox)
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     # Object storage (MinIO)
     storage_settings = StorageSettings(
@@ -100,6 +100,8 @@ async def main() -> None:
     finally:
         await valkey_client.close()
         await _engine.dispose()
+        if _read_engine is not _engine:
+            await _read_engine.dispose()
 
 
 if __name__ == "__main__":

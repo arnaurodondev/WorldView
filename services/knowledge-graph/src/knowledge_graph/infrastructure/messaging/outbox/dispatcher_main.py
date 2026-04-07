@@ -51,7 +51,7 @@ async def main() -> None:
     from knowledge_graph.infrastructure.intelligence_db.session import _build_factories
     from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="knowledge-graph-dispatcher",
         level=settings.log_level,
@@ -72,7 +72,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Write factory only — dispatcher reads/updates outbox rows in write txn
-    engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
     dispatcher = OutboxDispatcher(

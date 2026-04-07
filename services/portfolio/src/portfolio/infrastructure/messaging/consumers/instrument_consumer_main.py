@@ -41,7 +41,7 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     consumer_config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,

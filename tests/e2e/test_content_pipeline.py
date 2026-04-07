@@ -364,6 +364,9 @@ async def test_s5_dlq_list_empty(s5_client: AsyncClient) -> None:
 
 # ── Full pipeline integration: S4 submit → S5 stores document ─────────────────
 
+_S5_DB_URL = "postgresql+asyncpg://postgres:postgres@localhost:55433/content_store_db"
+_S4_DB_URL = "postgresql+asyncpg://postgres:postgres@localhost:55433/content_ingestion_db"
+
 
 @_skip_s4_s5
 async def test_content_pipeline_article_stored_within_timeout(
@@ -372,47 +375,129 @@ async def test_content_pipeline_article_stored_within_timeout(
 ) -> None:
     """Submit article via S4 and wait for S5 to store the canonical document.
 
-    This test exercises the full pipeline:
-      S4 submit → content.article.raw.v1 → S5 consumer → content.article.stored.v1
+    This test exercises the full async pipeline with direct DB assertions:
+      S4 submit → content.article.raw.v1 → S5 consumer → documents table
 
-    The test polls the S5 stats endpoint every 2 seconds (up to 60 seconds)
-    to detect when the document count increases after submission.
+    Assertions:
+    - S4 returns 202 with status=accepted and a doc_id
+    - S4 writes article_fetch_log row to content_ingestion_db (same transaction)
+    - S5 creates a documents row in content_store_db (async, via Kafka)
+    - The documents row has the correct content_hash, source_type, and minio_silver_key
 
-    Note: Requires Kafka, MinIO, and both services running.
+    Requires: Kafka, MinIO, S4 (localhost:8004), S5 (localhost:8005), PostgreSQL (localhost:55433)
+    Timeout: 90 seconds for the full async pipeline
     """
-    # Get baseline document count from S5
-    baseline_resp = await s5_client.get("/readyz")
-    # If S5 is not fully ready (503), skip rather than fail
-    if baseline_resp.status_code == 503:
-        pytest.skip("S5 is not fully ready (readyz returned 503)")
+    import hashlib
 
-    # Submit content to S4 (url only — raw_content and url are mutually exclusive)
-    unique_url = f"https://example.com/pipeline-test/{uuid.uuid4().hex}"
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    # Build the test article with a unique ID so content_hash is unique per run
+    raw_content = (
+        f"Pipeline test: IBM announces quantum computing breakthrough — uid:{uuid.uuid4().hex}. "
+        "New 1000-qubit processor achieves breakthrough fidelity rates for financial modeling."
+    )
+    raw_bytes = raw_content.encode()
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+    # Skip if PostgreSQL is not reachable (needed for DB assertions)
+    if not time.monotonic() or not _reachable("localhost", 55433):
+        # Quick TCP probe for PG
+        import socket as _socket
+
+        try:
+            with _socket.create_connection(("localhost", 55433), timeout=1.5):
+                pass
+        except OSError:
+            pytest.skip("PostgreSQL localhost:55433 not reachable — cannot assert S5 DB state")
+
+    # — Step 1: Submit to S4 ——————————————————————————————————————————————————
+
     submit_resp = await s4_client.post(
         "/internal/v1/ingest/submit",
         json={
-            "url": unique_url,
             "source_type": "newsapi",
-            "title": "Pipeline Integration Test Article",
+            "title": "IBM Quantum Computing Breakthrough",
+            "raw_content": raw_content,
             "published_at": datetime.now(tz=UTC).isoformat(),
         },
         headers=_internal_headers(),
     )
-    assert submit_resp.status_code == 202
-    doc_id = submit_resp.json().get("doc_id")
-    assert doc_id is not None
+    assert submit_resp.status_code == 202, f"S4 submit failed: {submit_resp.text}"
+    data = submit_resp.json()
+    assert data["status"] == "accepted", f"Expected accepted, got: {data['status']}"
+    s4_doc_id = data["doc_id"]
+    assert uuid.UUID(s4_doc_id)
 
-    # Poll S5 for the document to arrive (max 60 seconds)
-    from httpx import AsyncClient as _AsyncClient
+    # — Step 2: Verify S4 wrote to DB (article_fetch_log + outbox_events) ————
 
-    async with _AsyncClient(base_url=_S5_BASE_URL, timeout=10.0) as probe:
-        deadline = time.monotonic() + 60.0
+    s4_engine = create_async_engine(_S4_DB_URL, echo=False)
+    s4_factory = async_sessionmaker(s4_engine, expire_on_commit=False)
+
+    try:
+        async with s4_factory() as s4_session:
+            # article_fetch_log should exist (written atomically with outbox)
+            # Note: for raw_content, url = "manual://<ULID>" and url_hash = sha256(url).
+            # We look by aggregate_id (doc_id) instead of url_hash.
+            outbox_row = await s4_session.execute(
+                text(
+                    "SELECT status, event_type FROM outbox_events "
+                    "WHERE aggregate_id = :doc_id::uuid AND event_type = 'content.article.raw.v1' "
+                    "LIMIT 1"
+                ),
+                {"doc_id": s4_doc_id},
+            )
+            s4_outbox = outbox_row.fetchone()
+            assert s4_outbox is not None, (
+                f"S4 outbox_events row not found for doc_id={s4_doc_id}. "
+                "The submit use case should write outbox atomically."
+            )
+            assert s4_outbox.event_type == "content.article.raw.v1"
+    finally:
+        await s4_engine.dispose()
+
+    # — Step 3: Poll S5 until document appears ————————————————————————————————
+
+    s5_engine = create_async_engine(_S5_DB_URL, echo=False)
+    s5_factory = async_sessionmaker(s5_engine, expire_on_commit=False)
+
+    doc_row = None
+    try:
+        deadline = time.monotonic() + 90.0
         while time.monotonic() < deadline:
-            await asyncio.sleep(2.0)
-            check_resp = await probe.get("/admin/dlq", headers=_s5_admin_headers())
-            if check_resp.status_code == 200:
-                # The DLQ being accessible confirms S5 is processing
-                # In a full stack, we'd check the docs table directly
+            await asyncio.sleep(3.0)
+            async with s5_factory() as s5_session:
+                result = await s5_session.execute(
+                    text(
+                        "SELECT doc_id, content_hash, source_type, "
+                        "minio_silver_key, word_count, dedup_result, status "
+                        "FROM documents WHERE content_hash = :hash"
+                    ),
+                    {"hash": content_hash},
+                )
+                doc_row = result.fetchone()
+            if doc_row is not None:
                 break
         else:
-            pytest.skip("Pipeline did not complete within 60s — infrastructure may not be fully running")
+            pytest.skip(
+                f"S5 did not store the document within 90s (content_hash={content_hash[:16]}...). "
+                "Check that Kafka consumers (content-store-consumer) and "
+                "S4 dispatcher (content-ingestion-dispatcher) are running."
+            )
+    finally:
+        await s5_engine.dispose()
+
+    # — Step 4: Assert S5 document quality ————————————————————————————————————
+
+    assert doc_row is not None
+    assert doc_row.content_hash == content_hash
+    assert doc_row.source_type == "newsapi"
+    assert doc_row.status == "stored"
+    assert doc_row.dedup_result == "unique"
+    assert doc_row.minio_silver_key is not None, "S5 did not write to MinIO silver"
+    assert doc_row.minio_silver_key.startswith(
+        "content-store/canonical/"
+    ), f"Unexpected silver key: {doc_row.minio_silver_key!r}"
+    assert (
+        doc_row.word_count is not None and doc_row.word_count > 0
+    ), f"word_count={doc_row.word_count} — text cleaning/extraction may have failed"

@@ -9,7 +9,19 @@ import uuid
 from datetime import datetime
 from typing import ClassVar
 
-from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -144,3 +156,53 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# email_preferences
+# ---------------------------------------------------------------------------
+
+
+class EmailPreferenceModel(Base):
+    __tablename__ = "email_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    weekly_digest_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    send_day_of_week: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="6")
+    send_hour_utc: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="8")
+    email_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_digest_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("send_day_of_week BETWEEN 0 AND 6", name="ck_email_prefs_day"),
+        CheckConstraint("send_hour_utc BETWEEN 0 AND 23", name="ck_email_prefs_hour"),
+        Index("idx_email_prefs_scheduler", "tenant_id", "weekly_digest_enabled", "send_day_of_week"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# email_log
+# ---------------------------------------------------------------------------
+
+
+class EmailLogModel(Base):
+    __tablename__ = "email_log"
+
+    log_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    email_type: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_email_log_user_sent_at", "user_id", "sent_at"),
+        Index("idx_email_log_status_sent_at", "status", "sent_at"),
+    )

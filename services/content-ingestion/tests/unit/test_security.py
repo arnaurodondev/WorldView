@@ -80,13 +80,14 @@ class TestConfigDictConstraint:
                 config={"nested": {"bad": "value"}},  # type: ignore[dict-item]
             )
 
-    def test_list_value_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            SourceCreateRequest(
-                name="test",
-                source_type="eodhd",
-                config={"items": [1, 2, 3]},  # type: ignore[dict-item]
-            )
+    def test_list_of_primitives_allowed(self) -> None:
+        """Lists of str/int/bool are allowed in config (e.g. symbols=['AAPL', 'MSFT'])."""
+        req = SourceCreateRequest(
+            name="test",
+            source_type="eodhd",
+            config={"symbols": ["AAPL", "MSFT"], "counts": [1, 2, 3]},
+        )
+        assert req.config["symbols"] == ["AAPL", "MSFT"]
 
     def test_update_config_same_constraint(self) -> None:
         req = SourceUpdateRequest(config={"api_key": "xyz"})

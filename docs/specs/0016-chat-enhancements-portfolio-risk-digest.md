@@ -49,7 +49,7 @@ Portfolio users have no proactive intelligence delivery. They must actively quer
 | F12 | Email uses exhaustive EMAIL_DEEP_BRIEF prompt mode — no truncation, assume no follow-up |
 | F13 | Email provider: Resend default, provider-agnostic interface — switch via env var with no code changes |
 | F14 | Email preferences per user: enabled/disabled, preferred day (0=Mon…6=Sun), preferred hour UTC |
-| F15 | S10 runs weekly cron (Saturday night UTC, delivering Sunday morning) — processes all enabled users |
+| F15 | S10 runs a daily cron at each UTC hour, querying `email_preferences WHERE send_day_of_week = today AND send_hour_utc = current_hour` — sends digest only to users whose day+hour preference matches |
 | F16 | Internal S8 briefing endpoint for S10 to request AI-narrative generation |
 | F17 | HTML email template with clear sections (risk, positions, news, market summary) — style placeholder for v1, to be aligned with frontend design system in later PRDs |
 
@@ -109,14 +109,13 @@ Portfolio users have no proactive intelligence delivery. They must actively quer
   | user_id | UUID | UUIDv7 |
   | tenant_id | UUID | Tenant scope |
   | email_address | string | Registration email — never null (required at signup) |
-  | username | string | Display name |
   | created_at | string | ISO-8601 UTC |
 - **Error responses**: 404 (user not found), 401 (missing/invalid token)
 - **Rate limit**: 500 req/min (called once per user per digest run, low volume)
 
 #### POST /internal/v1/briefings (S8 — new)
 - **Purpose**: S10 requests AI narrative for portfolio risk email digest
-- **Auth**: X-Internal-Token (S8 `RAG_CHAT_INTERNAL_SERVICE_TOKEN` env var)
+- **Auth**: X-Internal-Token (S8 validates against `RAG_CHAT_INTERNAL_SERVICE_TOKEN`; S10 sends the value of its `ALERT_S8_INTERNAL_TOKEN` env var — both must match)
 - **Request body**:
   | Field | Type | Required | Default | Validation | Description |
   |-------|------|----------|---------|------------|-------------|
@@ -299,7 +298,7 @@ No new pages required.
 
 #### Weekly Email Digest Flow
 ```
-S10 EmailScheduler (weekly cron)
+S10 EmailScheduler (daily cron — fires when send_day_of_week=today AND send_hour_utc=now)
   → Query email_preferences WHERE weekly_digest_enabled=true AND send_day_of_week=today
   → For each user:
       1. GET /internal/v1/portfolio/context from S1 (holdings, watchlist, alerts)

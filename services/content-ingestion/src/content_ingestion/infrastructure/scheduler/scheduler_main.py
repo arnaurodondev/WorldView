@@ -43,7 +43,7 @@ class SchedulerProcess:
         self._tick_interval = tick_interval_seconds or settings.scheduler_tick_interval_seconds
         self._max_tasks_per_tick = max_tasks_per_tick or settings.scheduler_max_tasks_per_tick
         self._stop_event = asyncio.Event()
-        _, self._write_factory, self._read_factory = _build_factories(settings)
+        _, _, self._write_factory, self._read_factory = _build_factories(settings)
 
     def stop(self) -> None:
         """Signal the scheduler loop to stop after the current tick."""
@@ -60,7 +60,7 @@ class SchedulerProcess:
             await self._tick()
             with suppress(TimeoutError):
                 await asyncio.wait_for(
-                    asyncio.shield(self._stop_event.wait()),
+                    self._stop_event.wait(),
                     timeout=self._tick_interval,
                 )
 

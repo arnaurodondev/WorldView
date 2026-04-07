@@ -83,7 +83,7 @@ class WorkerProcess:
         self._task_timeout = settings.worker_task_timeout_seconds
 
         # Build own infrastructure (one instance per worker process — R22)
-        _, self._write_factory, self._read_factory = _build_factories(settings)
+        _, _, self._write_factory, self._read_factory = _build_factories(settings)
         self._valkey = create_valkey_client_from_url(settings.valkey_url)
 
         storage_settings = StorageSettings(
@@ -151,20 +151,20 @@ class WorkerProcess:
     async def _execute_with_semaphore(self, task: ContentIngestionTask) -> None:
         """Acquire the concurrency semaphore then execute the task.
 
-        A timeout guards against indefinite blocking when all semaphore
-        permits are held.
+        Semaphore is acquired first so that the timeout only measures actual
+        execution time, not time spent waiting for a concurrency slot.
         """
-        try:
-            async with asyncio.timeout(self._task_timeout):
-                async with self._semaphore:
+        async with self._semaphore:
+            try:
+                async with asyncio.timeout(self._task_timeout):
                     await self._execute_task(task)
-        except TimeoutError:
-            logger.warning(
-                "worker_task_timeout",
-                task_id=str(task.id),
-                worker_id=self._worker_id,
-                timeout=self._task_timeout,
-            )
+            except TimeoutError:
+                logger.warning(
+                    "worker_task_timeout",
+                    task_id=str(task.id),
+                    worker_id=self._worker_id,
+                    timeout=self._task_timeout,
+                )
 
     async def _execute_task(self, task: ContentIngestionTask) -> None:
         """Execute a single claimed task through the pipeline.

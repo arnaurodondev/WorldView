@@ -55,8 +55,8 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Databases — R23 dual factories
-    nlp_engine, nlp_sf, _nlp_read_sf = _build_nlp_factories(settings)
-    intel_engine, intel_sf, _intel_read_sf = _build_intelligence_factories(settings)
+    nlp_engine, _nlp_read_engine, nlp_sf, _nlp_read_sf = _build_nlp_factories(settings)
+    intel_engine, _intel_read_engine, intel_sf, _intel_read_sf = _build_intelligence_factories(settings)
 
     # Valkey + WatchlistCache
     valkey = create_valkey_client_from_url(settings.valkey_url)

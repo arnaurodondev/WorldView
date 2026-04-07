@@ -27,6 +27,21 @@ PRD reference: `$ARGUMENTS`
 9. Read `docs/BUG_PATTERNS.md` for patterns to guard against
 10. Read existing service source code (especially mature services like portfolio, market-ingestion, market-data) to understand implementation patterns the agent should follow
 
+## Phase 0.5 — PRD Pre-Flight Gate (Mandatory, Blocking)
+
+Before decomposing a single wave, explicitly verify the PRD is ready to plan:
+
+| Check | How to verify | Result |
+|-------|--------------|--------|
+| No unresolved BLOCKING open questions | Read §14 of the PRD; any OQ without "~~Resolved~~" or classified BLOCKING is a blocker | PASS/FAIL |
+| No unverified external API fields | Check if §2.7 Reality Check was done; if PRD was written before this enhancement, manually verify any external fields referenced | PASS/FAIL |
+| No active cross-plan conflicts | Read TRACKING.md; no other `in-progress` plan modifies the same service's tables/topics/entities | PASS/FAIL |
+| PRD recency check | If PRD `Created` date is > 14 days ago AND the architecture has changed since (check git log), flag for `/revise-prd` before proceeding | PASS/WARN |
+| Architecture compliance | No RULES.md violations visible in the PRD design (cross-check §6 against RULES.md) | PASS/FAIL |
+
+**If any row is FAIL**: Present to the user and require resolution before generating waves.
+**If WARN (stale PRD)**: Ask the user: "This PRD is X days old. Run `/revise-prd` first, or proceed with awareness?"
+
 ## Phase 1 — Plan Decomposition Strategy
 
 ### 1.1 Identify Natural Boundaries
@@ -47,6 +62,18 @@ Determine the execution order of plans:
 - Cross-cutting plans (observability, security hardening) can run in parallel with service plans
 
 Present the plan dependency graph to the user for approval.
+
+### 1.3 Codebase State Verification (Mandatory)
+
+For each entity, table, topic, or endpoint referenced in the PRD, verify the current state of the codebase:
+
+| PRD Reference | Type | Expected State | Actual State (read code) | Delta |
+|--------------|------|---------------|--------------------------|-------|
+| `entity_embedding_state` | DB table | exists in S7 | ? | none / needs migration |
+| `market.signal.v1` | Kafka topic | new | ? | create in Wave 1 |
+| ... | ... | ... | ... | ... |
+
+**Rule**: If the actual state differs from the PRD's assumed state (e.g., table already exists with different columns, topic already exists with different schema), flag the delta and resolve before writing wave tasks. This prevents tasks that silently assume a stale baseline.
 
 ## Phase 2 — Wave Decomposition (Per Plan)
 
@@ -172,8 +199,11 @@ Each wave must include:
 - [ ] Documentation updated (if API/events/schema changed)
 - [ ] No architecture violations (domain has no infra imports)
 
-#### Regression Guardrails
-- BP-XXX: <specific pattern to watch for and how it applies to this wave>
+#### Regression Guardrails (Mandatory — must not be empty)
+Scan `docs/BUG_PATTERNS.md` and list every pattern applicable to this wave's changes:
+- BP-XXX: <specific pattern, how it applies, and what the agent must do to avoid it>
+
+At minimum one guardrail per wave. Waves touching DB: check BP-007, BP-019, BP-032. Waves touching Kafka: check BP-001, BP-017, BP-024. Waves touching external I/O: check BP-025, BP-026, BP-027.
 ```
 
 ## Phase 3 — Cross-Cutting Concerns

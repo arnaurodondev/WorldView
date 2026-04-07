@@ -97,7 +97,7 @@ The existing endpoint is enhanced in-place. Request and response schemas are ext
 | Field | Type | Required | Default | Validation | Description |
 |-------|------|----------|---------|------------|-------------|
 | filters | `ScreenFilterRequest[]` | yes | — | min_length=1, max_length=20 | Metric filters |
-| limit | int | no | 50 | 1–200 | Result page size |
+| limit | int | no | 50 | 1–200 | Result page size. **Breaking change**: current code allows `le=1000` with default 100; this tightens the cap to 200 and changes the default to 50. Coordinate with any existing API consumers before deploying. |
 | offset | int | no | 0 | 0–5000 | Pagination offset |
 | sort_by | string \| null | no | null | one of metric names, `ticker`, `name`, or null (= no sort guarantee) | Sort key |
 | sort_order | `"asc"` \| `"desc"` | no | `"asc"` | — | Sort direction |
@@ -125,6 +125,7 @@ The existing endpoint is enhanced in-place. Request and response schemas are ext
 - **Error responses**: 400 (no filters), 422 (invalid metric name, invalid sort_by value)
 - **Auth**: none (public)
 - **Rate limit**: inherited from S9 tenant rate limit
+- **Session**: read-replica (R27) — use `ReadUoWDep` in the API route; this endpoint is purely read-only
 
 #### NEW — `GET /api/v1/fundamentals/screen/fields` (S3)
 
@@ -162,7 +163,7 @@ Returns metadata for all screenable fields.
 | observed_max | float \| null | yes | Max value in DB (numeric only); null if no data |
 | null_fraction | float | no | Fraction of instruments with null value (0–1) |
 
-The field metadata is **static + pre-computed**. A background job refreshes it into Valkey (key `s3:screen:fields:v1`) every 6 hours. The endpoint reads from Valkey; if cache miss, falls back to a synchronous DB query (slow path, <2s).
+The field metadata is **static + pre-computed**. A background job refreshes it into Valkey (key `s3:screen:fields:v1`) every 6 hours. The endpoint reads from Valkey; if cache miss, falls back to a synchronous DB query (slow path, <2s). Fallback DB query uses read-replica session (R27).
 
 #### NEW — `POST /api/v1/entities/similar` (S7)
 
@@ -223,6 +224,7 @@ Find entities similar to a given entity by embedding ANN.
 | final_score | float | no | `min(ann_similarity_score + (0.15 if has_competes_with else 0.0), 1.0)` |
 | has_competes_with_relation | bool | no | True if `competes_with` relation exists (confidence ≥ 0.3) |
 
+- **Session**: read-replica (R27) — use read-only session in the API route; this endpoint is purely read-only
 - **Error responses**:
   - 404: entity not found
   - 422: entity has no `fundamentals_ohlcv` embedding (e.g., entity_type is not `financial_instrument`)
@@ -238,7 +240,9 @@ No new Kafka topics or events. The `entity.dirtied.v1` compacted topic (already 
 
 ### §6.4 Database Changes
 
-#### `intelligence-migrations` — Migration 0002 (partial, cleanup only)
+#### `intelligence-migrations` — Migration 0003 (partial, cleanup only)
+
+> **Note**: Migration 0002 already exists (`0002_enhance_events_and_relations.py` — events table enhancements, 2026-04-05). This cleanup migration is numbered **0003**.
 
 This migration removes orphan `fundamentals_ohlcv` rows from `entity_embedding_state` for non-`financial_instrument` entities. It is a **data-only migration** — no DDL change.
 
@@ -467,14 +471,27 @@ def get_view_types_for_entity_type(entity_type: str) -> tuple[str, ...]:
 
 `ensure_rows_exist(entity_id, entity_type)` — new signature requires `entity_type`. All callers updated:
 - `instrument_consumer_main.py` — has access to entity_type from the `market.instrument.created` event
-- `entity_consumer.py` — has access to entity_type from the `entity.canonical.created.v1` event
 - `provisional_enrichment.py` — has entity_type from canonical profile
+
+> **Note**: `entity_consumer.py` does NOT call `ensure_rows_exist()` (confirmed by codebase audit — it only clears provisional flags on `relation_evidence_raw`). No change needed there.
 
 ---
 
 #### S7 — Fix: `DefinitionRefreshWorker` for non-company entities
 
 Current behaviour: `source_text` for non-company entities' `definition` view is populated by `provisional_enrichment.py` which uses Qwen via `FallbackChainClient`. This gives low-quality descriptions for persons, countries, organizations (Qwen does not have world knowledge for arbitrary entities).
+
+**Updated constructor** (adds `description_client` parameter):
+```python
+def __init__(
+    self,
+    session_factory: async_sessionmaker[AsyncSession],
+    llm_client: FallbackChainClient,                    # embedding (unchanged)
+    description_client: EntityDescriptionClient,         # NEW — text generation for non-company entities
+) -> None:
+```
+
+Wave A-4 must update the scheduler wiring (`scheduler.py`) to inject `GeminiDescriptionAdapter` (or `NullDescriptionAdapter` when `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER=none`).
 
 **Enhanced behaviour** (when `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER != "none"`):
 
@@ -502,14 +519,18 @@ The generated description becomes `source_text`; the SHA-256 hash prevents re-ge
 
 New proxy routes to add to the S9 gateway:
 
-| S9 Route | Upstream | Auth Required |
-|----------|----------|---------------|
-| `POST /api/v1/fundamentals/screen` | S3 | X-Tenant-ID |
-| `GET /api/v1/fundamentals/screen/fields` | S3 | none |
-| `GET /api/v1/fundamentals/timeseries` | S3 | X-Tenant-ID |
-| `POST /api/v1/entities/similar` | S7 | X-Tenant-ID |
+| S9 Route | Upstream | Auth Required | Status |
+|----------|----------|---------------|--------|
+| `POST /api/v1/fundamentals/screen` | S3 | X-Tenant-ID | update existing proxy handler |
+| `GET /api/v1/fundamentals/screen/fields` | S3 | none | new |
+| `GET /api/v1/fundamentals/timeseries` | S3 | X-Tenant-ID | **new** — not currently proxied through S9 |
+| `POST /api/v1/entities/similar` | S7 | X-Tenant-ID | new |
 
-Note: `POST /api/v1/fundamentals/screen` was already proxied; update to handle enhanced request/response.
+**Implementation pattern**: S9 does NOT use generic reverse-proxy routes. Follow the existing pattern:
+1. Add typed handler methods in `services/api-gateway/src/api_gateway/clients.py` (using the appropriate `ServiceClients.market_data` or `ServiceClients.knowledge_graph` `httpx.AsyncClient`)
+2. Add route handlers in `services/api-gateway/src/api_gateway/routes/proxy.py` that call those client methods
+
+Wave C-1 covers all four routes, including the `GET /api/v1/fundamentals/timeseries` proxy which is new work not previously routed through S9.
 
 ---
 
@@ -555,8 +576,9 @@ Note: `POST /api/v1/fundamentals/screen` was already proxied; update to handle e
 ```
 User filters form → POST /api/v1/fundamentals/screen (S9) → POST /api/v1/fundamentals/screen (S3)
   → ScreenInstrumentsUseCase.execute(filters, sort_by, sort_order, limit, offset)
-  → fundamental_metrics_query.screen() [SQL: SELECT fm.*, i.ticker, i.name, i.exchange,
+  → fundamental_metrics_query.screen() [SQL: SELECT fm.*, i.symbol AS ticker, i.name, i.exchange,
      f_sector.value_text as sector FROM fundamental_metrics fm JOIN instruments i ...]
+  -- NOTE: instruments table column is `symbol`; aliased to `ticker` in the API response
   → ScreenResponse {results[], count, total}
   → S9 returns JSON → Frontend renders table
 ```
@@ -701,13 +723,13 @@ DefinitionRefreshWorker.run() [APScheduler, every 90 days per entity]
 |------|---------------|-----------------|
 | `test_screener_with_real_db` | market_data_db with seed data | Metric filter returns correct instruments; total count correct |
 | `test_similar_entities_ann` | intelligence_db + pgvector | ANN query returns nearest neighbours in correct order |
-| `test_cleanup_migration` | intelligence_db | Migration 0002 deletes orphan fundamentals_ohlcv rows; company rows preserved |
+| `test_cleanup_migration` | intelligence_db | Migration 0003 deletes orphan fundamentals_ohlcv rows; company rows preserved |
 
 ---
 
 ## §12 Migration Plan
 
-1. Run `intelligence-migrations` migration 0002 (data cleanup, no schema change) — safe to run on live DB
+1. Run `intelligence-migrations` migration 0003 (data cleanup, no schema change) — safe to run on live DB
 2. Deploy updated S7 with `ensure_rows_exist()` fix — new entities correctly provisioned from this point
 3. Deploy updated S3 with enhanced screener response — backwards compatible (new fields added, none removed)
 4. Deploy updated S7 with similar entities endpoint — new endpoint, no existing behaviour changed
@@ -748,7 +770,7 @@ DefinitionRefreshWorker.run() [APScheduler, every 90 days per entity]
 
 | Wave | Description | Services | Effort |
 |------|-------------|----------|--------|
-| A-1 | intelligence-migrations 0002 cleanup migration | intelligence-migrations | 2h |
+| A-1 | intelligence-migrations 0003 cleanup migration | intelligence-migrations | 2h |
 | A-2 | S7: Fix `ensure_rows_exist()` + entity type awareness | S7 | 3h |
 | A-3 | `libs/ml-clients`: `EntityDescriptionClient` Protocol + adapters | libs/ml-clients | 4h |
 | A-4 | S7: `DefinitionRefreshWorker` non-company description enhancement | S7 | 3h |

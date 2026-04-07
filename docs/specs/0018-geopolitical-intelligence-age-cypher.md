@@ -63,7 +63,7 @@ S7 uses SQL recursive CTEs for graph traversal. For path-finding between two ent
 | F-005 | New S6 Block 13E enhancement: when NLP pipeline detects geopolitical events in enriched articles, produces `temporal_events` records via a new Kafka event `intelligence.temporal_event.v1` |
 | F-006 | EODHD `FundamentalsConsumer` (S7 Worker 13D-5) extracts from fundamentals payload: `General.FullTimeEmployees` (entity metadata), `Highlights.RevenueTTM` (entity context), `SharesStats.PercentInsiders` + `PercentInstitutions` (ownership signals stored in entity metadata) |
 | F-007 | New relation types added to `relation_type_registry` seed data: `has_executive`, `revenue_from_country`, `operates_in_country` |
-| F-008 | AGE extension enabled in `intelligence_db` via migration 0003; graph schema created: vertex labels `Entity`, `TemporalEvent`; edge labels for all relation types + event exposures |
+| F-008 | AGE extension enabled in `intelligence_db` via migration 0004; graph schema created: vertex labels `Entity`, `TemporalEvent`; edge labels for all relation types + event exposures |
 | F-009 | New S7 Worker 13F: AGE shadow sync — periodic (every 15 min) watermark-based sync from relational tables to AGE graph |
 | F-010 | New S7 endpoints: `POST /api/v1/graph/cypher/path` (shortest path, max 5 hops) and `POST /api/v1/graph/cypher/neighborhood` (egocentric Cypher neighborhood) |
 | F-011 | S8 RELATIONSHIP intent uses `POST /api/v1/graph/cypher/path` when two entities are resolved and `KNOWLEDGE_GRAPH_CYPHER_ENABLED=true` |
@@ -106,7 +106,7 @@ S7 uses SQL recursive CTEs for graph traversal. For path-finding between two ent
 
 | Service | Changes |
 |---------|---------|
-| `intelligence-migrations` | Migration 0003: AGE extension + schema; Migration 0002-patch: cleanup (already in PRD-0017 scope) |
+| `intelligence-migrations` | Migration 0004: AGE extension + schema; Migration 0003: cleanup orphan embeddings (PRD-0017 scope — must run first) |
 | S6 NLP Pipeline | New Block 13E enhancement: temporal event detection → `intelligence.temporal_event.v1` Kafka event |
 | S7 Knowledge Graph | New Worker 13F (AGE sync); enhanced `FundamentalsConsumer` (metadata enrichment); new Workers 13D-6 (Economic Events), 13D-7 (Macro Indicators), 13D-8 (Insider Transactions); new `TemporalEventRepository`; new relation type constants; new Cypher endpoints |
 | S8 RAG/Chat | RELATIONSHIP intent uses Cypher path endpoint when available; adds temporal event context to SIGNAL_INTEL retrieval |
@@ -262,7 +262,7 @@ Get egocentric neighborhood using Cypher (richer than existing SQL-based `/entit
 
 ### §6.4 Database Changes
 
-#### `intelligence-migrations` — Migration 0003: AGE Extension + Schema
+#### `intelligence-migrations` — Migration 0004: AGE Extension + Schema
 
 ```sql
 -- Step 1: Enable AGE extension
@@ -361,7 +361,7 @@ SELECT create_elabel('worldview_graph', 'EVENT_EXPOSES');  -- TemporalEvent → 
 
 #### NEW relation types in `relation_type_registry` seed
 
-3 new rows to be added via migration 0003:
+3 new rows to be added via migration 0004:
 
 | canonical_type | decay_class | semantic_mode | description |
 |----------------|-------------|---------------|-------------|
@@ -1034,7 +1034,7 @@ S8 RELATIONSHIP intent → POST /api/v1/graph/cypher/path (S7)
 
 **Order** (all non-destructive; zero downtime):
 
-1. Run `intelligence-migrations` migration 0003 (AGE extension + schema + new tables + new relation type seeds)
+1. Run `intelligence-migrations` migration 0004 (AGE extension + schema + new tables + new relation type seeds)
 2. Deploy updated S7 with `FundamentalsConsumer` enhancements — starts enriching new fundamentals payloads; existing companies enriched on next fundamentals fetch cycle
 3. Deploy updated S7 with `TemporalEventConsumer` — starts consuming new temporal events from S6
 4. Deploy updated S6 with Block 13E temporal event detection
@@ -1086,7 +1086,7 @@ S8 RELATIONSHIP intent → POST /api/v1/graph/cypher/path (S7)
 
 | Wave | Description | Services | Effort |
 |------|-------------|----------|--------|
-| A-1 | intelligence-migrations 0003: AGE extension + temporal_events + entity_event_exposures tables + new relation type seeds | intelligence-migrations | 4h |
+| A-1 | intelligence-migrations 0004: AGE extension + temporal_events + entity_event_exposures tables + new relation type seeds | intelligence-migrations | 4h |
 | A-2 | S7: `TemporalEvent` + `EntityEventExposure` domain models + `TemporalEventRepository` | S7 | 3h |
 | A-3 | `libs/contracts`: `intelligence.temporal_event.v1` Avro schema | libs/contracts | 2h |
 | A-4 | S7: `TemporalEventConsumer` (new Kafka consumer, `intelligence.temporal_event.v1`) | S7 | 4h |

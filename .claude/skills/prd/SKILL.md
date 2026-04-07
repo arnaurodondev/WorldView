@@ -33,6 +33,22 @@ Before engaging the user, read these files silently to build your understanding:
 8. Check existing specs: `docs/specs/` — avoid duplicating or contradicting existing PRDs
 9. Check existing ADRs: `docs/architecture/decisions/` — respect existing architectural decisions
 
+## Phase 0.5 — Cross-PRD Contradiction Check (Mandatory, Blocking)
+
+Before starting Phase 1, read `docs/plans/TRACKING.md` and identify all active/draft PRDs.
+For each active/draft PRD that touches overlapping domains, check:
+
+| Conflict Type | What to Check |
+|--------------|---------------|
+| **Kafka topic conflict** | Same topic claimed by two PRDs with different schemas or different producers/consumers |
+| **DB table conflict** | Same table modified by two concurrent PRDs without a dependency relationship |
+| **API path conflict** | Same endpoint path defined with different fields or semantics |
+| **Entity conflict** | Same domain entity extended differently by two PRDs |
+| **Architectural decision conflict** | This PRD contradicts a pattern already established in a recently-merged PRD |
+
+**If conflicts found**: Present them to the user before proceeding. Resolve each conflict explicitly — update scope, add dependency, or split into separate PRDs.
+**If no conflicts**: Proceed silently.
+
 
 ## Phase 1 — Requirements Discovery (Interactive)
 
@@ -58,6 +74,15 @@ For each requirement the user mentions:
 - Ask about backward compatibility constraints
 - Identify constraints from RULES.md that apply (outbox pattern, UUIDv7, UTC, etc.)
 - Ask: "What should this feature explicitly NOT do?"
+
+### 1.4 Open Question Severity Classification
+
+As open questions arise during discussion, classify each immediately:
+- **BLOCKING**: The design cannot be finalised or implemented without resolving this. (Example: "Does EODHD's API actually return field X?") — **must be resolved before PRD is written**
+- **DEFERRED**: Nice-to-have clarity; implementation can proceed safely with a documented assumption. (Example: "Should the email subject line be configurable?")
+
+**A PRD must not be written with any unresolved BLOCKING open question.**
+List all open questions in §14 with their classification.
 
 **Output after Phase 1**: Present a structured Requirements Summary and ask the user to confirm before proceeding.
 
@@ -104,7 +129,50 @@ Cross-reference with `BUG_PATTERNS.md`:
 - For each multi-step operation: what happens when step N fails after steps 1..N-1 succeeded?
 - Recovery strategy for each failure mode
 
+### 2.7 External API Reality Check (Mandatory when PRD references any external provider)
+
+For every external API field, endpoint, model ID, or capability this PRD references:
+
+| Assertion | Provider | Field/Endpoint | Verified? | Source |
+|-----------|----------|---------------|-----------|--------|
+| `EODHD /fundamentals` returns `General.Officers` | EODHD | General.Officers | ? | ? |
+| ... | ... | ... | ... | ... |
+
+**Rule**: Every row must be marked `YES` with a documentation reference or user confirmation before the PRD is written. If a field cannot be verified, mark it as `BLOCKING OQ` and do not design around it. (BP-100: PRDs that assume external API fields exist without verification produce dead implementation paths.)
+
+### 2.8 Architecture Compliance Gate (Mandatory, Blocking)
+
+Before writing the PRD, produce an explicit compliance table for every applicable RULES.md rule:
+
+| Rule | Applies? | Design Decision | Compliant? |
+|------|----------|----------------|------------|
+| R5 — Avro forward compat | yes/no | ... | PASS/FAIL |
+| R7 — No cross-service DB | yes/no | ... | PASS/FAIL |
+| R8 — No dual writes | yes/no | ... | PASS/FAIL |
+| R10 — UUIDv7 | yes/no | ... | PASS/FAIL |
+| R11 — UTC timestamps | yes/no | ... | PASS/FAIL |
+| R25 — API layer isolation | yes/no | ... | PASS/FAIL |
+| R27 — ReadOnlyUoW for reads | yes/no | ... | PASS/FAIL |
+
+**Block PRD writing** if any applicable rule is marked FAIL. Fix the design first.
+
 **Output after Phase 2**: Present the full Technical Design and discuss with the user. Iterate until both agree. **Do not proceed until the user confirms every entity, every schema, every endpoint.**
+
+## Phase 2.9 — Completeness Gate (Mandatory, Blocking)
+
+Before writing any PRD section, verify:
+
+| Check | Requirement | Status |
+|-------|-------------|--------|
+| No BLOCKING open questions | All OQs classified BLOCKING are resolved (§1.4) | PASS/FAIL |
+| No architecture compliance failures | §2.8 compliance table has no FAIL rows | PASS/FAIL |
+| No unverified external API fields | §2.7 table has no unverified rows | PASS/FAIL |
+| No cross-PRD conflicts | §0.5 found no unresolved conflicts | PASS/FAIL |
+| Every entity has ≥1 test | §11 has at least one test per entity in §6.5 | PASS/FAIL |
+| Every endpoint has ≥1 error response | §6.2 lists error responses for each endpoint | PASS/FAIL |
+| Every Kafka event has a named consumer | §6.3 lists at least one consumer per event | PASS/FAIL |
+
+**Do not proceed to Phase 3 if any row is FAIL.**
 
 ## Phase 3 — PRD Output
 

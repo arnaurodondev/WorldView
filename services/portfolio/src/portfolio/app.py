@@ -79,11 +79,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
 
     # 4. Create DB session factories (R23 — write + read split)
-    engine, write_factory, read_factory = _build_factories(settings)
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
     app.state.session_factory = write_factory  # backward-compat alias
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.engine = engine
+    app.state.read_engine = read_engine
 
     # 5. Create Valkey client for watchlist reverse-index cache
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
@@ -114,8 +115,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Close Valkey client
     await valkey_client.close()
 
-    # Dispose engine
+    # Dispose engine(s) — read_engine only disposed separately if it is a distinct object
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     logger.info("portfolio_service_stopped", service=settings.service_name)  # type: ignore[no-any-return]
 
 

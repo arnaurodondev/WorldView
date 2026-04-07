@@ -245,8 +245,12 @@ class ValkeyLSHClient(LSHClientPort):
             key = _sorted_set_key(band_idx, bucket_hash, source_type)
 
             try:
-                await self._valkey._redis.zadd(key, {member: now})  # type: ignore[union-attr]
-                await self._valkey._redis.expire(key, ttl)  # type: ignore[union-attr]
+                # Use pipeline to make zadd+expire atomic — prevents immortal
+                # keys if the process crashes between the two commands.
+                async with self._valkey._redis.pipeline(transaction=False) as pipe:  # type: ignore[union-attr]
+                    pipe.zadd(key, {member: now})
+                    pipe.expire(key, ttl)
+                    await pipe.execute()
             except Exception:
                 logger.warning(
                     "lsh_index_failed",

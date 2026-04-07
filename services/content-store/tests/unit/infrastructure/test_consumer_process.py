@@ -215,12 +215,31 @@ class TestProcessMessage:
         msg2_value = {**_SAMPLE_VALUE, "event_id": "evt-002"}
         await consumer._handle_message(_make_mock_msg(msg2_value))
 
-        # Each message opens 2 sessions: 1 for is_duplicate check + 1 for UoW.
-        # 2 messages x 2 sessions = 4 total session_factory calls.
-        assert (
-            session_factory.call_count == 4
-        ), f"Expected 4 session_factory calls (2 per message), got {session_factory.call_count}"
-        assert len(sessions) == 4
+        # Design intent (F-QA-011): ArticleConsumer opens exactly 2 sessions per message.
+        #
+        #   Session 1 (is_duplicate check): BaseKafkaConsumer._handle_message calls
+        #   is_duplicate() BEFORE get_unit_of_work(). Since _current_uow is always None
+        #   at that point (reset at _handle_message entry), is_duplicate falls back to a
+        #   fresh standalone session via session_factory().
+        #
+        #   Session 2 (UoW): get_unit_of_work() creates a new _SessionUnitOfWork which
+        #   opens its own session_factory() call for the DB write phase.
+        #
+        # This is intentional — the duplicate check is deliberately separated from the
+        # write transaction to avoid holding a write-capable session during the pre-check.
+        # The trade-off is 2 DB connections per message instead of 1.
+        #
+        # If this assertion fails with a count != 4, investigate:
+        #   - Count < 4: is_duplicate or UoW session was not opened for some messages
+        #   - Count > 4: an extra session is being leaked (pool exhaustion risk)
+        _sessions_per_msg = 2
+        _num_msgs = 2
+        assert session_factory.call_count == _sessions_per_msg * _num_msgs, (
+            f"Expected {_sessions_per_msg * _num_msgs} session_factory calls "
+            f"({_sessions_per_msg} per message x {_num_msgs} messages), "
+            f"got {session_factory.call_count}"
+        )
+        assert len(sessions) == _sessions_per_msg * _num_msgs
         # Verify session isolation: no two messages share the same UoW session
         assert sessions[0] is not sessions[2]  # UoW sessions for msg1 vs msg2
 

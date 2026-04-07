@@ -44,12 +44,12 @@ async def main() -> None:
         log.info("shutdown_signal_received", signal=sig)
         stop_event.set()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Use dual factory but only pass write_factory to dispatcher (R22, R23)
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
     dispatcher = ContentIngestionOutboxDispatcher(settings, write_factory)
 
     try:
@@ -66,6 +66,8 @@ async def main() -> None:
         log.info("dispatcher_stopped")
     finally:
         await _engine.dispose()
+        if _read_engine is not _engine:
+            await _read_engine.dispose()
 
 
 if __name__ == "__main__":

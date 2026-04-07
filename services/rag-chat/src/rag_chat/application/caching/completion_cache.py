@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from uuid import UUID
 
-    import redis.asyncio as aioredis
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 _TTL_SECONDS = 86_400  # 24 hours
 
@@ -28,16 +28,16 @@ class CompletionCache:
     """Cache LLM completion responses to avoid redundant inference.
 
     Args:
-        valkey: An async Redis/Valkey client (``redis.asyncio.Redis``).
+        valkey: A :class:`~messaging.valkey.client.ValkeyClient` instance.
     """
 
-    def __init__(self, valkey: aioredis.Redis) -> None:  # type: ignore[type-arg]
+    def __init__(self, valkey: ValkeyClient) -> None:
         self._valkey = valkey
 
     async def get(self, message: str, thread_id: UUID | None) -> dict | None:  # type: ignore[type-arg]
         """Return the cached response dict or *None* on a cache miss."""
         key = _cache_key(message, thread_id)
-        data: bytes | None = await self._valkey.get(key)
+        data: str | None = await self._valkey.get(key)
         if data is None:
             return None
         return json.loads(data)  # type: ignore[no-any-return]
@@ -45,4 +45,4 @@ class CompletionCache:
     async def set(self, message: str, thread_id: UUID | None, response: dict) -> None:  # type: ignore[type-arg]
         """Store *response* under *message* + *thread_id* for 24 hours."""
         key = _cache_key(message, thread_id)
-        await self._valkey.setex(key, _TTL_SECONDS, json.dumps(response))
+        await self._valkey.set(key, json.dumps(response), ttl=_TTL_SECONDS)

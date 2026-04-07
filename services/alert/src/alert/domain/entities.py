@@ -149,3 +149,35 @@ class DeadLetterEntry:
     created_at: datetime = field(default_factory=utc_now)
     resolved_at: datetime | None = None
     resolution_note: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# EmailPreference — user email notification settings (PRD-0016 §6.5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EmailPreference:
+    """User preferences for the weekly portfolio risk email digest.
+
+    ``send_day_of_week`` is 0=Monday to 6=Sunday.
+    ``send_hour_utc`` is 0-23.
+    ``email_address`` is nullable - falls back to the user's account email
+    fetched from S1 ``GET /internal/v1/users/{user_id}`` at send time.
+    """
+
+    user_id: UUID = field(default_factory=new_uuid7)
+    tenant_id: UUID = field(default_factory=new_uuid7)
+    weekly_digest_enabled: bool = True
+    send_day_of_week: int = 6  # Sunday
+    send_hour_utc: int = 8
+    email_address: str | None = None
+    last_digest_sent_at: datetime | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.send_day_of_week <= 6):
+            raise ValueError(f"send_day_of_week must be 0-6, got {self.send_day_of_week}")
+        if not (0 <= self.send_hour_utc <= 23):
+            raise ValueError(f"send_hour_utc must be 0-23, got {self.send_hour_utc}")
