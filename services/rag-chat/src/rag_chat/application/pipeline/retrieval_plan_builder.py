@@ -113,6 +113,17 @@ _INTENT_TO_FLAGS: dict[QueryIntent, _PlanFlags] = {
         use_portfolio=True,
         use_cypher=False,
     ),
+    QueryIntent.GENERAL: _PlanFlags(
+        use_chunks=True,
+        use_relations=False,
+        use_graph=False,
+        use_claims=False,
+        use_events=False,
+        use_contradictions=False,
+        use_financial=False,
+        use_portfolio=False,
+        use_cypher=False,
+    ),
 }
 
 

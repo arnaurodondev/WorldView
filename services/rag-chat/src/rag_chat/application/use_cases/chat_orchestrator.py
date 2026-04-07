@@ -196,6 +196,7 @@ class ChatOrchestrator:
             rephrased_query=rephrased or validated_message,
             sub_questions=tuple(sub_questions),
             contradiction_block=contradiction_block,
+            intent=intent,
         )
 
         # Step 11: LLM streaming
