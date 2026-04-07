@@ -5,6 +5,7 @@ Chains all 13 pipeline steps for streaming (/chat/stream) and sync (/chat) paths
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -236,6 +237,16 @@ class ChatOrchestrator:
         except Exception as exc:
             log.error("chat_persistence_failed", error=str(exc))  # type: ignore[no-any-return]
 
+        # Cache the completion for future identical requests (best-effort)
+        try:
+            await self._cache.set(
+                request.message,
+                request.thread_id,
+                {"answer": answer, "citations": [c.__dict__ if hasattr(c, "__dict__") else c for c in citations]},
+            )
+        except Exception:
+            log.debug("completion_cache_write_failed")  # type: ignore[no-any-return]
+
         yield self._emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
 
     async def execute_sync(
@@ -251,8 +262,6 @@ class ChatOrchestrator:
 
         async for event in self.execute_streaming(request, uow):
             event_type = event.get("event", "")
-            import json
-
             data = json.loads(event.get("data", "{}"))
             if event_type == "token":
                 answer += data.get("text", "")

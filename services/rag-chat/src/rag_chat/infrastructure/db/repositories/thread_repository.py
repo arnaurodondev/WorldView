@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -102,12 +102,13 @@ class SqlAlchemyThreadRepository(ThreadRepository):
 
     # ── Repository methods ────────────────────────────────────────────────────
 
-    async def get(self, thread_id: UUID, user_id: UUID) -> ConversationThread | None:
-        """Return thread + messages; ownership enforced by user_id filter."""
+    async def get(self, thread_id: UUID, user_id: UUID, tenant_id: UUID | None = None) -> ConversationThread | None:
+        """Return thread + messages; ownership enforced by user_id and tenant_id filters."""
+        where_clauses = [ThreadModel.thread_id == thread_id, ThreadModel.user_id == user_id]
+        if tenant_id is not None:
+            where_clauses.append(ThreadModel.tenant_id == tenant_id)
         result = await self._session.execute(
-            select(ThreadModel)
-            .where(ThreadModel.thread_id == thread_id, ThreadModel.user_id == user_id)
-            .options(selectinload(ThreadModel.messages))
+            select(ThreadModel).where(*where_clauses).options(selectinload(ThreadModel.messages))
         )
         row = result.scalar_one_or_none()
         return self._thread_to_entity(row) if row else None
@@ -131,6 +132,7 @@ class SqlAlchemyThreadRepository(ThreadRepository):
         rows_result = await self._session.execute(
             select(ThreadModel)
             .where(*base_where)
+            .options(selectinload(ThreadModel.messages))
             .order_by(ThreadModel.last_msg_at.desc().nulls_last())
             .limit(limit)
             .offset(offset)
@@ -160,7 +162,9 @@ class SqlAlchemyThreadRepository(ThreadRepository):
 
     async def soft_delete(self, thread_id: UUID) -> datetime:
         """Set archived_at to UTC now; return the timestamp."""
-        now = datetime.now(tz=UTC)
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        now = utc_now()
         await self._session.execute(
             update(ThreadModel).where(ThreadModel.thread_id == thread_id).values(archived_at=now)
         )

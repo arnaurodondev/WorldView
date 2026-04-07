@@ -122,10 +122,10 @@ async def get_thread(
     auth: AuthContextDep,
 ) -> ThreadDetailResponse:
     """Fetch a single thread with its full message history."""
-    _, user_id = auth
+    tenant_id, user_id = auth
     uc = GetThreadUseCase()
     try:
-        thread = await uc.execute(uow, thread_id=thread_id, user_id=user_id)
+        thread = await uc.execute(uow, thread_id=thread_id, user_id=user_id, tenant_id=tenant_id)
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ThreadDetailResponse(
@@ -143,10 +143,10 @@ async def delete_thread(
     auth: AuthContextDep,
 ) -> DeleteThreadResponse:
     """Soft-delete a thread (sets archived_at; thread is no longer listed)."""
-    _, user_id = auth
+    tenant_id, user_id = auth
     uc = DeleteThreadUseCase()
     try:
-        archived_at = await uc.execute(uow, thread_id=thread_id, user_id=user_id)
+        archived_at = await uc.execute(uow, thread_id=thread_id, user_id=user_id, tenant_id=tenant_id)
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return DeleteThreadResponse(thread_id=thread_id, archived_at=archived_at)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse  # type: ignore[import-not-found]
 
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
+log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _get_orchestrator(request: Request) -> Any:
@@ -118,6 +120,7 @@ async def chat_stream(
         except ProviderUnavailableError as e:
             yield emitter.emit_error("PROVIDER_UNAVAILABLE", str(e))
         except Exception as e:
-            yield emitter.emit_error("INTERNAL_ERROR", str(e))
+            log.error("stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
+            yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
     return EventSourceResponse(event_generator())

@@ -29,8 +29,9 @@ class DeleteThreadUseCase:
         uow: RagUnitOfWork,
         thread_id: UUID,
         user_id: UUID,
+        tenant_id: UUID | None = None,
     ) -> datetime:
-        thread = await uow.threads.get(thread_id, user_id)
+        thread = await uow.threads.get(thread_id, user_id, tenant_id=tenant_id)
         if thread is None:
             raise ThreadNotFoundError(f"Thread {thread_id} not found")
 

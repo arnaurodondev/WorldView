@@ -16,8 +16,11 @@ class ThreadRepository(ABC):
     """Abstract interface for conversation thread persistence."""
 
     @abstractmethod
-    async def get(self, thread_id: UUID, user_id: UUID) -> ConversationThread | None:
-        """Return thread with messages, or None if not found / wrong owner."""
+    async def get(self, thread_id: UUID, user_id: UUID, tenant_id: UUID | None = None) -> ConversationThread | None:
+        """Return thread with messages, or None if not found / wrong owner.
+
+        Pass tenant_id to enforce cross-tenant isolation (recommended for all external calls).
+        """
 
     @abstractmethod
     async def list_active(

@@ -67,12 +67,14 @@ class ParallelRetrievalOrchestrator:
         s1_client: S1Port,
         *,
         timeout: float = _RETRIEVAL_TIMEOUT,
+        s1_internal_token: str = "",
     ) -> None:
         self._s6 = s6_client
         self._s7 = s7_client
         self._s3 = s3_client
         self._s1 = s1_client
         self._timeout = timeout
+        self._s1_internal_token = s1_internal_token
 
     async def retrieve(
         self,
@@ -422,7 +424,7 @@ class ParallelRetrievalOrchestrator:
                 self._s1.get_portfolio_context(
                     request.user_id,
                     request.tenant_id,
-                    "",  # internal token injected by client
+                    self._s1_internal_token,
                 ),
                 timeout=self._timeout,
             )
