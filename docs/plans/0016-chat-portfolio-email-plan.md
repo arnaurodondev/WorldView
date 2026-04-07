@@ -113,11 +113,12 @@ S8 currently uses a single generic prompt for all 8 query intents. PRD-0016 requ
 
 ---
 
-### Wave A-3: 3-Layer Context Manager (Chunk Cache + Turn Summary + Assembly)
+### Wave A-3: 3-Layer Context Manager (Chunk Cache + Turn Summary + Assembly) ✅
 
 **Goal**: Implement `ContextManager` application service: chunk cache read/write (Valkey), async turn summary generation, and bounded `ConversationContext` assembly.
 **Depends on**: Wave A-2
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-04-07 · 254 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -131,9 +132,9 @@ S8 currently uses a single generic prompt for all 8 query intents. PRD-0016 requ
 | T-A-3-06 | Unit tests: cache reuse conditions, context assembly token budget, entity overlap | test | `services/rag-chat/tests/unit/pipeline/test_context_manager.py` | 12+ tests; all 3 cache bypass conditions tested |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/rag-chat/tests -m "unit" -v` passes
-- [ ] No blocking I/O in async code path (scan for `socket.`, `requests.`)
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest services/rag-chat/tests -m "unit" -v` passes (254 tests)
+- [x] No blocking I/O in async code path (scan for `socket.`, `requests.`)
 
 ---
 
@@ -306,7 +307,7 @@ The weekly email digest is S10's main new process: a scheduler that queries emai
 
 | ID | Task | Type | Target Files | Acceptance Criteria |
 |----|------|------|-------------|---------------------|
-| T-D-1-01 | `S8BriefingClient` HTTP client — calls `POST /internal/v1/briefings` | impl | `services/alert/src/alert/infrastructure/clients/s8_client.py` | Sets `X-Internal-Token`; handles 401/503 with `BriefingClientError`; 90s timeout |
+| T-D-1-01 | `S8BriefingClient` HTTP client — calls `POST /internal/v1/briefings` + add `s8_internal_token` field to `AlertSettings` (env var `ALERT_S8_INTERNAL_TOKEN`) | impl | `services/alert/src/alert/infrastructure/clients/s8_client.py`, `services/alert/src/alert/config.py` | Sets `X-Internal-Token` from `settings.s8_internal_token`; handles 401/503 with `BriefingClientError`; 90s timeout |
 | T-D-1-02 | `S3MarketDataClient` — `GET /api/v1/ohlcv/bulk` + `GET /api/v1/fundamentals` | impl | `services/alert/src/alert/infrastructure/clients/s3_client.py` | Returns structured dicts; handles 503 gracefully (returns empty) |
 | T-D-1-03 | `EmailScheduler` — queries DB for today's users, orchestrates digest flow per user | impl | `services/alert/src/alert/infrastructure/email/scheduler.py` | Sequential per-user processing; retry 3× on email send with exponential backoff (1s, 2s, 4s); inserts email_log row |
 | T-D-1-04 | `EmailScheduler` main entrypoint (process entry) | impl | `services/alert/src/alert/infrastructure/email/scheduler_main.py` | Runs daily via APScheduler at configured day+hour; `asyncio.run()` entrypoint |
@@ -409,7 +410,10 @@ S9 needs to proxy `/api/v1/email/preferences` to S10. S1 needs a new internal en
 | S10 | `ALERT_SMTP_HOST` | `localhost` | SMTP relay host |
 | S10 | `ALERT_SMTP_PORT` | `587` | SMTP port |
 | S10 | `ALERT_S8_BASE_URL` | `http://rag-chat:8008` | S8 briefing endpoint URL |
+| S10 | `ALERT_S8_INTERNAL_TOKEN` | required | Token S10 sends in X-Internal-Token header to S8 briefing endpoint (must match `RAG_CHAT_INTERNAL_SERVICE_TOKEN`) |
 | S10 | `ALERT_S1_INTERNAL_TOKEN` | required | Token for S1 user endpoint |
+| S10 | `ALERT_SMTP_USER` | — | SMTP auth username (optional for unauthenticated relays) |
+| S10 | `ALERT_SMTP_PASSWORD` | — | SMTP auth password |
 | S1 | `PORTFOLIO_S10_INTERNAL_TOKEN` | required | Validates S10 requests to S1 |
 
 ### Documentation Updates
