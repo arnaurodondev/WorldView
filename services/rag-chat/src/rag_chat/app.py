@@ -188,6 +188,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey: Any) -> 
             s3_client=s3,
             s1_client=s1,
             timeout=settings.upstream_timeout_seconds,
+            s1_internal_token=settings.s1_internal_token,
         ),
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),

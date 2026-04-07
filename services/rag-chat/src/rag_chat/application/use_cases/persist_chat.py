@@ -7,7 +7,6 @@ Best-effort: callers catch any exception and continue serving the response.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -64,8 +63,9 @@ class ChatPersistenceUseCase:
             Any SQLAlchemy exception on DB failure (caller must catch).
         """
         from common.ids import new_uuid7  # type: ignore[import-untyped]
+        from common.time import utc_now  # type: ignore[import-untyped]
 
-        now = datetime.now(tz=UTC)
+        now = utc_now()
         user_msg_id: UUID = new_uuid7()
         asst_msg_id: UUID = new_uuid7()
 
@@ -93,14 +93,13 @@ class ChatPersistenceUseCase:
             latency_ms=assistant_response.latency_ms,
         )
 
-        async with uow:
-            await uow.messages.create(user_msg)
-            await uow.messages.create(asst_msg)
+        await uow.messages.create(user_msg)
+        await uow.messages.create(asst_msg)
 
-            # Collect new entity IDs from the response
-            new_entity_ids = [e.entity_id for e in assistant_response.resolved_entities]
-            await uow.threads.update_last_msg(thread_id, now, new_entity_ids)
-            await uow.commit()
+        # Collect new entity IDs from the response
+        new_entity_ids = [e.entity_id for e in assistant_response.resolved_entities]
+        await uow.threads.update_last_msg(thread_id, now, new_entity_ids)
+        await uow.commit()
 
         log.info(  # type: ignore[no-any-return]
             "chat_persisted",
