@@ -17,10 +17,10 @@ from rag_chat.domain.enums import MessageRole
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.domain.entities.chat import ResolvedEntity, RetrievalPlan
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef
     from rag_chat.domain.enums import QueryIntent
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -55,7 +55,7 @@ class ChatPersistenceUseCase:
         thread_id: UUID,
         user_message: str,
         assistant_response: AssistantResponse,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
     ) -> tuple[UUID, UUID]:
         """Persist both messages and return ``(user_msg_id, assistant_msg_id)``.
 

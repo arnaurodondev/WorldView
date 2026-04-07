@@ -28,6 +28,7 @@ from content_store.infrastructure.db.repositories.minhash import MinHashReposito
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
 from content_store.infrastructure.db.repositories.processed_events import ProcessedEventsRepository
 from content_store.infrastructure.metrics.prometheus import s5_lsh_index_failures_total
+from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
 from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -155,6 +156,9 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
         self._lsh = lsh_client
         self._current_uow: _SessionUnitOfWork | None = None
         self._current_summary: ProcessingSummary | None = None
+        # R24: bronze bytes pre-fetched in _handle_message BEFORE the DB session opens.
+        # Stored on self so process_message() can pass them to the use case.
+        self._prefetched_bytes: bytes | None = None
 
     # ── Abstract: dedup ───────────────────────────────────────────────────────
 
@@ -276,14 +280,15 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             dedup_repo=DedupHashRepository(uow.session),
             minhash_repo=MinHashRepository(uow.session),
             outbox_repo=OutboxRepository(uow.session),
-            object_store=self._store,
+            bronze_store=BronzeStorageAdapter(self._store, self._app_config.bronze_bucket),
             bronze_bucket=self._app_config.bronze_bucket,
             silver_storage=SilverStorageAdapter(self._store, self._app_config.silver_bucket),
             lsh_client=self._lsh,
             output_topic=self._app_config.output_topic,
             num_perm=self._app_config.num_perm,
         )
-        self._current_summary = await use_case.execute(article)
+        # R24: pass pre-fetched bytes (fetched before session opened in _handle_message)
+        self._current_summary = await use_case.execute(article, prefetched_bytes=self._prefetched_bytes)
 
     # ── CR-3: post-commit LSH indexing ────────────────────────────────────────
 
@@ -295,9 +300,33 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
 
         After that succeeds we index into the Valkey LSH bands best-effort.
         On commit failure, delete any orphaned silver MinIO object best-effort.
+
+        R24: bronze bytes are pre-fetched here, BEFORE super()._handle_message opens
+        a DB session, to avoid holding a DB connection during external I/O.
         """
         self._current_summary = None
         self._current_uow = None  # reset so is_duplicate always uses a fresh session
+        self._prefetched_bytes = None  # R24: reset; populated below before session opens
+
+        # R24: Pre-fetch bronze bytes BEFORE the DB session opens.
+        # We deserialize the message here (the base class will deserialize again;
+        # the overhead is negligible compared to avoiding a held DB conn during I/O).
+        try:
+            raw = msg.value()
+            schema_path = self.get_schema_path(msg.topic())
+            value = self.deserialize_value(raw, schema_path)
+            article = _parse_raw_event(value)
+            self._prefetched_bytes = await self._store.get_bytes(
+                self._app_config.bronze_bucket, article.minio_bronze_key
+            )
+            logger.debug("bronze_prefetched", key=article.minio_bronze_key)
+        except Exception as exc:
+            logger.warning(
+                "bronze_prefetch_failed_falling_back_to_in_session_fetch",
+                error=str(exc),
+            )
+            # Fall through: use case will fetch bytes inside the DB session as fallback.
+
         try:
             await super()._handle_message(msg)  # type: ignore[misc]
         except Exception:

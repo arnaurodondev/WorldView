@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -26,7 +26,7 @@ class DeleteThreadUseCase:
 
     async def execute(
         self,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
         thread_id: UUID,
         user_id: UUID,
         tenant_id: UUID | None = None,

@@ -214,3 +214,153 @@ class TestGetPendingRetries:
         consumer = _make_consumer()
         result = await consumer.get_pending_retries()
         assert result == []
+
+
+class TestR24BronzePrefetch:
+    """D-3/S5: _handle_message must pre-fetch bronze bytes BEFORE opening a DB session (R24)."""
+
+    async def test_prefetch_bytes_set_before_super_is_called(self) -> None:
+        """get_bytes is called in _handle_message before super()._handle_message.
+
+        We verify that _prefetched_bytes is populated during the pre-fetch step
+        and that it is passed through to process_message → execute.
+        """
+        import json
+
+        from content_store.application.use_cases.process_article import ProcessingSummary
+        from content_store.domain.entities import DeduplicationDecision
+        from content_store.domain.enums import DedupOutcome
+
+        import common.ids
+
+        expected_bytes = b"<html>article content</html>"
+        call_order: list[str] = []
+
+        object_store = AsyncMock()
+
+        async def _track_get_bytes(bucket: str, key: str) -> bytes:
+            call_order.append("get_bytes")
+            return expected_bytes
+
+        object_store.get_bytes.side_effect = _track_get_bytes
+
+        consumer = _make_consumer(object_store=object_store)
+
+        mock_summary = ProcessingSummary(
+            article_id="doc-001",
+            decision=DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c"),
+            doc_id=common.ids.new_uuid7(),
+            suppressed=False,
+            signature=[1, 2, 3],
+            source_type="eodhd",
+        )
+
+        raw_msg = MagicMock()
+        raw_msg.topic.return_value = "content.article.raw.v1"
+        raw_msg.value.return_value = json.dumps(
+            {
+                "event_id": "evt-001",
+                "doc_id": "doc-001",
+                "source_type": "eodhd",
+                "minio_bronze_key": "bronze/key",
+                "content_hash": "abc123",
+            }
+        ).encode()
+        raw_msg.key.return_value = None
+        raw_msg.headers.return_value = []
+
+        execute_calls: list[bytes | None] = []
+
+        async def _track_execute(
+            self_uc: object, article: object, prefetched_bytes: bytes | None = None
+        ) -> ProcessingSummary:
+            call_order.append("execute")
+            execute_calls.append(prefetched_bytes)
+            return mock_summary
+
+        with (
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase.execute",
+                new=_track_execute,
+            ),
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.is_duplicate",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.mark_processed",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await consumer._handle_message(raw_msg)
+
+        # R24: get_bytes must be called BEFORE execute (which runs inside the DB session)
+        assert call_order.index("get_bytes") < call_order.index("execute"), f"R24 order: {call_order}"
+        # Pre-fetched bytes must be passed to execute
+        assert execute_calls[0] == expected_bytes
+
+    async def test_prefetch_failure_falls_through_to_in_session_fetch(self) -> None:
+        """If get_bytes raises, _prefetched_bytes stays None and super() is still called (R24 fallback)."""
+        import json
+
+        from content_store.application.use_cases.process_article import ProcessingSummary
+        from content_store.domain.entities import DeduplicationDecision
+        from content_store.domain.enums import DedupOutcome
+
+        import common.ids
+
+        object_store = AsyncMock()
+        object_store.get_bytes.side_effect = OSError("MinIO unavailable")
+
+        consumer = _make_consumer(object_store=object_store)
+
+        mock_summary = ProcessingSummary(
+            article_id="doc-001",
+            decision=DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c"),
+            doc_id=common.ids.new_uuid7(),
+            suppressed=False,
+            signature=[1, 2, 3],
+            source_type="eodhd",
+        )
+
+        raw_msg = MagicMock()
+        raw_msg.topic.return_value = "content.article.raw.v1"
+        raw_msg.value.return_value = json.dumps(
+            {
+                "event_id": "evt-001",
+                "doc_id": "doc-001",
+                "source_type": "eodhd",
+                "minio_bronze_key": "bronze/key",
+                "content_hash": "abc123",
+            }
+        ).encode()
+        raw_msg.key.return_value = None
+        raw_msg.headers.return_value = []
+
+        execute_calls: list[bytes | None] = []
+
+        async def _track_execute(
+            self_uc: object, article: object, prefetched_bytes: bytes | None = None
+        ) -> ProcessingSummary:
+            execute_calls.append(prefetched_bytes)
+            return mock_summary
+
+        with (
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessArticleUseCase.execute",
+                new=_track_execute,
+            ),
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.is_duplicate",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "content_store.infrastructure.messaging.consumers.article_consumer.ProcessedEventsRepository.mark_processed",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await consumer._handle_message(raw_msg)
+
+        # Fallback: execute is still called with prefetched_bytes=None
+        assert len(execute_calls) == 1
+        assert execute_calls[0] is None

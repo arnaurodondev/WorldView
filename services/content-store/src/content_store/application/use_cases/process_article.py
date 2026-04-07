@@ -40,8 +40,7 @@ if TYPE_CHECKING:
         MinHashRepositoryPort,
         OutboxPort,
     )
-    from content_store.application.ports.storage import SilverStoragePort
-    from storage.interface import ObjectStorage  # type: ignore[import-untyped]
+    from content_store.application.ports.storage import BronzeStoragePort, SilverStoragePort
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -88,7 +87,7 @@ class ProcessArticleUseCase:
         dedup_repo: DedupHashRepositoryPort,
         minhash_repo: MinHashRepositoryPort,
         outbox_repo: OutboxPort,
-        object_store: ObjectStorage,
+        bronze_store: BronzeStoragePort,
         bronze_bucket: str,
         silver_storage: SilverStoragePort,
         lsh_client: LSHClientPort,
@@ -99,18 +98,22 @@ class ProcessArticleUseCase:
         self._dedup_repo = dedup_repo
         self._minhash_repo = minhash_repo
         self._outbox_repo = outbox_repo
-        self._store = object_store
+        self._bronze_store = bronze_store
         self._bronze_bucket = bronze_bucket
         self._silver_storage = silver_storage
         self._lsh = lsh_client
         self._output_topic = output_topic
         self._num_perm = num_perm
 
-    async def execute(self, article: RawArticleEvent) -> ProcessingSummary:
+    async def execute(
+        self,
+        article: RawArticleEvent,
+        prefetched_bytes: bytes | None = None,
+    ) -> ProcessingSummary:
         """Process a single raw article through the full dedup pipeline.
 
         Steps:
-        1. Fetch raw bytes from MinIO bronze
+        1. Fetch raw bytes from MinIO bronze (skipped if *prefetched_bytes* provided)
         2. Clean text (extract + normalize)
         3. Stage A: exact raw hash check
         4. Stage B: normalized hash check
@@ -121,14 +124,20 @@ class ProcessArticleUseCase:
 
         Args:
             article: Deserialized raw article event.
+            prefetched_bytes: Raw bytes already fetched from bronze (R24 — pre-fetched
+                before the DB session opened).  When ``None``, the use case fetches
+                them itself (legacy / test path).
 
         Returns:
             ProcessingSummary with decision and outcome.
         """
         log = logger.bind(article_id=article.doc_id, source=article.source_type)
 
-        # 1. Fetch raw bytes from bronze
-        raw_bytes = await self._store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
+        # 1. Fetch raw bytes from bronze (R24: caller should pre-fetch before opening session)
+        if prefetched_bytes is not None:
+            raw_bytes = prefetched_bytes
+        else:
+            raw_bytes = await self._bronze_store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
         log.info("bronze_fetched", byte_size=len(raw_bytes))
 
         # 2. Clean text

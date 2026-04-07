@@ -12,7 +12,7 @@ from rag_chat.domain.entities.conversation import ConversationThread
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+    from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -22,7 +22,7 @@ class CreateThreadUseCase:
 
     async def execute(
         self,
-        uow: RagUnitOfWork,
+        uow: RagUnitOfWorkPort,
         user_id: UUID,
         tenant_id: UUID,
         title: str | None,
