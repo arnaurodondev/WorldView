@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from market_ingestion.application.ports.repositories import TaskRepository
@@ -183,11 +183,15 @@ class SqlaTaskRepository(TaskRepository):
         limit: int,
         lease_seconds: int,
     ) -> list[IngestionTask]:
-        """Atomically claim PENDING/RETRY tasks using a CTE + UPDATE … RETURNING.
+        """Atomically claim PENDING/RETRY tasks, plus RUNNING tasks with expired leases.
 
         A single SQL statement selects candidates (FOR UPDATE SKIP LOCKED) and
         updates them in one round-trip, closing the race window that existed when
         SELECT and UPDATE were two separate statements (M-006).
+
+        Expired-lease reclaim: RUNNING tasks whose locked_until < now are included
+        so that tasks left in RUNNING state after a worker crash are automatically
+        recovered without requiring manual intervention (BP-112).
         """
         now = datetime.now(UTC)
         lease_until = now + timedelta(seconds=lease_seconds)
@@ -198,10 +202,15 @@ class SqlaTaskRepository(TaskRepository):
         )
 
         # CTE locks candidate rows; UPDATE operates on the locked set atomically.
+        # Include RUNNING tasks with expired leases so crashed-worker tasks recover.
         cte = (
             select(IngestionTaskModel.id)
             .where(
-                IngestionTaskModel.status.in_(claimable_statuses),
+                or_(
+                    IngestionTaskModel.status.in_(claimable_statuses),
+                    (IngestionTaskModel.status == IngestionTaskStatus.RUNNING.value)
+                    & (IngestionTaskModel.locked_until < now),
+                ),
                 (IngestionTaskModel.next_attempt_at.is_(None)) | (IngestionTaskModel.next_attempt_at <= now),
             )
             .order_by(IngestionTaskModel.created_at)

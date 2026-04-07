@@ -100,6 +100,11 @@
 | [BP-106](#bp-106) | `infra/kafka/schemas/` not copied into Docker images — consumer falls back to JSON | Avro deserialization silently falls back to `json.loads(raw.decode())` → `UnicodeDecodeError` on binary Avro bytes; `_SCHEMA_DIR` resolves to `/app/infra/kafka/schemas` which doesn't exist | All consumer/dispatcher Dockerfiles: add `COPY infra/kafka/schemas /app/infra/kafka/schemas` to runtime stage |
 | [BP-107](#bp-107) | S4 raw_content dedup uses URL-hash not content-hash | `submit_content.py` generates unique `manual://<ULID>` URL each time → same raw_content always returns `"accepted"` from S4 | Use URL-based submissions to test S4 URL-dedup; test S5 content-hash dedup by submitting twice and waiting for S5 to store exactly 1 document |
 | [BP-108](#bp-108) | nlp_db outbox_events has different schema — injection tests fail with `column "id" does not exist` | `nlp_db.outbox_events` uses `event_id, payload_avro` columns (Avro-encoded); application outbox tables use `id, aggregate_id, payload (jsonb)` | For cross-service injection: produce directly to Kafka via `confluent_kafka.Producer` + `AvroSerializer`, not via nlp outbox table |
+| [BP-109](#bp-109) | S2 ingestion_tasks.result_ref stores CANONICAL path, not bronze path | `result_ref_bucket=market-canonical`, `result_ref_key=market-ingestion/canonical/...` — tests expecting bronze object via `result_ref_key` read canonical NDJSON instead | To get bronze key, construct manually: `market-ingestion/raw/{provider}/{dataset_type}/{symbol}/{task_id}` |
+| [BP-110](#bp-110) | S2 outbox_events uses `status='published'` not `'delivered'`, has no `aggregate_id` column | S2 outbox schema: `(id, correlation_id, topic, key BYTEA, payload BYTEA, headers JSON, event_type, status, attempt, ...)` — different from application outbox tables with `aggregate_id` and `payload JSONB` | S2 outbox queries must use `event_type='market.dataset.fetched'` and `status='published'`; cannot JOIN to ingestion_tasks via `aggregate_id`; payload is Avro BYTEA (not parseable as JSON) |
+| [BP-111](#bp-111) | EODHD demo key returns 0 OHLCV bars for AAPL — canonical NDJSON is empty | `result_ref_key` exists and canonical object is created, but it contains 0 lines; S3 ohlcv_consumer.materialized logs `bar_count=0` | Tests asserting `len(lines) > 0` or `bar_count > 0` must use `pytest.skip()` when empty, not fail; instrument creation (not bar count) is the reliable S2→S3 pipeline indicator |
+| [BP-112](#bp-112) | `claim_batch` never reclaims RUNNING tasks with expired leases — worker crash leaves tasks stuck permanently | Tasks remain in `running` state with `locked_until < NOW()` forever; no worker ever re-claims them because `claim_batch` only selects `PENDING`/`RETRY` | Fixed by adding `OR (status='running' AND locked_until < now)` to the CTE WHERE clause in `SqlaTaskRepository.claim_batch` |
+| [BP-113](#bp-113) | `TypeError` from None-valued OHLCV field not caught in `ExecuteTaskUseCase._canonicalize` — task stuck in running | EODHD intraday response may include `None` for `volume`; `int(None)` raises `TypeError` which is not in `except (ProviderDataError, ValueError, KeyError)`; `_persist_fail` never called; task stays RUNNING forever | Add `TypeError` to the exception tuple in `execute_task.py:110` |
 
 ---
 
@@ -4415,3 +4420,113 @@ Also ensure all files in the module that reference `RagChatSettings` use the sam
 **Prevention**: When introducing a `config.py` → `infrastructure/config/settings.py` shim in a wave, commit the shim in the same wave — do not leave it as an unstaged working-tree change.
 
 **First seen**: PLAN-0016 Wave B-2 (2026-04-07), rag-chat S8.
+
+---
+
+## BP-111 — `aiosmtplib.SMTPConnectError` Constructor Changed in v3
+
+**Category**: Dependency API change · **Severity**: Test failure (TypeError)
+**Affected areas**: Any test constructing `aiosmtplib.SMTPException` subclasses directly
+
+**Symptom**: `TypeError: SMTPException.__init__() takes 2 positional arguments but 3 were given` when constructing `aiosmtplib.SMTPConnectError(code, message)` in tests.
+
+**Root cause**: `aiosmtplib` v3 changed the `SMTPException` base class constructor from `(code: int, message: str)` to `(message: str)` only. The error code is no longer a positional argument.
+
+**Fix**: Use the single-argument form:
+```python
+# v2 (wrong in v3)
+aiosmtplib.SMTPConnectError(421, "Service unavailable")
+
+# v3 (correct)
+aiosmtplib.SMTPConnectError("Service unavailable")
+```
+
+**Prevention**: Pin `aiosmtplib>=3.0,<4` in `pyproject.toml` and use single-argument form consistently in tests.
+
+**First seen**: PLAN-0016 Wave C-2 (2026-04-07), alert S10.
+
+---
+
+## BP-112 — `claim_batch` Never Reclaims RUNNING Tasks with Expired Leases
+
+**Date discovered**: 2026-04-07
+**Category**: Worker reliability / task lease management · **Severity**: HIGH (data pipeline stall)
+**Affected areas**: `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/task_repository.py`
+
+**Symptom**: Tasks remain permanently stuck in `running` state with `locked_until` in the past. No worker ever picks them up again. The pipeline stalls silently — tasks never fail, never retry, never succeed.
+
+**Root cause**: `SqlaTaskRepository.claim_batch` only selects tasks with `status IN ('pending', 'retry')`. When a worker crashes mid-execution (e.g., container OOM, timeout, unhandled exception before `_persist_fail`), the task stays `running` with an expired lease. The `claim_batch` CTE silently skips it forever because `running` is not in the claimable set.
+
+**Evidence (from investigation)**:
+- 7 tasks stuck `running` since 13:26:50 with `locked_until=13:32:26` (5-minute lease expired)
+- All locked by the same worker ID that crashed
+- No code path ever transitions them to `pending` or `retry`
+
+**Fix**: Add `OR (status = 'running' AND locked_until < now)` to the CTE WHERE clause:
+```python
+# task_repository.py — claim_batch CTE
+.where(
+    or_(
+        IngestionTaskModel.status.in_(claimable_statuses),
+        (IngestionTaskModel.status == IngestionTaskStatus.RUNNING.value)
+        & (IngestionTaskModel.locked_until < now),
+    ),
+    ...
+)
+```
+
+**Prevention**: Any distributed worker system that uses lease-based task claiming MUST include expired-lease reclaim logic. The lease duration (`WORKER_LEASE_SECONDS`) must be > worst-case task execution time, and the claim query must include `OR (status=running AND locked_until < now)`.
+
+**First seen**: E2E investigation (2026-04-07), S2 market-ingestion.
+
+---
+
+## BP-113 — `TypeError` from None-Valued OHLCV Field Bypasses `_persist_fail` in ExecuteTaskUseCase
+
+**Date discovered**: 2026-04-07
+**Category**: Exception handling gap · **Severity**: HIGH (task stuck in running)
+**Affected areas**: `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py`
+
+**Symptom**: `worker_task_error: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'` in worker logs. Task remains in `running` state despite the canonicalize step failing.
+
+**Root cause**: The EODHD intraday API sometimes returns bars with `None` for the `volume` field. `CanonicalOHLCVBar.from_dict()` calls `int(None)` → `TypeError`. The canonicalize exception handler catches `(ProviderDataError, ValueError, KeyError)` but NOT `TypeError`, so `_persist_fail` is never called and the task stays RUNNING forever.
+
+**Evidence**: Worker logs at 2026-04-07 13:27:27 show the exact error for 7 intraday task IDs; those tasks remain `running` with expired leases.
+
+**Fix**: Add `TypeError` to the canonicalize exception handler:
+```python
+except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
+    log.error("canonicalize_fatal", error=str(exc))
+    await self._persist_fail(task, ProviderDataError(str(exc)))
+    raise ProviderDataError(str(exc)) from exc
+```
+
+**Prevention**: Any exception handler that calls `_persist_fail` to persist task failure should include `TypeError` and `AttributeError` in the caught set — these commonly arise from None/missing fields in provider responses. The pattern `except (SomeDomainError, ValueError, KeyError)` is fragile; consider `except Exception` with a narrow re-raise guard for truly unexpected errors.
+
+**First seen**: E2E investigation (2026-04-07), S2 market-ingestion 1h/5m intraday tasks.
+
+---
+
+## BP-114 — EODHD Demo Key Rate-Limits Silent `[]` for EOD OHLCV Under Concurrent Load
+
+**Date discovered**: 2026-04-07
+**Category**: External API / demo key behavior · **Severity**: MEDIUM (test data gap)
+**Affected areas**: S2 market-ingestion worker, E2E tests asserting bar counts
+
+**Symptom**: EODHD `/api/eod/AAPL.US?api_token=demo&period=d` returns HTTP 200 with body `[]` (empty JSON array, 2 bytes). Task succeeds, canonical NDJSON is 0 bytes. Tests that assert `bar_count > 0` skip.
+
+**Root cause**: The EODHD demo API key has a low concurrent request rate limit. When the worker processes 30 tasks simultaneously (concurrency=4), the first 4-6 requests succeed with real data; subsequent requests for the same session receive empty `[]`. The EOD endpoint (daily/weekly/monthly) is more affected than real-time quotes, which use a separate endpoint.
+
+**Evidence**: Worker logs show `row_count=1` for the first few quotes tasks and `row_count=0` for all subsequent EOD OHLCV tasks. Bronze objects contain `b'[]'`.
+
+**Distinguishing from BP-112/BP-113**: This is NOT a bug in the codebase — the task correctly succeeds with 0 rows. It is a demo-key operational limitation.
+
+**Mitigation options**:
+1. Use a real (paid) EODHD API key for E2E tests — provides full data
+2. Set `WORKER_CONCURRENCY=1` in test docker.env to serialize requests
+3. Add a per-provider rate limiter in the worker (token bucket, 1 req/s for demo key)
+4. In test assertions, skip on `row_count=0` rather than failing (already done in E2E tests)
+
+**Prevention**: Document that E2E tests requiring EODHD OHLCV bar data need a real API key. The demo key is only reliable for quotes and fundamentals under low concurrency.
+
+**First seen**: E2E investigation (2026-04-07), S2 market-ingestion full pipeline test.
