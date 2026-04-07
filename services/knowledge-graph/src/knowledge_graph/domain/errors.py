@@ -82,3 +82,19 @@ class EntityAliasCollisionError(EntityError):
 
 class ContradictionError(KnowledgeGraphError):
     """Base for contradiction-detection errors."""
+
+
+# ---------------------------------------------------------------------------
+# Embedding errors
+# ---------------------------------------------------------------------------
+
+
+class EmbeddingNotAvailableError(EntityError):
+    """Raised when an entity has no embedding for the requested view type.
+
+    Typically occurs when ``entity_type != 'financial_instrument'`` and the
+    caller requests a ``fundamentals_ohlcv`` embedding (PRD-0017 §6.5).
+    """
+
+    def __init__(self, entity_id: object, view_type: str) -> None:
+        super().__init__(f"No embedding available for entity {entity_id!r}, view_type={view_type!r}")

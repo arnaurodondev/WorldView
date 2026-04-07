@@ -201,3 +201,57 @@ class CanonicalEntityRepositoryPort(ABC):
 
     @abstractmethod
     async def exists(self, entity_id: UUID) -> bool: ...
+
+
+# ── Entity embedding ANN port (PRD-0017 §6.5) ────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AnnResult:
+    """Single nearest-neighbour result from a pgvector ANN query.
+
+    ``distance`` is cosine distance in [0, 2]: 0 = identical, 2 = opposite.
+    To convert to similarity: ``similarity = 1.0 - distance``.
+    """
+
+    entity_id: UUID
+    distance: float
+
+
+class EntityEmbeddingANNRepositoryPort(ABC):
+    """Port for pgvector ANN queries on ``entity_embedding_state`` (PRD-0017 §6.5)."""
+
+    @abstractmethod
+    async def find_nearest(
+        self,
+        query_embedding: list[float],
+        view_type: str,
+        limit: int = 40,
+        exclude_entity_id: UUID | None = None,
+        entity_types: list[str] | None = None,
+    ) -> list[AnnResult]:
+        """Return nearest neighbours by cosine distance, ascending.
+
+        Args:
+            query_embedding: The query vector (must match stored embedding dimension).
+            view_type:        Which embedding view to search (e.g. ``'fundamentals_ohlcv'``).
+            limit:            Maximum number of results to return.
+            exclude_entity_id: If provided, exclude this entity from results (self-exclusion).
+            entity_types:     If provided, restrict results to entities with these types.
+                              Applied via JOIN on ``canonical_entities``.
+
+        Returns:
+            Sorted ascending by ``distance`` (nearest first).
+        """
+
+    @abstractmethod
+    async def get_embedding(
+        self,
+        entity_id: UUID,
+        view_type: str,
+    ) -> list[float] | None:
+        """Fetch the stored embedding vector for a given entity + view, or None.
+
+        Returns None when no row exists or the embedding column is NULL.
+        Used by the use case to check embedding availability before ANN search.
+        """

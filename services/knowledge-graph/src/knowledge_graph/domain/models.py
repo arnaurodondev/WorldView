@@ -15,6 +15,33 @@ if TYPE_CHECKING:
     from knowledge_graph.domain.enums import SemanticMode
 
 
+# ---------------------------------------------------------------------------
+# Similarity search (PRD-0017 §6.5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SimilarEntityResult:
+    """Result item from the ``FindSimilarEntitiesUseCase`` (PRD-0017 §6.5).
+
+    Invariants (enforced by use case before construction):
+    - ``0.0 ≤ ann_similarity_score ≤ 1.0``
+    - ``0.0 ≤ final_score ≤ 1.0``
+    - ``final_score == min(ann_similarity_score + (0.15 if has_competes_with_relation else 0.0), 1.0)``
+    - ``has_competes_with_relation == (competes_with_confidence is not None)``
+    """
+
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None
+    exchange: str | None
+    ann_similarity_score: float  # 0-1; 1 = identical (transformed from cosine distance)
+    competes_with_confidence: float | None  # None if no competes_with relation
+    final_score: float  # min(ann_similarity_score + 0.15 boost, 1.0)
+    has_competes_with_relation: bool  # True iff competes_with_confidence is not None
+
+
 @dataclass(frozen=True)
 class Relation:
     """A directed relation between two canonical entities (PRD §6.4.4).
