@@ -18,7 +18,7 @@ from rag_chat.domain.errors import ProviderUnavailableError
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    import redis.asyncio as aioredis
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -55,7 +55,7 @@ class LLMProviderChain:
     def __init__(
         self,
         providers: list[LLMProvider],
-        valkey: aioredis.Redis,  # type: ignore[type-arg]
+        valkey: ValkeyClient,  # type: ignore[name-defined]
     ) -> None:
         self._providers = providers
         self._valkey = valkey
@@ -99,6 +99,6 @@ class LLMProviderChain:
                     provider=provider.name,
                     error=str(exc),
                 )
-                await self._valkey.setex(neg_key, _NEG_CACHE_TTL, b"1")
+                await self._valkey.setex(neg_key, _NEG_CACHE_TTL, "1")
 
         raise ProviderUnavailableError("All LLM providers unavailable or negative-cached")
