@@ -58,6 +58,8 @@
 | [BP-033](#bp-033) | Concurrent flag updates use read-modify-write | One consumer's `has_quotes=True` update overwrites another's `has_ohlcv=True` — flags silently cleared | Any repo that updates a flags struct with a plain `UPDATE SET ... WHERE id=` under concurrent consumers |
 | [BP-034](#bp-034) | Content-hash dedup early return skips `mark_processed` | Same Kafka message replayed passes dedup check again — event_id never recorded when skipping unchanged data | Kafka consumers that do content-hash dedup before event-id dedup |
 | [BP-035](#bp-035) | `is_duplicate()` check-then-insert race under concurrent consumers | Two consumers both pass `is_duplicate()` before either writes to the dedup table — duplicate processing despite `ON CONFLICT DO NOTHING` | Any consumer with check-then-insert idempotency pattern |
+| [BP-100](#bp-100) | PRD references non-existent external API field | Implementation hits `KeyError` or `None` at runtime — field never existed in the external provider's response | Any PRD/plan that references EODHD, SnapTrade, Polymarket, or other external provider fields without verification |
+| [BP-101](#bp-101) | PRD describes stale architecture baseline | Implementation conflicts with existing code — duplicated logic, incompatible indexes, or wrong migration baseline | Any PRD written before an architectural change lands; any plan derived from a PRD created >14 days ago |
 | [BP-036](#bp-036) | Token bucket `try_consume()` non-atomic with DB | Two workers both pass `tokens >= n` check before either persists the decrement — tokens over-consumed under concurrent load | Any in-memory token bucket that persists state to DB |
 | [BP-037](#bp-037) | `UnitOfWork.__aexit__` exception masking | Rollback failure during `__aexit__` suppresses the original exception — root cause invisible in logs | All services using async UnitOfWork context managers |
 | [BP-038](#bp-038) | `assert` used for production error handling | `python -O` strips assertions — critical guards silently disabled, `AssertionError` raises without context | Any service using `assert x is not None` in non-test code |
@@ -87,6 +89,13 @@
 | [BP-091](#bp-091) | AGE Cypher injection via f-string entity_id | `entity_id` f-stringed into Cypher query allows graph traversal manipulation; UUID validation alone is insufficient since AGE executes arbitrary Cypher string | S7 Cypher endpoints: `CypherPathUseCase`, `CypherNeighborhoodUseCase`; all AGE query builders |
 | [BP-092](#bp-092) | GLOBAL temporal event → entity_event_exposures explosion | Creating `entity_event_exposures` rows for every company affected by a GLOBAL event (pandemic, rate cycle) creates millions of rows; one GLOBAL event can affect 50K companies | S7 `TemporalEventConsumer`: entity exposure linking; any code that creates exposures for GLOBAL-scope events |
 | [BP-093](#bp-093) | EODHD non-existent fields (`Officers`/`Institutions`/`Revenue_Segment`) | `payload.get("General", {}).get("Officers", {})` always returns `{}`; these fields don't exist in the EODHD API | S7 `FundamentalsConsumer`, any EODHD payload extraction; use Insider Transactions API for officers |
+| [BP-099](#bp-099) | DDL alignment test misses `ALTER TABLE ADD COLUMN` migrations | `TestXxxDDLAlignment` reports `ORM columns missing from DDL` for columns added via incremental `ALTER TABLE` migrations — `_extract_ddl_columns` only parses `CREATE TABLE` | Any service with incremental Alembic migrations; update `_extract_ddl_columns` to scan `ALTER TABLE … ADD COLUMN` patterns |
+| [BP-100](#bp-100) | `app.state.dispatcher` missing in API lifespan → readyz 503 | Health endpoint accesses `app.state.dispatcher._get_producer()` but the dispatcher is a SEPARATE process — `app.state.dispatcher` is never set in the API lifespan → `AttributeError: 'State' object has no attribute 'dispatcher'` → 503 | Alert S10 `api/health.py:readyz`; any service where health check references a process-level object not created in the API lifespan |
+| [BP-101](#bp-101) | SQLAlchemy 2.0.0 FK INSERT ordering fails without `relationship()` | `IntegrityError: insert or update on table … violates foreign key constraint … is not present in parent table` even though parent `session.add()` was called first — SQLAlchemy 2.0.0 UoW may not detect FK ordering from column-level `ForeignKey` alone without `relationship()` declarations | content-store `DocumentRepository.create()`: add explicit `await self._session.flush()` after `session.add()` to guarantee parent row is in DB before FK-referencing children |
+| [BP-102](#bp-102) | S5 ProcessArticleUseCase hashes bronze envelope instead of original content | `doc.content_hash != article.content_hash` — `check_stage_a()` was called with `raw_bytes` (the JSON bronze envelope), not `article.content_hash` (sha256 of original article bytes) → inconsistent dedup across S4→S5 boundary | content-store `process_article.py`: pass `article.content_hash` (str) to `check_stage_a()` instead of `raw_bytes`; `check_stage_a()` must accept `bytes | str` |
+| [BP-103](#bp-103) | Integration test constructor stale after production interface refactor | `TypeError: __init__() got an unexpected keyword argument 'session'` or `'silver_bucket'` — test was written for old API; production code refactored to port ABC (`silver_storage: SilverStoragePort`) | content-store integration tests; any test that constructs use-case objects directly must be updated when use-case constructor changes |
+| [BP-104](#bp-104) | E2E DLQ count inflated by concurrent Docker services | `assert N == 5` fails because live Docker containers (e.g., alert-dispatcher) write to the same `dead_letter_queue` table during test execution | Alert E2E tests sharing DB with live Docker: add explicit `TRUNCATE dead_letter_queue CASCADE` before inserting test data in each DLQ-sensitive test |
+| [BP-103b](#bp-103b) | ValkeyClient wrapper type annotation drift — `aioredis.Redis` vs `ValkeyClient` | mypy: `Argument "valkey" has incompatible type "ValkeyClient"; expected "Redis"` in `app.py`; or hook-only `attr-defined` when new ValkeyClient methods are unstaged | Any service constructor that accepts a Valkey client: always type as `ValkeyClient` from `messaging.valkey.client`; stage `libs/messaging` changes in same commit as callers |
 
 ---
 
@@ -4135,3 +4144,154 @@ async def readyz(request: Request) -> Response: ...
 **Types that CAN be under TYPE_CHECKING**: return type annotations that FastAPI doesn't inspect at registration (only if the return type is a concrete Pydantic model or `dict`), and service-specific types used only in the function body (not the signature).
 
 **Applies to**: All FastAPI services (S1–S10) when using `from __future__ import annotations`.
+
+---
+
+## BP-097 — Read Engine Connection Leak in Dual-Session Factory
+
+**Pattern**: `_build_factories()` creates a separate `read_engine` when `database_url_read` differs from `database_url`, but only returns `write_engine` in the tuple. The `read_engine` is bound to `read_factory` via SQLAlchemy's internal reference, but is never explicitly disposed on shutdown.
+
+**Symptom**: Graceful shutdown (e.g. Kubernetes SIGTERM) leaves read-replica TCP connections open until OS timeout. No data loss, but violates graceful shutdown contract and causes connection exhaustion under repeated rolling restarts.
+
+**Cause**: Pattern `return write_engine, write_factory, read_factory` — only `write_engine` is tracked, so only `write_engine.dispose()` is called at shutdown.
+
+**Fix**: Return both engines (or a named tuple) from `_build_factories()`:
+```python
+# WRONG — read_engine leaked on shutdown
+return write_engine, write_factory, read_factory
+
+# CORRECT — both engines tracked
+return write_engine, read_engine_or_none, write_factory, read_factory
+# OR store read_engine in app.state.read_engine for disposal in lifespan shutdown
+app.state.read_engine = read_engine if read_url != write_url else None
+```
+
+**Only manifests when**: `database_url_read` is explicitly set to a different URL than `database_url`. All services default to empty (fallback), so this is a latent bug.
+
+**Applies to**: All services implementing R23 dual-session (S1, S4, S5, S6, S7, S10, S8).
+
+---
+
+## BP-098 — Config Re-Export Shim Breaks AST Architecture Tests
+
+**Pattern**: A service's `config.py` uses a thin re-export shim (`Settings = OtherSettingsClass`) instead of defining the `Settings` class directly. AST-based architecture tests that visit `ClassDef` nodes (like R23 and config-pattern tests) cannot detect fields defined in the aliased class.
+
+**Symptom**: Architecture tests fail for the service with violations like "Settings missing a write database URL field" even though the service IS compliant — the actual class is in a different file.
+
+**Fix Options**:
+1. **Preferred**: Define the `Settings` class directly in `config.py` (standard pattern for all services)
+2. **Workaround**: Add the service to the test's `_BASELINE` dict with explanation
+3. **Test improvement**: Enhance AST visitor to follow `Settings = X` assignments and scan `X`'s source file
+
+**Applies to**: Any service using `infrastructure/config/settings.py` as the canonical settings location (non-standard — avoid this pattern).
+
+---
+
+## BP-099 — DDL Alignment Test Misses ALTER TABLE ADD COLUMN Migrations
+
+**Category**: DB / Testing
+**Affected areas**: Any service whose `test_ddl_alignment.py` uses `_extract_ddl_columns()` with only `CREATE TABLE` parsing
+
+**Symptom**: DDL alignment test reports `ORM columns missing from DDL: {'column_name'}` after adding a column via an `ALTER TABLE` migration — even though the migration is correct and the ORM is updated.
+
+**Root cause**: The `_extract_ddl_columns` helper only parses `CREATE TABLE` blocks. When a column is added via a later `ALTER TABLE {table} ADD COLUMN` migration, it never appears in the CREATE TABLE DDL and the test falsely flags it as missing.
+
+**Fix**: Extend `_extract_ddl_columns` to also scan for `ALTER TABLE {table_name} ADD COLUMN [IF NOT EXISTS] <col_name>` patterns using `re.finditer`:
+```python
+alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)"
+for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+    columns.add(m.group(1))
+```
+
+**First seen**: PLAN-0016 Wave A-2 — adding `context_valkey_key` + `summary_valkey_key` to `messages` table in rag-chat (migration 0002).
+
+**Applies to**: Any service with incremental Alembic migrations that add columns to existing tables.
+
+---
+
+## BP-100 — PRD References Non-Existent External API Field
+
+**Category**: Process / PRD quality
+**Affected areas**: Any PRD/plan that references EODHD, SnapTrade, Polymarket, DeepInfra, or other external provider fields without verification
+
+**Symptom**: Implementation hits `KeyError`, `AttributeError`, or silent `None` at runtime because the referenced field never existed in the external provider's response. Alternatively, the field name is wrong (e.g., different nesting level, camelCase vs snake_case).
+
+**Root cause**: The PRD author (human or agent) assumed a field exists in an external API response without verifying against actual API documentation or a live response. The assumption propagates into domain entities, DB columns, and consumers before anyone tests against the real API.
+
+**Real examples**:
+- PRD-0018 referenced `General.Officers`, `Holders.Institutions`, `Financials.Revenue_Segment` from EODHD — none exist. Replaced with Insider Transactions API endpoint.
+
+**Prevention**:
+1. `/prd` Phase 2.7 External API Reality Check — every external field must be marked `Verified: YES` with a source before the PRD is written
+2. If field cannot be verified in the session, it MUST be raised as a BLOCKING open question
+3. `/revise-prd` Phase 4 explicitly checks this before planning
+
+**Fix pattern**: Remove the non-existent field from the domain entity, DB column, and Avro schema. Identify the correct field or alternative API endpoint and update the PRD.
+
+---
+
+## BP-101 — PRD Describes Stale Architecture Baseline
+
+**Category**: Process / PRD quality
+**Affected areas**: Any PRD written before an architectural change lands; any plan derived from a PRD >14 days old
+
+**Symptom**: Implementation produces conflicting code — duplicated logic, wrong index types, migration that tries to create an already-existing column, or tests that assert the old behavior.
+
+**Root cause**: The PRD was written based on the architecture state at a point in time. Since then, the codebase evolved (e.g., index type changed, table restructured, new pattern adopted) but the PRD was not updated to reflect the new baseline. The plan inherits the stale assumption and generates tasks that conflict with reality.
+
+**Real examples**:
+- PRD-0017 specified IVFFlat indexes for `entity_embedding_state`; the codebase had already migrated to HNSW partial indexes. PRD had to be revised before planning.
+
+**Prevention**:
+1. `/revise-prd` Phase 3 Codebase Alignment Check — reads actual source code and diffs PRD claims against current state
+2. `/plan` Phase 0.5 PRD Pre-Flight Gate — flags PRDs created >14 days ago for mandatory `/revise-prd` before decomposing waves
+3. After any architectural change (index, schema, pattern), run `/revise-prd --all-draft` to check all pending PRDs
+
+**Fix pattern**: Run `/revise-prd` on the affected PRD, resolve each stale assumption with the user, and update the PRD in-place before generating or proceeding with the plan.
+
+---
+
+## BP-102 — intelligence-migrations Numbering Conflict
+
+**Category**: Database migrations / PRD quality
+**Affected areas**: Any PRD that schedules a new `intelligence-migrations` migration by number; any `/plan` wave targeting `intelligence-migrations`
+
+**Symptom**: Two plans try to create migrations with the same revision number (e.g., both reference "migration 0002"). Alembic fails at `alembic upgrade head` with `Multiple head revisions are not supported`.
+
+**Root cause**: PRDs are written independently and each assumes the next available migration number. When a migration actually lands before the PRD is implemented, the number assigned in the PRD is stale.
+
+**Real example**: PRD-0017 was written with "cleanup migration 0002"; `0002_enhance_events_and_relations.py` had already landed. PRD-0018 then also referenced 0003 for its AGE migration. Both PRDs required renumbering (0017 → 0003, 0018 → 0004).
+
+**Prevention**:
+1. `/revise-prd` — Phase 3 checks `services/intelligence-migrations/alembic/versions/` for the current highest migration file and flags any mismatch against the PRD's claimed number
+2. Before implementing any `intelligence-migrations` wave: `ls services/intelligence-migrations/alembic/versions/` and use the next available number
+
+**Fix pattern**: Renumber the PRD migration reference to the next available integer; update all §6.4, §12, §15 occurrences, the cross-PRD dependency note in any downstream PRD, and the `down_revision` in the Alembic file.
+
+---
+
+## BP-103 — ValkeyClient Wrapper Type Annotation Drift
+
+**Category**: Type system / libs/messaging
+**Affected areas**: Any service that accepts a Valkey/Redis client as a constructor argument
+
+**Symptom**: mypy reports `Argument "valkey" has incompatible type "ValkeyClient"; expected "Redis"` in `app.py` when wiring components. No runtime error (ValkeyClient passes all required methods to the underlying redis.asyncio.Redis).
+
+**Root cause**: New components are sometimes written with `import redis.asyncio as aioredis` + `aioredis.Redis` as the type hint, copying patterns from older code or redis.asyncio documentation. The project's shared `ValkeyClient` (from `libs/messaging`) wraps `redis.asyncio.Redis` but is not a subclass, so mypy rejects the assignment.
+
+**Secondary risk**: Unstaged additions to `ValkeyClient` (e.g. `pipeline()`, `setex()`) look correct locally but the pre-commit hook stashes unstaged files — callers fail with `attr-defined` in the hook run even though the method is visible in the working tree.
+
+**Fix**:
+1. All `valkey` parameters must be typed as `ValkeyClient` (not `aioredis.Redis`):
+   ```python
+   # In TYPE_CHECKING block
+   from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+   # In __init__ signature
+   def __init__(self, valkey: ValkeyClient, ...) -> None:
+   ```
+2. If `ValkeyClient` is missing a needed method, add it to `libs/messaging/src/messaging/valkey/client.py` and stage the change in the **same commit** as the callers.
+3. Never use `setex(key, ttl, b"1")` — `ValkeyClient.setex` expects `str`, not `bytes`.
+
+**Prevention**: Code review checklist: reject any `aioredis.Redis` or `redis.asyncio.Redis` parameter type annotation in service code.
+
+**First seen**: PLAN-0016 Wave B-1 fix — S1Client, LLMProviderChain, HydeExpander all had `aioredis.Redis` instead of `ValkeyClient`.
