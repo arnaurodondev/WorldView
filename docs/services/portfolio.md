@@ -24,7 +24,7 @@ direct market data ingestion, cross-service DB queries.
 |--------|------|-------------|------------|
 | GET | `/healthz` | Liveness probe | — |
 | GET | `/readyz` | Readiness probe (DB check) | — |
-| GET | `/metrics` | Prometheus metrics | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — |
 | POST | `/api/v1/tenants` | Create tenant | private |
 | GET | `/api/v1/tenants/{id}` | Get tenant | private |
 | POST | `/api/v1/users` | Create user | private |

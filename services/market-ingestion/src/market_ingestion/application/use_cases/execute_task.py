@@ -8,7 +8,8 @@ Pipeline order (critical — do NOT reorder):
   5. Short DB transaction: advance watermark + add outbox event + task.succeed() + commit.
 
 Error classification:
-  Retryable  → ProviderRateLimited, ProviderUnavailable, StorageUnavailable, TaskLeaseLost
+  Retryable  → ProviderRateLimited, ProviderUnavailable, StorageUnavailable, TaskLeaseLost,
+               WatermarkViolation (concurrent worker race — re-queued via task.retry())
   Fatal      → ProviderAuthError, ProviderDataError, InvalidStateTransition
 """
 
@@ -28,6 +29,7 @@ from market_ingestion.domain.errors import (
     ProviderUnavailable,
     StorageUnavailable,
     TaskLeaseLost,
+    WatermarkViolation,
 )
 from market_ingestion.domain.events import MarketDatasetFetched
 from market_ingestion.domain.value_objects import ObjectRef
@@ -70,10 +72,12 @@ class ExecuteTaskUseCase:
         """Run the pipeline for *task*.
 
         Raises:
-            ProviderRateLimited / ProviderUnavailable / StorageUnavailable:
-                Retryable errors — task.retry() called before re-raise.
-            ProviderAuthError / ProviderDataError / InvalidStateTransition /
+            ProviderRateLimited / ProviderUnavailable / StorageUnavailable /
             WatermarkViolation:
+                Retryable errors — task.retry() called before re-raise.
+                WatermarkViolation indicates a concurrent worker race; the task is
+                re-queued via retry() so the worker loop picks it up again.
+            ProviderAuthError / ProviderDataError / InvalidStateTransition:
                 Fatal errors — task.fail() called before re-raise.
         """
         log = logger.bind(
@@ -194,6 +198,17 @@ class ExecuteTaskUseCase:
                 await self._uow.tasks.save(task)
                 await self._uow.commit()
 
+        except WatermarkViolation as exc:
+            log.warning(
+                "watermark_violation_retry",
+                error=str(exc),
+                task_id=task.id,
+            )
+            # Concurrent worker race: the loser gets WatermarkViolation.
+            # Re-queue via retry() so the task is attempted again on the next cycle
+            # rather than being permanently failed (it is not broken, just lost a race).
+            await self._persist_retry(task, exc)
+            raise
         except InvalidStateTransition as exc:
             log.error("invalid_state_transition", error=str(exc))
             # F-DS-005: persist task failure before re-raising so the task does not

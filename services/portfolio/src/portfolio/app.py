@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from observability import configure_logging, configure_tracing, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
+from portfolio.api.dependencies import InternalAuthDep
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
 from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
@@ -182,7 +183,10 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/metrics")
-    async def metrics_endpoint() -> FastAPIResponse:
+    async def metrics_endpoint(
+        _auth: InternalAuthDep,
+    ) -> FastAPIResponse:
+        """Prometheus metrics — requires X-Internal-Token (M-004)."""
         data = prometheus_client.generate_latest()
         return FastAPIResponse(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 

@@ -106,8 +106,12 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
                     )
         finally:
             if self._session is not None:
-                await self._session.close()
-                self._session = None
+                try:
+                    await self._session.close()
+                except Exception as close_err:
+                    logger.warning("uow_session_close_error", error=str(close_err))
+                finally:
+                    self._session = None
 
     @property
     def tenants(self) -> TenantRepository:

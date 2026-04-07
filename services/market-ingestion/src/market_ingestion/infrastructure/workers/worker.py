@@ -81,10 +81,11 @@ class WorkerProcess:
         self._settings = settings
         import common.ids
 
-        self._worker_id = worker_id or common.ids.new_ulid()
+        self._worker_id = worker_id or common.ids.new_uuid7_str()
         self._batch_size = int(cast("Any", batch_size_value))
         self._lease_seconds = int(cast("Any", lease_seconds_value))
         self._idle_sleep = float(idle_sleep_value)
+        self._claim_backoff: float = 0.0
         self._stop_event = asyncio.Event()
         concurrency = int(getattr(settings, "worker_concurrency", 4))
         self._semaphore = asyncio.Semaphore(concurrency)
@@ -117,7 +118,11 @@ class WorkerProcess:
         logger.info("worker_stopped", worker_id=self._worker_id)
 
     async def _claim_batch(self) -> list[IngestionTask]:
-        """Claim a batch of tasks and return them."""
+        """Claim a batch of tasks and return them.
+
+        Uses exponential backoff (capped at 60 s) on repeated DB failures so a
+        single bad worker does not hammer the database (M-008).
+        """
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
         use_case = ClaimTasksUseCase(uow=uow)
         try:
@@ -126,11 +131,18 @@ class WorkerProcess:
                 batch_size=self._batch_size,
                 lease_seconds=self._lease_seconds,
             )
+            self._claim_backoff = 0.0
             logger.debug("worker_claimed_tasks", count=len(tasks), worker_id=self._worker_id)
             return tasks
         except Exception as exc:
-            logger.error("worker_claim_error", error=str(exc), worker_id=self._worker_id)
-            await asyncio.sleep(self._idle_sleep)
+            self._claim_backoff = min(self._claim_backoff * 2 + self._idle_sleep, 60.0)
+            logger.error(
+                "worker_claim_error",
+                error=str(exc),
+                worker_id=self._worker_id,
+                backoff_seconds=self._claim_backoff,
+            )
+            await asyncio.sleep(self._claim_backoff)
             return []
 
     async def _execute_with_semaphore(self, task: IngestionTask) -> None:

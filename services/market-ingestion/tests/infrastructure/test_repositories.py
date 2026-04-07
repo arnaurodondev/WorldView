@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -559,6 +559,78 @@ def test_outbox_get_topic_returns_correct_topic_for_known_event() -> None:
     topic = _get_topic("market.dataset.fetched")
     assert topic  # non-empty string
     assert "market" in topic  # either the canonical name or messaging lib value
+
+
+# ---------------------------------------------------------------------------
+# N-009: Lease-owner guard in save()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_save_respects_lease_owner() -> None:
+    """save() with wrong lease_owner produces rowcount==0 and logs a warning (N-009).
+
+    The WHERE clause includes:
+        locked_by == task.lease_owner OR locked_by IS NULL
+    so a task held by a different worker is not overwritten.
+    """
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.rowcount = 0  # simulate stale-worker mismatch
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.lease_owner = "worker-A"
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+
+    with patch("market_ingestion.infrastructure.db.repositories.task_repository.logger") as mock_log:
+        await repo.save(task)
+
+    # Warning must be emitted when rowcount == 0
+    mock_log.warning.assert_called_once()
+    call_kwargs = mock_log.warning.call_args
+    event_name = call_kwargs[0][0]
+    assert event_name == "task_save_lease_mismatch"
+
+
+@pytest.mark.unit
+async def test_save_lease_guard_where_clause_contains_locked_by() -> None:
+    """save() WHERE clause must reference locked_by for lease-owner guard (N-009)."""
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.rowcount = 1
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.lease_owner = "worker-B"
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+    await repo.save(task)
+
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    # The WHERE clause must include a locked_by condition
+    assert "locked_by" in sql
+
+
+@pytest.mark.unit
+async def test_save_no_warning_when_rowcount_positive() -> None:
+    """save() must NOT log a warning when the UPDATE affects at least one row."""
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.rowcount = 1  # successful update
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.lease_owner = "worker-C"
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+
+    with patch("market_ingestion.infrastructure.db.repositories.task_repository.logger") as mock_log:
+        await repo.save(task)
+
+    mock_log.warning.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

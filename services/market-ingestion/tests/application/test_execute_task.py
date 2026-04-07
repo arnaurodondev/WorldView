@@ -326,8 +326,13 @@ async def test_watermark_advanced_with_range_end() -> None:
 
 
 @pytest.mark.unit
-async def test_watermark_violation_fails_task_and_propagates() -> None:
-    """WatermarkViolation from advance_bar_ts propagates without persisting fail/retry state."""
+async def test_watermark_violation_retries_task_and_propagates() -> None:
+    """WatermarkViolation from advance_bar_ts → task.retry() called (concurrent worker race).
+
+    WatermarkViolation is a transient race condition, not a fatal error.
+    The losing worker should re-queue via retry() so the task is attempted again.
+    task.fail() must NOT be called.
+    """
     task = _make_task()
     wm = _make_watermark()
     wm.advance_bar_ts.side_effect = WatermarkViolation("non-monotonic advance")
@@ -337,8 +342,8 @@ async def test_watermark_violation_fails_task_and_propagates() -> None:
     with pytest.raises(WatermarkViolation):
         await uc.execute(task)
 
+    task.retry.assert_called_once()
     task.fail.assert_not_called()
-    task.retry.assert_not_called()
 
 
 @pytest.mark.unit
@@ -795,3 +800,116 @@ async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
 
     # task.fail must have been called (BP-113 fix)
     task.fail.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# M-007: Watermark race condition tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_violation_triggers_retry() -> None:
+    """WatermarkViolation from advance_bar_ts → task.retry() called, status is RETRY not FAILED.
+
+    When two workers race on the same watermark, the loser receives a
+    WatermarkViolation.  The correct response is task.retry() so the task is
+    re-queued; task.fail() must NOT be called (the task is not broken, just lost
+    a race).
+    """
+    task = _make_task()
+    # Simulate task in RUNNING state (after claim)
+    task.status = "running"
+
+    wm = _make_watermark()
+    wm.advance_bar_ts.side_effect = WatermarkViolation("non-monotonic: new_ts <= current_ts")
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    # WatermarkViolation should propagate after triggering retry
+    with pytest.raises(WatermarkViolation):
+        await uc.execute(task)
+
+    # retry() called — task goes back to RETRY queue
+    task.retry.assert_called_once()
+    # fail() must NOT be called — this is a transient race, not a fatal error
+    task.fail.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_watermark_concurrent_advance_only_one_succeeds() -> None:
+    """Concurrent advance with same bar_ts: one succeeds, other gets WatermarkViolation and retries.
+
+    Simulates two tasks racing to advance the same watermark.  The second call
+    raises WatermarkViolation, which must result in retry(), not fail().
+    """
+
+    bar_ts = datetime(2024, 6, 30, tzinfo=UTC)
+
+    # Task 1: succeeds (watermark advances normally)
+    task1 = _make_task(range_end=bar_ts)
+    wm1 = _make_watermark(changed=True)
+    uow1 = _make_uow(watermark=wm1)
+    uc1, _, _, _, _ = _make_use_case(uow=uow1)
+
+    # Task 2: races, loses — watermark raises WatermarkViolation
+    task2 = _make_task(range_end=bar_ts)
+    wm2 = _make_watermark(changed=True)
+    wm2.advance_bar_ts.side_effect = WatermarkViolation("concurrent advance detected")
+    uow2 = _make_uow(watermark=wm2)
+    uc2, _, _, _, _ = _make_use_case(uow=uow2)
+
+    # Task 1 executes successfully
+    await uc1.execute(task1)
+    task1.succeed.assert_called_once()
+    task1.retry.assert_not_called()
+
+    # Task 2 races and loses → retry, not fail
+    with pytest.raises(WatermarkViolation):
+        await uc2.execute(task2)
+
+    task2.retry.assert_called_once()
+    task2.fail.assert_not_called()
+
+    # Only one watermark was actually advanced (task1's)
+    wm1.advance_bar_ts.assert_called_once_with(bar_ts)
+    wm2.advance_bar_ts.assert_called_once_with(bar_ts)  # called but raised
+
+
+@pytest.mark.unit
+async def test_canonicalize_type_error_marks_failed() -> None:
+    """BP-113 regression: None field in record → TypeError → task.fail() called (not stuck RUNNING).
+
+    Feed a record where volume is None (simulating missing EODHD intraday data).
+    The real serializer will raise TypeError; ExecuteTaskUseCase must catch it
+    and call task.fail(), not leave the task stuck in RUNNING state.
+    """
+    import json as _json
+
+    raw_with_none_volume = _json.dumps(
+        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_volume)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    with pytest.raises(ProviderDataError):
+        await uc.execute(task)
+
+    # task.fail() must be called — task transitions to FAILED, not stuck in RUNNING
+    task.fail.assert_called_once()
+    task.retry.assert_not_called()

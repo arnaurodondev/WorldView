@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     eodhd_base_url: str = "https://eodhd.com/api"
 
     # Provider API keys
+    # N-003: Default "demo" is intentional for local dev and CI testing.
+    # The demo key supports EODHD's original 3 endpoints at low concurrency.
+    # Tests use the demo key explicitly; set MARKET_INGESTION_EODHD_API_KEY to
+    # a real key in production. Startup validator below emits a WARNING if unset.
     eodhd_api_key: str = "demo"
     finnhub_api_key: str = ""
     polygon_api_key: str = ""

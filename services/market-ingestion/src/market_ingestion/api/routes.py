@@ -248,7 +248,9 @@ async def list_policies(
 
 
 @router.get("/metrics", tags=["probes"])
-async def metrics() -> Response:
-    """Prometheus metrics endpoint."""
+async def metrics(
+    _auth: InternalAuthDep,
+) -> Response:
+    """Prometheus metrics — requires X-Internal-Token (M-004)."""
     data = prometheus_client.generate_latest()
     return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
