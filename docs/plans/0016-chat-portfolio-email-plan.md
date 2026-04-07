@@ -307,11 +307,12 @@ The weekly email digest is S10's main new process: a scheduler that queries emai
 
 ---
 
-### Wave D-1: EmailScheduler Process + S1/S3/S8 Orchestration
+### Wave D-1: EmailScheduler Process + S1/S3/S8 Orchestration ✅
 
 **Goal**: Implement `EmailScheduler` background process that reads preferences, calls S1/S3/S8 HTTP clients, and builds the digest data package.
 **Depends on**: Wave B-2 (briefing endpoint), Wave C-1 (email_preferences table)
 **Estimated effort**: 75–90 minutes
+**Status**: **DONE** — 2026-04-07 · 244 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -324,9 +325,9 @@ The weekly email digest is S10's main new process: a scheduler that queries emai
 | T-D-1-05 | Unit tests: scheduler orchestration with mocked clients, retry logic, log insertion | test | `services/alert/tests/unit/infrastructure/test_email_scheduler.py` | S1 503 → skip user; S8 503 → send partial email; retry backoff tested |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/alert/tests -m "unit" -v` passes
-- [ ] No synchronous blocking calls in async scheduler loop
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest services/alert/tests -m "unit" -v` passes
+- [x] No synchronous blocking calls in async scheduler loop
 
 ---
 

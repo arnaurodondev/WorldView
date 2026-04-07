@@ -19,6 +19,13 @@ if TYPE_CHECKING:
     from alert.config import Settings
 
 
+def _get_url(url: object) -> str:
+    """Extract string from a ``SecretStr`` or plain ``str`` database URL."""
+    if hasattr(url, "get_secret_value"):
+        return url.get_secret_value()  # type: ignore[no-any-return]
+    return str(url)
+
+
 def _same_db_endpoint(url1: str, url2: str) -> bool:
     """True if two DB URLs connect to the same host, port, and database."""
     from urllib.parse import urlparse
@@ -46,7 +53,7 @@ def _build_factories(
         ``read_engine is write_engine``.
     """
     write_engine = create_async_engine(
-        settings.database_url,
+        _get_url(settings.database_url),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -59,8 +66,10 @@ def _build_factories(
         expire_on_commit=False,
     )
 
-    read_url: str = settings.database_url_read or settings.database_url
-    if _same_db_endpoint(read_url, settings.database_url):
+    read_url: str = (
+        _get_url(settings.database_url_read) if settings.database_url_read else _get_url(settings.database_url)
+    )
+    if _same_db_endpoint(read_url, _get_url(settings.database_url)):
         read_engine = write_engine
         read_factory = write_factory
     else:
