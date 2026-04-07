@@ -89,7 +89,19 @@ async def screen_instruments(
 
     Uses the latest available value per instrument for each metric.
     All filters are combined with AND logic.
+
+    ``sort_by`` is validated against a whitelist (filter metric names + ``ticker``
+    and ``name``) to prevent SQL injection (PRD-0017 §6.8, §8).
     """
+    # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
+    if body.sort_by is not None:
+        valid_sort_fields = {"ticker", "name"} | {f.metric for f in body.filters}
+        if body.sort_by not in valid_sort_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"sort_by must be one of: {', '.join(sorted(valid_sort_fields))}",
+            )
+
     screen_filters = [
         ScreenFilter(
             metric=f.metric,
@@ -100,16 +112,27 @@ async def screen_instruments(
         )
         for f in body.filters
     ]
-    results = await uc.execute(screen_filters, limit=body.limit, offset=body.offset)
+    results, total = await uc.execute(
+        screen_filters,
+        limit=body.limit,
+        offset=body.offset,
+        sort_by=body.sort_by,
+        sort_order=body.sort_order,
+    )
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(
                 instrument_id=r.instrument_id,
+                ticker=r.ticker,
+                name=r.name,
+                exchange=r.exchange,
+                sector=r.sector,
                 metrics={k: float(v) if v is not None else None for k, v in r.metrics.items()},
             )
             for r in results
         ],
         count=len(results),
+        total=total,
     )
 
 

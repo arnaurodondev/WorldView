@@ -127,6 +127,24 @@ class Quote:
     updated_at: datetime = field(default_factory=_utc_now)
 
 
+@dataclass(frozen=True, slots=True)
+class ScreenFieldMetadata:
+    """Metadata for a screenable fundamental metric field (PRD-0017 §6.4).
+
+    Static instances represent the 12 supported metric fields.
+    Persisted in ``screen_field_metadata`` table; also cached in Valkey.
+    """
+
+    name: str
+    label: str
+    field_type: str  # "numeric" | "text"
+    unit: str | None
+    description: str | None
+    observed_min: float | None
+    observed_max: float | None
+    null_fraction: float  # 0.0-1.0
+
+
 @dataclass
 class FundamentalsRecord:
     """One section of company fundamentals for a given reporting period.

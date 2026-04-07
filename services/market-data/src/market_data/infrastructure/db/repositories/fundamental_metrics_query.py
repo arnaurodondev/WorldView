@@ -73,23 +73,30 @@ async def query_timeseries(
 async def query_screen(
     session: AsyncSession,
     filters: list[ScreenFilter],
-    limit: int = 100,
+    limit: int = 50,
     offset: int = 0,
-) -> list[ScreenResult]:
+    sort_by: str | None = None,
+    sort_order: str = "asc",
+) -> tuple[list[ScreenResult], int]:
     """Screen instruments by metric thresholds.
 
     For each filter, uses the most recent ``as_of_date`` per instrument.
-    Returns instruments that satisfy ALL filters (AND logic).
+    Returns instruments that satisfy ALL filters (AND logic), along with the
+    total count of matching rows (before LIMIT/OFFSET, for pagination).
+
+    ``sort_by`` is validated by the caller (router) against a whitelist of
+    allowed field names before reaching this function — it is never interpolated
+    into raw SQL; column references are resolved via SQLAlchemy ORM attributes.
     """
     if not filters:
-        return []
+        return [], 0
 
     m = FundamentalMetricModel
+    instr = InstrumentModel
 
-    # Build a CTE for each filter that selects instruments matching the criterion
-    # using the latest value per instrument for that metric.
-    filter_subqueries = []
-    metric_columns = []
+    # Build a subquery for each filter: latest value per instrument for that metric.
+    filter_subqueries: list[Any] = []
+    metric_columns: list[tuple[str, Any]] = []
 
     for i, f in enumerate(filters):
         alias = f"f{i}"
@@ -118,11 +125,9 @@ async def query_screen(
             ),
         )
 
-        # Apply period_type filter if specified
         if f.period_type is not None:
             value_sq = value_sq.where(m.period_type == f.period_type)
 
-        # Apply min/max filters
         conditions = []
         if f.min_value is not None:
             conditions.append(m.value_numeric >= f.min_value)
@@ -135,36 +140,60 @@ async def query_screen(
         filter_subqueries.append(sq)
         metric_columns.append((f.metric, sq.c.value_numeric))
 
-    # INNER JOIN all filter subqueries on instrument_id
+    # INNER JOIN all filter subqueries then always JOIN instruments for
+    # ticker/name/exchange/sector and COUNT(*) OVER() for pagination total.
     base = filter_subqueries[0]
 
-    # Add metric value columns
-    select_cols = [base.c.instrument_id]
+    select_cols: list[Any] = [
+        base.c.instrument_id,
+        instr.symbol.label("ticker"),
+        instr.name.label("name"),
+        instr.exchange.label("exchange"),
+        instr.sector.label("sector"),
+        func.count().over().label("total_count"),
+    ]
     for metric_name, col in metric_columns:
         select_cols.append(col.label(metric_name))
 
-    joined = select(*select_cols)
+    stmt = select(*select_cols)
 
     for sq in filter_subqueries[1:]:
-        joined = joined.join(sq, base.c.instrument_id == sq.c.instrument_id)
+        stmt = stmt.join(sq, base.c.instrument_id == sq.c.instrument_id)
 
-    # Apply sector filter: join with instruments and restrict by sector if any filter specifies one
-    sector_values = [f.sector for f in filters if f.sector is not None]
-    if sector_values:
-        instr = InstrumentModel
-        joined = joined.join(instr, instr.id == base.c.instrument_id)
-        # AND logic: all specified sector values must agree (in practice, use the first one
-        # since cross-sector AND would match zero instruments).  Use IN to allow callers
-        # to express "sector in (list)" by adding multiple filters with the same metric but
-        # different sectors; here we apply the intersection (AND) of all sector values.
-        for sv in sector_values:
-            joined = joined.where(instr.sector == sv)
+    # Always JOIN instruments (provides ticker/name/exchange/sector + sector filter)
+    stmt = stmt.join(instr, instr.id == base.c.instrument_id)
 
-    joined = joined.order_by(base.c.instrument_id).offset(offset).limit(limit)
+    # Sector filter (AND logic across all filter entries that specify a sector)
+    for sv in (f.sector for f in filters if f.sector is not None):
+        stmt = stmt.where(instr.sector == sv)
 
-    result: Any = await session.execute(joined)
+    # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
+    sort_col: Any
+    if sort_by == "ticker":
+        sort_col = instr.symbol
+    elif sort_by == "name":
+        sort_col = instr.name
+    elif sort_by is not None:
+        # metric sort: find the column from the metric subqueries
+        sort_col = next((col for mn, col in metric_columns if mn == sort_by), base.c.instrument_id)
+    else:
+        sort_col = None
+
+    if sort_col is not None:
+        order_expr = sort_col.desc().nullslast() if sort_order == "desc" else sort_col.asc().nullslast()
+        stmt = stmt.order_by(order_expr)
+    else:
+        stmt = stmt.order_by(base.c.instrument_id)
+
+    stmt = stmt.offset(offset).limit(limit)
+
+    result: Any = await session.execute(stmt)
     rows = result.all()
 
+    if not rows:
+        return [], 0
+
+    total = int(rows[0].total_count)
     results = []
     for row in rows:
         metrics_dict: dict[str, Decimal | None] = {}
@@ -173,11 +202,15 @@ async def query_screen(
         results.append(
             ScreenResult(
                 instrument_id=row.instrument_id,
+                ticker=row.ticker,
+                name=row.name,
+                exchange=row.exchange,
+                sector=row.sector,
                 metrics=metrics_dict,
             )
         )
 
-    return results
+    return results, total
 
 
 async def query_latest_metric(

@@ -47,7 +47,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
-| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit`, `offset` | — |
+| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
@@ -609,6 +609,7 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | Table | PK | Key columns | Notes |
 |---|---|---|---|
 | `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries. |
+| `screen_field_metadata` | `field_name TEXT` | `label TEXT`, `field_type TEXT` (CHECK IN `'numeric','text'`), `unit TEXT`, `description TEXT`, `observed_min NUMERIC`, `observed_max NUMERIC`, `null_fraction NUMERIC` (CHECK 0–1), `last_computed_at TIMESTAMPTZ` | Metadata for screenable metric fields (PRD-0017 §6.4). ~50 rows; populated by Wave B-2 background job. Used as Valkey fallback for `GET /screen/fields`. |
 
 **Metric catalog** (expanded set extracted from section JSONB data on write):
 
@@ -694,6 +695,8 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
 | `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
+| `003` (consolidated) | `002` (consolidated) | Add `lowercase_outbox_status` migration |
+| `004` (consolidated) | `003` (consolidated) | Add `screen_field_metadata` table (PRD-0017 Wave B-1) |
 
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.

@@ -57,10 +57,19 @@ class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
         self,
         filters: list[ScreenFilter],
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
-    ) -> list[ScreenResult]:
-        return await query_screen(self._session, filters=filters, limit=limit, offset=offset)
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> tuple[list[ScreenResult], int]:
+        return await query_screen(
+            self._session,
+            filters=filters,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
 
     async def get_available_metrics(self, instrument_id: str) -> list[str]:
         return await query_available_metrics(self._session, instrument_id)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -35,17 +36,27 @@ class ScreenFilterRequest(BaseModel):
 
 
 class ScreenRequest(BaseModel):
-    """Screening request body."""
+    """Screening request body (PRD-0017 §6.8, NFR-001).
+
+    Breaking change from prior version: limit max reduced 1000→200, default 100→50;
+    offset max tightened to 5000. Coordinate with API consumers before deploying.
+    """
 
     filters: list[ScreenFilterRequest] = Field(..., min_length=1)
-    limit: int = Field(100, ge=1, le=1000)
-    offset: int = Field(0, ge=0)
+    limit: int = Field(50, ge=1, le=200)
+    offset: int = Field(0, ge=0, le=5000)
+    sort_by: str | None = None
+    sort_order: Literal["asc", "desc"] = "asc"
 
 
 class ScreenInstrumentResponse(BaseModel):
     """One instrument matching screen criteria."""
 
     instrument_id: str
+    ticker: str | None = None
+    name: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
     metrics: dict[str, float | None]
 
 
@@ -54,6 +65,7 @@ class ScreenResponse(BaseModel):
 
     results: list[ScreenInstrumentResponse]
     count: int
+    total: int
 
 
 class AvailableMetricsResponse(BaseModel):

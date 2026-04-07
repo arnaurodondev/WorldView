@@ -58,9 +58,11 @@ def _make_timeseries_uc(data_points: list[MetricDataPoint] | None = None) -> Mag
     return uc
 
 
-def _make_screen_uc(results: list[ScreenResult] | None = None) -> MagicMock:
+def _make_screen_uc(results: list[ScreenResult] | None = None, total: int | None = None) -> MagicMock:
     uc = MagicMock()
-    uc.execute = AsyncMock(return_value=results or [])
+    result_list = results or []
+    total_count = total if total is not None else len(result_list)
+    uc.execute = AsyncMock(return_value=(result_list, total_count))
     return uc
 
 
@@ -214,12 +216,12 @@ def test_timeseries_text_metric_included_in_response() -> None:
 
 
 def test_screen_returns_matching_instruments() -> None:
-    """Happy-path: screen returns count and results list."""
+    """Happy-path: screen returns count, total, and results list."""
     results = [
         ScreenResult(instrument_id="instr-001", metrics={"pe_ratio": Decimal("15.0")}),
         ScreenResult(instrument_id="instr-002", metrics={"pe_ratio": Decimal("18.0")}),
     ]
-    _, client = _make_app(mock_screen_uc=_make_screen_uc(results))
+    _, client = _make_app(mock_screen_uc=_make_screen_uc(results, total=42))
     resp = client.post(
         "/api/v1/fundamentals/screen",
         json={"filters": [{"metric": "pe_ratio", "max_value": 20.0}]},
@@ -227,6 +229,7 @@ def test_screen_returns_matching_instruments() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 2
+    assert body["total"] == 42
     assert body["results"][0]["instrument_id"] == "instr-001"
     assert body["results"][0]["metrics"]["pe_ratio"] == pytest.approx(15.0)
 
@@ -249,9 +252,9 @@ def test_screen_two_filters_passed_to_use_case() -> None:
     """Two filters in the request body are forwarded as ScreenFilter objects."""
     captured_filters: list = []
 
-    async def _capture(filters, *, limit=100, offset=0):  # type: ignore[misc]
+    async def _capture(filters, *, limit=50, offset=0, sort_by=None, sort_order="asc"):  # type: ignore[misc]
         captured_filters.extend(filters)
-        return []
+        return ([], 0)
 
     mock_uc = MagicMock()
     mock_uc.execute = AsyncMock(side_effect=_capture)
@@ -277,9 +280,9 @@ def test_screen_sector_filter_forwarded() -> None:
     """Sector field in a filter is forwarded as ScreenFilter.sector."""
     captured_filters: list = []
 
-    async def _capture(filters, *, limit=100, offset=0):  # type: ignore[misc]
+    async def _capture(filters, *, limit=50, offset=0, sort_by=None, sort_order="asc"):  # type: ignore[misc]
         captured_filters.extend(filters)
-        return []
+        return ([], 0)
 
     mock_uc = MagicMock()
     mock_uc.execute = AsyncMock(side_effect=_capture)
@@ -300,7 +303,7 @@ def test_screen_sector_filter_forwarded() -> None:
 
 
 def test_screen_no_results_returns_empty() -> None:
-    """No matching instruments → count=0, results=[]."""
+    """No matching instruments → count=0, total=0, results=[]."""
     _, client = _make_app(mock_screen_uc=_make_screen_uc([]))
     resp = client.post(
         "/api/v1/fundamentals/screen",
@@ -309,6 +312,7 @@ def test_screen_no_results_returns_empty() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 0
+    assert body["total"] == 0
     assert body["results"] == []
 
 

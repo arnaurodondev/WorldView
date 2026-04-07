@@ -29,12 +29,15 @@ def _make_data_point(as_of: date = date(2024, 1, 1)) -> MetricDataPoint:
 def _make_uow(
     timeseries: list[MetricDataPoint] | None = None,
     screen_results: list[ScreenResult] | None = None,
+    screen_total: int | None = None,
     metrics: list[str] | None = None,
 ) -> MagicMock:
     uow = MagicMock()
     repo = MagicMock()
     repo.get_timeseries = AsyncMock(return_value=timeseries or [])
-    repo.screen = AsyncMock(return_value=screen_results or [])
+    result_list = screen_results or []
+    total_count = screen_total if screen_total is not None else len(result_list)
+    repo.screen = AsyncMock(return_value=(result_list, total_count))
     repo.get_available_metrics = AsyncMock(return_value=metrics or [])
     uow.fundamental_metrics_query = repo
     return uow
@@ -91,11 +94,12 @@ async def test_screen_returns_results() -> None:
         ScreenResult(instrument_id="instr-001", metrics={"pe_ratio": Decimal("14.0")}),
         ScreenResult(instrument_id="instr-002", metrics={"pe_ratio": Decimal("17.0")}),
     ]
-    uow = _make_uow(screen_results=results)
+    uow = _make_uow(screen_results=results, screen_total=2)
     uc = ScreenInstrumentsUseCase(uow)
     filters = [ScreenFilter(metric="pe_ratio", max_value=Decimal("20.0"))]
-    result = await uc.execute(filters)
-    assert result == results
+    result_list, total = await uc.execute(filters)
+    assert result_list == results
+    assert total == 2
 
 
 @pytest.mark.asyncio
@@ -108,6 +112,8 @@ async def test_screen_forwards_limit_offset() -> None:
         filters,
         limit=25,
         offset=50,
+        sort_by=None,
+        sort_order="asc",
     )
 
 
@@ -116,8 +122,9 @@ async def test_screen_empty_results() -> None:
     uow = _make_uow(screen_results=[])
     uc = ScreenInstrumentsUseCase(uow)
     filters = [ScreenFilter(metric="pe_ratio", max_value=Decimal("1.0"))]
-    result = await uc.execute(filters)
-    assert result == []
+    result_list, total = await uc.execute(filters)
+    assert result_list == []
+    assert total == 0
 
 
 # ── GetAvailableFundamentalMetricsUseCase ─────────────────────────────────────
