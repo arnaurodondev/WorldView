@@ -151,11 +151,12 @@ GENERAL intent has special routing (light ANN + LLM general knowledge + follow-u
 
 ---
 
-### Wave B-1: GENERAL Intent Handler + Retrieval Plan Integration
+### Wave B-1: GENERAL Intent Handler + Retrieval Plan Integration ✅
 
 **Goal**: Wire GENERAL intent through the retrieval plan builder and chat orchestrator; add follow-up suggestions to GENERAL responses.
 **Depends on**: Wave A-1
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-07 · 272 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -164,11 +165,16 @@ GENERAL intent has special routing (light ANN + LLM general knowledge + follow-u
 | T-B-1-01 | Update `RetrievalPlanBuilder` to handle GENERAL intent (light ANN, no Cypher, no financial) | impl | `services/rag-chat/src/rag_chat/application/pipeline/retrieval_plan_builder.py` | GENERAL → `use_chunks=True`, others=False; entity_ids from resolved entities if any |
 | T-B-1-02 | Update `ChatOrchestrator` to append 2–3 follow-up suggestions for GENERAL responses | impl | `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` | Follow-ups appended to LLM output for GENERAL intent only |
 | T-B-1-03 | Update intent classifier classification prompt + examples to include GENERAL | impl | `services/rag-chat/src/rag_chat/application/pipeline/intent_classifier.py` | Classification prompt has GENERAL example; keyword fallback returns GENERAL for ambiguous queries |
-| T-B-1-04 | Unit tests: GENERAL retrieval plan, follow-up injection, classifier GENERAL output | test | `services/rag-chat/tests/unit/pipeline/test_general_intent.py` | Tests for entity-present and entity-absent GENERAL paths |
+| T-B-1-04 | Unit tests: GENERAL retrieval plan, follow-up injection, classifier GENERAL output | test | `services/rag-chat/tests/unit/application/test_general_intent.py` | Tests for entity-present and entity-absent GENERAL paths |
+
+#### Notes
+- T-B-1-03 was already complete from Wave A-1 (GENERAL in `_INTENT_KEYWORDS`, `_CLASSIFICATION_PROMPT`, `_VALID_INTENTS`)
+- Follow-up injection is achieved by routing `intent=intent` to `PromptBuilder.build()` — the GENERAL system prompt already instructs the LLM to output 2-3 follow-up questions in a structured format
+- `"explain what"` GENERAL keyword is shadowed by `"explain"` in higher-priority REASONING keywords (documented in test)
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/rag-chat/tests -m "unit" -v` passes
+- [x] `ruff check` + `mypy` pass (changed files clean; 3 pre-existing errors in app.py from Wave A-3)
+- [x] `python -m pytest services/rag-chat/tests -m "unit" -v` passes (272 tests)
 
 ---
 
