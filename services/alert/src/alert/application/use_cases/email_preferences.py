@@ -65,6 +65,7 @@ class GetEmailPreferencesUseCase:
         if result is None:
             result = EmailPreference(user_id=user_id, tenant_id=tenant_id)
             await self._repo.upsert(result)
+            await self._repo.commit()
         return result
 
 
@@ -115,4 +116,5 @@ class UpdateEmailPreferencesUseCase:
             created_at=pref.created_at,
         )
         await self._repo.upsert(updated)
+        await self._repo.commit()
         return updated

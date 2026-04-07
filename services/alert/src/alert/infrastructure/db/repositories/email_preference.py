@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from alert.application.ports.repositories import EmailPreferenceRepositoryPort
@@ -63,15 +64,26 @@ class EmailPreferenceRepository(EmailPreferenceRepositoryPort):
         await self._session.execute(stmt)
         await self._session.flush()
 
-    async def list_scheduled_users(self, day: int, hour: int) -> list[EmailPreference]:
-        """Return all users whose digest is scheduled for *day* and *hour*.
+    async def commit(self) -> None:
+        """Commit the current session transaction (N-04: commit inside UoW, not in routes)."""
+        await self._session.commit()
 
-        Used by the EmailScheduler to find users to send to on each run.
+    async def list_scheduled_users(self, day: int, hour: int) -> list[EmailPreference]:
+        """Return users whose digest is scheduled for *day*/*hour* and not yet sent.
+
+        C-03: Excludes users whose ``last_digest_sent_at`` is within the last
+        23 hours — prevents duplicate sends if the scheduler fires slightly
+        early or the job is retried within the same run window.
         """
+        cutoff = utc_now() - timedelta(hours=23)
         stmt = select(EmailPreferenceModel).where(
             EmailPreferenceModel.weekly_digest_enabled.is_(True),
             EmailPreferenceModel.send_day_of_week == day,
             EmailPreferenceModel.send_hour_utc == hour,
+            or_(
+                EmailPreferenceModel.last_digest_sent_at.is_(None),
+                EmailPreferenceModel.last_digest_sent_at < cutoff,
+            ),
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._to_entity(r) for r in rows]

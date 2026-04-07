@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -197,6 +198,10 @@ class ContextManager:
         llm_provider: Streaming LLM used exclusively for turn-summary generation.
     """
 
+    # Valkey circuit-breaker constants
+    _CACHE_FAILURE_THRESHOLD: int = 5  # consecutive failures before opening circuit
+    _CACHE_HALF_OPEN_AFTER: float = 60.0  # seconds before retrying after open
+
     def __init__(
         self,
         chunk_cache: ChunkCachePort,
@@ -206,6 +211,9 @@ class ContextManager:
         self._llm = llm_provider
         # Holds strong references to scheduled background tasks (prevents GC).
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Valkey circuit-breaker state
+        self._cache_failures: int = 0
+        self._circuit_open_at: float | None = None  # monotonic clock, None = closed
 
     # ── Valkey key helpers ────────────────────────────────────────────────────
 
@@ -272,6 +280,18 @@ class ContextManager:
 
         return chunks, HIT
 
+    def _is_cache_circuit_open(self) -> bool:
+        """Return True when the Valkey circuit breaker is open (too many failures)."""
+        if self._circuit_open_at is None:
+            return False
+        elapsed = time.monotonic() - self._circuit_open_at
+        if elapsed >= self._CACHE_HALF_OPEN_AFTER:
+            # Half-open: allow one probe; reset counter to give Valkey a chance
+            self._cache_failures = 0
+            self._circuit_open_at = None
+            return False
+        return True
+
     async def cache_chunks(
         self,
         thread_id: UUID,
@@ -285,7 +305,19 @@ class ContextManager:
 
         Errors are logged and swallowed — a write failure degrades to full
         retrieval on the next turn, which is acceptable.
+
+        M-04: Circuit breaker — after ``_CACHE_FAILURE_THRESHOLD`` consecutive
+        write failures the circuit opens and writes are skipped for
+        ``_CACHE_HALF_OPEN_AFTER`` seconds to avoid hammering an unhealthy Valkey.
         """
+        if self._is_cache_circuit_open():
+            log.warning(
+                "chunk_cache_circuit_open_skipping_write",
+                thread_id=str(thread_id),
+                turn_num=turn_num,
+            )
+            return
+
         key = self.chunk_key(thread_id, turn_num)
         payload: dict[str, Any] = {
             "intent": str(intent),
@@ -295,12 +327,22 @@ class ContextManager:
         }
         try:
             await self._cache.set(key, payload, ttl=_CHUNK_TTL)
+            self._cache_failures = 0  # reset on success
         except Exception:
+            self._cache_failures += 1
             log.warning(
                 "chunk_cache_write_failed",
                 thread_id=str(thread_id),
                 turn_num=turn_num,
+                consecutive_failures=self._cache_failures,
             )
+            if self._cache_failures >= self._CACHE_FAILURE_THRESHOLD:
+                self._circuit_open_at = time.monotonic()
+                log.error(
+                    "chunk_cache_circuit_opened",
+                    consecutive_failures=self._cache_failures,
+                    retry_after_seconds=self._CACHE_HALF_OPEN_AFTER,
+                )
 
     # ── Turn summary operations ───────────────────────────────────────────────
 
@@ -392,6 +434,27 @@ class ContextManager:
                 thread_id=str(thread_id),
                 turn_num=turn_num,
             )
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    async def shutdown(self) -> None:
+        """Cancel and await all in-flight background turn-summary tasks (M-04).
+
+        Called from the application lifespan shutdown hook.  Without this,
+        fire-and-forget tasks are silently abandoned on server stop, which can
+        leave incomplete Valkey writes or swallow errors.
+        """
+        pending = list(self._background_tasks)
+        if not pending:
+            return
+        log.info("context_manager_shutdown_cancelling_tasks", count=len(pending))
+        for task in pending:
+            task.cancel()
+        results = await asyncio.gather(*pending, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                log.warning("context_manager_shutdown_task_error", error=str(result))
+        self._background_tasks.clear()
 
     # ── Context assembly ──────────────────────────────────────────────────────
 

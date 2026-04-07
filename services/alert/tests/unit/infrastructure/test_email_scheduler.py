@@ -263,8 +263,8 @@ class TestEmailScheduler:
             mock_repo.list_scheduled_users = AsyncMock(return_value=[pref])
             mock_repo_cls.return_value = mock_repo
 
-            with patch.object(sched, "_fetch_user_email_direct", AsyncMock(return_value="u@e.com")):
-                await sched.run()
+            sched._s1.get_user_email = AsyncMock(return_value="u@e.com")
+            await sched.run()
 
         ep.send.assert_called_once()
 
@@ -279,8 +279,8 @@ class TestEmailScheduler:
             mock_repo.list_scheduled_users = AsyncMock(return_value=[pref])
             mock_repo_cls.return_value = mock_repo
 
-            with patch.object(sched, "_fetch_user_email_direct", AsyncMock(return_value=None)):
-                await sched.run()
+            sched._s1.get_user_email = AsyncMock(return_value=None)
+            await sched.run()
 
         ep.send.assert_not_called()
 
@@ -327,16 +327,17 @@ class TestEmailScheduler:
 
     @pytest.mark.unit
     async def test_all_retries_exhausted_logs_failed(self) -> None:
-        """All 4 send attempts fail → email_log.status = 'failed'."""
+        """All 4 send attempts fail → email_log: pending_send added, then updated to failed.
+
+        Outbox-first pattern (B-01): initial pending_send row added via session.add(),
+        then finalized to 'failed' via session.execute(UPDATE ...).
+        """
         pref = _pref()
         ep = AsyncMock()
         ep.send = AsyncMock(side_effect=EmailProviderError("refused"))
         sched, _sf, _ = _make_scheduler(email_provider=ep)
 
-        log_rows: list[Any] = []
-
-        def _capture_add(row: Any) -> None:  # sync — MagicMock.add is sync
-            log_rows.append(row)
+        added_rows: list[Any] = []
 
         with (
             patch("alert.infrastructure.email.scheduler.EmailPreferenceRepository") as mock_repo_cls,
@@ -349,17 +350,19 @@ class TestEmailScheduler:
             mock_repo.list_scheduled_users = AsyncMock(return_value=[pref])
             mock_repo_cls.return_value = mock_repo
 
-            # Capture session.add calls to inspect the log row
             session_mock = _sf.return_value.__aenter__.return_value
-            session_mock.add = MagicMock(side_effect=_capture_add)
+            session_mock.add = MagicMock(side_effect=lambda row: added_rows.append(row))
+            session_mock.execute = AsyncMock()
 
             await sched.run()
 
         # 4 total send attempts (initial + 3 retries)
         assert ep.send.call_count == 4
-        # At least one EmailLogModel was logged with status=failed
-        failed_rows = [r for r in log_rows if hasattr(r, "status") and r.status == "failed"]
-        assert len(failed_rows) >= 1
+        # Outbox-first: pending_send row was added before any send attempt
+        pending_rows = [r for r in added_rows if hasattr(r, "status") and r.status == "pending_send"]
+        assert len(pending_rows) >= 1
+        # finalize_failed called session.execute (UPDATE to 'failed')
+        assert session_mock.execute.called
 
     @pytest.mark.unit
     async def test_retry_backoff_delays_are_applied(self) -> None:
@@ -394,11 +397,15 @@ class TestEmailScheduler:
 
     @pytest.mark.unit
     async def test_email_log_inserted_on_success(self) -> None:
-        """On successful send, an EmailLogModel row is inserted with status='sent'."""
+        """On successful send, outbox-first flow: pending_send added, then updated to sent.
+
+        Outbox-first pattern (B-01): initial pending_send row added via session.add(),
+        then finalized to 'sent' + outbox event via session.execute(UPDATE ...).
+        """
         pref = _pref()
         sched, _sf, _ep = _make_scheduler()
 
-        log_rows: list[Any] = []
+        added_rows: list[Any] = []
 
         with patch("alert.infrastructure.email.scheduler.EmailPreferenceRepository") as mock_repo_cls:
             mock_repo = AsyncMock()
@@ -406,12 +413,21 @@ class TestEmailScheduler:
             mock_repo_cls.return_value = mock_repo
 
             session_mock = _sf.return_value.__aenter__.return_value
-            session_mock.add = MagicMock(side_effect=lambda row: log_rows.append(row))
+            session_mock.add = MagicMock(side_effect=lambda row: added_rows.append(row))
+            session_mock.execute = AsyncMock()
 
             await sched.run()
 
-        sent_rows = [r for r in log_rows if hasattr(r, "status") and r.status == "sent"]
-        assert len(sent_rows) >= 1
+        from alert.infrastructure.db.models import EmailLogModel, OutboxEventModel
+
+        # pending_send row added before send attempt
+        pending_rows = [r for r in added_rows if isinstance(r, EmailLogModel) and r.status == "pending_send"]
+        assert len(pending_rows) >= 1
+        # outbox event (OutboxEventModel) also added in finalize_sent
+        outbox_rows = [r for r in added_rows if isinstance(r, OutboxEventModel)]
+        assert len(outbox_rows) >= 1
+        # finalize_sent called session.execute (UPDATE to 'sent' + UPDATE last_digest_sent_at)
+        assert session_mock.execute.called
 
     @pytest.mark.unit
     async def test_run_no_users_no_sends(self) -> None:
@@ -433,17 +449,16 @@ class TestEmailScheduler:
         pref = _pref(email_address="override@example.com")
         sched, _sf, ep = _make_scheduler()
 
-        with (
-            patch("alert.infrastructure.email.scheduler.EmailPreferenceRepository") as mock_repo_cls,
-            patch.object(sched, "_fetch_user_email_direct", AsyncMock()) as mock_s1,
-        ):
+        with patch("alert.infrastructure.email.scheduler.EmailPreferenceRepository") as mock_repo_cls:
             mock_repo = AsyncMock()
             mock_repo.list_scheduled_users = AsyncMock(return_value=[pref])
             mock_repo_cls.return_value = mock_repo
 
+            sched._s1.get_user_email = AsyncMock()
             await sched.run()
 
-        mock_s1.assert_not_called()
+        # S1 should NOT be called because email_address was set in preferences
+        sched._s1.get_user_email.assert_not_called()
         ep.send.assert_called_once()
         call_kwargs = ep.send.call_args.kwargs
         assert call_kwargs["to"] == "override@example.com"
@@ -461,10 +476,10 @@ class TestEmailScheduler:
             mock_repo.list_scheduled_users = AsyncMock(return_value=[pref])
             mock_repo_cls.return_value = mock_repo
 
-            with patch.object(sched, "_fetch_user_email_direct", AsyncMock(return_value=None)):
-                session_mock = sf.return_value.__aenter__.return_value
-                session_mock.add = MagicMock(side_effect=lambda row: log_rows.append(row))
-                await sched.run()
+            sched._s1.get_user_email = AsyncMock(return_value=None)
+            session_mock = sf.return_value.__aenter__.return_value
+            session_mock.add = MagicMock(side_effect=lambda row: log_rows.append(row))
+            await sched.run()
 
         skipped = [r for r in log_rows if hasattr(r, "status") and r.status == "skipped"]
         assert len(skipped) >= 1

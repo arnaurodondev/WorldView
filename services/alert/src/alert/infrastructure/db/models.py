@@ -180,6 +180,7 @@ class EmailPreferenceModel(Base):
         CheckConstraint("send_day_of_week BETWEEN 0 AND 6", name="ck_email_prefs_day"),
         CheckConstraint("send_hour_utc BETWEEN 0 AND 23", name="ck_email_prefs_hour"),
         Index("idx_email_prefs_scheduler", "tenant_id", "weekly_digest_enabled", "send_day_of_week"),
+        UniqueConstraint("tenant_id", "user_id", name="uq_email_prefs_tenant_user"),
     )
 
 
@@ -201,6 +202,7 @@ class EmailLogModel(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("idx_email_log_user_sent_at", "user_id", "sent_at"),

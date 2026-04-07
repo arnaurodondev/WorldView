@@ -2,36 +2,31 @@
 
 Used by ``EmailScheduler`` to produce an outbox event after a successful send.
 The outbox dispatcher picks it up and publishes to Kafka (topic: alert.email.sent.v1).
+
+C-04: Schema is loaded from the canonical .avsc file in ``infra/kafka/schemas/``
+rather than being defined inline.  All Avro schemas MUST live in the shared
+schema directory — defining schemas inline in service code is a pattern to avoid
+because it duplicates the source of truth and can drift from the canonical version.
+See BUG_PATTERNS.md §BP-119 (schema inline drift).
 """
 
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import fastavro  # type: ignore[import-untyped]
+import fastavro.schema  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from uuid import UUID
 
-_EMAIL_SENT_SCHEMA: dict[str, Any] = {
-    "type": "record",
-    "name": "AlertEmailSent",
-    "namespace": "com.worldview",
-    "fields": [
-        {"name": "event_id", "type": "string"},
-        {"name": "event_type", "type": "string", "default": "alert.email.sent"},
-        {"name": "schema_version", "type": "int", "default": 1},
-        {"name": "occurred_at", "type": "string"},
-        {"name": "user_id", "type": "string"},
-        {"name": "tenant_id", "type": "string"},
-        {"name": "email_type", "type": "string"},
-        {"name": "provider", "type": "string"},
-        {"name": "provider_message_id", "type": ["null", "string"], "default": None},
-        {"name": "sent_at", "type": "string"},
-        {"name": "subject", "type": "string"},
-    ],
-}
+# Resolve schema path relative to this file's location in the repo tree.
+# Layout: services/alert/src/alert/infrastructure/messaging/email_sent_event.py
+#                                                              ^ parents[0]
+# parents[6] = repo root
+_SCHEMA_PATH = Path(__file__).parents[6] / "infra" / "kafka" / "schemas" / "alert.email.sent.v1.avsc"
 
 _TOPIC = "alert.email.sent.v1"
 
@@ -41,7 +36,7 @@ _PARSED_SCHEMA: dict[str, Any] | None = None
 def _get_parsed_schema() -> dict[str, Any]:
     global _PARSED_SCHEMA
     if _PARSED_SCHEMA is None:
-        _PARSED_SCHEMA = fastavro.parse_schema(_EMAIL_SENT_SCHEMA)  # type: ignore[assignment]
+        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)  # type: ignore[assignment]
     return _PARSED_SCHEMA  # type: ignore[return-value]
 
 

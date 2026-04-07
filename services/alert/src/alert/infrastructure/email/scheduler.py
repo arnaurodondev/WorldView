@@ -9,8 +9,10 @@ day/hour, then orchestrates the per-user digest flow:
   2. Fetch OHLCV + fundamentals from S3 (best-effort).
   3. Request AI narrative from S8 (best-effort — send partial on failure).
   4. Render HTML/plain template stub (full template implemented in Wave D-2).
-  5. Send via email provider with exponential-backoff retry (3 attempts).
-  6. Insert ``email_log`` row (status: sent | failed | skipped).
+  5. Write a ``pending_send`` log entry BEFORE attempting the send (outbox-first
+     so crash-recovery can detect and retry stalled sends).
+  6. Send via email provider with exponential-backoff retry (3 attempts).
+  7. UPDATE log row to ``sent`` | ``failed`` + write outbox event atomically.
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from sqlalchemy import update
 
 from alert.domain.email_provider import EmailProviderError
 from alert.infrastructure.clients.s8_client import BriefingClientError
-from alert.infrastructure.db.models import EmailLogModel, OutboxEventModel
+from alert.infrastructure.db.models import EmailLogModel, EmailPreferenceModel, OutboxEventModel
 from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
 from alert.infrastructure.email.template import render_digest_email
 from alert.infrastructure.messaging.email_sent_event import EMAIL_SENT_TOPIC, serialize_email_sent
@@ -126,15 +129,14 @@ class EmailScheduler:
         # ── 1. Resolve delivery address ──────────────────────────────────────
         email_address = pref.email_address
         if not email_address:
-            user_info = await self._resolve_user_email(user_id)
-            if not user_info:
+            email_address = await self._s1.get_user_email(str(user_id))
+            if not email_address:
                 logger.warning(  # type: ignore[no-any-return]
                     "email_scheduler.skip_no_email",
                     user_id=str(user_id),
                 )
-                await self._log_result(user_id, tenant_id, "skipped", error_detail="no_email_address")
+                await self._log_skipped(user_id, tenant_id)
                 return
-            email_address = user_info
 
         # ── 2. Fetch market data (best-effort) ───────────────────────────────
         # entity_ids would normally come from the portfolio context; for the
@@ -152,13 +154,16 @@ class EmailScheduler:
         narrative = ""
         briefing: dict[str, Any] | None = None
         try:
-            briefing = await self._s8.request_briefing(
+            raw = await self._s8.request_briefing(
                 user_id=user_id,
                 tenant_id=tenant_id,
                 portfolio_context=portfolio_context,
                 market_snapshots=market_snapshots,
             )
-            narrative = str(briefing.get("narrative", ""))
+            # M-05: guard against non-dict responses (e.g. None or error string)
+            if isinstance(raw, dict):
+                briefing = raw
+                narrative = str(briefing.get("narrative", ""))
         except BriefingClientError:
             logger.warning(  # type: ignore[no-any-return]
                 "email_scheduler.s8_briefing_unavailable",
@@ -179,32 +184,22 @@ class EmailScheduler:
         # ── 5. Send with exponential-backoff retry + outbox event ───────────
         await self._send_with_retry(user_id, tenant_id, email_address, html_body, text_body)
 
-    async def _resolve_user_email(self, user_id: UUID) -> str | None:
-        """Fetch user email from S1 via ``GET /internal/v1/users/{user_id}``
-        (endpoint added in Wave E-1). Returns None when S1 is unavailable.
-        """
-        return await self._fetch_user_email_direct(user_id)
-
-    async def _fetch_user_email_direct(self, user_id: UUID) -> str | None:
-        """Call GET /internal/v1/users/{user_id} on S1 to get the email address."""
-        import httpx
-
-        url = f"{self._s1._base_url}/internal/v1/users/{user_id}"
-        try:
-            resp = await self._s1._client.get(
-                url,
-                headers={"X-Internal-Token": self._settings.s1_internal_token},
-            )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
-            return str(data.get("email_address", "")) or None
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            logger.warning(  # type: ignore[no-any-return]
-                "email_scheduler.s1_user_lookup_failed",
-                user_id=str(user_id),
-                error=str(exc),
-            )
-            return None
+    async def _log_skipped(self, user_id: UUID, tenant_id: UUID) -> None:
+        """Insert a single 'skipped' email_log row (no outbox event needed)."""
+        now = utc_now()
+        row = EmailLogModel(
+            log_id=new_uuid7(),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            email_type=_EMAIL_TYPE,
+            sent_at=now,
+            provider=self._settings.email_provider,
+            status="skipped",
+            error_detail="no_email_address",
+        )
+        async with self._sf() as session:
+            session.add(row)
+            await session.commit()
 
     async def _send_with_retry(
         self,
@@ -214,11 +209,21 @@ class EmailScheduler:
         html_body: str,
         text_body: str,
     ) -> None:
-        """Attempt email send up to ``_MAX_SEND_ATTEMPTS`` times.
+        """Outbox-first send with exponential-backoff retry.
 
-        On success: inserts email_log with status='sent'.
-        On all attempts exhausted: inserts email_log with status='failed'.
+        Pattern (B-01):
+          1. Write ``pending_send`` log entry atomically BEFORE attempting send.
+          2. Attempt send up to ``_MAX_SEND_ATTEMPTS`` times.
+          3a. Success → UPDATE log to ``sent`` + INSERT outbox event + UPDATE
+              ``email_preferences.last_digest_sent_at`` in one transaction.
+          3b. Exhausted → UPDATE log to ``failed`` in one transaction.
+
+        This means every attempted send is always visible, enabling crash
+        detection and retry by an operator or a future recovery job.
         """
+        log_id = new_uuid7()
+        await self._create_pending_log(log_id, user_id, tenant_id)
+
         last_error: str = ""
         for attempt in range(_MAX_SEND_ATTEMPTS):
             try:
@@ -229,7 +234,7 @@ class EmailScheduler:
                     text_body=text_body,
                     from_address=self._settings.email_from_address,
                 )
-                await self._log_result(user_id, tenant_id, "sent", provider_message_id=msg_id)
+                await self._finalize_sent(log_id, user_id, tenant_id, msg_id)
                 logger.info(  # type: ignore[no-any-return]
                     "email_scheduler.digest_sent",
                     user_id=str(user_id),
@@ -247,62 +252,88 @@ class EmailScheduler:
                 if attempt < len(_RETRY_DELAYS):
                     await asyncio.sleep(_RETRY_DELAYS[attempt])
 
-        # All attempts exhausted — log failure, no outbox event (send never succeeded)
-        await self._log_result(user_id, tenant_id, "failed", error_detail=last_error)
+        # All attempts exhausted
+        await self._finalize_failed(log_id, user_id, tenant_id, last_error)
         logger.error(  # type: ignore[no-any-return]
             "email_scheduler.digest_failed",
             user_id=str(user_id),
             error=last_error,
         )
 
-    async def _log_result(
-        self,
-        user_id: UUID,
-        tenant_id: UUID,
-        status: str,
-        *,
-        provider_message_id: str | None = None,
-        error_detail: str | None = None,
-    ) -> None:
-        """Insert email_log + outbox event (on success) in a single transaction.
+    # ── Outbox-first transaction helpers ────────────────────────────────────
 
-        For status='sent' an ``alert.email.sent.v1`` outbox row is written
-        atomically alongside the log row — this is the transactional outbox
-        pattern (no dual-write risk).
-        """
+    async def _create_pending_log(self, log_id: Any, user_id: UUID, tenant_id: UUID) -> None:
+        """Step 1: INSERT pending_send row before attempting the send."""
         now = utc_now()
         row = EmailLogModel(
-            log_id=new_uuid7(),
+            log_id=log_id,
             user_id=user_id,
             tenant_id=tenant_id,
             email_type=_EMAIL_TYPE,
             sent_at=now,
             provider=self._settings.email_provider,
-            provider_message_id=provider_message_id,
-            status=status,
-            error_detail=error_detail,
+            status="pending_send",
         )
         async with self._sf() as session:
             session.add(row)
-            if status == "sent":
-                event_id = str(new_uuid7())
-                now_iso = now.isoformat()
-                payload = serialize_email_sent(
-                    event_id=event_id,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    email_type=_EMAIL_TYPE,
-                    provider=self._settings.email_provider,
-                    sent_at=now_iso,
-                    subject=_DIGEST_SUBJECT,
-                    occurred_at=now_iso,
-                    provider_message_id=provider_message_id,
-                )
-                outbox_row = OutboxEventModel(
+            await session.commit()
+
+    async def _finalize_sent(
+        self,
+        log_id: Any,
+        user_id: UUID,
+        tenant_id: UUID,
+        provider_message_id: str | None,
+    ) -> None:
+        """Step 3a: UPDATE log to 'sent' + INSERT outbox + UPDATE last_digest_sent_at atomically."""
+        now = utc_now()
+        now_iso = now.isoformat()
+        event_id = str(new_uuid7())
+        payload = serialize_email_sent(
+            event_id=event_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            email_type=_EMAIL_TYPE,
+            provider=self._settings.email_provider,
+            sent_at=now_iso,
+            subject=_DIGEST_SUBJECT,
+            occurred_at=now_iso,
+            provider_message_id=provider_message_id,
+        )
+        async with self._sf() as session:
+            await session.execute(
+                update(EmailLogModel)
+                .where(EmailLogModel.log_id == log_id)
+                .values(status="sent", updated_at=now, provider_message_id=provider_message_id)
+            )
+            session.add(
+                OutboxEventModel(
                     event_id=new_uuid7(),
                     topic=EMAIL_SENT_TOPIC,
                     partition_key=str(user_id),
                     payload_avro=payload,
                 )
-                session.add(outbox_row)
+            )
+            await session.execute(
+                update(EmailPreferenceModel)
+                .where(EmailPreferenceModel.user_id == user_id)
+                .values(last_digest_sent_at=now)
+            )
+            await session.commit()
+
+    async def _finalize_failed(
+        self,
+        log_id: Any,
+        user_id: UUID,
+        tenant_id: UUID,
+        error_detail: str,
+    ) -> None:
+        """Step 3b: UPDATE log to 'failed' so retry tooling can detect it."""
+        now = utc_now()
+        async with self._sf() as session:
+            await session.execute(
+                update(EmailLogModel)
+                .where(EmailLogModel.log_id == log_id)
+                .values(status="failed", updated_at=now, error_detail=error_detail)
+            )
             await session.commit()

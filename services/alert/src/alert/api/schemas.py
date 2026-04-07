@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 # ── Pending Alerts ────────────────────────────────────────────────────────────
 
@@ -70,7 +70,7 @@ class EmailPreferencesResponse(BaseModel):
     weekly_digest_enabled: bool
     send_day_of_week: int = Field(ge=0, le=6)
     send_hour_utc: int = Field(ge=0, le=23)
-    email_address: str | None
+    email_address: EmailStr | None
     last_digest_sent_at: datetime | None
 
 
@@ -80,7 +80,7 @@ class UpdateEmailPreferencesRequest(BaseModel):
     weekly_digest_enabled: bool | None = None
     send_day_of_week: int | None = Field(default=None, ge=0, le=6)
     send_hour_utc: int | None = Field(default=None, ge=0, le=23)
-    email_address: str | None = Field(default=..., description="Delivery address; null clears override")
+    email_address: EmailStr | None = Field(default=..., description="Delivery address; null clears override")
 
 
 class DigestTriggerRequest(BaseModel):
