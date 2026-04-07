@@ -308,3 +308,120 @@ def test_relation_type_registry_new_types(conn: sa.engine.Connection) -> None:
     assert rows["corporate_action"][1] == "TEMPORAL_CLAIM"
     assert rows["corporate_action"][2] == "DURABLE"
     assert rows["corporate_action"][3] == pytest.approx(0.90)
+
+
+# ── Migration 0003: fundamentals_ohlcv orphan cleanup ────────────────────────
+
+
+def test_migration_0003_cleanup_preserves_company_rows(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL leaves fundamentals_ohlcv rows for financial_instrument intact."""
+    entity_id = str(uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) "
+            "VALUES (:id, 'Acme Corp', 'financial_instrument')"
+        ),
+        {"id": entity_id},
+    )
+    conn.execute(
+        text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, 'fundamentals_ohlcv')"),
+        {"id": entity_id},
+    )
+
+    # Run the same DELETE SQL used in migration 0003.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text("SELECT count(*) FROM entity_embedding_state WHERE entity_id = :id AND view_type = 'fundamentals_ohlcv'"),
+        {"id": entity_id},
+    )
+    assert result.scalar() == 1, "fundamentals_ohlcv row for financial_instrument must NOT be deleted"
+    conn.rollback()
+
+
+def test_migration_0003_cleanup_removes_non_company_rows(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL removes fundamentals_ohlcv rows for non-company entities."""
+    non_company_types = ["person", "country", "organization", "regulatory_body", "index"]
+    entity_ids: list[str] = []
+
+    for entity_type in non_company_types:
+        eid = str(uuid.uuid4())
+        entity_ids.append(eid)
+        conn.execute(
+            text("INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) VALUES (:id, :name, :type)"),
+            {"id": eid, "name": f"Test {entity_type}", "type": entity_type},
+        )
+        conn.execute(
+            text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, 'fundamentals_ohlcv')"),
+            {"id": eid},
+        )
+
+    # Run the migration cleanup SQL.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text(
+            "SELECT count(*) FROM entity_embedding_state "
+            "WHERE entity_id = ANY(:ids) AND view_type = 'fundamentals_ohlcv'"
+        ),
+        {"ids": entity_ids},
+    )
+    assert result.scalar() == 0, "fundamentals_ohlcv rows for non-company entities must all be deleted"
+    conn.rollback()
+
+
+def test_migration_0003_cleanup_preserves_other_view_types(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL does not touch definition or narrative rows."""
+    entity_id = str(uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) VALUES (:id, 'Jane Doe', 'person')"
+        ),
+        {"id": entity_id},
+    )
+    for view_type in ("definition", "narrative", "fundamentals_ohlcv"):
+        conn.execute(
+            text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, :vt)"),
+            {"id": entity_id, "vt": view_type},
+        )
+
+    # Run the migration cleanup SQL.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text("SELECT view_type FROM entity_embedding_state WHERE entity_id = :id ORDER BY view_type"),
+        {"id": entity_id},
+    )
+    remaining = [row[0] for row in result]
+    assert remaining == ["definition", "narrative"], f"Expected only definition+narrative to remain, got: {remaining}"
+    conn.rollback()
