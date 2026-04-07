@@ -243,11 +243,12 @@ S10 needs a provider-agnostic email interface, email_preferences table, email_lo
 
 ---
 
-### Wave C-2: Email Provider Adapters (Resend + SendGrid + SMTP) + Factory
+### Wave C-2: Email Provider Adapters (Resend + SendGrid + SMTP) + Factory ✅
 
 **Goal**: Implement 3 email provider adapters and a factory function selected by `ALERT_EMAIL_PROVIDER` env var.
 **Depends on**: Wave C-1
 **Estimated effort**: 60–75 minutes
+**Status**: **DONE** — 2026-04-07 · 190 tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -261,10 +262,10 @@ S10 needs a provider-agnostic email interface, email_preferences table, email_lo
 | T-C-2-06 | Unit tests: ResendEmailAdapter mock, factory selection, SMTP adapter | test | `services/alert/tests/unit/infrastructure/test_email_adapters.py` | Mock httpx responses; factory returns correct type; provider error raised on 4xx/5xx |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] `python -m pytest services/alert/tests -m "unit" -v` passes
-- [ ] No API keys or SMTP passwords hardcoded (env vars only)
-- [ ] `aiosmtplib` added to `services/alert/pyproject.toml` dependencies
+- [x] `ruff check` + `mypy` pass
+- [x] `python -m pytest services/alert/tests -m "unit" -v` passes (190 tests)
+- [x] No API keys or SMTP passwords hardcoded (env vars only)
+- [x] `aiosmtplib` added to `services/alert/pyproject.toml` dependencies
 
 ---
 

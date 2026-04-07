@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50
 
+    # ── Email provider ─────────────────────────────────────────────────────
+    email_provider: str = "resend"  # resend | sendgrid | smtp
+    email_from_address: str = ""
+    resend_api_key: str = ""
+    sendgrid_api_key: str = ""
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+
+    # ── Email scheduler ────────────────────────────────────────────────────
+    s8_base_url: str = "http://rag-chat:8008"
+    s8_internal_token: str = ""
+    s1_internal_token: str = ""
+
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
     service_name: str = "alert"
     log_level: str = "INFO"
