@@ -12,6 +12,7 @@ from rag_chat.domain.entities.chat import (
     RetrievedItem,
     compute_recency_score,
 )
+from rag_chat.domain.entities.context import ConversationContext, TurnSummary
 from rag_chat.domain.entities.conversation import (
     Citation,
     ContradictionRef,
@@ -25,11 +26,13 @@ __all__ = [
     "Citation",
     "CitationMeta",
     "ContradictionRef",
+    "ConversationContext",
     "ConversationThread",
     "Message",
     "ResolvedEntity",
     "ResolvedQuery",
     "RetrievalPlan",
     "RetrievedItem",
+    "TurnSummary",
     "compute_recency_score",
 ]

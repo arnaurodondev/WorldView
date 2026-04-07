@@ -51,4 +51,7 @@ class MessageModel(Base):
     token_count_out: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Context management columns (PRD-0016 §6.4 — added in migration 0002)
+    context_valkey_key: Mapped[str | None] = mapped_column(Text)
+    summary_valkey_key: Mapped[str | None] = mapped_column(Text)
     thread: Mapped[ThreadModel] = relationship("ThreadModel", back_populates="messages")

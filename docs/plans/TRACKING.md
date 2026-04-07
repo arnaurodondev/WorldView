@@ -11,7 +11,7 @@
 | PLAN-0010 | Architecture Hardening — DLQ Use Cases (R25), Security, Platform QA Script | QA-S4S5S6S7S10-001 | complete | 6/6 | 2026-03-31 | 2026-03-31 |
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
 | PLAN-0015 | S8 RAG/Chat: Hybrid Intelligence Pipeline | PRD-0015 | completed | 22/22 | 2026-04-07 | 2026-04-07 |
-| PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | in-progress | 1/11 | — | 2026-04-06 |
+| PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | in-progress | 2/11 | — | 2026-04-07 |
 | PLAN-0017 | Entity Screener + Similarity Search + Embedding View Fix + EODHD Description LLM | PRD-0017 | draft | 0/11 | — | 2026-04-04 |
 | PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | draft | 0/10 | — | 2026-04-04 |
 | PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | draft | 0/0 | — | 2026-04-06 |
@@ -62,7 +62,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0008 | QA Follow-Up — Standards Enforcement, Architecture Hardening & Production Readiness | PLAN-0001-E-R1 QA | 2026-03-30 | 10 | 2026-03-30 |
 | PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | 2026-03-30 | 4 | 2026-03-30 |
 | QA-S4S5S6S7S10-001 | Full QA Pass + E2E Test Suite: S4/S5/S6/S7/S10 security fixes + ASGI e2e suites + cross-service integration + real provider tests + infra scaffold | N/A | 2026-03-30 | — | 2026-03-30 |
-| PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | — |
+| PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | 2026-04-07 |
 | PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | 2026-04-01 | 9 | 2026-04-01 |
 | PLAN-0013 | Process Topology Completion + Alert WebSocket Cross-Process Bridge | PLAN-0011 QA follow-up | 2026-04-01 | 6 | 2026-04-01 |
 
