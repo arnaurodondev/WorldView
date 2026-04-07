@@ -331,11 +331,12 @@ The weekly email digest is S10's main new process: a scheduler that queries emai
 
 ---
 
-### Wave D-2: HTML Email Template + Avro Schema + Outbox Event
+### Wave D-2: HTML Email Template + Avro Schema + Outbox Event ✅
 
 **Goal**: Create HTML email template renderer; add `alert.email.sent.v1` Avro schema + outbox event production.
 **Depends on**: Wave D-1
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-07 · 271 unit + 11 contract tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -349,11 +350,11 @@ The weekly email digest is S10's main new process: a scheduler that queries emai
 | T-D-2-06 | Contract test: alert.email.sent.v1 schema alignment | test | `services/alert/tests/contract/test_email_sent_schema.py` | Schema validates with fastavro; forward-compatible |
 
 #### Validation Gate
-- [ ] `ruff check` + `mypy` pass
-- [ ] Avro schema validates with fastavro
-- [ ] `python -m pytest services/alert/tests -m "unit" -v` passes
-- [ ] Outbox pattern used (not dual-write)
-- [ ] XSS prevention: portfolio data XML-wrapped, never injected as raw HTML
+- [x] `ruff check` + `mypy` pass
+- [x] Avro schema validates with fastavro
+- [x] `python -m pytest services/alert/tests -m "unit" -v` passes
+- [x] Outbox pattern used (not dual-write)
+- [x] XSS prevention: portfolio data XML-wrapped, never injected as raw HTML
 
 ---
 
