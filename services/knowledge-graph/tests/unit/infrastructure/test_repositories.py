@@ -328,3 +328,136 @@ class TestOutboxRepository:
         asyncio.get_event_loop().run_until_complete(repo.fetch_pending(batch_size=10))
         sql = str(session.execute.call_args_list[0][0][0])
         assert "SKIP LOCKED" in sql.upper()
+
+
+# ---------------------------------------------------------------------------
+# get_view_types_for_entity_type  (pure function — no DB)
+# ---------------------------------------------------------------------------
+
+
+class TestGetViewTypesForEntityType:
+    def test_financial_instrument_gets_three_views(self) -> None:
+        """financial_instrument → (definition, narrative, fundamentals_ohlcv)."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            VIEW_DEFINITION,
+            VIEW_FUNDAMENTALS,
+            VIEW_NARRATIVE,
+            get_view_types_for_entity_type,
+        )
+
+        result = get_view_types_for_entity_type("financial_instrument")
+        assert set(result) == {VIEW_DEFINITION, VIEW_NARRATIVE, VIEW_FUNDAMENTALS}
+        assert len(result) == 3
+
+    def test_non_company_gets_two_views(self) -> None:
+        """Non-company entity types → (definition, narrative) only."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            VIEW_DEFINITION,
+            VIEW_NARRATIVE,
+            get_view_types_for_entity_type,
+        )
+
+        for entity_type in ("person", "country", "organization", "regulatory_body", "index"):
+            result = get_view_types_for_entity_type(entity_type)
+            assert set(result) == {
+                VIEW_DEFINITION,
+                VIEW_NARRATIVE,
+            }, f"Expected 2 views for entity_type={entity_type!r}, got: {result}"
+            assert len(result) == 2
+
+    def test_unknown_entity_type_gets_two_views(self) -> None:
+        """Unrecognised entity types default to 2 views (safe fallback)."""
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            get_view_types_for_entity_type,
+        )
+
+        result = get_view_types_for_entity_type("unknown_future_type")
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# EntityEmbeddingStateRepository.ensure_rows_exist
+# ---------------------------------------------------------------------------
+
+
+class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
+    def test_ensure_rows_exist_company_executes_three_inserts(self) -> None:
+        """financial_instrument → 3 INSERT statements (one per view type)."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EntityEmbeddingStateRepository(session)
+
+        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
+
+        assert (
+            session.execute.call_count == 3
+        ), f"Expected 3 execute calls for financial_instrument, got {session.execute.call_count}"
+        # Verify fundamentals_ohlcv row was requested
+        all_view_types_used = [call[0][1]["view_type"] for call in session.execute.call_args_list]
+        assert "fundamentals_ohlcv" in all_view_types_used
+
+    def test_ensure_rows_exist_non_company_executes_two_inserts(self) -> None:
+        """Non-company entity → 2 INSERT statements (definition + narrative only)."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EntityEmbeddingStateRepository(session)
+
+        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "person"))
+
+        assert session.execute.call_count == 2, f"Expected 2 execute calls for person, got {session.execute.call_count}"
+        all_view_types_used = [call[0][1]["view_type"] for call in session.execute.call_args_list]
+        assert (
+            "fundamentals_ohlcv" not in all_view_types_used
+        ), "fundamentals_ohlcv must NOT be inserted for non-company entities"
+
+    def test_ensure_rows_exist_all_non_company_types_get_two_inserts(self) -> None:
+        """Each non-company entity type gets exactly 2 INSERT calls."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        non_company_types = ["person", "country", "organization", "regulatory_body", "index"]
+
+        for entity_type in non_company_types:
+            session = AsyncMock()
+            session.execute = AsyncMock(return_value=MagicMock())
+            repo = EntityEmbeddingStateRepository(session)
+
+            asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), entity_type))
+
+            assert (
+                session.execute.call_count == 2
+            ), f"Expected 2 execute calls for entity_type={entity_type!r}, got {session.execute.call_count}"
+
+    def test_ensure_rows_exist_uses_on_conflict_do_nothing(self) -> None:
+        """INSERT must use ON CONFLICT DO NOTHING for idempotency."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EntityEmbeddingStateRepository(session)
+
+        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
+
+        for call in session.execute.call_args_list:
+            sql = str(call[0][0])
+            assert "ON CONFLICT" in sql.upper(), "INSERT must be idempotent (ON CONFLICT DO NOTHING)"
+            assert "DO NOTHING" in sql.upper()
