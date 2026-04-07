@@ -6,7 +6,7 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-07
 total_waves: 11
-waves_done: 3
+waves_done: 5
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -117,17 +117,23 @@ waves_done: 3
 
 ---
 
-### Wave B-1: S3 — Enhanced screener response + sort + total + `screen_field_metadata` table
+### Wave B-1: S3 — Enhanced screener response + sort + total + `screen_field_metadata` table ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-07 · 363 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] Add `ScreenFieldMetadata` domain object (12 static fields)
-- [ ] Extend `ScreenInstrumentResponse` with `ticker`, `name`, `exchange`, `sector`
-- [ ] Add `sort_by`, `sort_order`, `total` to request/response (`COUNT(*) OVER()` window function)
-- [ ] Tighten limit: max 200, default 50; offset max 5000
-- [ ] Alembic migration: `screen_field_metadata` table in `market_data_db`
-- [ ] Unit tests: `test_screen_response_includes_instrument_fields`, `test_screen_sort_by_ticker`, `test_screen_sort_by_metric_nulls_last`, `test_screen_total_count`, `test_screen_sort_by_invalid_field`
+- [x] Add `ScreenFieldMetadata` domain object (12 static fields)
+- [x] Extend `ScreenInstrumentResponse` with `ticker`, `name`, `exchange`, `sector`
+- [x] Add `sort_by`, `sort_order`, `total` to request/response (`COUNT(*) OVER()` window function)
+- [x] Tighten limit: max 200, default 50; offset max 5000
+- [x] Alembic migration: `screen_field_metadata` table in `market_data_db`
+- [x] Unit tests: `test_screen_response_includes_instrument_fields`, `test_screen_sort_by_ticker`, `test_screen_sort_by_metric_nulls_last`, `test_screen_total_count`, `test_screen_sort_by_invalid_field`
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (100 source files, 0 errors)
+- [x] 363 unit tests pass (12 new Wave B-1 tests + 5 updated existing tests)
 
 **Depends on**: none (parallel with A waves)
 **Estimated effort**: 4h

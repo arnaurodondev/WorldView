@@ -63,6 +63,10 @@ class ScreenResult:
 
     instrument_id: str
     metrics: dict[str, Decimal | None]
+    ticker: str | None = None
+    name: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
 
 
 class SecurityRepository(ABC):
@@ -396,10 +400,12 @@ class FundamentalMetricsQueryRepository(ABC):
         self,
         filters: list[ScreenFilter],
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
-    ) -> list[ScreenResult]:
-        """Screen instruments by metric thresholds; return matching instruments."""
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> tuple[list[ScreenResult], int]:
+        """Screen instruments by metric thresholds; return (matching instruments, total count)."""
 
     @abstractmethod
     async def get_available_metrics(self, instrument_id: str) -> list[str]:

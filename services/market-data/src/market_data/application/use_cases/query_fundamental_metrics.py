@@ -47,13 +47,17 @@ class ScreenInstrumentsUseCase:
         self,
         filters: list[ScreenFilter],
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
-    ) -> list[ScreenResult]:
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> tuple[list[ScreenResult], int]:
         return await self._uow.fundamental_metrics_query.screen(
             filters,
             limit=limit,
             offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
 
