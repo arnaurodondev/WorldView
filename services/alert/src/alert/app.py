@@ -18,7 +18,7 @@ import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from alert.api import dlq, health, routes
+from alert.api import dlq, email_routes, health, routes
 from alert.config import Settings
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -141,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(routes.router)
     app.include_router(dlq.router)
+    app.include_router(email_routes.router)
 
     return app
 
