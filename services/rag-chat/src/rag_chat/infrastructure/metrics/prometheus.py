@@ -79,3 +79,30 @@ rag_injection_blocked = Counter(
     "rag_injection_blocked_total",
     "Number of prompt injection attempts blocked",
 )
+
+# ── Context management (PRD-0016 §13) ────────────────────────────────────────
+
+rag_chunk_cache_hits = Counter(
+    "s8_chunk_cache_hits_total",
+    "Chunk cache hits — previous turn's chunks reused (all 3 conditions met)",
+    ["intent"],
+)
+
+rag_chunk_cache_misses = Counter(
+    "s8_chunk_cache_misses_total",
+    "Chunk cache misses broken down by reason",
+    ["reason"],  # no_cache | intent_mismatch | entity_mismatch | low_similarity
+)
+
+rag_turn_summary_duration = Histogram(
+    "s8_turn_summary_duration_seconds",
+    "Async LLM turn-summary generation latency",
+    buckets=[0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
+)
+
+rag_context_token_estimate = Histogram(
+    "s8_context_token_estimate",
+    "Assembled ConversationContext token estimate per intent",
+    ["intent"],
+    buckets=[500, 1000, 1500, 2000, 3000, 4000, 5000, 6000],
+)
