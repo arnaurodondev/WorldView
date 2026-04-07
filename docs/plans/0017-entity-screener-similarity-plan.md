@@ -6,7 +6,7 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-08
 total_waves: 11
-waves_done: 6
+waves_done: 7
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -162,16 +162,24 @@ waves_done: 6
 
 ---
 
-### Wave B-3: S7 — `EntityEmbeddingANNRepository` + pgvector ANN query
+### Wave B-3: S7 — `EntityEmbeddingANNRepository` + pgvector ANN query ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 263 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] Add `EntityEmbeddingANNRepositoryPort` ABC to application ports
-- [ ] `AnnResult` dataclass: `entity_id: UUID, distance: float`
-- [ ] Implement `SqlalchemyEntityEmbeddingANNRepository` — pgvector `<=>` cosine distance
-- [ ] JOIN on `canonical_entities` to filter by `entity_types`
-- [ ] Unit tests: `test_similar_entities_no_embedding`, `test_similar_entities_not_found`
+- [x] Add `EntityEmbeddingANNRepositoryPort` ABC to `application/ports/repositories.py`
+- [x] `AnnResult` frozen dataclass: `entity_id: UUID, distance: float`
+- [x] Add `SimilarEntityResult` frozen dataclass to `domain/models.py` (PRD-0017 §6.5)
+- [x] Add `EmbeddingNotAvailableError` to `domain/errors.py`
+- [x] Implement `SqlalchemyEntityEmbeddingANNRepository` — pgvector `<=>` cosine distance
+- [x] JOIN on `canonical_entities` to filter by `entity_types` via `ANY(:array)`
+- [x] `get_embedding()` method for null-embedding check (used by use case step 2)
+- [x] Unit tests: `test_similar_entities_no_embedding`, `test_similar_entities_not_found` + 12 additional
+
+**Notes**:
+- `extra_conditions` f-string injection is safe: only hardcoded SQL fragments, all user data via bind params
+- `entity_types` uses `ANY(:array)` parameterized — no injection risk
+- `get_embedding()` parses pgvector text `"[0.1,0.2,...]"` into `list[float]`
 
 **Depends on**: A-2 (ensure_rows_exist fix deployed)
 **Estimated effort**: 3h
