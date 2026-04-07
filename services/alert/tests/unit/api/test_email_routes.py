@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
+from alert.api.dependencies import get_email_prefs_get_uc, get_email_prefs_update_uc
 from alert.app import create_app
 from alert.config import Settings
 from alert.domain.entities import EmailPreference
@@ -19,7 +20,7 @@ _TENANT_ID = UUID("01912345-6789-7abc-8def-0123456789ac")
 _ADMIN_TOKEN = "test-admin-token"  # noqa: S105
 
 
-def _make_app() -> tuple[object, AsyncMock]:
+def _make_app() -> object:
     settings = Settings(
         database_url="postgresql+asyncpg://x:x@localhost/x",
         admin_token=_ADMIN_TOKEN,
@@ -30,12 +31,14 @@ def _make_app() -> tuple[object, AsyncMock]:
     )
     app = create_app(settings)
 
+    # Minimal mock session factory — prevents AttributeError when FastAPI
+    # resolves DB dependencies in parallel with Pydantic body validation.
+    # Tests that need the use case mock it via app.dependency_overrides.
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
     session.execute = AsyncMock()
-
     mock_factory = MagicMock()
     mock_factory.return_value = session
     app.state.session_factory = mock_factory
@@ -44,7 +47,7 @@ def _make_app() -> tuple[object, AsyncMock]:
     from alert.infrastructure.websocket.manager import ConnectionManager
 
     app.state.ws_manager = ConnectionManager()
-    return app, session
+    return app
 
 
 def _default_pref(
@@ -66,34 +69,26 @@ def _default_pref(
     )
 
 
-_GET_UC_PATH = "alert.api.email_routes.GetEmailPreferencesUseCase"
-_UPD_UC_PATH = "alert.api.email_routes.UpdateEmailPreferencesUseCase"
-_REPO_PATH = "alert.infrastructure.db.repositories.email_preference.EmailPreferenceRepository"
-
-
 # ── GET /api/v1/email/preferences ────────────────────────────────────────────
 
 
 class TestGetEmailPreferences:
     @pytest.mark.unit
     async def test_returns_200_with_preferences(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         pref = _default_pref()
 
-        with (
-            patch(_REPO_PATH),
-            patch(_GET_UC_PATH) as mock_uc_cls,
-        ):
-            mock_uc = AsyncMock()
-            mock_uc.execute = AsyncMock(return_value=pref)
-            mock_uc_cls.return_value = mock_uc
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=pref)
+        app.dependency_overrides[get_email_prefs_get_uc] = lambda: mock_uc  # type: ignore[attr-defined]
 
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.get(
-                    "/api/v1/email/preferences",
-                    headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get(
+                "/api/v1/email/preferences",
+                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+            )
 
+        app.dependency_overrides.clear()  # type: ignore[attr-defined]
         assert resp.status_code == 200
         body = resp.json()
         assert body["user_id"] == str(_USER_ID)
@@ -103,7 +98,7 @@ class TestGetEmailPreferences:
 
     @pytest.mark.unit
     async def test_missing_tenant_header_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
@@ -115,7 +110,7 @@ class TestGetEmailPreferences:
 
     @pytest.mark.unit
     async def test_missing_user_header_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
@@ -127,7 +122,7 @@ class TestGetEmailPreferences:
 
     @pytest.mark.unit
     async def test_invalid_uuid_header_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
@@ -139,23 +134,20 @@ class TestGetEmailPreferences:
 
     @pytest.mark.unit
     async def test_last_digest_sent_at_null_in_response(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         pref = _default_pref(last_digest_sent_at=None)
 
-        with (
-            patch(_REPO_PATH),
-            patch(_GET_UC_PATH) as mock_uc_cls,
-        ):
-            mock_uc = AsyncMock()
-            mock_uc.execute = AsyncMock(return_value=pref)
-            mock_uc_cls.return_value = mock_uc
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=pref)
+        app.dependency_overrides[get_email_prefs_get_uc] = lambda: mock_uc  # type: ignore[attr-defined]
 
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.get(
-                    "/api/v1/email/preferences",
-                    headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get(
+                "/api/v1/email/preferences",
+                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+            )
 
+        app.dependency_overrides.clear()  # type: ignore[attr-defined]
         assert resp.status_code == 200
         assert resp.json()["last_digest_sent_at"] is None
 
@@ -166,29 +158,26 @@ class TestGetEmailPreferences:
 class TestUpdateEmailPreferences:
     @pytest.mark.unit
     async def test_returns_200_with_updated_preferences(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         updated = _default_pref(weekly_digest_enabled=False, send_day_of_week=1)
 
-        with (
-            patch(_REPO_PATH),
-            patch(_UPD_UC_PATH) as mock_uc_cls,
-        ):
-            mock_uc = AsyncMock()
-            mock_uc.execute = AsyncMock(return_value=updated)
-            mock_uc_cls.return_value = mock_uc
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=updated)
+        app.dependency_overrides[get_email_prefs_update_uc] = lambda: mock_uc  # type: ignore[attr-defined]
 
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.put(
-                    "/api/v1/email/preferences",
-                    json={
-                        "weekly_digest_enabled": False,
-                        "send_day_of_week": 1,
-                        "send_hour_utc": None,
-                        "email_address": None,
-                    },
-                    headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put(
+                "/api/v1/email/preferences",
+                json={
+                    "weekly_digest_enabled": False,
+                    "send_day_of_week": 1,
+                    "send_hour_utc": None,
+                    "email_address": None,
+                },
+                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+            )
 
+        app.dependency_overrides.clear()  # type: ignore[attr-defined]
         assert resp.status_code == 200
         body = resp.json()
         assert body["weekly_digest_enabled"] is False
@@ -196,7 +185,7 @@ class TestUpdateEmailPreferences:
 
     @pytest.mark.unit
     async def test_missing_auth_headers_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
@@ -209,7 +198,7 @@ class TestUpdateEmailPreferences:
     @pytest.mark.unit
     async def test_invalid_send_day_pydantic_returns_422(self) -> None:
         """send_day_of_week=7 is caught by Pydantic schema validation (ge=0, le=6)."""
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.put(
@@ -223,46 +212,40 @@ class TestUpdateEmailPreferences:
     @pytest.mark.unit
     async def test_use_case_value_error_returns_400(self) -> None:
         """A ValueError raised by the use case (e.g. cross-field constraint) maps to 400."""
-        app, _ = _make_app()
+        app = _make_app()
 
-        with (
-            patch(_REPO_PATH),
-            patch(_UPD_UC_PATH) as mock_uc_cls,
-        ):
-            mock_uc = AsyncMock()
-            mock_uc.execute = AsyncMock(side_effect=ValueError("custom domain constraint violated"))
-            mock_uc_cls.return_value = mock_uc
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(side_effect=ValueError("custom domain constraint violated"))
+        app.dependency_overrides[get_email_prefs_update_uc] = lambda: mock_uc  # type: ignore[attr-defined]
 
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.put(
-                    "/api/v1/email/preferences",
-                    json={"send_day_of_week": 1, "email_address": None},
-                    headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.put(
+                "/api/v1/email/preferences",
+                json={"send_day_of_week": 1, "email_address": None},
+                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+            )
 
+        app.dependency_overrides.clear()  # type: ignore[attr-defined]
         assert resp.status_code == 400
         assert "domain constraint" in resp.json()["detail"]
 
     @pytest.mark.unit
     async def test_use_case_receives_correct_user_and_tenant(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         pref = _default_pref()
 
-        with (
-            patch(_REPO_PATH),
-            patch(_UPD_UC_PATH) as mock_uc_cls,
-        ):
-            mock_uc = AsyncMock()
-            mock_uc.execute = AsyncMock(return_value=pref)
-            mock_uc_cls.return_value = mock_uc
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=pref)
+        app.dependency_overrides[get_email_prefs_update_uc] = lambda: mock_uc  # type: ignore[attr-defined]
 
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                await client.put(
-                    "/api/v1/email/preferences",
-                    json={"email_address": None},
-                    headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.put(
+                "/api/v1/email/preferences",
+                json={"email_address": None},
+                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+            )
 
+        app.dependency_overrides.clear()  # type: ignore[attr-defined]
         call_args = mock_uc.execute.call_args
         assert call_args[0][0] == _USER_ID
         assert call_args[0][1] == _TENANT_ID
@@ -274,7 +257,7 @@ class TestUpdateEmailPreferences:
 class TestTriggerDigest:
     @pytest.mark.unit
     async def test_returns_202_with_job_id(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         user_id = uuid4()
         tenant_id = uuid4()
 
@@ -293,7 +276,7 @@ class TestTriggerDigest:
 
     @pytest.mark.unit
     async def test_missing_admin_token_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
@@ -305,7 +288,7 @@ class TestTriggerDigest:
 
     @pytest.mark.unit
     async def test_wrong_admin_token_returns_401(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post(
@@ -318,7 +301,7 @@ class TestTriggerDigest:
 
     @pytest.mark.unit
     async def test_job_id_is_unique_per_call(self) -> None:
-        app, _ = _make_app()
+        app = _make_app()
         user_id = uuid4()
         tenant_id = uuid4()
         job_ids: set[str] = set()

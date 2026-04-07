@@ -367,6 +367,88 @@ async def test_generate_briefing_uc_concentration_score_multi_position() -> None
     assert result["risk_summary"]["concentration_score"] == pytest.approx(0.5, abs=1e-4)
 
 
+@pytest.mark.parametrize(
+    "positions,expected_hhi",
+    [
+        # Single position — maximum concentration
+        (
+            [{"symbol": "AAPL", "value": 10_000, "sector": "tech"}],
+            1.0,
+        ),
+        # Two equal positions — HHI = 2 * (0.5^2) = 0.5
+        (
+            [
+                {"symbol": "AAPL", "value": 5_000, "sector": "tech"},
+                {"symbol": "MSFT", "value": 5_000, "sector": "tech"},
+            ],
+            0.5,
+        ),
+        # Three equal positions — HHI = 3 * (1/3)^2 ≈ 0.333
+        (
+            [
+                {"symbol": "A", "value": 1_000, "sector": "x"},
+                {"symbol": "B", "value": 1_000, "sector": "x"},
+                {"symbol": "C", "value": 1_000, "sector": "x"},
+            ],
+            pytest.approx(1 / 3, abs=1e-4),
+        ),
+        # Four equal positions — HHI = 4 * (0.25^2) = 0.25
+        (
+            [
+                {"symbol": "A", "value": 2_500, "sector": "x"},
+                {"symbol": "B", "value": 2_500, "sector": "x"},
+                {"symbol": "C", "value": 2_500, "sector": "x"},
+                {"symbol": "D", "value": 2_500, "sector": "x"},
+            ],
+            0.25,
+        ),
+        # Dominant position (80 %) + 2 small (10 % each)
+        # HHI = 0.8^2 + 0.1^2 + 0.1^2 = 0.64 + 0.01 + 0.01 = 0.66
+        (
+            [
+                {"symbol": "DOM", "value": 8_000, "sector": "a"},
+                {"symbol": "SM1", "value": 1_000, "sector": "b"},
+                {"symbol": "SM2", "value": 1_000, "sector": "c"},
+            ],
+            pytest.approx(0.66, abs=1e-4),
+        ),
+    ],
+)
+async def test_generate_briefing_uc_hhi_concentration_parametrized(
+    positions: list[dict],  # type: ignore[type-arg]
+    expected_hhi: float,
+) -> None:
+    """Parametrised HHI concentration score across 1-4+ position portfolios (M-06)."""
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    async def _fake_stream(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+        yield "ok"
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = _fake_stream
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        internal_service_token="tok",
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={"positions": positions},
+        market_snapshots=[],
+        active_signals=[],
+        lookback_days=7,
+        token="tok",
+    )
+
+    assert result["risk_summary"]["concentration_score"] == expected_hhi
+
+
 async def test_generate_briefing_uc_rate_limit_sets_ttl_on_first_request() -> None:
     """expire() is called when incr returns 1 (first request of the day)."""
     from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase

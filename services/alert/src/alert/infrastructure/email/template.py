@@ -160,6 +160,11 @@ def _render_html(
 # ---------------------------------------------------------------------------
 
 
+def _sanitize(text: str) -> str:
+    """Strip CRLF from user-supplied text to prevent header injection (M-03)."""
+    return text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+
+
 def _render_text(
     narrative: str,
     risk_summary: dict[str, Any],
@@ -170,7 +175,7 @@ def _render_text(
     lines: list[str] = ["YOUR WEEKLY PORTFOLIO RISK DIGEST", "=" * 36, ""]
 
     if narrative:
-        lines += [narrative, ""]
+        lines += [_sanitize(narrative), ""]
 
     # Section 1
     lines.append("RISK OVERVIEW")
@@ -178,7 +183,7 @@ def _render_text(
     risk_signals = risk_summary.get("top_risk_signals", [])
     if risk_signals:
         for s in risk_signals:
-            lines.append(f"• {s}")
+            lines.append(f"• {_sanitize(str(s))}")
     else:
         lines.append("No risk signals detected this week.")
     lines.append("")
@@ -203,8 +208,8 @@ def _render_text(
     lines.append("-" * 11)
     if citations:
         for c in citations:
-            title = c.get("title", "Untitled")
-            source = c.get("source", "")
+            title = _sanitize(c.get("title", "Untitled"))
+            source = _sanitize(c.get("source", ""))
             suffix = f" ({source})" if source else ""
             lines.append(f"• {title}{suffix}")
     else:

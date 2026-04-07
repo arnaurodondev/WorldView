@@ -98,6 +98,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # Shutdown — reverse order
+    # If ContextManager is attached to app.state in a future wave, call:
+    #   await app.state.context_manager.shutdown()
+    # before closing Valkey (M-04: drains in-flight turn-summary background tasks).
     await valkey_client.close()
     await engine.dispose()
     if read_engine is not engine:

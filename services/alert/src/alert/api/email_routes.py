@@ -4,22 +4,28 @@ Endpoints:
   GET  /api/v1/email/preferences          -- get/create email prefs for the user
   PUT  /api/v1/email/preferences          -- update email prefs for the user
   POST /admin/email/digest/trigger        -- manually trigger digest (admin)
+
+R25: routes depend only on use case classes injected via DI factories in
+``dependencies.py``.  No infrastructure imports are present in this module.
+N-04: session.commit() is called inside the use case via ``repo.commit()``;
+routes never call ``session.commit()`` directly.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from alert.api.dependencies import AdminAuthDep, DbSessionDep, TenantUserDep
+from alert.api.dependencies import (
+    AdminAuthDep,
+    GetEmailPrefsUseCaseDep,
+    TenantUserDep,
+    UpdateEmailPrefsUseCaseDep,
+)
 from alert.api.schemas import (
     DigestTriggerRequest,
     DigestTriggerResponse,
     EmailPreferencesResponse,
     UpdateEmailPreferencesRequest,
-)
-from alert.application.use_cases.email_preferences import (
-    GetEmailPreferencesUseCase,
-    UpdateEmailPreferencesUseCase,
 )
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -35,19 +41,15 @@ router = APIRouter(tags=["email"])
 @router.get("/api/v1/email/preferences", response_model=EmailPreferencesResponse)
 async def get_email_preferences(
     tenant_user: TenantUserDep,
-    session: DbSessionDep,
+    use_case: GetEmailPrefsUseCaseDep,
 ) -> EmailPreferencesResponse:
     """Return email preferences for the authenticated user.
 
     Creates and persists default preferences if no row exists yet.
     Auth: ``X-Tenant-ID`` + ``X-User-ID`` headers.
     """
-    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
-
     tenant_id, user_id = tenant_user
-    repo = EmailPreferenceRepository(session)
-    pref = await GetEmailPreferencesUseCase(repo).execute(user_id, tenant_id)
-    await session.commit()
+    pref = await use_case.execute(user_id, tenant_id)
     return EmailPreferencesResponse(
         user_id=pref.user_id,
         weekly_digest_enabled=pref.weekly_digest_enabled,
@@ -65,7 +67,7 @@ async def get_email_preferences(
 async def update_email_preferences(
     body: UpdateEmailPreferencesRequest,
     tenant_user: TenantUserDep,
-    session: DbSessionDep,
+    use_case: UpdateEmailPrefsUseCaseDep,
 ) -> EmailPreferencesResponse:
     """Update email preferences for the authenticated user.
 
@@ -73,16 +75,13 @@ async def update_email_preferences(
     Auth: ``X-Tenant-ID`` + ``X-User-ID`` headers.
     Errors: 400 for invalid day/hour (raised by domain invariant).
     """
-    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
-
     tenant_id, user_id = tenant_user
-    repo = EmailPreferenceRepository(session)
 
     # email_address is a required field in UpdateEmailPreferencesRequest
     # (default=...) so it is always present in the validated body.
     # None means "clear the override address"; a string means "set it".
     try:
-        pref = await UpdateEmailPreferencesUseCase(repo).execute(
+        pref = await use_case.execute(
             user_id,
             tenant_id,
             weekly_digest_enabled=body.weekly_digest_enabled,
@@ -93,7 +92,6 @@ async def update_email_preferences(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await session.commit()
     logger.debug(  # type: ignore[no-any-return]
         "email_preferences_updated",
         user_id=str(user_id),

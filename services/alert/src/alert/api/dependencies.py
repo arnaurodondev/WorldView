@@ -11,6 +11,7 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
+from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
 
 # ── Database session (write) ─────────────────────────────────────────────────
 
@@ -96,3 +97,32 @@ def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_db_session)]) 
 
 
 DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
+
+
+# ── Email preference use case factories (R25 — infra wiring lives in DI, not routes) ─────
+
+
+def get_email_prefs_get_uc(session: Annotated[AsyncSession, Depends(get_db_session)]) -> GetEmailPreferencesUseCase:
+    """Build a GetEmailPreferencesUseCase wired to the write DB session.
+
+    The use case calls ``repo.commit()`` internally (N-04), so the route
+    does not need to call ``session.commit()`` itself.
+    """
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
+    return GetEmailPreferencesUseCase(EmailPreferenceRepository(session))
+
+
+GetEmailPrefsUseCaseDep = Annotated[GetEmailPreferencesUseCase, Depends(get_email_prefs_get_uc)]
+
+
+def get_email_prefs_update_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> UpdateEmailPreferencesUseCase:
+    """Build an UpdateEmailPreferencesUseCase wired to the write DB session."""
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
+    return UpdateEmailPreferencesUseCase(EmailPreferenceRepository(session))
+
+
+UpdateEmailPrefsUseCaseDep = Annotated[UpdateEmailPreferencesUseCase, Depends(get_email_prefs_update_uc)]

@@ -38,7 +38,7 @@ class S1Client:
 
     def __init__(self, settings: Settings, client: AsyncClient | None = None) -> None:
         self._base_url = settings.s1_portfolio_base_url.rstrip("/")
-        self._token = settings.internal_service_token
+        self._token = settings.s1_internal_token
         self._client = client or AsyncClient(timeout=5.0)
 
     async def close(self) -> None:
@@ -86,6 +86,19 @@ class S1Client:
                 for w in watchers
             ]
         return result
+
+    async def get_user_email(self, user_id: str) -> str | None:
+        """GET /internal/v1/users/{user_id} → email address or None.
+
+        Returns the user's email address from S1 Portfolio.  Returns None
+        when S1 is unreachable, returns 4xx/5xx, or the field is absent.
+        """
+        url = f"{self._base_url}/internal/v1/users/{user_id}"
+        data = await self._get_json(url)
+        if data is None:
+            return None
+        email = data.get("email_address", "")
+        return str(email) if email else None
 
     async def health_check(self) -> bool:
         """GET /internal/v1/health — returns True if S1 is healthy."""

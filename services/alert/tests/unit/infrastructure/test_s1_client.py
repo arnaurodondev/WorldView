@@ -130,13 +130,64 @@ class TestS1Client:
         mock_resp.raise_for_status = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        client = S1Client(_settings(internal_service_token="secret-tok"), client=mock_client)
+        # M-01: S1Client uses s1_internal_token (not internal_service_token) as the header value
+        client = S1Client(_settings(s1_internal_token="secret-tok"), client=mock_client)
         await client.get_watchers_by_entity("eid-1")
 
         call_args = mock_client.get.call_args
         # headers may be in kwargs or positional — check both
         headers = call_args.kwargs.get("headers") or (call_args.args[1] if len(call_args.args) > 1 else {})
         assert headers.get("X-Internal-Token") == "secret-tok"
+
+
+class TestGetUserEmail:
+    @pytest.mark.unit
+    async def test_returns_email_on_success(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"user_id": "u1", "email_address": "user@example.com"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result == "user@example.com"
+
+    @pytest.mark.unit
+    async def test_returns_none_when_email_absent(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"user_id": "u1", "email_address": ""}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_returns_none_on_s1_error(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_returns_none_on_404(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError("404", request=MagicMock(), response=MagicMock())
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
 
 
 class TestWatcherInfo:
