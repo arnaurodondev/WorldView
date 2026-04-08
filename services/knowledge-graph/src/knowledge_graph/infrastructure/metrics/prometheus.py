@@ -73,3 +73,15 @@ s7_age_sync_duration_seconds = Histogram(
     "Duration of a single Worker 13F AGE shadow sync run in seconds.",
     buckets=(1, 5, 10, 30, 60, 120, 300, 600),
 )
+
+s7_insider_transactions_relations_total = Counter(
+    "s7_insider_transactions_relations_total",
+    "Total has_executive relations upserted by Worker 13D-8, by ticker.",
+    ["ticker"],
+)
+
+s7_insider_transactions_skipped_total = Counter(
+    "s7_insider_transactions_skipped_total",
+    "Total insider transactions skipped by Worker 13D-8 (non-executive title, no name), by reason.",
+    ["reason"],
+)

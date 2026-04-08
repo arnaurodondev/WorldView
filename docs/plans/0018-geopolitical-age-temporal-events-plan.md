@@ -4,11 +4,11 @@ title: Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Sha
 prd: docs/specs/0018-geopolitical-intelligence-age-cypher.md
 status: in-progress
 created: 2026-04-08
-updated: 2026-04-08
+updated: 2026-04-09
 
 
 total_waves: 10
-waves_done: 6
+waves_done: 9
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -172,24 +172,35 @@ waves_done: 6
 
 ---
 
-### Wave B-4: S7 — Worker 13D-8 EODHD Insider Transactions → has_executive Relations
+### Wave B-4: S7 — Worker 13D-8 EODHD Insider Transactions → has_executive Relations ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-09 · 447 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `InsiderTransactionsWorker` class (APScheduler weekly Monday 02:00 UTC)
-- [ ] EODHD client method: `get_insider_transactions(code, limit)`
-- [ ] `is_executive_title()` whitelist filter (CEO/CFO/COO/CTO/Director/President/Chairman/VP/General Counsel/10% Owner)
-- [ ] `EntityRepository.find_or_create_person(name, context_ticker)` — person entity upsert
-- [ ] `EntityRepository.list_us_instruments()` — filter on exchange US
-- [ ] `RelationRepository.upsert_relation()` for `has_executive` (company → person)
-- [ ] Evidence text with transaction direction (insider sentiment)
-- [ ] Unit tests: CEO creates relation, VP Sales filtered, same officer deduplicates
+- [x] `InsiderTransactionsWorker` class (APScheduler weekly Monday 02:00 UTC)
+- [x] EODHD client method: `get_insider_transactions(code, limit)` (already in client from B-2)
+- [x] `is_executive_title()` whitelist filter (CEO/CFO/COO/CTO/Director/President/Chairman/VP/General Counsel/10% Owner)
+- [x] `EntityRepository.find_or_create_person(name, context_ticker)` — person entity upsert
+- [x] `EntityRepository.list_us_instruments()` — filter on exchange US
+- [x] `RelationRepository.upsert_relation()` convenience wrapper for `has_executive` (RELATION_STATE, DURABLE, decay_alpha=0.000950)
+- [x] Evidence text with transaction direction (insider sentiment)
+- [x] Prometheus metrics: `s7_insider_transactions_relations_total{ticker}`, `s7_insider_transactions_skipped_total{reason}`
+- [x] Unit tests: 43 new tests — CEO creates relation, VP Sales filtered, same officer deduplicates, direction bought/sold, no name skipped, empty transactions, no US instruments, Prometheus counters, `is_executive_title()` edge cases
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (98 source files, 0 issues)
+- [x] Unit tests pass: 447 tests, 0 failures (43 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: A-1
 **Estimated effort**: 4h
 **Files**:
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/insider_transactions_worker.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/entity_repository.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/metrics/prometheus.py`
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_insider_transactions_worker.py`
 
 ---
@@ -287,24 +298,34 @@ waves_done: 6
 
 ---
 
-### Wave E-1: S7 — GET /api/v1/temporal-events Endpoint
+### Wave E-1: S7 — GET /api/v1/temporal-events Endpoint ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-09 · 468 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `ListTemporalEventsUseCase` (read-only use case, `ReadOnlyUnitOfWork`)
-- [ ] `TemporalEventResponse` Pydantic schema with `lifecycle_phase` computed field
-- [ ] `GET /api/v1/temporal-events` route with all query params from PRD §6.3
-- [ ] Pagination: `limit` (1–200) + `offset` response with `total` count
-- [ ] `exposed_entity_count` from `COUNT(entity_event_exposures)` per event
-- [ ] Unit tests: all filter combinations, pagination, empty result
-- [ ] Architecture test: route uses ReadUoWDep only
+- [x] `ListTemporalEventsUseCase` (read-only use case, `ReadOnlyUnitOfWork`)
+- [x] `TemporalEventResponse` Pydantic schema with `lifecycle_phase` computed field
+- [x] `GET /api/v1/temporal-events` route with all query params from PRD §6.3
+- [x] Pagination: `limit` (1–200) + `offset` response with `total` count
+- [x] `exposed_entity_count` from `COUNT(entity_event_exposures)` per event
+- [x] Unit tests: all filter combinations, pagination, empty result (19 new tests)
+- [x] Architecture test: route uses ReadUoWDep only (verified via fixture pattern)
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (100 source files, 0 issues)
+- [x] Unit tests pass: 468 tests, 0 failures (19 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: C-1
 **Estimated effort**: 3h
 **Files**:
 - `services/knowledge-graph/src/knowledge_graph/application/use_cases/list_temporal_events.py`
-- `services/knowledge-graph/src/knowledge_graph/api/v1/temporal_events.py`
+- `services/knowledge-graph/src/knowledge_graph/api/temporal_events.py`
+- `services/knowledge-graph/src/knowledge_graph/api/schemas.py`
+- `services/knowledge-graph/src/knowledge_graph/api/dependencies.py`
+- `services/knowledge-graph/src/knowledge_graph/app.py`
 - `services/knowledge-graph/tests/unit/api/test_temporal_events_route.py`
 - `services/knowledge-graph/tests/unit/application/test_list_temporal_events.py`
 

@@ -95,6 +95,53 @@ RETURNING relation_id
         row = result.fetchone()
         return UUID(str(row[0]))  # type: ignore[index]
 
+    async def upsert_relation(
+        self,
+        subject_entity_id: UUID,
+        object_entity_id: UUID,
+        canonical_type: str,
+        evidence_text: str | None = None,
+        source_weight: float = 0.90,
+        is_backfill: bool = False,
+    ) -> UUID:
+        """Convenience wrapper for worker-sourced relation upserts.
+
+        Uses ``RELATION_STATE`` semantic mode and ``DURABLE`` decay class,
+        appropriate for long-lived company → person executive relationships.
+        The *evidence_text* is logged for audit trail; *is_backfill* is
+        accepted for interface symmetry but does not affect DB writes.
+
+        Args:
+            subject_entity_id: Source entity (e.g. company).
+            object_entity_id:  Target entity (e.g. person).
+            canonical_type:    Relation type key (e.g. ``"has_executive"``).
+            evidence_text:     Human-readable provenance (logged only).
+            source_weight:     Base confidence assigned to the relation.
+            is_backfill:       Accepted for interface symmetry; unused.
+
+        Returns:
+            The ``relation_id`` of the upserted relation row.
+        """
+        from observability import get_logger  # type: ignore[import-untyped]
+
+        _log = get_logger(__name__)  # type: ignore[no-any-return]
+        if evidence_text:
+            _log.debug(  # type: ignore[no-any-return]
+                "relation_upsert_evidence",
+                canonical_type=canonical_type,
+                evidence=evidence_text,
+            )
+
+        return await self.upsert(
+            subject_entity_id=subject_entity_id,
+            object_entity_id=object_entity_id,
+            canonical_type=canonical_type,
+            semantic_mode="RELATION_STATE",
+            decay_class="DURABLE",
+            decay_alpha=0.000950,  # DURABLE: ~730-day half-life
+            base_confidence=source_weight,
+        )
+
     async def get(
         self,
         subject_entity_id: UUID,

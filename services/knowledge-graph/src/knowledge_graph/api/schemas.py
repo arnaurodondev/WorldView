@@ -242,3 +242,31 @@ class SimilarEntitiesResponse(BaseModel):
     canonical_name: str
     results: list[SimilarEntityResultItem]
     total: int
+
+
+# ── GET /api/v1/temporal-events ────────────────────────────────────────────────
+
+
+class TemporalEventResponse(BaseModel):
+    """A single temporal event with computed lifecycle_phase."""
+
+    event_id: UUID
+    event_type: str
+    scope: str
+    region: str | None = None
+    title: str
+    description: str | None = None
+    active_from: datetime
+    active_until: datetime | None = None
+    residual_impact_days: int
+    lifecycle_phase: str
+    confidence: float
+    exposed_entity_count: int
+    created_at: datetime
+
+
+class TemporalEventsListResponse(BaseModel):
+    """Paginated list of temporal events."""
+
+    events: list[TemporalEventResponse]
+    total: int

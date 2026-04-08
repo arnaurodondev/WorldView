@@ -10,14 +10,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
+from uuid import UUID
 
 from sqlalchemy import text
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class InstrumentRecord(NamedTuple):
+    """Minimal canonical_entities projection for US-listed instruments (Worker 13D-8)."""
+
+    entity_id: UUID
+    ticker: str
+    canonical_name: str
 
 
 class EntityRepository:
@@ -104,8 +111,6 @@ WHERE entity_id = :entity_id
         Args:
             iso2: ISO-3166 alpha-2 country code (e.g. ``"US"``, ``"DE"``).
         """
-        from uuid import UUID as _UUID
-
         result = await self._session.execute(
             text("""
 SELECT entity_id FROM canonical_entities
@@ -116,4 +121,83 @@ LIMIT 1
             {"iso2": iso2},
         )
         row = result.fetchone()
-        return _UUID(str(row[0])) if row else None
+        return UUID(str(row[0])) if row else None
+
+    async def list_us_instruments(self) -> list[InstrumentRecord]:
+        """List all US-listed financial instruments tracked in canonical_entities.
+
+        Filters on ``entity_type = 'financial_instrument'``, ``exchange = 'US'``,
+        and ``ticker IS NOT NULL``.  Used by :class:`InsiderTransactionsWorker`
+        to build the list of tickers to poll for SEC Form 4 filings.
+
+        Returns:
+            List of :class:`InstrumentRecord` sorted by canonical_name.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, ticker, canonical_name
+FROM canonical_entities
+WHERE entity_type = 'financial_instrument'
+  AND exchange = 'US'
+  AND ticker IS NOT NULL
+ORDER BY canonical_name
+"""),
+        )
+        rows = result.fetchall()
+        return [
+            InstrumentRecord(
+                entity_id=UUID(str(row[0])),
+                ticker=str(row[1]),
+                canonical_name=str(row[2]),
+            )
+            for row in rows
+        ]
+
+    async def find_or_create_person(self, name: str, context_ticker: str) -> UUID:
+        """Find or create a person canonical entity by name.
+
+        Looks up ``canonical_entities`` where ``entity_type = 'person'`` and
+        ``canonical_name = :name``.  If not found, inserts a new person entity
+        with the given name and stores *context_ticker* in metadata.
+
+        **Idempotency**: Two calls with the same *name* return the same
+        entity_id (SELECT finds the existing row on the second call).
+
+        Args:
+            name:           Full name of the person (e.g. ``"Tim Cook"``).
+            context_ticker: Ticker of the company where the person was discovered
+                            (e.g. ``"AAPL"``); stored as ``metadata["context_ticker"]``.
+
+        Returns:
+            The ``entity_id`` of the found or created person entity.
+        """
+        from common.ids import new_uuid7  # type: ignore[import-untyped]
+
+        # Try to find existing person by canonical_name
+        result = await self._session.execute(
+            text("""
+SELECT entity_id FROM canonical_entities
+WHERE entity_type = 'person'
+  AND canonical_name = :name
+LIMIT 1
+"""),
+            {"name": name},
+        )
+        row = result.fetchone()
+        if row:
+            return UUID(str(row[0]))
+
+        # Create new person entity
+        entity_id: UUID = new_uuid7()
+        await self._session.execute(
+            text("""
+INSERT INTO canonical_entities (entity_id, entity_type, canonical_name, metadata)
+VALUES (:entity_id, 'person', :name, cast(:metadata AS jsonb))
+"""),
+            {
+                "entity_id": str(entity_id),
+                "name": name,
+                "metadata": json.dumps({"context_ticker": context_ticker}),
+            },
+        )
+        return entity_id
