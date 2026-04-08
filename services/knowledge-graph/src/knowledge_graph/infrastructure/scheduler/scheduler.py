@@ -86,7 +86,7 @@ class KnowledgeGraphScheduler:
     # ------------------------------------------------------------------
 
     def _register_jobs(self) -> None:
-        """Register all 8 APScheduler jobs with configured intervals."""
+        """Register all APScheduler jobs with configured intervals."""
         s = self._settings
         jobs: list[tuple[str, int, str]] = [
             ("confidence_recompute", s.worker_confidence_interval_s, "worker_13a_confidence"),
@@ -97,6 +97,7 @@ class KnowledgeGraphScheduler:
             ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
             ("provisional_enrichment", s.worker_embedding_refresh_interval_s, "worker_13e_provisional"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
+            ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
         ]
         for name, interval, job_id in jobs:
             fn = self._resolve_job(name)
@@ -159,13 +160,15 @@ def build_workers(
     settings: Settings,
     session_factory: Any,
     llm_client: FallbackChainClient | None = None,
+    valkey_client: Any | None = None,
 ) -> dict[str, Any]:
-    """Instantiate all 8 workers from service dependencies.
+    """Instantiate all workers from service dependencies.
 
     Args:
         settings:        Service settings.
         session_factory: intelligence_db async_sessionmaker.
         llm_client:      FallbackChainClient (None → workers use stubs).
+        valkey_client:   ValkeyClient for watermark storage (None → age_sync stub).
 
     Returns:
         Dict mapping scheduler job names to worker instances.
@@ -185,6 +188,11 @@ def build_workers(
         "contradiction_batch": ContradictionBatchWorker(session_factory),
         "partition_management": MonthlyPartitionWorker(session_factory),
     }
+
+    if valkey_client is not None:
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        workers["age_sync"] = AgeSyncWorker(session_factory, valkey_client, settings)
 
     if llm_client is not None:
         description_client = _build_description_client(settings)
