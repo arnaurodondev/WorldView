@@ -223,19 +223,26 @@ waves_done: 5
 
 ---
 
-### Wave C-2: S7 — TemporalEventConsumer
+### Wave C-2: S7 — TemporalEventConsumer ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 404 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `TemporalEventConsumer` (Kafka consumer for `intelligence.temporal_event.v1`)
-- [ ] Avro deserialisation → `TemporalEvent` domain model
-- [ ] Convert `region=""` → `None` (per PRD §6.5 Avro contract)
-- [ ] Upsert `temporal_events` via `TemporalEventRepository`
-- [ ] Create `entity_event_exposures` rows from `exposed_entities[]` (scope-tiered)
-- [ ] GLOBAL scope: link to sector/industry entities only (not companies)
-- [ ] DLQ for consumer failures
-- [ ] Unit tests: Avro message → DB rows, GLOBAL scope sector-only linking, region empty-string → None
+- [x] `TemporalEventConsumer` (Kafka consumer for `intelligence.temporal_event.v1`)
+- [x] Avro deserialisation → `TemporalEvent` domain model
+- [x] Convert `region=""` → `None` (per PRD §6.5 Avro contract)
+- [x] Upsert `temporal_events` via `TemporalEventRepository`
+- [x] Create `entity_event_exposures` rows from `exposed_entities[]` (scope-tiered)
+- [x] GLOBAL scope: link to sector/industry entities only (not companies)
+- [x] DLQ for consumer failures
+- [x] Unit tests: Avro message → DB rows, GLOBAL scope sector-only linking, region empty-string → None
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (96 source files, 0 issues)
+- [x] Unit tests pass: 404 tests, 0 failures (27 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: C-1
 **Estimated effort**: 4h
