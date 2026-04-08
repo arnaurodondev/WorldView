@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,9 +14,6 @@ from ml_clients.dataclasses import (
     NERInput,
 )
 from ml_clients.errors import FatalError, RetryableError
-
-if TYPE_CHECKING:
-    import asyncio
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1136,3 +1133,431 @@ class TestGeminiDescriptionAdapter:
         assert (
             mock_genai.Client.call_count == 1
         ), f"genai.Client should be instantiated once; got {mock_genai.Client.call_count}"
+
+
+# ── ResizableSemaphore ────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestResizableSemaphore:
+    """Unit tests for ResizableSemaphore."""
+
+    @pytest.mark.asyncio
+    async def test_acquire_up_to_limit(self) -> None:
+        """Acquire proceeds up to the limit without blocking."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=2, max_permits=5)
+        await sem.acquire()
+        await sem.acquire()
+        assert sem.active == 2
+
+    @pytest.mark.asyncio
+    async def test_acquire_blocks_at_limit(self) -> None:
+        """Third acquire blocks when limit is 2."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=2, max_permits=5)
+        await sem.acquire()
+        await sem.acquire()
+
+        blocked = asyncio.ensure_future(sem.acquire())
+        await asyncio.sleep(0)  # yield to let the task start
+        assert not blocked.done(), "Third acquire should be blocked"
+
+        sem.release()
+        await asyncio.sleep(0)  # yield to let the waiter proceed
+        assert blocked.done()
+        sem.release()
+        sem.release()
+
+    @pytest.mark.asyncio
+    async def test_set_limit_increase_wakes_waiters(self) -> None:
+        """Increasing limit wakes blocked waiters immediately."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=1, max_permits=5)
+        await sem.acquire()  # use the only permit
+
+        waiter = asyncio.ensure_future(sem.acquire())
+        await asyncio.sleep(0)
+        assert not waiter.done()
+
+        sem.set_limit(2)  # open up one more slot
+        await asyncio.sleep(0)
+        assert waiter.done()
+        sem.release()
+        sem.release()
+
+    @pytest.mark.asyncio
+    async def test_set_limit_decrease_respected_on_next_acquire(self) -> None:
+        """After decreasing limit, new acquires block at the lower bound."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=3, max_permits=5)
+        sem.set_limit(1)
+
+        await sem.acquire()
+        blocked = asyncio.ensure_future(sem.acquire())
+        await asyncio.sleep(0)
+        assert not blocked.done()
+
+        sem.release()
+        await asyncio.sleep(0)
+        assert blocked.done()
+        sem.release()
+
+    @pytest.mark.asyncio
+    async def test_release_over_acquire_raises(self) -> None:
+        """Releasing more than acquired raises RuntimeError."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=2, max_permits=2)
+        with pytest.raises(RuntimeError, match="released more times"):
+            sem.release()
+
+    @pytest.mark.asyncio
+    async def test_context_manager(self) -> None:
+        """async with properly acquires and releases."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=1, max_permits=1)
+        async with sem:
+            assert sem.active == 1
+        assert sem.active == 0
+
+    @pytest.mark.asyncio
+    async def test_cancellation_does_not_leak_permit(self) -> None:
+        """Cancelled waiter is removed from the queue; semaphore stays consistent."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=1, max_permits=1)
+        await sem.acquire()  # hold the only permit
+
+        waiter = asyncio.ensure_future(sem.acquire())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.sleep(0)
+
+        assert waiter.cancelled()
+        sem.release()  # should not raise — waiter was cleaned up
+        assert sem.active == 0
+
+    def test_invalid_initial_raises(self) -> None:
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        with pytest.raises(ValueError, match="≥ 1"):
+            ResizableSemaphore(initial=0)
+
+    def test_max_permits_less_than_initial_raises(self) -> None:
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        with pytest.raises(ValueError, match="max_permits"):
+            ResizableSemaphore(initial=5, max_permits=2)
+
+    def test_set_limit_clamped_to_max(self) -> None:
+        """set_limit above max_permits is silently clamped."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=1, max_permits=5)
+        sem.set_limit(100)
+        assert sem.current_limit == 5
+
+    def test_set_limit_clamped_to_one(self) -> None:
+        """set_limit below 1 is clamped to 1."""
+        from ml_clients.adapters.gliner_adaptive import ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=3, max_permits=5)
+        sem.set_limit(0)
+        assert sem.current_limit == 1
+
+
+# ── AIMDController ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestAIMDController:
+    """Unit tests for AIMDController."""
+
+    def _make(self, initial: int = 2, target_ms: float = 1000.0, min_samples: int = 3) -> tuple:  # type: ignore[type-arg]
+        from ml_clients.adapters.gliner_adaptive import AIMDController, ResizableSemaphore
+
+        sem = ResizableSemaphore(initial=initial, max_permits=20)
+        ctrl = AIMDController(semaphore=sem, target_latency_ms=target_ms, min_samples=min_samples)
+        return ctrl, sem
+
+    def test_no_adjustment_before_min_samples(self) -> None:
+        """No limit change until min_samples observations are recorded."""
+        ctrl, sem = self._make(initial=2, min_samples=3)
+        ctrl.record_success(100.0)
+        ctrl.record_success(100.0)
+        assert sem.current_limit == 2  # still at initial; only 2 samples
+
+    def test_increases_on_fast_responses(self) -> None:
+        """Limit grows when avg latency < target."""
+        ctrl, sem = self._make(initial=2, target_ms=1000.0, min_samples=3)
+        for _ in range(3):
+            ctrl.record_success(200.0)  # well below target
+        assert sem.current_limit == 3
+
+    def test_decreases_on_slow_responses(self) -> None:
+        """Limit shrinks when avg latency > 1.5x target."""
+        ctrl, sem = self._make(initial=5, target_ms=1000.0, min_samples=3)
+        for _ in range(3):
+            ctrl.record_success(1800.0)  # above 1.5x target (1500)
+        assert sem.current_limit == 4
+
+    def test_no_change_when_within_band(self) -> None:
+        """No adjustment when avg is between target and 1.5x target."""
+        ctrl, sem = self._make(initial=5, target_ms=1000.0, min_samples=3)
+        for _ in range(3):
+            ctrl.record_success(1200.0)  # between 1000 and 1500
+        assert sem.current_limit == 5
+
+    def test_timeout_halves_limit(self) -> None:
+        """Timeout triggers multiplicative decrease (÷2)."""
+        ctrl, sem = self._make(initial=8)
+        ctrl.record_failure(is_timeout=True)
+        assert sem.current_limit == 4
+
+    def test_failure_decrements_limit(self) -> None:
+        """Non-timeout failure decrements limit by 1."""
+        ctrl, sem = self._make(initial=5)
+        ctrl.record_failure(is_timeout=False)
+        assert sem.current_limit == 4
+
+    def test_failure_never_below_one(self) -> None:
+        """Repeated failures cannot push limit below 1."""
+        ctrl, sem = self._make(initial=1)
+        ctrl.record_failure(is_timeout=True)
+        assert sem.current_limit == 1
+        ctrl.record_failure(is_timeout=False)
+        assert sem.current_limit == 1
+
+    def test_avg_latency_none_before_any_record(self) -> None:
+        ctrl, _ = self._make()
+        assert ctrl.avg_latency_ms is None
+
+    def test_avg_latency_computed_correctly(self) -> None:
+        ctrl, _ = self._make()
+        ctrl.record_success(100.0)
+        ctrl.record_success(200.0)
+        assert ctrl.avg_latency_ms == pytest.approx(150.0)
+
+
+# ── AdaptiveGLiNERHTTPAdapter ─────────────────────────────────────────────────
+
+
+def _make_httpx_response(status: int = 200, body: dict | None = None) -> MagicMock:  # type: ignore[type-arg]
+    """Build a mock httpx response."""
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json.return_value = body or {"results": [[]]}
+    resp.text = str(body)
+    return resp
+
+
+@pytest.mark.unit
+class TestAdaptiveGLiNERHTTPAdapter:
+    """Unit tests for AdaptiveGLiNERHTTPAdapter."""
+
+    def _adapter(self, initial: int = 5, max_conc: int = 10) -> AdaptiveGLiNERHTTPAdapter:  # type: ignore[name-defined]
+        from ml_clients.adapters.gliner_adaptive import AdaptiveGLiNERHTTPAdapter
+
+        return AdaptiveGLiNERHTTPAdapter(
+            base_url="http://gliner-test:8080",
+            initial_concurrency=initial,
+            max_concurrency=max_conc,
+            target_latency_ms=5000.0,  # high target so tests don't trigger AIMD adjustment
+        )
+
+    def _inp(self, text: str = "Apple reported earnings.") -> NERInput:
+        return NERInput(text=text, entity_classes=["ORG"], threshold=0.35)
+
+    @pytest.mark.asyncio
+    async def test_empty_input_returns_empty(self) -> None:
+        adapter = self._adapter()
+        result = await adapter.batch_extract_entities([])
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_single_input_returns_single_output(self) -> None:
+        adapter = self._adapter()
+        body = {"results": [[{"text": "Apple", "label": "ORG", "start": 0, "end": 5, "score": 0.9}]]}
+        mock_resp = _make_httpx_response(200, body)
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_resp):
+            results = await adapter.batch_extract_entities([self._inp()])
+
+        assert len(results) == 1
+        assert results[0].mentions[0].text == "Apple"
+
+    @pytest.mark.asyncio
+    async def test_fan_out_fires_one_request_per_input(self) -> None:
+        """With 3 inputs, exactly 3 HTTP POST calls are made."""
+        adapter = self._adapter(initial=5)
+        mock_resp = _make_httpx_response(200, {"results": [[]]})
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+            inputs = [self._inp(f"text {i}") for i in range(3)]
+            await adapter.batch_extract_entities(inputs)
+
+        assert mock_post.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_results_in_input_order(self) -> None:
+        """Results are returned in the same order as inputs (gather preserves order)."""
+        adapter = self._adapter(initial=5)
+
+        call_index = 0
+
+        async def mock_post(url: str, **kwargs: object) -> MagicMock:  # type: ignore[return]
+            nonlocal call_index
+            idx = call_index
+            call_index += 1
+            label = f"LABEL_{idx}"
+            return _make_httpx_response(
+                200,
+                {"results": [[{"text": f"ent{idx}", "label": label, "start": 0, "end": 4, "score": 0.8}]]},
+            )
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=mock_post):
+            inputs = [self._inp(f"text {i}") for i in range(4)]
+            results = await adapter.batch_extract_entities(inputs)
+
+        # Results must align with inputs (order preserved)
+        assert len(results) == 4
+        for i, result in enumerate(results):
+            assert result.mentions[0].label == f"LABEL_{i}"
+
+    @pytest.mark.asyncio
+    async def test_5xx_raises_retryable(self) -> None:
+        adapter = self._adapter()
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_httpx_response(500)),
+            pytest.raises(RetryableError, match="5xx"),
+        ):
+            await adapter.extract_entities(self._inp())
+
+    @pytest.mark.asyncio
+    async def test_503_raises_retryable(self) -> None:
+        adapter = self._adapter()
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_httpx_response(503)),
+            pytest.raises(RetryableError, match="unavailable"),
+        ):
+            await adapter.extract_entities(self._inp())
+
+    @pytest.mark.asyncio
+    async def test_4xx_raises_fatal(self) -> None:
+        adapter = self._adapter()
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_httpx_response(422)),
+            pytest.raises(FatalError, match="4xx"),
+        ):
+            await adapter.extract_entities(self._inp())
+
+    @pytest.mark.asyncio
+    async def test_timeout_raises_retryable(self) -> None:
+        import httpx
+
+        adapter = self._adapter()
+        with (
+            patch(
+                "httpx.AsyncClient.post",
+                new_callable=AsyncMock,
+                side_effect=httpx.TimeoutException("timed out"),
+            ),
+            pytest.raises(RetryableError, match="timeout"),
+        ):
+            await adapter.extract_entities(self._inp())
+
+    @pytest.mark.asyncio
+    async def test_connection_error_raises_retryable(self) -> None:
+        import httpx
+
+        adapter = self._adapter()
+        with (
+            patch(
+                "httpx.AsyncClient.post",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            pytest.raises(RetryableError, match="connection error"),
+        ):
+            await adapter.extract_entities(self._inp())
+
+    @pytest.mark.asyncio
+    async def test_concurrency_limit_respected(self) -> None:
+        """With initial_concurrency=2, at most 2 HTTP calls are in-flight at once."""
+        from ml_clients.adapters.gliner_adaptive import AdaptiveGLiNERHTTPAdapter
+
+        adapter = AdaptiveGLiNERHTTPAdapter(
+            base_url="http://gliner-test:8080",
+            initial_concurrency=2,
+            max_concurrency=2,  # hard cap at 2
+            target_latency_ms=99999.0,  # never triggers AIMD increase
+        )
+
+        active_count = 0
+        max_observed = 0
+        gate = asyncio.Event()
+
+        async def mock_post(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal active_count, max_observed
+            active_count += 1
+            max_observed = max(max_observed, active_count)
+            await gate.wait()
+            active_count -= 1
+            return _make_httpx_response(200, {"results": [[]]})
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=mock_post):
+            inputs = [self._inp(f"text {i}") for i in range(5)]
+            gather_task = asyncio.ensure_future(adapter.batch_extract_entities(inputs))
+
+            # Let all tasks start and block at the gate
+            await asyncio.sleep(0.01)
+            # Only 2 should be active (limited by initial_concurrency=2, max=2)
+            assert active_count == 2, f"Expected 2 active, got {active_count}"
+
+            gate.set()
+            await gather_task
+
+        assert max_observed == 2, f"Expected max 2 concurrent, got {max_observed}"
+
+    @pytest.mark.asyncio
+    async def test_5xx_reduces_concurrency(self) -> None:
+        """5xx response decreases the adaptive concurrency limit."""
+        adapter = self._adapter(initial=5, max_conc=10)
+        initial_limit = adapter.current_concurrency
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_httpx_response(500)):
+            with pytest.raises(RetryableError):
+                await adapter.extract_entities(self._inp())
+
+        assert adapter.current_concurrency < initial_limit
+
+    @pytest.mark.asyncio
+    async def test_timeout_halves_concurrency(self) -> None:
+        """Timeout halves the adaptive concurrency limit."""
+        import httpx
+
+        adapter = self._adapter(initial=8, max_conc=10)
+
+        with patch(
+            "httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            side_effect=httpx.TimeoutException("timed out"),
+        ):
+            with pytest.raises(RetryableError):
+                await adapter.extract_entities(self._inp())
+
+        assert adapter.current_concurrency == 4  # 8 // 2
+
+    def test_initial_concurrency_exposed(self) -> None:
+        adapter = self._adapter(initial=3)
+        assert adapter.current_concurrency == 3
+
+    def test_avg_latency_none_initially(self) -> None:
+        adapter = self._adapter()
+        assert adapter.avg_latency_ms is None
