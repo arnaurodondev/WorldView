@@ -411,7 +411,7 @@ SELECT
     confidence
 FROM relations
 WHERE canonical_type = 'competes_with'
-  AND (confidence IS NULL OR confidence >= :min_confidence)
+  AND confidence >= :min_confidence
   AND (
     (subject_entity_id = :entity_id AND object_entity_id = ANY(:candidate_ids))
     OR

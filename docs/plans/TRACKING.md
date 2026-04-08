@@ -65,7 +65,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | 2026-04-01 | 9 | 2026-04-01 |
 | PLAN-0013 | Process Topology Completion + Alert WebSocket Cross-Process Bridge | PLAN-0011 QA follow-up | 2026-04-01 | 6 | 2026-04-01 |
 | QA-S1S2S3-2026-04-07 | QA Pass S1+S2+S3: PASS_WITH_WARNINGS — 8 MAJOR (ULID/metrics/cache-hook/contract-tests), 0 BLOCKING/CRITICAL, all unit+lint+mypy PASS | N/A | 2026-04-07 | — | 2026-04-07 |
-| PLAN-0017 | Entity Screener + Similarity Search + Embedding View Fix + EODHD Description LLM | PRD-0017 | 2026-04-08 | 11 | — |
+| PLAN-0017 | Entity Screener + Similarity Search + Embedding View Fix + EODHD Description LLM | PRD-0017 | 2026-04-08 | 11 | 2026-04-08 |
 
 ## Conventions
 

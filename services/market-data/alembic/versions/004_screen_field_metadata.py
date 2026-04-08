@@ -51,6 +51,7 @@ def upgrade() -> None:
             "last_computed_at",
             sa.DateTime(timezone=True),
             nullable=False,
+            server_default=sa.text("now()"),
         ),
         sa.CheckConstraint(
             "field_type IN ('numeric', 'text')",

@@ -283,6 +283,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.object_storage = object_storage
 
     # 7. Background task: seed screen field metadata to DB + Valkey, then refresh every 6h
+    # R22 exemption: screen fields cache-warmer is explicitly exempted from the
+    # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
     refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
 
     log.info("service_started", service=settings.service_name)

@@ -174,11 +174,21 @@ class GeminiDescriptionAdapter:
 
     @staticmethod
     def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:
-        """Build the entity description prompt."""
-        hints_str = "; ".join(f"{k}: {v}" for k, v in context_hints.items()) if context_hints else "none"
+        """Build the entity description prompt.
+
+        ``canonical_name`` and context values are XML-wrapped to prevent prompt
+        injection (PRD-0017 §8 security requirement).
+        """
+        # Truncate inputs to safe bounds before interpolation
+        safe_name = canonical_name[:256]
+        safe_type = entity_type[:64]
+        hints_str = (
+            "; ".join(f"{k[:64]}: {str(v)[:256]}" for k, v in context_hints.items()) if context_hints else "none"
+        )
         return (
-            f"Write a concise 2-3 sentence factual description of '{canonical_name}' "
-            f"(entity type: {entity_type}). "
+            f"Write a concise 2-3 sentence factual description of "
+            f"<entity_name>{safe_name}</entity_name> "
+            f"(entity type: <entity_type>{safe_type}</entity_type>). "
             f"Additional context: {hints_str}. "
             "Focus on what this entity is, its significance, and its primary domain. "
             "Do not include opinions or speculation. "
