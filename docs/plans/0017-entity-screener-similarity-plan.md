@@ -6,7 +6,8 @@ status: in-progress
 created: 2026-04-04
 updated: 2026-04-08
 total_waves: 11
-waves_done: 9
+waves_done: 11
+status: completed
 ---
 
 # PLAN-0017: Entity Screener & Similarity Search
@@ -217,33 +218,35 @@ waves_done: 9
 
 ---
 
-### Wave C-2: Frontend — `ScreenerPage` component
+### Wave C-2: Frontend — `ScreenerPage` component ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · manual TS review clean (no node_modules in repo)
 
 **Tasks**:
-- [ ] `apps/frontend/src/pages/ScreenerPage.tsx`
-- [ ] Dynamic filter form built from `GET /screen/fields` response
-- [ ] Results table: Ticker, Name, Exchange, Sector, + active filter metric columns; sortable
-- [ ] Pagination: page size selector (25/50/100), prev/next
-- [ ] CSV export (client-side)
-- [ ] Route: `/screener`
+- [x] `apps/frontend/src/pages/ScreenerPage.tsx` — dynamic filter form + sortable results table
+- [x] Dynamic filter form built from `GET /screen/fields` response (`fieldsData`)
+- [x] Results table: Ticker, Name, Exchange, Sector, + active filter metric columns; sortable headers
+- [x] Pagination: page size selector (25/50/100), prev/next with total count
+- [x] CSV export (client-side) via `exportCsv()` helper
+- [x] Route: `/screener` added to `App.tsx`; nav item added to `Layout.tsx`
+- [x] Types + API methods added to `gateway-client.ts` (`ScreenField`, `ScreenFilter`, `ScreenInstrumentResult`, `ScreenResponse`, `gateway.getScreenFields()`, `gateway.screenInstruments()`)
 
 **Depends on**: C-1 (S9 proxy)
 **Estimated effort**: 6h
 
 ---
 
-### Wave C-3: Frontend — `SimilarCompaniesPanel` component
+### Wave C-3: Frontend — `SimilarCompaniesPanel` component ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · manual TS review clean (no node_modules in repo)
 
 **Tasks**:
-- [ ] `apps/frontend/src/components/SimilarCompaniesPanel.tsx`
-- [ ] Placement: `CompanyDetailPage` — collapsible card below graph neighborhood section
-- [ ] Top-10 list: ticker badge, company name, final_score bar, competitor badge
-- [ ] Empty state + loading skeleton
-- [ ] "View all (N)" modal with top_k=50
+- [x] `apps/frontend/src/components/SimilarCompaniesPanel.tsx` — collapsible card with top-10 list
+- [x] Placement: `CompanyDetailPage` — collapsible section below Latest News
+- [x] Top-10 list: ticker badge, company name, final_score bar, competitor badge (red label)
+- [x] Empty state + loading skeleton (5 gray placeholder bars)
+- [x] "View all (N)" modal with top_k=50 and click-outside-to-close
+- [x] Types + API method added to `gateway-client.ts` (`SimilarEntityResult`, `SimilarEntitiesResponse`, `gateway.findSimilarEntities()`)
 
 **Depends on**: C-1 (S9 proxy)
 **Estimated effort**: 4h

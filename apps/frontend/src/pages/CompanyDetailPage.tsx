@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { gateway } from "../lib/gateway-client";
 import { OHLCVChart } from "../components/OHLCVChart";
 import { NewsList } from "../components/NewsList";
+import { SimilarCompaniesPanel } from "../components/SimilarCompaniesPanel";
 
 export function CompanyDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,10 +25,11 @@ export function CompanyDetailPage() {
         <h3>Price Chart</h3>
         <OHLCVChart data={data.ohlcv.bars ?? []} />
       </section>
-      <section>
+      <section style={{ marginBottom: "2rem" }}>
         <h3>Latest News</h3>
         <NewsList articles={data.latest_news.articles ?? []} />
       </section>
+      <SimilarCompaniesPanel entityId={id!} />
     </div>
   );
 }

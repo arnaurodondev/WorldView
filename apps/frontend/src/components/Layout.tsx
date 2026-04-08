@@ -3,6 +3,7 @@ import { Link, Outlet } from "react-router-dom";
 const NAV_ITEMS = [
   { path: "/", label: "Dashboard" },
   { path: "/companies", label: "Companies" },
+  { path: "/screener", label: "Screener" },
   { path: "/portfolio", label: "Portfolio" },
   { path: "/news", label: "News" },
   { path: "/map", label: "Map" },
