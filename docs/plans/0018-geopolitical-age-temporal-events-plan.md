@@ -7,7 +7,7 @@ created: 2026-04-08
 updated: 2026-04-08
 
 total_waves: 10
-waves_done: 2
+waves_done: 3
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -166,18 +166,25 @@ waves_done: 2
 
 ---
 
-### Wave C-1: S7 — TemporalEventRepository + Domain Ports
+### Wave C-1: S7 — TemporalEventRepository + Domain Ports ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 349 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `TemporalEventRepository` port interface (application layer)
-- [ ] `TemporalEventRepositoryImpl` (infrastructure layer — SQLAlchemy)
-- [ ] `upsert_by_natural_key(...)` — idempotent ON CONFLICT DO UPDATE
-- [ ] `list_active(scope, entity_id, event_type, region, from_date, to_date, limit, offset)` — query builder
-- [ ] `EntityEventExposureRepository` port + impl
-- [ ] `ExposureRepository.upsert(event_id, entity_id, exposure_type, confidence)` — ON CONFLICT DO NOTHING
-- [ ] Unit tests: mock repository roundtrip, query filters
+- [x] `TemporalEventRepositoryPort` interface (application layer)
+- [x] `TemporalEventRepository` impl (infrastructure layer — SQLAlchemy)
+- [x] `upsert_by_natural_key(...)` — idempotent ON CONFLICT DO UPDATE (natural key: event_type, region, title, date_trunc('day', active_from))
+- [x] `list_active(scope, entity_id, event_type, region, from_date, to_date, limit, offset)` — dynamic query builder; EXISTS subquery for entity_id; COUNT(*) OVER() for total
+- [x] `EntityEventExposureRepositoryPort` + `EntityEventExposureRepository` impl
+- [x] `ExposureRepository.upsert(...)` — ON CONFLICT (event_id, entity_id, exposure_type) DO NOTHING
+- [x] Unit tests: 24 tests — upsert roundtrip, conflict SQL, all filter combos, pagination, empty result, exposure idempotency
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (91 source files, 0 issues)
+- [x] Unit tests pass: 349 tests, 0 failures (24 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: A-1
 **Estimated effort**: 4h
