@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # Market data service (used by Worker 13D-3)
     market_data_base_url: str = "http://market-data:8003"
 
+    # EODHD API (Workers 13D-6, 13D-7, 13D-8)
+    eodhd_api_key: SecretStr = SecretStr("")
+    eodhd_base_url: str = "https://eodhd.com/api"
+    # Comma-separated ISO-3166 alpha-2 country codes for economic event polling
+    economic_event_countries: str = "US,DE,GB,JP,CN,EU"
+
     # Outbox dispatcher
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50

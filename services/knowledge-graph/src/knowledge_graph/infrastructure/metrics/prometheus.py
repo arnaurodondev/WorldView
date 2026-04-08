@@ -45,3 +45,9 @@ s7_worker_crash_total = Counter(
     "Total unhandled exceptions from background worker jobs, by worker.",
     ["worker"],
 )
+
+s7_economic_events_ingested_total = Counter(
+    "s7_economic_events_ingested_total",
+    "Total economic events upserted by Worker 13D-6, by country.",
+    ["country"],
+)
