@@ -37,7 +37,7 @@ class EntityProfileEmbeddingRepository:
         # pgvector cosine distance operator: <=>
         result = await self._session.execute(
             text(
-                "SELECT entity_id, embedding <=> :query_vec::vector AS distance "
+                "SELECT entity_id, embedding <=> cast(:query_vec AS vector) AS distance "
                 "FROM entity_embedding_state "
                 "WHERE view_type = :view_type "
                 "AND embedding IS NOT NULL "

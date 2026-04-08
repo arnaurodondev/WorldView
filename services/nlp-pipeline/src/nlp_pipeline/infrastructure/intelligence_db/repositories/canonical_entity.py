@@ -91,7 +91,7 @@ class CanonicalEntityRepository:
                 "(entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata, "
                 "created_at, updated_at) "
                 "VALUES (:entity_id, :canonical_name, :entity_type, :isin, :ticker, :exchange, "
-                ":metadata::jsonb, :created_at, :updated_at)",
+                "cast(:metadata AS jsonb), :created_at, :updated_at)",
             ),
             {
                 "entity_id": str(entity_id),

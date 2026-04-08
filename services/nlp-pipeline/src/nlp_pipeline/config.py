@@ -105,6 +105,7 @@ class Settings(BaseSettings):
     storage_access_key: str = ""
     storage_secret_key: str = ""
     chunk_bucket: str = "worldview"
+    silver_bucket: str = "worldview-silver"
 
     # Admin API
     admin_token: str = ""
