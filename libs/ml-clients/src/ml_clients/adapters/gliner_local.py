@@ -91,11 +91,11 @@ class GLiNERLocalAdapter:
                 threshold = inputs[0].threshold
 
                 def sync_batch_call() -> list[list[dict[str, Any]]]:
-                    # GLiNER predict_entities accepts a list of texts when passed
-                    # as the first argument; returns list[list[entity_dict]].
-                    return model.predict_entities(  # type: ignore[no-any-return]
-                        texts, entity_classes, threshold=threshold
-                    )
+                    # GLiNER predict_entities(list, labels) silently returns [] — the
+                    # batch API is broken (BP-123). Must iterate individually like server.py.
+                    return [  # type: ignore[no-any-return]
+                        model.predict_entities(t, entity_classes, threshold=threshold) for t in texts
+                    ]
 
                 raw_batched: list[list[dict[str, Any]]] = await loop.run_in_executor(None, sync_batch_call)
 

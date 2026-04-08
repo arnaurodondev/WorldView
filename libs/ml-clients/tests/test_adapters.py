@@ -319,10 +319,10 @@ class TestGLiNERLocalAdapter:
             await adapter.extract_entities(NERInput(text="Apple", entity_classes=["ORG"]))
 
     async def test_valid_entities_returned(self, adapter) -> None:  # type: ignore[no-untyped-def]
-        # predict_entities now receives a list of texts and returns list[list[dict]]
+        # Sequential loop: each predict_entities(text, ...) call returns list[dict] for that text
         raw_section = [{"text": "Apple Inc.", "label": "ORG", "start": 0, "end": 10, "score": 0.95}]
         mock_model = MagicMock()
-        mock_model.predict_entities.return_value = [raw_section]  # one list per input text
+        mock_model.predict_entities.return_value = raw_section  # per-call: list[dict]
         adapter._model = mock_model
 
         result = await adapter.extract_entities(NERInput(text="Apple Inc. reported earnings", entity_classes=["ORG"]))
@@ -340,7 +340,7 @@ class TestGLiNERLocalAdapter:
             {"text": "Apple Inc", "label": "ORG", "start": 0, "end": 8, "score": 0.80},
         ]
         mock_model = MagicMock()
-        mock_model.predict_entities.return_value = [raw_section]  # one list per input text
+        mock_model.predict_entities.return_value = raw_section  # per-call: list[dict]
         adapter._model = mock_model
 
         result = await adapter.extract_entities(NERInput(text="Apple Inc. reported", entity_classes=["ORG"]))
