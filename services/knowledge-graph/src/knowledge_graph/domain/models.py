@@ -5,14 +5,15 @@ All models are frozen dataclasses — pure domain layer, no infrastructure impor
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
-    from datetime import datetime
     from uuid import UUID
 
-    from knowledge_graph.domain.enums import SemanticMode
+    from knowledge_graph.domain.enums import EventScope, EventType, ExposureType, SemanticMode
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +144,89 @@ class Contradiction:
     polarity_b: str  # e.g. "negative"
     strength: float
     detected_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Temporal events (PRD-0018 §6.6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TemporalEvent:
+    """A geopolitical, regulatory, macro, or other temporal event (PRD-0018 §6.6).
+
+    Stored in ``temporal_events``.  Unlike relations (continuous confidence decay),
+    events have a binary activation lifecycle managed entirely in the application layer:
+
+        PENDING_ACTIVE → ACTIVE (at active_from) → ENDED (at active_until)
+        → RESIDUAL (residual_impact_days) → EXPIRED
+
+    The DB stores only active_from, active_until (nullable), and residual_impact_days.
+    ``lifecycle_phase`` and ``current_impact_weight`` are computed properties.
+    """
+
+    event_id: UUID
+    event_type: EventType
+    scope: EventScope
+    title: str
+    confidence: float
+    active_from: datetime  # UTC-aware
+    residual_impact_days: int
+    created_at: datetime  # UTC-aware
+    source_article_ids: tuple[UUID, ...] = ()
+    region: str | None = None
+    description: str | None = None
+    source_url: str | None = None
+    active_until: datetime | None = None  # None = still active
+
+    @property
+    def lifecycle_phase(self) -> str:
+        """Current lifecycle phase based on wall-clock UTC time.
+
+        PENDING_ACTIVE — event has not yet started (active_from is in the future)
+        ACTIVE         — event is ongoing (active_until is None or in the future)
+        RESIDUAL       — event ended; within residual_impact_days window
+        EXPIRED        — event ended; residual window has elapsed
+        """
+        now = datetime.now(UTC)
+        if now < self.active_from:
+            return "PENDING_ACTIVE"
+        if self.active_until is None or now <= self.active_until:
+            return "ACTIVE"
+        days_since_end = (now - self.active_until).days
+        if days_since_end <= self.residual_impact_days:
+            return "RESIDUAL"
+        return "EXPIRED"
+
+    @property
+    def current_impact_weight(self) -> float:
+        """Scalar impact weight: 1.0 if ACTIVE, exp(-0.02 * days_since_end) if RESIDUAL, 0.0 otherwise.
+
+        50-day half-life for RESIDUAL decay: weight = exp(-0.02 * days_since_end).
+        """
+        phase = self.lifecycle_phase
+        if phase == "ACTIVE":
+            return 1.0
+        if phase == "RESIDUAL":
+            days_since_end = (datetime.now(UTC) - self.active_until).days  # type: ignore[operator]
+            return math.exp(-0.02 * days_since_end)
+        return 0.0
+
+
+@dataclass(frozen=True)
+class EntityEventExposure:
+    """Maps a canonical entity to a temporal event with exposure type (PRD-0018 §6.6).
+
+    Stored in ``entity_event_exposures``.  GLOBAL-scope events link only to
+    sector/industry canonical entities (not individual companies) — see PRD-0018 §6.2.
+    """
+
+    exposure_id: UUID
+    event_id: UUID
+    entity_id: UUID
+    exposure_type: ExposureType
+    confidence: float
+    evidence_text: str | None = None
 
 
 @dataclass

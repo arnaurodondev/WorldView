@@ -31,10 +31,12 @@ class DecayClass(StrEnum):
 
 
 class RelationType(StrEnum):
-    """8 well-known relation types for typed application code (PRD §6.7 Block 11).
+    """11 well-known relation types for typed application code.
 
-    The full registry lives in ``relation_type_registry`` (20 seed rows).
+    The full registry lives in ``relation_type_registry`` (27 seed rows after migration 0004).
     These are the most commonly referenced types in domain logic.
+
+    Original 8 (PRD §6.7 Block 11) + 3 new from PRD-0018 §6.4.
     """
 
     EMPLOYS = "employs"
@@ -45,3 +47,59 @@ class RelationType(StrEnum):
     SUPPLIER_OF = "supplier_of"
     PARTNER_OF = "partner_of"
     COMPETES_WITH = "competes_with"
+    # PRD-0018 §6.4 — seeded in migration 0004
+    HAS_EXECUTIVE = "has_executive"
+    REVENUE_FROM_COUNTRY = "revenue_from_country"
+    OPERATES_IN_COUNTRY = "operates_in_country"
+
+
+# ---------------------------------------------------------------------------
+# Temporal event enums (PRD-0018 §6.6)
+# ---------------------------------------------------------------------------
+
+
+class EventScope(StrEnum):
+    """Scope of a temporal event's market impact (PRD-0018 §6.6).
+
+    Values are uppercase to match the DB CHECK constraint on temporal_events.scope.
+
+    LOCAL    — affects a specific company or small group (entity_event_exposures rows per company)
+    REGIONAL — affects a geographic region e.g. EU, ASEAN (entity_event_exposures for country entities)
+    NATIONAL — affects a country's economy (entity_event_exposures for country entity)
+    GLOBAL   — affects entire sectors/industries; entity_event_exposures for sector entities ONLY;
+               company exposure inferred at query time via is_in_sector traversal (PRD-0018 §6.2)
+    """
+
+    LOCAL = "LOCAL"
+    REGIONAL = "REGIONAL"
+    NATIONAL = "NATIONAL"
+    GLOBAL = "GLOBAL"
+
+
+class EventType(StrEnum):
+    """Category of a temporal event (PRD-0018 §6.6).
+
+    Values are lowercase to match the DB CHECK constraint and the Avro schema field
+    ``temporal_event_type``.  Use ``EventType.MACRO`` (not ``"MACRO"``) in all code.
+    """
+
+    GEOPOLITICAL = "geopolitical"
+    REGULATORY = "regulatory"
+    MACRO = "macro"
+    SANCTIONS = "sanctions"
+    NATURAL_DISASTER = "natural_disaster"
+    OTHER = "other"
+
+
+class ExposureType(StrEnum):
+    """How a canonical entity is exposed to a temporal event (PRD-0018 §6.6).
+
+    Values are lowercase to match the DB CHECK constraint on entity_event_exposures.exposure_type
+    and the Avro ExposedEntity.exposure_type field.
+    """
+
+    DIRECTLY_AFFECTED = "directly_affected"
+    OPERATIONALLY_IMPACTED = "operationally_impacted"
+    SUPPLY_CHAIN = "supply_chain"
+    REVENUE_GEOGRAPHY = "revenue_geography"
+    SECTOR_EXPOSURE = "sector_exposure"
