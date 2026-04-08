@@ -53,6 +53,61 @@ export interface MapLayer {
   enabled: boolean;
 }
 
+// ── Screener types (PRD-0017) ─────────────────────────────
+
+export interface ScreenField {
+  name: string;
+  label: string;
+  type: "numeric" | "text";
+  unit: string | null;
+  description: string | null;
+  observed_min: number | null;
+  observed_max: number | null;
+  null_fraction: number;
+}
+
+export interface ScreenFilter {
+  metric: string;
+  op: "lt" | "lte" | "gt" | "gte" | "eq";
+  value: number;
+}
+
+export interface ScreenInstrumentResult {
+  instrument_id: string;
+  ticker: string | null;
+  name: string | null;
+  exchange: string | null;
+  sector: string | null;
+  metrics: Record<string, number | null>;
+}
+
+export interface ScreenResponse {
+  results: ScreenInstrumentResult[];
+  count: number;
+  total: number;
+}
+
+// ── Similar entities types (PRD-0017) ────────────────────
+
+export interface SimilarEntityResult {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  ticker: string | null;
+  exchange: string | null;
+  ann_similarity_score: number;
+  competes_with_confidence: number | null;
+  final_score: number;
+  has_competes_with_relation: boolean;
+}
+
+export interface SimilarEntitiesResponse {
+  entity_id: string;
+  canonical_name: string;
+  results: SimilarEntityResult[];
+  total: number;
+}
+
 // ── API methods ──────────────────────────────────────────
 
 export const gateway = {
@@ -64,6 +119,32 @@ export const gateway = {
 
   getMapLayers: () =>
     request<{ layers: MapLayer[] }>("/v1/map/layers"),
+
+  getScreenFields: () =>
+    request<{ fields: ScreenField[] }>("/v1/fundamentals/screen/fields"),
+
+  screenInstruments: (
+    filters: ScreenFilter[],
+    opts: {
+      limit?: number;
+      offset?: number;
+      sort_by?: string | null;
+      sort_order?: "asc" | "desc";
+    } = {},
+  ) =>
+    request<ScreenResponse>("/v1/fundamentals/screen", {
+      method: "POST",
+      body: JSON.stringify({ filters, ...opts }),
+    }),
+
+  findSimilarEntities: (
+    entityId: string,
+    opts: { top_k?: number; min_score?: number; include_competitors_only?: boolean } = {},
+  ) =>
+    request<SimilarEntitiesResponse>("/v1/entities/similar", {
+      method: "POST",
+      body: JSON.stringify({ entity_id: entityId, ...opts }),
+    }),
 
   /** Returns an EventSource for streaming chat. */
   streamChat(message: string): EventSource {
