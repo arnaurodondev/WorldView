@@ -123,3 +123,15 @@ def get_entity_contradictions_repo(session: ReadOnlyDbSessionDep) -> object:
 
 
 EntityContradictionsRepoDep = Annotated[object, Depends(get_entity_contradictions_repo)]
+
+
+def get_temporal_event_repo(session: ReadOnlyDbSessionDep) -> object:
+    """Build a TemporalEventRepository for the current read-only request session."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+        TemporalEventRepository,
+    )
+
+    return TemporalEventRepository(session)
+
+
+TemporalEventRepoDep = Annotated[object, Depends(get_temporal_event_repo)]
