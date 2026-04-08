@@ -11,6 +11,7 @@ COPY libs/contracts /build/libs/contracts
 COPY libs/messaging /build/libs/messaging
 COPY libs/observability /build/libs/observability
 COPY libs/ml-clients /build/libs/ml-clients
+COPY libs/storage /build/libs/storage
 COPY services/nlp-pipeline /build/services/nlp-pipeline
 
 RUN uv venv /app/.venv && \
@@ -20,6 +21,7 @@ RUN uv venv /app/.venv && \
         -e /build/libs/messaging \
         -e /build/libs/observability \
         -e /build/libs/ml-clients \
+        -e /build/libs/storage \
         -e /build/services/nlp-pipeline
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
@@ -37,7 +39,7 @@ COPY --from=builder /build/services/nlp-pipeline/alembic.ini /app/alembic.ini
 
 COPY infra/kafka/schemas /app/infra/kafka/schemas
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src"
+ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src:/app/libs/storage/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 

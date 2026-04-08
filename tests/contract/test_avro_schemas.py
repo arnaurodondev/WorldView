@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import fastavro
 import pytest
@@ -29,10 +30,10 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "entity.canonical.created.v1": 10,
     "relation.type.proposed.v1": 12,  # Existing: 12 fields (richer than PRD minimum)
     "alert.delivered.v1": 10,
-    "market.instrument.created": 12,  # Enhanced with name, description, isin (v2)
-    "market.instrument.updated": 8,  # Existing: 8 fields
+    "market.instrument.created": 15,  # Enhanced with name, description, isin, security_id, entity_id, causation_id
+    "market.instrument.updated": 14,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
-    "portfolio.events.v1": 8,
+    "portfolio.events.v1": 10,  # 10 record types in multi-record schema file
     "portfolio.watchlist.updated.v1": 9,
     "watchlist.item_added": 13,
     "watchlist.item_deleted": 13,
@@ -75,9 +76,13 @@ class TestEnvelopeFieldsPresent:
     @pytest.mark.parametrize("schema_path", _all_avsc_files(), ids=_schema_name)
     def test_envelope_fields(self, schema_path: Path) -> None:
         schema = _load_schema(schema_path)
-        field_names = {f["name"] for f in schema.get("fields", [])}
-        missing = ENVELOPE_FIELDS - field_names
-        assert not missing, f"{schema_path.name} missing envelope fields: {missing}"
+        # Multi-record schemas (array of record definitions) — validate each record.
+        records = schema if isinstance(schema, list) else [schema]
+        for record in records:
+            field_names = {f["name"] for f in record.get("fields", [])}
+            missing = ENVELOPE_FIELDS - field_names
+            record_name = record.get("name", schema_path.name)
+            assert not missing, f"{schema_path.name} record '{record_name}' missing envelope fields: {missing}"
 
 
 @pytest.mark.contract
@@ -94,11 +99,19 @@ class TestSchemaFieldCounts:
         if not schema_path.exists():
             pytest.skip(f"Schema {schema_name}.avsc not found")
         schema = _load_schema(schema_path)
-        actual = len(schema.get("fields", []))
-        assert actual == expected_count, (
-            f"{schema_name}: expected {expected_count} fields, got {actual}. "
-            f"Fields: {[f['name'] for f in schema.get('fields', [])]}"
-        )
+        # Multi-record schemas: count the number of record types in the array.
+        if isinstance(schema, list):
+            actual = len(schema)
+            assert actual == expected_count, (
+                f"{schema_name}: expected {expected_count} record types, got {actual}. "
+                f"Records: {[r.get('name') for r in schema]}"
+            )
+        else:
+            actual = len(schema.get("fields", []))
+            assert actual == expected_count, (
+                f"{schema_name}: expected {expected_count} fields, got {actual}. "
+                f"Fields: {[f['name'] for f in schema.get('fields', [])]}"
+            )
 
 
 @pytest.mark.contract
@@ -145,6 +158,85 @@ class TestEntityCanonicalCreatedSchema:
         rows = list(fastavro.reader(buf))
         assert len(rows) == 1
         assert rows[0]["alias_texts"] == ["Apple", "AAPL", "Apple Computer"]
+
+
+@pytest.mark.contract
+class TestConfluentWireFormatRoundtrip:
+    """Validate the Confluent wire-format path: serialize → prepend header → deserialize."""
+
+    # Minimal valid sample records keyed by schema stem name.
+    # Only schemas whose full mandatory fields are known here are tested; the
+    # parametrize list can be extended as schemas evolve.
+    _SAMPLES: ClassVar[dict[str, dict]] = {
+        "content.article.stored.v1": {
+            "event_id": "018f4a00-0000-7000-0000-000000000001",
+            "event_type": "content.article.stored",
+            "schema_version": 1,
+            "occurred_at": "2026-04-08T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000002",
+            "content_hash": "abc123",
+            "normalized_hash": "def456",
+            "dedup_result": "unique",
+            "minio_silver_key": "silver/bucket/key",
+            "source_type": "eodhd",
+            "title": None,
+            "word_count": None,
+            "published_at": None,
+            "is_backfill": False,
+            "correlation_id": None,
+        },
+        "nlp.article.enriched.v1": {
+            "event_id": "018f4a00-0000-7000-0000-000000000003",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-04-08T12:00:00Z",
+            "doc_id": "018f4a00-0000-7000-0000-000000000004",
+            "source_type": "eodhd",
+            "published_at": None,
+            "is_backfill": False,
+            "routing_tier": "medium",
+            "routing_score": 0.55,
+            "section_count": 3,
+            "chunk_count": 9,
+            "mention_count": 5,
+            "resolved_entity_ids": [],
+            "relation_count": 0,
+            "claim_count": 0,
+            "event_count": 0,
+            "provisional_entity_count": 2,
+            "correlation_id": None,
+        },
+    }
+
+    @pytest.mark.parametrize("schema_name", list(_SAMPLES.keys()))
+    def test_confluent_roundtrip(self, schema_name: str) -> None:
+        """Schema can serialize a sample record, prepend Confluent header, and decode."""
+        import io
+        import struct
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_path = SCHEMA_DIR / f"{schema_name}.avsc"
+        if not schema_path.exists():
+            pytest.skip(f"{schema_name}.avsc not found")
+
+        schema_dict = _load_schema(schema_path)
+        parsed = fastavro.parse_schema(schema_dict)
+        record = self._SAMPLES[schema_name]
+
+        # Schemaless encode
+        buf = io.BytesIO()
+        fastavro.schemaless_writer(buf, parsed, record)
+        payload = buf.getvalue()
+
+        # Prepend Confluent header: 0x00 (magic) + 4-byte big-endian schema_id
+        schema_id = 1
+        header = b"\x00" + struct.pack(">I", schema_id)
+        confluent_bytes = header + payload
+
+        decoded = deserialize_confluent_avro(str(schema_path), confluent_bytes)
+        assert decoded["event_id"] == record["event_id"]
+        assert decoded["event_type"] == record["event_type"]
 
 
 @pytest.mark.contract

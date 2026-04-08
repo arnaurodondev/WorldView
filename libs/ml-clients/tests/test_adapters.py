@@ -162,6 +162,62 @@ class TestOllamaEmbeddingAdapter:
 
         assert captured[0]["prompt"] == "Represent: Apple Inc."
 
+    async def test_long_text_truncated_to_max_words(
+        self,
+        adapter,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """Texts over _MAX_WORDS words are word-count truncated before embedding."""
+        from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
+
+        long_text = " ".join(f"word{i}" for i in range(500))  # 500 words > _MAX_WORDS=384
+        inputs = [EmbeddingInput(text=long_text, model_id="bge-large-en-v1.5")]
+        embedding = [0.1] * 1024
+        captured: list[dict] = []  # type: ignore[type-arg]
+
+        async def fake_post(url: str, json: dict, **kwargs) -> MagicMock:  # type: ignore[type-arg]
+            captured.append(json)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"embedding": embedding}
+            mock_resp.raise_for_status = MagicMock()
+            return mock_resp
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = fake_post
+            await adapter.embed(inputs)
+
+        sent_text = captured[0]["prompt"]
+        sent_words = sent_text.split()
+        assert len(sent_words) == OllamaEmbeddingAdapter._MAX_WORDS
+
+    async def test_short_text_not_truncated(
+        self,
+        adapter,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """Short texts (under _MAX_WORDS) are sent as-is without modification."""
+        text = "Apple reported earnings this quarter."
+        inputs = [EmbeddingInput(text=text, model_id="bge-large-en-v1.5")]
+        embedding = [0.1] * 1024
+        captured: list[dict] = []  # type: ignore[type-arg]
+
+        async def fake_post(url: str, json: dict, **kwargs) -> MagicMock:  # type: ignore[type-arg]
+            captured.append(json)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"embedding": embedding}
+            mock_resp.raise_for_status = MagicMock()
+            return mock_resp
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = fake_post
+            await adapter.embed(inputs)
+
+        assert captured[0]["prompt"] == text
+
 
 # ── OllamaExtractionAdapter ───────────────────────────────────────────────────
 

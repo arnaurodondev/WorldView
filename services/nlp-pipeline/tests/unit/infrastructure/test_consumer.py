@@ -105,9 +105,57 @@ class TestArticleConsumerSerialization:
         result = consumer.deserialize_value(raw)
         assert result["doc_id"] == "123"
 
-    def test_get_schema_path_returns_none(self) -> None:
+    def test_get_schema_path_returns_none_for_unknown_topic(self) -> None:
         consumer = _make_consumer()
-        assert consumer.get_schema_path("any.topic") is None
+        assert consumer.get_schema_path("any.unknown.topic") is None
+
+    def test_get_schema_path_returns_path_for_article_topic(self) -> None:
+        """get_schema_path must return the .avsc path for the article stored topic."""
+        consumer = _make_consumer()
+        path = consumer.get_schema_path("content.article.stored.v1")
+        assert path is not None
+        assert path.endswith("content.article.stored.v1.avsc")
+
+    def test_deserialize_value_json_fallback_without_magic_byte(self) -> None:
+        """Plain JSON bytes (no 0x00 magic byte) always fall back to JSON decoding."""
+        consumer = _make_consumer()
+        payload = {"doc_id": "xyz", "source_type": "sec"}
+        raw = json.dumps(payload).encode()
+        # Even when schema_path is provided, lack of magic byte → JSON path
+        result = consumer.deserialize_value(raw, schema_path="/some/schema.avsc")
+        assert result["doc_id"] == "xyz"
+
+    def test_deserialize_value_confluent_avro(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Consumer decodes Confluent Avro wire format (magic byte + 4-byte schema_id + payload)."""
+        import io
+
+        import fastavro
+
+        schema = {
+            "type": "record",
+            "name": "ArticleStored",
+            "fields": [
+                {"name": "event_id", "type": "string"},
+                {"name": "doc_id", "type": "string"},
+            ],
+        }
+        schema_file = tmp_path / "article.avsc"
+        schema_file.write_text(json.dumps(schema))
+
+        parsed = fastavro.parse_schema(schema)
+        record = {"event_id": "ev-001", "doc_id": "doc-abc"}
+        buf = io.BytesIO()
+        fastavro.schemaless_writer(buf, parsed, record)
+        payload = buf.getvalue()
+
+        # Confluent wire format: 0x00 magic + 4-byte big-endian schema_id
+        schema_id = 3
+        confluent_bytes = b"\x00" + schema_id.to_bytes(4, "big") + payload
+
+        consumer = _make_consumer()
+        result = consumer.deserialize_value(confluent_bytes, schema_path=str(schema_file))
+        assert result["event_id"] == "ev-001"
+        assert result["doc_id"] == "doc-abc"
 
 
 @pytest.mark.unit
