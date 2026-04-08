@@ -1,13 +1,13 @@
-"""Consumer 13D-5: Fundamentals description change detector (PRD §6.7 Block 13D-5).
+"""Consumer 13D-5: Fundamentals description change detector + metadata enrichment.
 
 Consumer group: ``kg-fundamentals-group``.
 Consumes: ``market.dataset.fetched`` WHERE dataset_type='fundamentals'.
 
 Processing:
   1. Download payload from MinIO claim-check.
-  2. Extract General.Description field.
-  3. SHA-256 compare: if description changed → trigger definition re-embed.
-  4. If unchanged → skip (no-op).
+  2. Extract General.Description field → trigger definition re-embed on change.
+  3. Extract structured metadata fields (B-1: employee_count, revenue_ttm_usd,
+     pct_insiders, pct_institutions) → partial JSONB patch on canonical_entities.
 """
 
 from __future__ import annotations
@@ -16,6 +16,9 @@ import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from knowledge_graph.infrastructure.intelligence_db.repositories.entity_repository import (
+    EntityRepository,
+)
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -30,6 +33,34 @@ if TYPE_CHECKING:
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _extract_metadata_updates(payload: dict[str, Any]) -> dict[str, object]:
+    """Extract structured metadata fields from an EODHD fundamentals payload.
+
+    Only includes fields that are present and truthy in the payload.
+    Returns an empty dict if no recognised fields are found.
+
+    Fields extracted:
+    - ``General.FullTimeEmployees``   → ``employee_count`` (int)
+    - ``Highlights.RevenueTTM``       → ``revenue_ttm_usd`` (int)
+    - ``SharesStats.PercentInsiders`` → ``pct_insiders`` (float)
+    - ``SharesStats.PercentInstitutions`` → ``pct_institutions`` (float)
+    """
+    general = payload.get("General") or {}
+    highlights = payload.get("Highlights") or {}
+    shares_stats = payload.get("SharesStats") or {}
+
+    updates: dict[str, object] = {}
+    if emp := general.get("FullTimeEmployees"):
+        updates["employee_count"] = int(emp)
+    if rev := highlights.get("RevenueTTM"):
+        updates["revenue_ttm_usd"] = int(rev)
+    if pct_ins := shares_stats.get("PercentInsiders"):
+        updates["pct_insiders"] = float(pct_ins)
+    if pct_inst := shares_stats.get("PercentInstitutions"):
+        updates["pct_institutions"] = float(pct_inst)
+    return updates
 
 
 class _NoOpUoW:
@@ -47,14 +78,21 @@ class _NoOpUoW:
 
 
 class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
-    """Detects description changes in fundamentals data and triggers re-embedding.
+    """Detects description changes in fundamentals data and enriches entity metadata.
+
+    Processing per message:
+    1. Description change detection: delegates to ``DefinitionRefreshWorker``
+       (which handles SHA-256 dedup internally).
+    2. Metadata enrichment: extracts structured fields (employee_count,
+       revenue_ttm_usd, pct_insiders, pct_institutions) and patches
+       ``canonical_entities.metadata`` via JSONB merge (idempotent).
 
     Args:
-        config:           Consumer configuration.
-        session_factory:  async_sessionmaker for intelligence_db.
+        config:            Consumer configuration.
+        session_factory:   async_sessionmaker for intelligence_db.
         definition_worker: DefinitionRefreshWorker to trigger re-embed on change.
-        storage_client:   Object storage client to download claim-check payloads.
-        dedup_client:     Optional Valkey dedup client.
+        storage_client:    Object storage client to download claim-check payloads.
+        dedup_client:      Optional Valkey dedup client.
     """
 
     def __init__(
@@ -95,34 +133,45 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
         instrument_id = UUID(str(instrument_id_raw))
         object_key = value.get("object_key")
 
-        # Download payload from MinIO
-        description = await self._extract_description(object_key)
-        if description is None:
+        # Download full payload from MinIO once
+        payload = await self._download_payload(object_key)
+        if payload is None:
             logger.warning(  # type: ignore[no-any-return]
-                "fundamentals_consumer_no_description",
+                "fundamentals_consumer_no_payload",
                 instrument_id=str(instrument_id),
                 object_key=object_key,
             )
             return
 
-        # Delegate to definition worker — refresh_for_entity handles SHA-256 change
-        # detection internally, so a redundant outer check here is not needed.
-        await self._def_worker.refresh_for_entity(instrument_id, description)
+        # 1. Description change detection (existing behaviour — SHA-256 dedup in worker)
+        description: str | None = (payload.get("General") or {}).get("Description")
+        if description:
+            await self._def_worker.refresh_for_entity(instrument_id, description)
+            logger.info(  # type: ignore[no-any-return]
+                "fundamentals_consumer_description_processed",
+                instrument_id=str(instrument_id),
+            )
 
-        logger.info(  # type: ignore[no-any-return]
-            "fundamentals_consumer_description_changed",
-            instrument_id=str(instrument_id),
-        )
+        # 2. Metadata enrichment (B-1) — idempotent JSONB merge, no entity.dirtied event
+        metadata_updates = _extract_metadata_updates(payload)
+        if metadata_updates:
+            async with self._sf() as session:
+                repo = EntityRepository(session)
+                await repo.update_metadata(instrument_id, metadata_updates)
+                await session.commit()
+            logger.info(  # type: ignore[no-any-return]
+                "fundamentals_consumer_metadata_updated",
+                instrument_id=str(instrument_id),
+                fields=sorted(metadata_updates.keys()),
+            )
 
-    async def _extract_description(self, object_key: str | None) -> str | None:
-        """Download the claim-check payload and extract General.Description."""
+    async def _download_payload(self, object_key: str | None) -> dict[str, Any] | None:
+        """Download the MinIO claim-check payload and return the full JSON dict."""
         if not object_key or not self._storage:
             return None
         try:
-            data = await self._storage.get_json(object_key)
-            if data is None:
-                return None
-            return data.get("General", {}).get("Description")  # type: ignore[return-value, no-any-return]
+            data: dict[str, Any] | None = await self._storage.get_json(object_key)
+            return data
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_consumer_storage_error",

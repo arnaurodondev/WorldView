@@ -117,7 +117,7 @@ Key invariants:
 | ID | Consumer | Group | Topic | Action |
 |----|----------|-------|-------|--------|
 | 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed |
-| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed |
+| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed. **Wave B-1**: also extracts `General.FullTimeEmployees`, `Highlights.RevenueTTM`, `SharesStats.PercentInsiders/PercentInstitutions` → `canonical_entities.metadata` JSONB patch (keys: `employee_count`, `revenue_ttm_usd`, `pct_insiders`, `pct_institutions`). Idempotent; no `entity.dirtied.v1` emitted. |
 
 ### LLM Fallback Chain (`infrastructure/llm/fallback_chain.py`)
 

@@ -12,7 +12,7 @@
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
 | PLAN-0015 | S8 RAG/Chat: Hybrid Intelligence Pipeline | PRD-0015 | completed | 22/22 | 2026-04-07 | 2026-04-07 |
 | PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | completed | 11/11 | 2026-04-07 | 2026-04-07 |
-| PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | in-progress | 1/10 | — | 2026-04-08 |
+| PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | in-progress | 2/10 | — | 2026-04-08 |
 | PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | draft | 0/0 | — | 2026-04-06 |
