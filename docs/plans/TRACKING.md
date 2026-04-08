@@ -17,6 +17,7 @@
 | PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | draft | 0/0 | — | 2026-04-06 |
+| PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)

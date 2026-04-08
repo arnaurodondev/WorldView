@@ -19,3 +19,4 @@ CONTENT_ARTICLE_STORED = "content.article.stored.v1"
 # ── Intelligence domain (S6 / S7) ─────────────────────────
 NLP_ARTICLE_ENRICHED = "nlp.article.enriched.v1"
 NLP_SIGNAL_DETECTED = "nlp.signal.detected.v1"
+INTELLIGENCE_TEMPORAL_EVENT = "intelligence.temporal_event.v1"

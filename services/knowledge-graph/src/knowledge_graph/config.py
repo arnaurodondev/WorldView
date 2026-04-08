@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     kafka_topic_entity_created: str = "entity.canonical.created.v1"
     kafka_topic_instrument_created: str = "market.instrument.created"
     kafka_topic_dataset_fetched: str = "market.dataset.fetched"
+    kafka_topic_temporal_event: str = "intelligence.temporal_event.v1"
 
     # Kafka topics — produced
     kafka_topic_graph_state: str = "graph.state.changed.v1"
