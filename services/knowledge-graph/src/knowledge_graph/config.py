@@ -99,8 +99,11 @@ class Settings(BaseSettings):
     # EODHD API (Workers 13D-6, 13D-7, 13D-8)
     eodhd_api_key: SecretStr = SecretStr("")
     eodhd_base_url: str = "https://eodhd.com/api"
-    # Comma-separated ISO-3166 alpha-2 country codes for economic event polling
+    # Comma-separated ISO-3166 alpha-2 country codes for economic event polling (Worker 13D-6)
     economic_event_countries: str = "US,DE,GB,JP,CN,EU"
+    # Comma-separated ISO-3166 alpha-3 country codes for macro indicator enrichment (Worker 13D-7)
+    # Note: Macro Indicator API uses alpha-3 (USA/GBR/DEU/JPN/CHN), not alpha-2
+    macro_indicator_countries: str = "USA,GBR,DEU,JPN,CHN"
 
     # Outbox dispatcher
     dispatcher_poll_interval_s: float = 1.0
