@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
+from knowledge_graph.api.dependencies import EntityContradictionsRepoDep, FindSimilarEntitiesReposDep
 from knowledge_graph.api.schemas import (
     ContradictionDetailResponse,
     ContradictionSideResponse,
@@ -37,7 +37,7 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 )
 async def get_entity_contradictions(
     entity_id: UUID,
-    session: ReadOnlyDbSessionDep,
+    claim_repo: EntityContradictionsRepoDep,
     claim_type: str | None = Query(default=None),
     top_k: int = Query(default=20, ge=1, le=100),
 ) -> ContradictionsListResponse:
@@ -46,11 +46,6 @@ async def get_entity_contradictions(
     Returns an empty ``contradictions`` list when no contradictions exist —
     this is NOT a 404.
     """
-    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
-        ClaimRepository,
-    )
-
-    claim_repo = ClaimRepository(session)
     contradictions = await EntityContradictionsUseCase().execute(
         claim_repo=claim_repo,  # type: ignore[arg-type]
         entity_id=entity_id,
@@ -83,7 +78,7 @@ async def get_entity_contradictions(
 @router.post("/entities/similar", response_model=SimilarEntitiesResponse)
 async def find_similar_entities(
     body: SimilarEntitiesRequest,
-    session: ReadOnlyDbSessionDep,
+    repos: FindSimilarEntitiesReposDep,
 ) -> SimilarEntitiesResponse:
     """Return top-K similar financial instrument entities by embedding ANN.
 
@@ -95,23 +90,12 @@ async def find_similar_entities(
     """
     from knowledge_graph.application.use_cases.find_similar_entities import FindSimilarEntitiesUseCase
     from knowledge_graph.domain.errors import EmbeddingNotAvailableError, EntityNotFoundError
-    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-        CanonicalEntityRepository,
-    )
-    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_ann import (
-        SqlalchemyEntityEmbeddingANNRepository,
-    )
-    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
-
-    entity_repo = CanonicalEntityRepository(session)
-    embedding_repo = SqlalchemyEntityEmbeddingANNRepository(session)
-    relation_repo = RelationRepository(session)
 
     try:
         entity_dict, results = await FindSimilarEntitiesUseCase().execute(
-            entity_repo=entity_repo,  # type: ignore[arg-type]
-            embedding_repo=embedding_repo,
-            relation_repo=relation_repo,  # type: ignore[arg-type]
+            entity_repo=repos.entity_repo,  # type: ignore[arg-type]
+            embedding_repo=repos.embedding_repo,
+            relation_repo=repos.relation_repo,  # type: ignore[arg-type]
             entity_id=body.entity_id,
             top_k=body.top_k,
             min_score=body.min_score,

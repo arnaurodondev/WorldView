@@ -186,18 +186,28 @@ async def _do_screen_fields_refresh(
     log.info("screen_fields_refreshed", field_count=len(fields))  # type: ignore[attr-defined]
 
 
+_SCREEN_FIELDS_REFRESH_RETRY_SECONDS = 60  # Back-off on first-run / transient failure
+
+
 async def _screen_fields_refresh_loop(
     write_factory: async_sessionmaker,
     valkey_client: ValkeyClient,
     log: object,
 ) -> None:
-    """Background task: seed + refresh screen field metadata every 6 hours."""
+    """Background task: seed + refresh screen field metadata every 6 hours.
+
+    Sleeps ``_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS`` (6 h) after a successful
+    refresh.  On failure, backs off ``_SCREEN_FIELDS_REFRESH_RETRY_SECONDS`` (60 s)
+    so the initial warm-up is not delayed by 6 h if the DB or Valkey is momentarily
+    unavailable at startup.
+    """
     while True:
         try:
             await _do_screen_fields_refresh(write_factory, valkey_client, log)
+            await asyncio.sleep(_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS)
         except Exception as exc:
             log.error("screen_fields_refresh_error", error=str(exc))  # type: ignore[attr-defined]
-        await asyncio.sleep(_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS)
+            await asyncio.sleep(_SCREEN_FIELDS_REFRESH_RETRY_SECONDS)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

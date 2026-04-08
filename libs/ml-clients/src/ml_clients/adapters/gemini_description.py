@@ -79,6 +79,7 @@ class GeminiDescriptionAdapter:
         self._semaphore = semaphore
         self._cost_tracker = cost_tracker
         self._max_monthly_usd = max_monthly_usd
+        self._genai_client: object | None = None  # Lazy: initialized on first generate call
 
     async def generate_description(
         self,
@@ -100,17 +101,18 @@ class GeminiDescriptionAdapter:
             )
             return None
 
-        try:
-            from google import genai
-        except ImportError as exc:
-            raise FatalError("google-genai package not installed; install ml-clients[gemini]") from exc
+        if self._genai_client is None:
+            try:
+                from google import genai
+            except ImportError as exc:
+                raise FatalError("google-genai package not installed; install ml-clients[gemini]") from exc
+            self._genai_client = genai.Client(api_key=self._api_key)
 
         prompt = self._build_prompt(canonical_name, entity_type, context_hints)
 
         async with self._semaphore:
             try:
-                client = genai.Client(api_key=self._api_key)
-                response = await client.aio.models.generate_content(
+                response = await self._genai_client.aio.models.generate_content(  # type: ignore[union-attr]
                     model=self._model_id,
                     contents=prompt,
                 )
@@ -149,7 +151,8 @@ class GeminiDescriptionAdapter:
             current = float(raw)
         except (ValueError, TypeError):
             return False
-        return current >= self._max_monthly_usd
+        # Guard with 5% margin so inflight API calls do not silently exceed the cap.
+        return current >= self._max_monthly_usd * 0.95
 
     async def _record_cost(self, response: object, prompt: str) -> None:
         """Increment the Valkey monthly cost counter by the estimated call cost."""

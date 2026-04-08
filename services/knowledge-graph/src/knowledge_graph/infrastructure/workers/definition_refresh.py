@@ -16,6 +16,7 @@ next_refresh_at = now() + 90 days.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -79,62 +80,106 @@ class DefinitionRefreshWorker:
             self._description_client = description_client
 
     async def run(self) -> None:
-        """Periodic fallback: refresh definition embeddings due for refresh."""
+        """Periodic fallback: refresh definition embeddings due for refresh.
+
+        Execution is split into three phases to avoid holding a DB session
+        across external I/O (HTTP description generation + ML embedding calls):
+
+        Phase 1 — Read: fetch due rows, close session immediately.
+        Phase 2 — Process: generate descriptions + embeddings (no session open).
+        Phase 3 — Write: upsert all results in a single session + commit.
+        """
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
             EntityEmbeddingStateRepository,
         )
 
-        refreshed = 0
-        skipped = 0
+        # ── Phase 1: Read ────────────────────────────────────────────────────
         async with self._sf() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
             due = await emb_repo.get_due_for_refresh(VIEW_DEFINITION, _BATCH_LIMIT)
+        # Session released here — FOR UPDATE lock released, that is acceptable
+        # because this worker runs as a single periodic process.
 
-            for row in due:
-                entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
-                entity_type = str(row.get("entity_type") or "")
-                source_text = str(row.get("source_text") or "")
+        if not due:
+            logger.info(  # type: ignore[no-any-return]
+                "definition_refresh_worker_complete",
+                refreshed=0,
+                skipped_unchanged=0,
+            )
+            return
 
-                # Non-company entities: generate a fresh description each cycle.
-                if entity_type != _FINANCIAL_INSTRUMENT:
-                    source_text = await self._resolve_non_company_text(entity_id, entity_type, row)
+        # ── Phase 2: Process ─────────────────────────────────────────────────
+        # No DB session open during description generation or embedding calls.
+        refreshed = 0
+        skipped = 0
 
-                if not source_text:
-                    # financial_instrument with no EODHD description yet — skip
-                    continue
+        @dataclasses.dataclass
+        class _Update:
+            entity_id: UUID
+            source_text: str
+            source_hash: str
+            embedding: list[float] | None
+            model_id: str | None
 
-                new_hash = sha256_hex(source_text)
-                if new_hash == row.get("source_hash"):
-                    # Unchanged — just push next_refresh_at forward
-                    await emb_repo.upsert(
-                        entity_id,
-                        VIEW_DEFINITION,
-                        embedding=None,
-                        model_id=None,
+        to_write: list[_Update] = []
+
+        for row in due:
+            entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
+            entity_type = str(row.get("entity_type") or "")
+            source_text = str(row.get("source_text") or "")
+
+            if entity_type != _FINANCIAL_INSTRUMENT:
+                source_text = await self._resolve_non_company_text(entity_id, entity_type, row)
+
+            if not source_text:
+                continue
+
+            new_hash = sha256_hex(source_text)
+            if new_hash == row.get("source_hash"):
+                # Unchanged — push next_refresh_at forward, keep existing embedding.
+                to_write.append(
+                    _Update(
+                        entity_id=entity_id,
                         source_text=source_text,
                         source_hash=new_hash,
-                        next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                        embedding=None,  # COALESCE in SQL preserves existing
+                        model_id=None,  # COALESCE in SQL preserves existing
                     )
-                    skipped += 1
-                    continue
+                )
+                skipped += 1
+                continue
 
-                embedding = await self._embed(entity_id, source_text)
-                if embedding is None:
-                    # Fallback exhausted; next_refresh_at stays unchanged → retry next cycle
-                    continue
+            embedding = await self._embed(entity_id, source_text)
+            if embedding is None:
+                # Fallback exhausted; next_refresh_at unchanged → retry next cycle
+                continue
 
-                await emb_repo.upsert(
-                    entity_id,
-                    VIEW_DEFINITION,
-                    embedding=embedding,
-                    model_id=_EMBED_MODEL_ID,
+            to_write.append(
+                _Update(
+                    entity_id=entity_id,
                     source_text=source_text,
                     source_hash=new_hash,
-                    next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                    embedding=embedding,
+                    model_id=_EMBED_MODEL_ID,
                 )
-                refreshed += 1
+            )
+            refreshed += 1
 
-            await session.commit()
+        # ── Phase 3: Write ───────────────────────────────────────────────────
+        if to_write:
+            async with self._sf() as session:
+                emb_repo = EntityEmbeddingStateRepository(session)
+                for item in to_write:
+                    await emb_repo.upsert(
+                        item.entity_id,
+                        VIEW_DEFINITION,
+                        embedding=item.embedding,
+                        model_id=item.model_id,
+                        source_text=item.source_text,
+                        source_hash=item.source_hash,
+                        next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                    )
+                await session.commit()
 
         logger.info(  # type: ignore[no-any-return]
             "definition_refresh_worker_complete",

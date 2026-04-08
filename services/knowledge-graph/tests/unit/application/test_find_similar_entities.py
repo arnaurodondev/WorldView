@@ -40,21 +40,20 @@ def _make_entity_repo(
 ) -> AsyncMock:
     """Build a mock CanonicalEntityRepositoryPort.
 
-    ``entity``: returned for the first get() call (query entity lookup).
-    ``detail_map``: maps entity_id (UUID) → dict for subsequent per-result gets.
+    ``entity``: returned for the get() call (query entity lookup).
+    ``detail_map``: maps entity_id (UUID) → dict returned by get_batch().
     """
     detail_map = detail_map or {}
     mock = AsyncMock()
-    call_count = [0]
 
     async def _get(eid: UUID) -> dict | None:
-        call_count[0] += 1
-        if call_count[0] == 1:
-            return entity
-        # Subsequent calls are enrichment gets
-        return detail_map.get(eid)
+        return entity
+
+    async def _get_batch(eids: list[UUID]) -> list[dict]:
+        return [detail_map[eid] for eid in eids if eid in detail_map]
 
     mock.get = _get
+    mock.get_batch = _get_batch
     return mock
 
 

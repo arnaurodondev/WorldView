@@ -16,8 +16,9 @@ from __future__ import annotations
 import math
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 
+from knowledge_graph.api.dependencies import EntityGraphReposDep
 from knowledge_graph.api.schemas import (
     EntitySummary,
     GraphNeighborhoodResponse,
@@ -84,7 +85,7 @@ def _relation_response(row: dict[str, object]) -> RelationResponse:
 @router.get("/entities/{entity_id}/graph", response_model=GraphNeighborhoodResponse)
 async def get_entity_graph(
     entity_id: UUID,
-    request: Request,
+    repos: EntityGraphReposDep,
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     semantic_mode: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -94,23 +95,14 @@ async def get_entity_graph(
     Relations are filtered by ``min_confidence`` and optional ``semantic_mode``.
     ``summary_authority`` is computed at query time — NOT a cached column.
     """
-    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-        CanonicalEntityRepository,
+    entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
+        entity_repo=repos.entity_repo,  # type: ignore[arg-type]
+        relation_repo=repos.relation_repo,  # type: ignore[arg-type]
+        entity_id=entity_id,
+        min_confidence=min_confidence,
+        semantic_mode=semantic_mode,
+        limit=limit,
     )
-    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
-
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
-        entity_repo = CanonicalEntityRepository(session)
-        relation_repo = RelationRepository(session)
-        entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
-            entity_repo=entity_repo,  # type: ignore[arg-type]
-            relation_repo=relation_repo,  # type: ignore[arg-type]
-            entity_id=entity_id,
-            min_confidence=min_confidence,
-            semantic_mode=semantic_mode,
-            limit=limit,
-        )
 
     if entity_row is None:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -127,7 +119,7 @@ async def get_entity_graph(
 
 @router.get("/relations", response_model=RelationsListResponse)
 async def list_relations(
-    request: Request,
+    repos: EntityGraphReposDep,
     subject_entity_id: UUID | None = Query(default=None),
     object_entity_id: UUID | None = Query(default=None),
     canonical_type: str | None = Query(default=None),
@@ -137,21 +129,16 @@ async def list_relations(
     offset: int = Query(default=0, ge=0),
 ) -> RelationsListResponse:
     """Paginated, filtered relation list."""
-    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
-
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
-        relation_repo = RelationRepository(session)
-        rows, total = await ListRelationsUseCase().execute(
-            relation_repo=relation_repo,  # type: ignore[arg-type]
-            subject_entity_id=subject_entity_id,
-            object_entity_id=object_entity_id,
-            canonical_type=canonical_type,
-            semantic_mode=semantic_mode,
-            min_confidence=min_confidence,
-            limit=limit,
-            offset=offset,
-        )
+    rows, total = await ListRelationsUseCase().execute(
+        relation_repo=repos.relation_repo,  # type: ignore[arg-type]
+        subject_entity_id=subject_entity_id,
+        object_entity_id=object_entity_id,
+        canonical_type=canonical_type,
+        semantic_mode=semantic_mode,
+        min_confidence=min_confidence,
+        limit=limit,
+        offset=offset,
+    )
 
     return RelationsListResponse(
         items=[_relation_response(r) for r in rows],
@@ -165,14 +152,9 @@ async def list_relations(
 
 
 @router.get("/graph/stats", response_model=GraphStatsResponse)
-async def get_graph_stats(request: Request) -> GraphStatsResponse:
+async def get_graph_stats(repos: EntityGraphReposDep) -> GraphStatsResponse:
     """Return aggregate knowledge graph statistics."""
-    from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
-
-    session_factory = request.app.state.session_factory
-    async with session_factory() as session:
-        relation_repo = RelationRepository(session)
-        stats = await GetGraphStatsUseCase().execute(relation_repo=relation_repo)  # type: ignore[arg-type]
+    stats = await GetGraphStatsUseCase().execute(relation_repo=repos.relation_repo)  # type: ignore[arg-type]
 
     return GraphStatsResponse(
         entity_count=int(stats["entity_count"]),  # type: ignore[call-overload]

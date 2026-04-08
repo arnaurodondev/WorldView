@@ -86,8 +86,8 @@ INSERT INTO entity_embedding_state (
     now(), :next_refresh_at, 0
 )
 ON CONFLICT (entity_id, view_type) DO UPDATE SET
-    embedding         = EXCLUDED.embedding,
-    model_id          = EXCLUDED.model_id,
+    embedding         = COALESCE(EXCLUDED.embedding, entity_embedding_state.embedding),
+    model_id          = COALESCE(EXCLUDED.model_id, entity_embedding_state.model_id),
     source_text       = EXCLUDED.source_text,
     source_hash       = EXCLUDED.source_hash,
     last_refreshed_at = now(),

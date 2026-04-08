@@ -11,7 +11,7 @@ Algorithm:
   6. Compute final_score = min(ann_similarity_score + (0.15 if competes_with else 0.0), 1.0).
   7. Filter by min_score; apply include_competitors_only.
   8. Sort by final_score DESC; take top_k.
-  9. Batch-enrich entity details (N+1, bounded at top_k ≤ 50).
+  9. Batch-enrich entity details via get_batch() — single query.
  10. Return (entity_dict, list[SimilarEntityResult]).
 """
 
@@ -91,7 +91,7 @@ class FindSimilarEntitiesUseCase:
         # Steps 6 / 7 / 8 — score, filter, sort
         scored: list[tuple[float, SimilarEntityResult]] = []
         for ann in ann_results:
-            ann_similarity = 1.0 - ann.distance
+            ann_similarity = max(0.0, 1.0 - ann.distance)
             competes_entry = competes_map.get(ann.entity_id)
             has_competes = competes_entry is not None
             competes_confidence = competes_entry[1] if competes_entry is not None else None
@@ -125,10 +125,14 @@ class FindSimilarEntitiesUseCase:
         scored.sort(key=lambda t: t[0], reverse=True)
         top_scored = scored[:top_k]
 
-        # Step 9 — enrich entity details (bounded at top_k ≤ 50)
+        # Step 9 — batch-enrich entity details (single WHERE entity_id = ANY(:ids) query)
+        top_entity_ids = [partial.entity_id for _, partial in top_scored]
+        batch = await entity_repo.get_batch(top_entity_ids)
+        detail_map: dict[object, dict[str, object]] = {d["entity_id"]: d for d in batch}
+
         results: list[SimilarEntityResult] = []
         for _, partial in top_scored:
-            detail = await entity_repo.get(partial.entity_id)
+            detail = detail_map.get(partial.entity_id)
             if detail is None:
                 # Entity disappeared between ANN query and now — skip silently
                 continue

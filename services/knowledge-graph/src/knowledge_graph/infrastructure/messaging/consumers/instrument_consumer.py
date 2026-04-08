@@ -113,6 +113,7 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             EntityAliasRepository,
         )
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            VIEW_DEFINITION,
             EntityEmbeddingStateRepository,
         )
 
@@ -124,6 +125,15 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             # Idempotency: check if entity already created for this instrument
             existing = await entity_repo.get(instrument_id)
             if existing:
+                entity_id_existing: UUID = existing["entity_id"]  # type: ignore[assignment]
+                # Re-trigger embedding if entity exists but definition embedding is absent.
+                # This handles replay after a crash between entity creation (step 4) and
+                # embedding (step 5) — fixes BP-124.
+                if description and self._def_worker:
+                    emb_row = await emb_repo.get(entity_id_existing, VIEW_DEFINITION)
+                    if emb_row is None or emb_row.get("model_id") is None:
+                        await session.commit()  # flush any reads
+                        await self._def_worker.refresh_for_entity(entity_id_existing, description)
                 logger.debug(  # type: ignore[no-any-return]
                     "instrument_consumer_already_exists",
                     instrument_id=str(instrument_id),

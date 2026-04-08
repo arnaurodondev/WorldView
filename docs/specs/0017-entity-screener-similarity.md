@@ -101,7 +101,7 @@ The existing endpoint is enhanced in-place. Request and response schemas are ext
 | offset | int | no | 0 | 0–5000 | Pagination offset |
 | sort_by | string \| null | no | null | one of metric names, `ticker`, `name`, or null (= no sort guarantee) | Sort key |
 | sort_order | `"asc"` \| `"desc"` | no | `"asc"` | — | Sort direction |
-| include_fields | `string[]` | no | `["ticker","name","exchange"]` | subset of screen field names | Extra instrument fields to return |
+<!-- include_fields: dropped from v1 — always returns all 4 fields (ticker, name, exchange, sector). Multi-field selection adds API complexity with minimal benefit; deferred to future PRD. -->
 
 **Response** (`ScreenResponse` — enhanced):
 
@@ -524,7 +524,7 @@ New proxy routes to add to the S9 gateway:
 | `POST /api/v1/fundamentals/screen` | S3 | X-Tenant-ID | update existing proxy handler |
 | `GET /api/v1/fundamentals/screen/fields` | S3 | none | new |
 | `GET /api/v1/fundamentals/timeseries` | S3 | X-Tenant-ID | **new** — not currently proxied through S9 |
-| `POST /api/v1/entities/similar` | S7 | X-Tenant-ID | new |
+| `POST /api/v1/entities/similar` | S7 | none (public) | new |
 
 **Implementation pattern**: S9 does NOT use generic reverse-proxy routes. Follow the existing pattern:
 1. Add typed handler methods in `services/api-gateway/src/api_gateway/clients.py` (using the appropriate `ServiceClients.market_data` or `ServiceClients.knowledge_graph` `httpx.AsyncClient`)

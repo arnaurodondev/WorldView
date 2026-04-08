@@ -51,6 +51,34 @@ WHERE entity_id = :entity_id
         )
         return result.fetchone() is not None
 
+    async def get_batch(self, entity_ids: list[UUID]) -> list[dict[str, object]]:
+        """Fetch multiple canonical entities in one query.
+
+        Returns only entities that exist; missing IDs are omitted silently.
+        """
+        if not entity_ids:
+            return []
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+FROM canonical_entities
+WHERE entity_id = ANY(:ids)
+"""),
+            {"ids": [str(eid) for eid in entity_ids]},
+        )
+        return [
+            {
+                "entity_id": UUID(str(row[0])),
+                "canonical_name": row[1],
+                "entity_type": row[2],
+                "isin": row[3],
+                "ticker": row[4],
+                "exchange": row[5],
+                "metadata": row[6],
+            }
+            for row in result.fetchall()
+        ]
+
     async def find_by_name_and_type(self, canonical_name: str, entity_type: str) -> UUID | None:
         """Find entity_id by exact canonical_name + entity_type match.
 

@@ -461,3 +461,171 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
             sql = str(call[0][0])
             assert "ON CONFLICT" in sql.upper(), "INSERT must be idempotent (ON CONFLICT DO NOTHING)"
             assert "DO NOTHING" in sql.upper()
+
+
+# ---------------------------------------------------------------------------
+# CanonicalEntityRepository — get_batch
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalEntityRepositoryGetBatch:
+    def test_get_batch_empty_input_returns_empty_list(self) -> None:
+        """get_batch([]) returns [] without hitting the DB."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        session = AsyncMock()
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([]))
+
+        assert result == []
+        session.execute.assert_not_awaited()
+
+    def test_get_batch_single_entity(self) -> None:
+        """get_batch with one ID returns a list with one dict."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        eid = uuid4()
+        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None)
+
+        session = _make_session(fetchall_return=[row])
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([eid]))
+
+        assert len(result) == 1
+        assert result[0]["entity_id"] == eid
+        assert result[0]["canonical_name"] == "Apple Inc."
+        assert result[0]["ticker"] == "AAPL"
+
+    def test_get_batch_multiple_entities(self) -> None:
+        """get_batch with multiple IDs issues ONE query and returns all found rows."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        ids = [uuid4(), uuid4(), uuid4()]
+        rows = [
+            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None),
+            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None),
+            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None),
+        ]
+
+        session = _make_session(fetchall_return=rows)
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.get_event_loop().run_until_complete(repo.get_batch(ids))
+
+        # ONE execute call for all IDs (not N)
+        session.execute.assert_awaited_once()
+        assert len(result) == 3
+
+    def test_get_batch_missing_ids_silently_omitted(self) -> None:
+        """Missing entity IDs are not returned — no error raised."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        existing_id = uuid4()
+        missing_id = uuid4()
+
+        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None)
+        session = _make_session(fetchall_return=[row])
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([existing_id, missing_id]))
+
+        assert len(result) == 1
+        assert result[0]["entity_id"] == existing_id
+
+    def test_get_batch_uses_any_operator(self) -> None:
+        """get_batch must use WHERE entity_id = ANY(:ids) — single round-trip."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        session = _make_session(fetchall_return=[])
+        repo = CanonicalEntityRepository(session)
+        ids = [uuid4(), uuid4()]
+
+        asyncio.get_event_loop().run_until_complete(repo.get_batch(ids))
+
+        call_sql = str(session.execute.call_args[0][0])
+        assert "ANY" in call_sql.upper(), "get_batch must use WHERE entity_id = ANY(:ids)"
+
+
+# ---------------------------------------------------------------------------
+# EntityEmbeddingStateRepository — upsert COALESCE (F-DS-009)
+# ---------------------------------------------------------------------------
+
+
+class TestEntityEmbeddingStateUpsertCoalesce:
+    def test_upsert_sql_coalesces_embedding(self) -> None:
+        """ON CONFLICT DO UPDATE must use COALESCE for embedding to prevent NULL overwrite."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = _make_session()
+        repo = EntityEmbeddingStateRepository(session)
+
+        asyncio.get_event_loop().run_until_complete(
+            repo.upsert(
+                uuid4(),
+                "definition",
+                embedding=None,
+                model_id=None,
+                source_text="text",
+                source_hash="hash",
+                next_refresh_at=_NOW,
+            )
+        )
+
+        call_sql = str(session.execute.call_args[0][0])
+        assert "COALESCE" in call_sql.upper(), "upsert SQL must COALESCE embedding to preserve existing vectors"
+        assert "EXCLUDED.embedding" in call_sql
+
+    def test_upsert_sql_coalesces_model_id(self) -> None:
+        """model_id must also use COALESCE so it is not overwritten by NULL on hash-unchanged path."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+            EntityEmbeddingStateRepository,
+        )
+
+        session = _make_session()
+        repo = EntityEmbeddingStateRepository(session)
+
+        asyncio.get_event_loop().run_until_complete(
+            repo.upsert(
+                uuid4(),
+                "definition",
+                embedding=None,
+                model_id=None,
+                source_text="text",
+                source_hash="hash",
+                next_refresh_at=_NOW,
+            )
+        )
+
+        call_sql = str(session.execute.call_args[0][0])
+        assert "COALESCE" in call_sql.upper()
+        # Both embedding and model_id should use COALESCE
+        coalesce_count = call_sql.upper().count("COALESCE")
+        assert coalesce_count >= 2, f"Expected ≥2 COALESCE uses, found {coalesce_count}"

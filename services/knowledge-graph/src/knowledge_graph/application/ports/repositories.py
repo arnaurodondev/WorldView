@@ -218,6 +218,13 @@ class CanonicalEntityRepositoryPort(ABC):
     @abstractmethod
     async def exists(self, entity_id: UUID) -> bool: ...
 
+    @abstractmethod
+    async def get_batch(self, entity_ids: list[UUID]) -> list[dict[str, object]]:
+        """Fetch multiple canonical entities in a single WHERE entity_id = ANY(:ids) query.
+
+        Returns only entities that exist — missing IDs are silently omitted.
+        """
+
 
 # ── Entity embedding ANN port (PRD-0017 §6.5) ────────────────────────────────
 
