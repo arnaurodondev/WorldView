@@ -105,17 +105,18 @@ async def ner_single(req: NERRequest) -> NERResponse:
 
 @app.post("/ner/batch", response_model=BatchNERResponse)
 async def ner_batch(req: BatchNERRequest) -> BatchNERResponse:
-    """Batch NER — one model forward pass for all texts."""
+    """Batch NER — processes each text individually (GLiNER predict_entities
+    does not support list input reliably across versions)."""
     if not req.texts:
         return BatchNERResponse(results=[])
 
     model = await _get_model()
     loop = asyncio.get_event_loop()
 
-    raw_batched: list[list[dict[str, Any]]] = await loop.run_in_executor(
-        None,
-        lambda: model.predict_entities(req.texts, req.entity_classes, threshold=req.threshold),
-    )
+    def _run_batch() -> list[list[dict[str, Any]]]:
+        return [model.predict_entities(text, req.entity_classes, threshold=req.threshold) for text in req.texts]
+
+    raw_batched: list[list[dict[str, Any]]] = await loop.run_in_executor(None, _run_batch)
 
     results: list[list[EntitySpan]] = [
         [

@@ -107,6 +107,9 @@
 | [BP-113](#bp-113) | `TypeError` from None-valued OHLCV field not caught in `ExecuteTaskUseCase._canonicalize` — task stuck in running | EODHD intraday response may include `None` for `volume`; `int(None)` raises `TypeError` which is not in `except (ProviderDataError, ValueError, KeyError)`; `_persist_fail` never called; task stays RUNNING forever | Add `TypeError` to the exception tuple in `execute_task.py:110` |
 | [BP-119](#bp-119) | Avro schema defined as inline Python dict drifts from canonical `.avsc` file | Schema changes applied to `.avsc` are not reflected in the serializer (or vice versa); Avro contract tests may pass while the actual schema diverges silently | Always load schemas via `fastavro.schema.load_schema(path_to_avsc)` — never define Avro schemas as inline Python dicts |
 | [BP-120](#bp-120) | Post-commit hook failures silently suppressed — cache invalidation skipped with no retry path | Valkey/Redis outage during quote updates leaves stale cache; Kafka offset committed as if success; no mechanism to replay failed invalidation | S3 market-data UoW:131-137, S1 portfolio watchlist:229-236 — post-commit hooks suppress exceptions; see M-002/M-003 in QA-S1S2S3-2026-04-07 |
+| [BP-121](#bp-121) | ML / Ollama | BGE-large BERT context window overflow crashes Ollama GGML runner with `GGML_ASSERT(i01 >= 0 && i01 < ne01) failed` | Any service using OllamaEmbeddingAdapter with document-length texts |
+| [BP-122](#bp-122) | Kafka / Avro deserialization | S6 Confluent-Avro wire format not detected — consumer crashes on binary `bytes` instead of JSON dict | `article_consumer.py`, any consumer expecting JSON from Schema Registry topics |
+| [BP-123](#bp-123) | ML / GLiNER | `model.predict_entities(list_of_texts)` returns `[]` — batch API unsupported; must iterate texts individually | `infra/gliner/server.py`, any GLiNER batch endpoint |
 
 ---
 
@@ -4600,3 +4603,51 @@ except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
 **Prevention**: When writing new post-commit hooks, explicitly document the consistency model. If the hook is critical (cache invalidation for a real-time feed), use Option A. If it's best-effort, document it and monitor `post_commit_hook_failed` counter.
 
 **First seen**: QA pass QA-S1S2S3-2026-04-07 (finding M-002/M-003).
+
+---
+
+## BP-121 — BGE-large BERT Context Overflow Crashes Ollama GGML Runner
+
+**Symptom**: Ollama returns `500 Internal Server Error` with `{"error":"do embedding request: Post ... EOF"}`. Docker logs show `GGML_ASSERT(i01 >= 0 && i01 < ne01) failed` and `llama runner terminated: signal: aborted`. Subsequent embedding requests continue returning 500 until the model is manually reloaded.
+
+**Root cause**: BGE-large (`bert.context_length: 512`, `position_embd.weight shape: [1024, 512]`) has a hard 512-token BERT context window. Financial text with numbers, tickers, and dollar amounts tokenizes at ~3 chars/token (denser than typical English at ~4-5 chars/token). An article of 339 words in financial English can exceed 512 tokens after adding the instruction prefix (e.g., `"Represent this financial document passage for retrieval: "`). When the token index reaches position 512, the GGML matrix index check `i01 < ne01` fires, killing the runner subprocess.
+
+**Fix**: In `OllamaEmbeddingAdapter.embed()` (`libs/ml-clients/src/ml_clients/adapters/ollama_embedding.py`), truncate the combined `(prefix + text)` string to `_MAX_CHARS = 1500` before sending. This keeps the tokenized length under 500 tokens (leaving margin for CLS/SEP special tokens).
+
+**Affected areas**: Any service using `OllamaEmbeddingAdapter` with section-level or document-level texts; particularly NLP-pipeline S6 `run_embeddings_block` which embeds full section texts (not chunks).
+
+**Prevention**: Always truncate input to BERT-based models at the adapter level. Do not rely on the model to truncate — BERT position embeddings are statically sized and do NOT truncate gracefully (they crash). Use `_MAX_CHARS = context_length * min_chars_per_token` as the safe limit.
+
+**First seen**: 2026-04-08 E2E NLP pipeline investigation.
+
+---
+
+## BP-122 — Confluent Avro Wire Format Not Detected in S6 Consumer
+
+**Symptom**: `article_consumer.py` raises `json.JSONDecodeError: Expecting value: line 1 column 1` or `AttributeError` when trying to read fields from the Kafka message. The message bytes start with `\x00` (magic byte) followed by 4 bytes schema ID — this is Confluent Schema Registry wire format, not JSON.
+
+**Root cause**: The content-store dispatcher (S5) publishes `content.article.stored.v1` using Confluent Avro serialization (5-byte header: magic `0x00` + 4-byte schema ID + Avro binary payload). The original S6 consumer called `json.loads(raw)` directly, which fails on binary Avro payloads.
+
+**Fix**: Override `deserialize_value()` in `ArticleProcessingConsumer` to detect the `\x00` magic byte and call `deserialize_confluent_avro(schema_path, raw)` from `messaging.kafka.serialization_utils`. Override `get_schema_path()` to return the `.avsc` file path for the topic.
+
+**Affected areas**: `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py`. Any consumer reading from topics published by Schema Registry-aware producers.
+
+**Prevention**: When connecting a consumer to a topic produced with Confluent Schema Registry: (1) check if the first byte is `\x00`, (2) strip the 5-byte header, (3) use `fastavro.schemaless_reader` with the loaded schema. Never assume Kafka messages on SR topics are plain JSON.
+
+**First seen**: 2026-04-08 E2E NLP pipeline investigation.
+
+---
+
+## BP-123 — GLiNER `predict_entities(list)` Returns Empty List — Batch API Unsupported
+
+**Symptom**: GLiNER server returns `{"results": []}` (empty) for every batch request despite receiving valid texts. Consumer logs `ner_http_batch_completed, total_entities: 0`.
+
+**Root cause**: `GLiNER.predict_entities(texts, labels)` where `texts` is a list returns `[]` — the GLiNER library batch API is broken (the implementation only works when `texts` is a single string). Passing a list silently returns nothing.
+
+**Fix**: In `infra/gliner/server.py`, change `_run_batch()` to iterate texts individually: `[model.predict_entities(text, ...) for text in req.texts]`. Do NOT call `model.predict_entities(req.texts, ...)` — the batch overload does not work.
+
+**Affected areas**: `infra/gliner/server.py` — the GLiNER HTTP server used by NLP pipeline S6.
+
+**Prevention**: When using GLiNER: always pass a single string to `predict_entities`, wrap iteration at the call site. Do not assume the batch overload works — verify with a quick unit test.
+
+**First seen**: 2026-04-08 E2E NLP pipeline investigation.

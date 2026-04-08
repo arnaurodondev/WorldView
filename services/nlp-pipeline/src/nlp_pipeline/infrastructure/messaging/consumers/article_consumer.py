@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import common.ids  # type: ignore[import-untyped]
@@ -95,6 +96,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _TOPIC = "content.article.stored.v1"
 
+# Avro schema directory — 6 parents up from this file reaches /app in the container
+# (/app/src/nlp_pipeline/infrastructure/messaging/consumers/ → /app)
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+
 # Default source trust weight — used when intelligence_db source_trust_weights table
 # is not queried. Contribution = 0.20 * 0.5 = 0.10 to routing score.
 _DEFAULT_SOURCE_TRUST = 0.5
@@ -107,6 +112,12 @@ class _NoOpUnitOfWork:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        pass
+
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
         pass
 
 
@@ -381,17 +392,22 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
     # ── MinIO download ────────────────────────────────────────────────────────
 
     async def _download_article(self, minio_key: str) -> str:
-        """Download cleaned article text from MinIO silver layer."""
-        import asyncio as _aio
+        """Download cleaned article text from MinIO silver layer.
 
-        loop = _aio.get_event_loop()
-        raw = await loop.run_in_executor(
-            None,
-            lambda: self._storage.get_object_bytes(minio_key),  # type: ignore[attr-defined]
-        )
-        if isinstance(raw, bytes):
-            return raw.decode("utf-8", errors="replace")
-        return str(raw)
+        The silver object is a JSON envelope (see content-store minio_silver.py):
+        {"body": "<cleaned text>", "source_type": ..., ...}
+        """
+        if self._storage is None:
+            msg = "Object storage not configured; cannot download article text"
+            raise RuntimeError(msg)
+        raw = await self._storage.get_bytes(self._settings.silver_bucket, minio_key)
+        try:
+            envelope = json.loads(raw)
+            if isinstance(envelope, dict) and "body" in envelope:
+                return str(envelope["body"])
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
 
     # ── Source metadata cache (best-effort) ──────────────────────────────────
 
@@ -499,12 +515,17 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
-        try:
-            return json.loads(raw)  # type: ignore[no-any-return]
-        except (json.JSONDecodeError, ValueError):
-            raise
+        # S5 dispatcher publishes content.article.stored.v1 as Confluent Avro wire format
+        # (5-byte header: magic 0x00 + 4-byte schema ID).  Fall back to JSON for plain payloads.
+        if schema_path and raw and raw[0:1] == b"\x00":
+            from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+            return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
+        return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == _TOPIC:
+            return str(_SCHEMA_DIR / "content.article.stored.v1.avsc")
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

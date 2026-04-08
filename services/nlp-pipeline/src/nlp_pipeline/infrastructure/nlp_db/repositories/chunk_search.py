@@ -116,14 +116,14 @@ class ChunkANNRepository:
                 c.heading_path,
                 c.chunk_text_key,
                 s.section_type,
-                1 - (ce.embedding <=> :vec::vector) AS score
+                1 - (ce.embedding <=> cast(:vec AS vector)) AS score
             FROM chunk_embeddings ce
             JOIN chunks c ON c.chunk_id = ce.chunk_id
             JOIN sections s ON s.section_id = c.section_id
             {meta_join}
             WHERE {where_sql}
-              AND 1 - (ce.embedding <=> :vec::vector) >= :min_score
-            ORDER BY ce.embedding <=> :vec::vector
+              AND 1 - (ce.embedding <=> cast(:vec AS vector)) >= :min_score
+            ORDER BY ce.embedding <=> cast(:vec AS vector)
             LIMIT :top_k
             """,
         ).bindparams(**params)
@@ -188,13 +188,13 @@ class ChunkANNRepository:
                 se.section_id,
                 s.title            AS heading_path,
                 s.section_type,
-                1 - (se.embedding <=> :vec::vector) AS score
+                1 - (se.embedding <=> cast(:vec AS vector)) AS score
             FROM section_embeddings se
             JOIN sections s ON s.section_id = se.section_id
             LEFT JOIN document_source_metadata dsm ON dsm.doc_id = s.doc_id
-            WHERE 1 - (se.embedding <=> :vec::vector) >= :min_score
+            WHERE 1 - (se.embedding <=> cast(:vec AS vector)) >= :min_score
               {where_filter}
-            ORDER BY se.embedding <=> :vec::vector
+            ORDER BY se.embedding <=> cast(:vec AS vector)
             LIMIT :top_k
             """,
         ).bindparams(**params)

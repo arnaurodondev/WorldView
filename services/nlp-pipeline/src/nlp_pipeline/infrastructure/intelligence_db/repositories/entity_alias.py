@@ -170,7 +170,7 @@ class EntityAliasRepository:
             text(
                 "SELECT q.search_term, ea.entity_id, "
                 "similarity(ea.normalized_alias_text, q.search_term) AS sim "
-                "FROM unnest(:terms::text[]) AS q(search_term) "
+                "FROM unnest(cast(:terms AS text[])) AS q(search_term) "
                 "JOIN entity_aliases ea ON "
                 "  similarity(ea.normalized_alias_text, q.search_term) > :threshold "
                 "  AND ea.is_active = true "
