@@ -62,7 +62,7 @@ class TestSummaryWorkerHashSkip:
             patch(_SUM_REPO, return_value=mock_sum),
         ):
             worker = SummaryWorker(sf, llm)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         llm.extract.assert_not_awaited()
         mock_rel.mark_summary_updated.assert_awaited_once()
@@ -95,7 +95,7 @@ class TestSummaryWorkerHashSkip:
             patch(_SUM_REPO, return_value=mock_sum),
         ):
             worker = SummaryWorker(sf, llm)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         llm.extract.assert_awaited_once()
         mock_sum.insert_new.assert_awaited_once()
@@ -116,7 +116,7 @@ class TestSummaryWorkerHashSkip:
             patch(_SUM_REPO, return_value=mock_sum),
         ):
             worker = SummaryWorker(sf, llm)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         llm.extract.assert_not_awaited()
         mock_sum.insert_new.assert_not_awaited()
@@ -137,7 +137,7 @@ class TestSummaryWorkerHashSkip:
             patch(_SUM_REPO, return_value=mock_sum),
         ):
             worker = SummaryWorker(sf, llm)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         llm.extract.assert_not_awaited()
         mock_sum.insert_new.assert_not_awaited()

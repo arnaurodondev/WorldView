@@ -69,7 +69,7 @@ class TestExactMatch:
         )
 
         registry = _make_registry_repo(exact_return=_EXACT_ROW)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -91,7 +91,7 @@ class TestExactMatch:
 
         registry = _make_registry_repo(exact_return=_EXACT_ROW)
         emb = _make_embedding_client()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -111,7 +111,7 @@ class TestExactMatch:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -130,7 +130,7 @@ class TestExactMatch:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -156,7 +156,7 @@ class TestSoftMap:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -177,7 +177,7 @@ class TestSoftMap:
         )
 
         emb = _make_embedding_client()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -197,7 +197,7 @@ class TestSoftMap:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -223,7 +223,7 @@ class TestPropose:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -245,7 +245,7 @@ class TestPropose:
         )
 
         # Should not raise
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -265,7 +265,7 @@ class TestPropose:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -289,7 +289,7 @@ class TestPropose:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="TEMPORAL_CLAIM",

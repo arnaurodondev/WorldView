@@ -78,7 +78,7 @@ def _is_schema_applied(engine_url: str) -> bool:
             await conn.close()
 
     try:
-        return asyncio.get_event_loop().run_until_complete(_check())
+        return asyncio.run(_check())
     except Exception:
         return False
 

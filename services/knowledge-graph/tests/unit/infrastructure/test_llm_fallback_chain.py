@@ -51,7 +51,7 @@ class TestFallbackChainClientEmbedding:
             retry_delays_gemini=(),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(client.embed([]))
+        result = asyncio.run(client.embed([]))
         ollama.embed.assert_awaited_once()
         gemini.embed.assert_not_awaited()
         assert result is not None
@@ -69,7 +69,7 @@ class TestFallbackChainClientEmbedding:
             retry_delays_gemini=(),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(client.embed([]))
+        result = asyncio.run(client.embed([]))
         assert result is not None
         gemini.embed.assert_awaited_once()
 
@@ -86,14 +86,14 @@ class TestFallbackChainClientEmbedding:
             retry_delays_gemini=(),
         )
 
-        result = asyncio.get_event_loop().run_until_complete(client.embed([]))
+        result = asyncio.run(client.embed([]))
         assert result is None
 
     def test_no_clients_returns_none(self) -> None:
         from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
         client = FallbackChainClient(retry_delays_ollama=(), retry_delays_gemini=())
-        result = asyncio.get_event_loop().run_until_complete(client.embed([]))
+        result = asyncio.run(client.embed([]))
         assert result is None
 
 
@@ -109,7 +109,7 @@ class TestFallbackChainClientExtraction:
             retry_delays_gemini=(),
         )
         inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
-        result = asyncio.get_event_loop().run_until_complete(client.extract(inp))
+        result = asyncio.run(client.extract(inp))
         assert result is not None
         assert result.result == {"summary": "ok"}
 
@@ -126,7 +126,7 @@ class TestFallbackChainClientExtraction:
             retry_delays_gemini=(),
         )
         inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
-        result = asyncio.get_event_loop().run_until_complete(client.extract(inp))
+        result = asyncio.run(client.extract(inp))
         assert result is not None
         gemini.extract.assert_awaited_once()
 
@@ -148,7 +148,7 @@ class TestFallbackChainLlmLogging:
             retry_delays_gemini=(),
         )
         inp = EmbeddingInput(text="hello", model_id="nomic")
-        asyncio.get_event_loop().run_until_complete(client.embed([inp]))
+        asyncio.run(client.embed([inp]))
         usage_repo.insert.assert_awaited_once()
 
     def test_llm_usage_log_written_on_failure(self) -> None:
@@ -167,7 +167,7 @@ class TestFallbackChainLlmLogging:
             retry_delays_gemini=(),
         )
         inp = EmbeddingInput(text="hello", model_id="nomic")
-        asyncio.get_event_loop().run_until_complete(client.embed([inp]))
+        asyncio.run(client.embed([inp]))
         # Should log with success=False
         call_kwargs = usage_repo.insert.call_args.kwargs
         assert call_kwargs["success"] is False

@@ -54,7 +54,9 @@ _TEMPORAL_EVENT_SCHEMA_PATH = str(_SCHEMA_DIR / "intelligence.temporal_event.v1.
 # Entity types that qualify for GLOBAL-scope event exposure (PRD-0018 §6.2).
 # GLOBAL events must ONLY link sector/industry canonical entities — company
 # exposure is inferred at query time via ``is_in_sector`` traversal.
-_GLOBAL_ALLOWED_ENTITY_TYPES: frozenset[str] = frozenset({"sector", "industry"})
+# Seeded entity_type values from migration 0003 are 'sector' and 'industry_group'.
+# 'industry' does not exist in canonical_entities — use 'industry_group' (PRD-0018 §6.2).
+_GLOBAL_ALLOWED_ENTITY_TYPES: frozenset[str] = frozenset({"sector", "industry_group"})
 
 
 # ---------------------------------------------------------------------------

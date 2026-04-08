@@ -210,15 +210,42 @@ class AgeSyncWorker:
     # ── Watermark ─────────────────────────────────────────────────────────────
 
     async def _get_watermark(self) -> datetime:
-        """Read the current watermark from Valkey; return epoch if missing."""
-        raw = await self._valkey.get(_WATERMARK_KEY)
+        """Read the current watermark from Valkey; return epoch on missing or error.
+
+        Falls back to epoch (full re-sync) on Valkey unavailability — AGE MERGE
+        is idempotent so re-syncing already-synced data is safe.
+        """
+        try:
+            raw = await self._valkey.get(_WATERMARK_KEY)
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_watermark_read_failed",
+                message="Valkey unavailable; falling back to epoch watermark (full re-sync)",
+                exc_info=True,
+            )
+            return _EPOCH
         if raw is None:
             return _EPOCH
-        return datetime.fromisoformat(raw)
+        result = datetime.fromisoformat(raw)
+        # Ensure the parsed watermark is always timezone-aware (UTC).
+        if result.tzinfo is None:
+            return result.replace(tzinfo=UTC)
+        return result
 
     async def _set_watermark(self, dt: datetime) -> None:
-        """Persist *dt* (ISO-8601 UTC) as the new watermark in Valkey."""
-        await self._valkey.set(_WATERMARK_KEY, dt.isoformat())
+        """Persist *dt* (ISO-8601 UTC) as the new watermark in Valkey.
+
+        Logs and swallows Valkey errors — on next run the watermark falls
+        back to epoch (full re-sync), which is safe since AGE MERGE is idempotent.
+        """
+        try:
+            await self._valkey.set(_WATERMARK_KEY, dt.isoformat())
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_watermark_write_failed",
+                message="Valkey unavailable; watermark not persisted — next run will re-sync from epoch",
+                exc_info=True,
+            )
 
     # ── Entity sync ───────────────────────────────────────────────────────────
 
@@ -277,15 +304,16 @@ class AgeSyncWorker:
         offset = 0
 
         while True:
+            # Note: DISTINCT ON removed — relation_id is the PK, each row is unique.
+            # ORDER BY updated_at ASC enables stable pagination across runs.
             rows = await session.execute(
                 text(
-                    "SELECT DISTINCT ON (relation_id)"
-                    "       relation_id, subject_entity_id, object_entity_id,"
+                    "SELECT relation_id, subject_entity_id, object_entity_id,"
                     "       canonical_type, confidence, updated_at"
                     " FROM relations"
                     " WHERE updated_at > :since"
                     "   AND confidence > :min_conf"
-                    " ORDER BY relation_id, updated_at ASC"
+                    " ORDER BY updated_at ASC, relation_id ASC"
                     " LIMIT :lim OFFSET :off"
                 ),
                 {
@@ -331,48 +359,75 @@ class AgeSyncWorker:
     # ── Temporal event sync ───────────────────────────────────────────────────
 
     async def _sync_temporal_events(self, session: AsyncSession, since: datetime) -> None:
-        """MERGE temporal events + EVENT_EXPOSES edges updated since *since*."""
-        # 1. TemporalEvent vertices
-        rows = await session.execute(
-            text(
-                "SELECT event_id, event_type, scope, region, title, confidence, updated_at"
-                " FROM temporal_events"
-                " WHERE updated_at > :since"
-                " ORDER BY updated_at ASC"
-            ),
-            {"since": since},
-        )
-        for row in rows.fetchall():
-            params = {
-                "event_id": str(row.event_id),
-                "event_type": row.event_type,
-                "scope": row.scope,
-                "region": row.region or "",
-                "title": row.title,
-                "confidence": float(row.confidence),
-                "updated_at": row.updated_at.isoformat(),
-            }
-            await session.execute(text(_SQL_TEMPORAL_EVENT_MERGE), {"params": json.dumps(params)})
+        """MERGE temporal events + EVENT_EXPOSES edges updated/created since *since*.
 
-        # 2. EVENT_EXPOSES edges (from entity_event_exposures created since watermark)
-        exp_rows = await session.execute(
-            text(
-                "SELECT exposure_id, event_id, entity_id, exposure_type, confidence"
-                " FROM entity_event_exposures"
-                " WHERE created_at > :since"
-                " ORDER BY created_at ASC"
-            ),
-            {"since": since},
-        )
-        for row in exp_rows.fetchall():
-            params = {
-                "event_id": str(row.event_id),
-                "entity_id": str(row.entity_id),
-                "exposure_id": str(row.exposure_id),
-                "exposure_type": row.exposure_type,
-                "confidence": float(row.confidence),
-            }
-            await session.execute(text(_SQL_EVENT_EXPOSES_MERGE), {"params": json.dumps(params)})
+        Uses paginated fetches (same pattern as _sync_entities) to bound memory
+        usage on large or first-run backlogs.
+        """
+        event_batch = 2000
+        exposure_batch = 5000
+
+        # 1. TemporalEvent vertices — paginated
+        offset = 0
+        while True:
+            rows = await session.execute(
+                text(
+                    "SELECT event_id, event_type, scope, region, title, confidence, updated_at"
+                    " FROM temporal_events"
+                    " WHERE updated_at > :since"
+                    " ORDER BY updated_at ASC, event_id ASC"
+                    " LIMIT :lim OFFSET :off"
+                ),
+                {"since": since, "lim": event_batch, "off": offset},
+            )
+            batch = rows.fetchall()
+            if not batch:
+                break
+            for row in batch:
+                params = {
+                    "event_id": str(row.event_id),
+                    "event_type": row.event_type,
+                    "scope": row.scope,
+                    "region": row.region or "",
+                    "title": row.title,
+                    "confidence": float(row.confidence),
+                    "updated_at": row.updated_at.isoformat(),
+                }
+                await session.execute(text(_SQL_TEMPORAL_EVENT_MERGE), {"params": json.dumps(params)})
+            if len(batch) < event_batch:
+                break
+            offset += event_batch
+
+        # 2. EVENT_EXPOSES edges — paginated
+        # entity_event_exposures is immutable after creation (DO NOTHING on conflict),
+        # so created_at is the correct watermark column (no updated_at exists).
+        offset = 0
+        while True:
+            exp_rows = await session.execute(
+                text(
+                    "SELECT exposure_id, event_id, entity_id, exposure_type, confidence"
+                    " FROM entity_event_exposures"
+                    " WHERE created_at > :since"
+                    " ORDER BY created_at ASC, exposure_id ASC"
+                    " LIMIT :lim OFFSET :off"
+                ),
+                {"since": since, "lim": exposure_batch, "off": offset},
+            )
+            batch = exp_rows.fetchall()
+            if not batch:
+                break
+            for row in batch:
+                params = {
+                    "event_id": str(row.event_id),
+                    "entity_id": str(row.entity_id),
+                    "exposure_id": str(row.exposure_id),
+                    "exposure_type": row.exposure_type,
+                    "confidence": float(row.confidence),
+                }
+                await session.execute(text(_SQL_EVENT_EXPOSES_MERGE), {"params": json.dumps(params)})
+            if len(batch) < exposure_batch:
+                break
+            offset += exposure_batch
 
 
 # ── Session helpers ────────────────────────────────────────────────────────────
@@ -385,7 +440,8 @@ async def _setup_age_session(session: AsyncSession) -> None:
     See migration 0004 and PRD-0018 §6.4 for the rationale.
     """
     await session.execute(text("LOAD 'age'"))
-    await session.execute(text("SET search_path = ag_catalog, public"))
+    # Include "$user" to match the migration-time search_path constant.
+    await session.execute(text('SET search_path = ag_catalog, "$user", public'))
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -398,7 +454,12 @@ def _build_relation_merge_sql(edge_label: str) -> str:
     It is embedded into the Cypher string (not parameterized) because AGE
     Cypher does not support dynamic edge labels via params. All data values
     (entity IDs, confidence, etc.) are passed separately as :params.
+
+    SECURITY: Defense-in-depth assertion — prevents any future caller from
+    bypassing whitelist validation and injecting arbitrary Cypher edge labels.
     """
+    # SECURITY: edge_label must be whitelist-validated; assert here as defense-in-depth.
+    assert edge_label in _VALID_EDGE_LABELS, f"Cypher label injection guard: {edge_label!r} not in whitelist"
     cypher = (
         "MATCH (s:Entity {entity_id: $subject_id}),"
         "      (o:Entity {entity_id: $object_id})"

@@ -50,11 +50,11 @@ def _lifecycle_phase(
 @router.get("/temporal-events", response_model=TemporalEventsListResponse)
 async def list_temporal_events(
     temporal_event_repo: TemporalEventRepoDep,
-    scope: str | None = Query(default=None),
+    scope: str | None = Query(default=None, max_length=20),
     entity_id: UUID | None = Query(default=None),
     active_only: bool = Query(default=True),
     event_type: str | None = Query(default=None, max_length=50),
-    region: str | None = Query(default=None),
+    region: str | None = Query(default=None, max_length=100),
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -69,7 +69,7 @@ async def list_temporal_events(
     Results ordered by ``active_from DESC``.
     """
     events, total = await ListTemporalEventsUseCase().execute(
-        temporal_event_repo,  # type: ignore[arg-type]
+        temporal_event_repo,
         scope=scope,
         entity_id=entity_id,
         active_only=active_only,

@@ -30,7 +30,7 @@ pytestmark = pytest.mark.unit
 
 
 def _run(coro: object) -> object:
-    return asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+    return asyncio.run(coro)  # type: ignore[arg-type]
 
 
 def _make_entity_repo(

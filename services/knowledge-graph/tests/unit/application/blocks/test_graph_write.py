@@ -80,7 +80,7 @@ class TestGraphMaterializationRelations:
     def test_empty_relations_returns_zero_counts(self) -> None:
         from knowledge_graph.application.blocks.graph_write import materialize_graph
 
-        summary = asyncio.get_event_loop().run_until_complete(
+        summary = asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -109,7 +109,7 @@ class TestGraphMaterializationRelations:
 
         relation_repo = _make_relation_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -138,7 +138,7 @@ class TestGraphMaterializationRelations:
 
         relation_repo = _make_relation_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -167,7 +167,7 @@ class TestGraphMaterializationRelations:
 
         evidence_repo = _make_evidence_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -203,7 +203,7 @@ class TestPartitionKeyNotInInsert:
 
         evidence_repo = _make_evidence_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -242,7 +242,7 @@ class TestEntityDirtiedDirectProduce:
         producer = _MockProducer()
         outbox = _make_outbox_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -286,7 +286,7 @@ class TestEntityDirtiedDirectProduce:
             extraction_confidence=0.8,
             evidence_date=_NOW,
         )
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -319,7 +319,7 @@ class TestEntityDirtiedDirectProduce:
 
         outbox = _make_outbox_repo()
         rel = _raw_relation()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -362,7 +362,7 @@ class TestEventsAndClaims:
             extraction_confidence=0.9,
             event_date=_NOW,
         )
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -397,7 +397,7 @@ class TestEventsAndClaims:
             claim_text="Buy rating",
             extraction_confidence=0.8,
         )
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",

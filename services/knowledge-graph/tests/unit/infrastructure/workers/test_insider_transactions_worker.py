@@ -96,7 +96,7 @@ def _run_worker(
     worker = InsiderTransactionsWorker(session_factory=sf, eodhd_client=eodhd_client)
 
     with patch(_ENTITY_REPO, return_value=entity_repo), patch(_RELATION_REPO, return_value=relation_repo):
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
     return entity_repo, relation_repo, eodhd_client
 
@@ -260,7 +260,7 @@ class TestInsiderTransactionsWorkerCreatesRelation:
 
         worker = InsiderTransactionsWorker(session_factory=sf, eodhd_client=eodhd_client)
         with patch(_ENTITY_REPO, return_value=entity_repo), patch(_RELATION_REPO, return_value=relation_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         sf.return_value.commit.assert_awaited()
 

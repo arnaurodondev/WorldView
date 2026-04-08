@@ -55,7 +55,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         with patch(_EMB_REPO, return_value=emb_repo):
             worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         emb_repo.upsert.assert_not_awaited()
 
@@ -84,7 +84,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         with patch(_EMB_REPO, return_value=emb_repo):
             worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         emb_repo.upsert.assert_not_awaited()
 
@@ -109,7 +109,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         with patch(_EMB_REPO, return_value=emb_repo):
             worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         http_client.get.assert_not_awaited()
         emb_repo.upsert.assert_not_awaited()
@@ -153,7 +153,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         with patch(_EMB_REPO, return_value=emb_repo):
             worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         llm.embed.assert_awaited_once()
         emb_repo.upsert.assert_awaited_once()
@@ -215,9 +215,7 @@ class TestEarningsEventInsertion:
         session = _make_session_for_earnings(dedup_found=False)
         worker = _make_worker_bare()
 
-        count = asyncio.get_event_loop().run_until_complete(
-            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
-        )
+        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
 
         assert count == 1
         # First call = dedup SELECT, second call = INSERT
@@ -229,9 +227,7 @@ class TestEarningsEventInsertion:
         session = _make_session_for_earnings(dedup_found=True)
         worker = _make_worker_bare()
 
-        count = asyncio.get_event_loop().run_until_complete(
-            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
-        )
+        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
 
         assert count == 0
         # Only the dedup SELECT; no INSERT
@@ -243,9 +239,7 @@ class TestEarningsEventInsertion:
         session = AsyncMock()
         worker = _make_worker_bare()
 
-        count = asyncio.get_event_loop().run_until_complete(
-            worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc.")
-        )
+        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
 
         assert count == 0
         session.execute.assert_not_awaited()
@@ -308,7 +302,7 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos()
         worker = _make_worker_bare()
 
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
         )
 
@@ -327,7 +321,7 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos(sector_found=False, industry_found=False)
         worker = _make_worker_bare()
 
-        count = asyncio.get_event_loop().run_until_complete(
+        count = asyncio.run(
             worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
         )
 
@@ -341,11 +335,10 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos()
         worker = _make_worker_bare()
 
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        asyncio.run(
             worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
         )
-        loop.run_until_complete(
+        asyncio.run(
             worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
         )
 

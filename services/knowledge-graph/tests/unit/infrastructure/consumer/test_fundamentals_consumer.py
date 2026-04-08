@@ -86,7 +86,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "fundamentals/aapl.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_awaited_once()
 
@@ -104,7 +104,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "fundamentals/aapl.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         # Consumer delegates to worker for ALL descriptions; hash dedup is inside refresh_for_entity.
         def_worker.refresh_for_entity.assert_awaited_once()
@@ -120,7 +120,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "ohlcv/aapl.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         storage.get_json.assert_not_awaited()
         def_worker.refresh_for_entity.assert_not_awaited()
@@ -137,7 +137,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "fundamentals/aapl.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_not_awaited()
 
@@ -153,7 +153,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "fundamentals/aapl.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_not_awaited()
 
@@ -167,7 +167,7 @@ class TestFundamentalsConsumerDescriptionChange:
             "object_key": "fundamentals/unknown.json",
         }
 
-        asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+        asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_not_awaited()
 
@@ -193,7 +193,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_instance.update_metadata.assert_awaited_once()
         _entity_id, updates = mock_instance.update_metadata.call_args.args
@@ -222,7 +222,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_instance.update_metadata.assert_awaited_once()
         _entity_id, updates = mock_instance.update_metadata.call_args.args
@@ -247,7 +247,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_instance.update_metadata.assert_not_awaited()
         session.commit.assert_not_awaited()
@@ -272,7 +272,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_awaited_once()
         mock_instance.update_metadata.assert_awaited_once()
@@ -295,8 +295,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         # Both calls reach update_metadata; DB JSONB || merge produces identical state (idempotent)
         assert mock_instance.update_metadata.await_count == 2
@@ -327,7 +327,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         # All fields were None → nothing to update → update_metadata NOT called
         mock_instance.update_metadata.assert_not_awaited()

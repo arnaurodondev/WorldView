@@ -51,7 +51,7 @@ class TestArticleClaimSearchUseCase:
         expected = [_claim_result(entity_id=entity_id)]
         repo = _make_claim_repo(results=expected)
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             ArticleClaimSearchUseCase().execute(
                 claim_repo=repo,
                 entity_ids=[entity_id],
@@ -71,7 +71,7 @@ class TestArticleClaimSearchUseCase:
 
         repo = _make_claim_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ArticleClaimSearchUseCase().execute(
                 claim_repo=repo,
                 entity_ids=[uuid4()],
@@ -92,7 +92,7 @@ class TestArticleClaimSearchUseCase:
         d_from = date(2026, 1, 1)
         d_to = date(2026, 3, 31)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ArticleClaimSearchUseCase().execute(
                 claim_repo=repo,
                 entity_ids=[uuid4()],
@@ -113,7 +113,7 @@ class TestArticleClaimSearchUseCase:
 
         repo = _make_claim_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ArticleClaimSearchUseCase().execute(
                 claim_repo=repo,
                 entity_ids=[uuid4()],

@@ -55,7 +55,7 @@ class TestConfidenceWorkerRun:
             MockEvRepo.return_value = mock_ev
 
             worker = ConfidenceWorker(sf, settings)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
             # mark_confidence_updated should never be called
             for _call in MockRelRepo.return_value.mock_calls:

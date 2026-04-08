@@ -124,7 +124,7 @@ class TestTemporalEventConsumerMessageMapping:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_te.upsert_by_natural_key.assert_awaited_once()
         call_kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
@@ -153,7 +153,7 @@ class TestTemporalEventConsumerMessageMapping:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         af = kwargs["active_from"]
@@ -182,7 +182,7 @@ class TestTemporalEventConsumerMessageMapping:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["source_article_ids"] == article_ids
@@ -214,7 +214,7 @@ class TestTemporalEventConsumerEmptyStringConversions:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["region"] is None
@@ -237,7 +237,7 @@ class TestTemporalEventConsumerEmptyStringConversions:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["active_until"] is None
@@ -260,7 +260,7 @@ class TestTemporalEventConsumerEmptyStringConversions:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["active_until"] is not None
@@ -284,7 +284,7 @@ class TestTemporalEventConsumerEmptyStringConversions:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["description"] is None
@@ -307,7 +307,7 @@ class TestTemporalEventConsumerEmptyStringConversions:
             mock_te.upsert_by_natural_key = AsyncMock(return_value=returned_event_id)
             MockTE.return_value = mock_te
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         kwargs = mock_te.upsert_by_natural_key.call_args.kwargs
         assert kwargs["source_url"] is None
@@ -346,7 +346,7 @@ class TestTemporalEventConsumerExposures:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         assert mock_ee.upsert.await_count == 2
 
@@ -377,7 +377,7 @@ class TestTemporalEventConsumerExposures:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         # No entity type lookup for non-GLOBAL scopes
         mock_get_type.assert_not_called()
@@ -404,7 +404,7 @@ class TestTemporalEventConsumerExposures:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_ee.upsert.assert_not_awaited()
 
@@ -444,14 +444,18 @@ class TestTemporalEventConsumerGlobalScope:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_ee.upsert.assert_awaited_once()
         upsert_kwargs = mock_ee.upsert.call_args.kwargs
         assert upsert_kwargs["entity_id"] == UUID(sector_id)
 
     def test_global_scope_industry_entity_is_linked(self) -> None:
-        """GLOBAL + entity_type='industry' → exposure row created."""
+        """GLOBAL + entity_type='industry_group' → exposure row created.
+
+        Seeded GICS entities use entity_type='industry_group' (not 'industry').
+        _GLOBAL_ALLOWED_ENTITY_TYPES must include 'industry_group'.
+        """
         consumer, _sf, _session = _make_consumer()
         industry_id = str(uuid4())
         entities = [{"entity_id": industry_id, "exposure_type": "sector_exposure", "confidence": 0.9}]
@@ -467,7 +471,7 @@ class TestTemporalEventConsumerGlobalScope:
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
-                new=AsyncMock(return_value="industry"),
+                new=AsyncMock(return_value="industry_group"),
             ),
         ):
             mock_te = AsyncMock()
@@ -477,7 +481,7 @@ class TestTemporalEventConsumerGlobalScope:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_ee.upsert.assert_awaited_once()
 
@@ -508,7 +512,7 @@ class TestTemporalEventConsumerGlobalScope:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_ee.upsert.assert_not_awaited()
 
@@ -539,7 +543,7 @@ class TestTemporalEventConsumerGlobalScope:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         mock_ee.upsert.assert_not_awaited()
 
@@ -557,10 +561,11 @@ class TestTemporalEventConsumerGlobalScope:
         msg = _make_message(scope="GLOBAL", region="GLOBAL", exposed_entities=entities)
         returned_event_id = UUID(str(uuid4()))
 
+        # Seeded GICS entities use 'industry_group', not 'industry'
         entity_types: dict[str, str] = {
             sector_id: "sector",
             company_id: "company",
-            industry_id: "industry",
+            industry_id: "industry_group",
         }
 
         async def _mock_get_entity_type(_session: object, entity_id: UUID) -> str | None:
@@ -585,9 +590,9 @@ class TestTemporalEventConsumerGlobalScope:
             mock_ee = AsyncMock()
             MockEE.return_value = mock_ee
 
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
-        # Only sector + industry (2) — company is rejected
+        # Only sector + industry_group (2) — company is rejected
         assert mock_ee.upsert.await_count == 2
         linked_ids = {call.kwargs["entity_id"] for call in mock_ee.upsert.call_args_list}
         assert UUID(sector_id) in linked_ids
@@ -606,7 +611,7 @@ class TestTemporalEventConsumerIdempotency:
     def test_is_duplicate_false_when_no_dedup_client(self) -> None:
         """Without Valkey, is_duplicate always returns False."""
         consumer, _sf, _session = _make_consumer(dedup_client=None)
-        result = asyncio.get_event_loop().run_until_complete(consumer.is_duplicate("test-id"))
+        result = asyncio.run(consumer.is_duplicate("test-id"))
         assert result is False
 
     def test_is_duplicate_checks_valkey_key(self) -> None:
@@ -615,7 +620,7 @@ class TestTemporalEventConsumerIdempotency:
         dedup_client.exists = AsyncMock(return_value=True)
         consumer, _sf, _session = _make_consumer(dedup_client=dedup_client)
 
-        result = asyncio.get_event_loop().run_until_complete(consumer.is_duplicate("abc123"))
+        result = asyncio.run(consumer.is_duplicate("abc123"))
         assert result is True
         dedup_client.exists.assert_awaited_once_with("kg:temporal:kg-temporal-event-test:abc123")
 
@@ -625,14 +630,14 @@ class TestTemporalEventConsumerIdempotency:
         dedup_client.set = AsyncMock()
         consumer, _sf, _session = _make_consumer(dedup_client=dedup_client)
 
-        asyncio.get_event_loop().run_until_complete(consumer.mark_processed("evt-xyz"))
+        asyncio.run(consumer.mark_processed("evt-xyz"))
         dedup_client.set.assert_awaited_once_with("kg:temporal:kg-temporal-event-test:evt-xyz", "1", ex=86400)
 
     def test_mark_processed_noop_without_dedup_client(self) -> None:
         """mark_processed is a no-op when dedup_client is None."""
         consumer, _sf, _session = _make_consumer(dedup_client=None)
         # Must not raise
-        asyncio.get_event_loop().run_until_complete(consumer.mark_processed("evt-abc"))
+        asyncio.run(consumer.mark_processed("evt-abc"))
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +661,7 @@ class TestTemporalEventConsumerDLQ:
             attempt=1,
             last_error=RuntimeError("db down"),
         )
-        result = asyncio.get_event_loop().run_until_complete(consumer.store_failure(failure))
+        result = asyncio.run(consumer.store_failure(failure))
         assert result is None
 
     def test_dead_letter_does_not_raise(self) -> None:
@@ -672,12 +677,12 @@ class TestTemporalEventConsumerDLQ:
             attempt=5,
             last_error=ValueError("permanent error"),
         )
-        asyncio.get_event_loop().run_until_complete(consumer.dead_letter(failure))
+        asyncio.run(consumer.dead_letter(failure))
 
     def test_get_pending_retries_returns_empty(self) -> None:
         """get_pending_retries returns [] — no retry state persisted."""
         consumer, _sf, _session = _make_consumer()
-        result = asyncio.get_event_loop().run_until_complete(consumer.get_pending_retries())
+        result = asyncio.run(consumer.get_pending_retries())
         assert result == []
 
 

@@ -111,7 +111,7 @@ def _run_worker(
 
     sf = _make_session_factory(session)
     worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-    asyncio.get_event_loop().run_until_complete(worker.run())
+    asyncio.run(worker.run())
     return valkey, session
 
 
@@ -129,7 +129,7 @@ class TestAgeSyncWorkerDisabled:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         # No DB session opened, no Valkey reads/writes
         session.execute.assert_not_called()
@@ -145,7 +145,7 @@ class TestAgeSyncWorkerDisabled:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         valkey.set.assert_not_awaited()
 
@@ -188,7 +188,7 @@ class TestAgeSyncWorkerWatermark:
         worker._sync_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
         worker._sync_temporal_events = AsyncMock()  # type: ignore[method-assign]
 
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         assert captured == [_EPOCH]
 
@@ -214,7 +214,7 @@ class TestAgeSyncWorkerWatermark:
         worker._sync_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
         worker._sync_temporal_events = AsyncMock()  # type: ignore[method-assign]
 
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         assert len(captured) == 1
         assert captured[0] == datetime.fromisoformat(stored_wm)
@@ -252,7 +252,7 @@ class TestAgeSyncWorkerEntities:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         # The 4th call should be the Cypher MERGE for the entity
         cypher_call = session.execute.call_args_list[3]
@@ -296,7 +296,7 @@ class TestAgeSyncWorkerEntities:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         after = s7_age_sync_entities_total._value.get()
         assert after - before == 1.0
@@ -373,7 +373,7 @@ class TestAgeSyncWorkerRelations:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         # The Cypher call should contain COMPETES_WITH
         cypher_call = session.execute.call_args_list[4]
@@ -406,7 +406,7 @@ class TestAgeSyncWorkerRelations:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         # Total execute calls: LOAD, SET, entities Q, relations SELECT (no Cypher), temporal Q, exposures Q = 6
         assert session.execute.await_count == 6
@@ -442,7 +442,7 @@ class TestAgeSyncWorkerRelations:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         after = s7_age_sync_relations_total._value.get()
         assert after - before == 1.0
@@ -467,7 +467,7 @@ class TestAgeSessionSetup:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
         # First call should be LOAD 'age'
         first_call_text = str(session.execute.call_args_list[0][0][0])

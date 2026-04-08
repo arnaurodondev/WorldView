@@ -58,7 +58,7 @@ class TestPolarityRules:
         )
 
         contra_repo = _make_contradiction_repo()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -80,7 +80,7 @@ class TestPolarityRules:
         )
 
         contra_repo = _make_contradiction_repo(opposing=[_opposing_claim()])
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -100,7 +100,7 @@ class TestPolarityRules:
             detect_and_record_contradictions,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -128,7 +128,7 @@ class TestWindowParam:
         )
 
         contra_repo = _make_contradiction_repo(opposing=[])
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -158,7 +158,7 @@ class TestContradictionLinkAndOutbox:
         )
 
         contra_repo = _make_contradiction_repo(opposing=[_opposing_claim()])
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -179,7 +179,7 @@ class TestContradictionLinkAndOutbox:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -203,7 +203,7 @@ class TestContradictionLinkAndOutbox:
 
         opposing = _opposing_claim(confidence=0.60)
         contra_repo = _make_contradiction_repo(opposing=[opposing])
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -225,7 +225,7 @@ class TestContradictionLinkAndOutbox:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),
@@ -248,7 +248,7 @@ class TestContradictionLinkAndOutbox:
         )
 
         contra_repo = _make_contradiction_repo(opposing=[_opposing_claim(0.5), _opposing_claim(0.6)])
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             detect_and_record_contradictions(
                 raw_evidence_id=uuid4(),
                 claim_id=uuid4(),

@@ -173,8 +173,30 @@ ORDER BY canonical_name
         """
         from common.ids import new_uuid7  # type: ignore[import-untyped]
 
-        # Try to find existing person by canonical_name
+        entity_id: UUID = new_uuid7()
+        # INSERT … ON CONFLICT DO NOTHING + RETURNING eliminates the SELECT-then-INSERT
+        # TOCTOU race: two concurrent callers with the same name will both attempt the
+        # INSERT; only one succeeds, the other gets DO NOTHING with no RETURNING row,
+        # and we fall back to a SELECT to retrieve the winner's entity_id.
         result = await self._session.execute(
+            text("""
+INSERT INTO canonical_entities (entity_id, entity_type, canonical_name, metadata)
+VALUES (:entity_id, 'person', :name, cast(:metadata AS jsonb))
+ON CONFLICT (entity_type, canonical_name) DO NOTHING
+RETURNING entity_id
+"""),
+            {
+                "entity_id": str(entity_id),
+                "name": name,
+                "metadata": json.dumps({"context_ticker": context_ticker}),
+            },
+        )
+        row = result.fetchone()
+        if row:
+            return UUID(str(row[0]))
+
+        # Conflict fired — fetch the existing row's entity_id.
+        existing = await self._session.execute(
             text("""
 SELECT entity_id FROM canonical_entities
 WHERE entity_type = 'person'
@@ -183,21 +205,8 @@ LIMIT 1
 """),
             {"name": name},
         )
-        row = result.fetchone()
-        if row:
-            return UUID(str(row[0]))
-
-        # Create new person entity
-        entity_id: UUID = new_uuid7()
-        await self._session.execute(
-            text("""
-INSERT INTO canonical_entities (entity_id, entity_type, canonical_name, metadata)
-VALUES (:entity_id, 'person', :name, cast(:metadata AS jsonb))
-"""),
-            {
-                "entity_id": str(entity_id),
-                "name": name,
-                "metadata": json.dumps({"context_ticker": context_ticker}),
-            },
-        )
+        existing_row = existing.fetchone()
+        if existing_row:
+            return UUID(str(existing_row[0]))
+        # Should never reach here — INSERT conflict implies the row exists.
         return entity_id

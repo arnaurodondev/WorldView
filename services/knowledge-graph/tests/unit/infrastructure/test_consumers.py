@@ -132,7 +132,7 @@ class TestEnrichedConsumerOrchestration:
     def test_process_empty_message_completes_without_error(self) -> None:
         consumer = self._make_consumer()
         msg = _build_enriched_message()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
 
@@ -140,7 +140,7 @@ class TestEnrichedConsumerOrchestration:
         session = _make_mock_session()
         consumer = self._make_consumer(session)
         msg = _build_enriched_message()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
@@ -190,7 +190,7 @@ class TestEnrichedConsumerOrchestration:
                 side_effect=mock_materialize,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
             )
 
@@ -238,7 +238,7 @@ class TestEnrichedConsumerIdempotency:
 
     def test_is_duplicate_returns_false_without_dedup(self) -> None:
         consumer = self._make_consumer()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             consumer.is_duplicate(str(uuid4()))  # type: ignore[attr-defined]
         )
         assert result is False
@@ -246,7 +246,7 @@ class TestEnrichedConsumerIdempotency:
     def test_mark_processed_noop_without_dedup(self) -> None:
         consumer = self._make_consumer()
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.mark_processed(str(uuid4()))  # type: ignore[attr-defined]
         )
 
@@ -283,7 +283,7 @@ class TestEntityCreatedConsumer:
             "entity_type": "financial_instrument",
             "provisional_queue_id": str(uuid4()),
         }
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
@@ -298,7 +298,7 @@ class TestEntityCreatedConsumer:
             "entity_type": "financial_instrument",
             "provisional_queue_id": str(uuid4()),
         }
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         # UPDATE relation_evidence_raw must have been called
