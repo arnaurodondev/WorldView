@@ -215,6 +215,7 @@ All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_p
 | `intelligence.contradiction.v1` | 12 | 30d | S7 | S10 | `subject_entity_id` |
 | `relation.type.proposed.v1` | 4 | 30d | S7 | Human review | `proposed_type` |
 | `entity.dirtied.v1` | 24 | compact | S7 | S7 (async) | `entity_id` |
+| `intelligence.temporal_event.v1` | 12 | 14d | S6 | S7 | `event_id` |
 | `alert.delivered.v1` | 12 | 7d | S10 | Audit | `alert_id` |
 
 ### 7.3 Core Patterns

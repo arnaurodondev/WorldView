@@ -103,9 +103,9 @@ def test_source_trust_weights_seeded(conn: sa.engine.Connection) -> None:
 
 
 def test_relation_type_registry_seeded(conn: sa.engine.Connection) -> None:
-    """24 relation types seeded (20 from migration 0001 + 4 added by migration 0002)."""
+    """27 relation types seeded (20 from 0001 + 4 from 0002 + 3 new from 0004)."""
     result = conn.execute(text("SELECT count(*) FROM relation_type_registry"))
-    assert result.scalar() == 24
+    assert result.scalar() == 27
 
 
 def test_relation_type_registry_has_embedding_column(conn: sa.engine.Connection) -> None:
@@ -425,3 +425,153 @@ def test_migration_0003_cleanup_preserves_other_view_types(conn: sa.engine.Conne
     remaining = [row[0] for row in result]
     assert remaining == ["definition", "narrative"], f"Expected only definition+narrative to remain, got: {remaining}"
     conn.rollback()
+
+
+# ── Migration 0004: AGE + temporal_events + entity_event_exposures ─────────────
+
+
+def test_temporal_events_table_exists(conn: sa.engine.Connection) -> None:
+    """temporal_events table created by migration 0004."""
+    result = conn.execute(
+        text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'temporal_events'")
+    )
+    assert result.fetchone() is not None, "temporal_events table missing"
+
+
+def test_temporal_events_columns(conn: sa.engine.Connection) -> None:
+    """temporal_events has all required columns from PRD-0018 §6.4."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'temporal_events' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "event_id",
+        "event_type",
+        "scope",
+        "region",
+        "title",
+        "description",
+        "source_article_ids",
+        "source_url",
+        "active_from",
+        "active_until",
+        "residual_impact_days",
+        "confidence",
+        "created_at",
+        "updated_at",
+    }
+    missing = required - columns
+    assert not missing, f"temporal_events missing columns: {missing}"
+
+
+def test_temporal_events_natural_key_unique_index(conn: sa.engine.Connection) -> None:
+    """temporal_events has functional unique index for deduplication."""
+    result = conn.execute(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'temporal_events' AND indexname = 'uidx_temporal_events_natural_key'"
+        )
+    )
+    assert result.fetchone() is not None, "uidx_temporal_events_natural_key index missing"
+
+
+def test_temporal_events_natural_key_prevents_duplicates(conn: sa.engine.Connection) -> None:
+    """Inserting same (event_type, region, title, active_from::date) twice raises IntegrityError."""
+    eid1 = uuid.uuid4()
+    eid2 = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:id, 'macro', 'NATIONAL', 'US', 'CPI Report', '2026-04-01 06:00:00+00', 30, 1.0)"
+        ),
+        {"id": str(eid1)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO temporal_events "
+                "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+                "VALUES (:id, 'macro', 'NATIONAL', 'US', 'CPI Report', '2026-04-01 08:00:00+00', 30, 1.0)"
+            ),
+            {"id": str(eid2)},
+        )
+    conn.rollback()
+
+
+def test_entity_event_exposures_table_exists(conn: sa.engine.Connection) -> None:
+    """entity_event_exposures table created by migration 0004."""
+    result = conn.execute(
+        text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'entity_event_exposures'")
+    )
+    assert result.fetchone() is not None, "entity_event_exposures table missing"
+
+
+def test_entity_event_exposures_unique_constraint(conn: sa.engine.Connection) -> None:
+    """(event_id, entity_id, exposure_type) is unique in entity_event_exposures."""
+    event_id = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    exp_id1 = uuid.uuid4()
+    exp_id2 = uuid.uuid4()
+    # Insert event first (FK constraint)
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:eid, 'geopolitical', 'GLOBAL', 'Test Event', '2026-04-01 00:00:00+00', 90, 0.9)"
+        ),
+        {"eid": str(event_id)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_event_exposures "
+            "(exposure_id, event_id, entity_id, exposure_type, confidence) "
+            "VALUES (:xid, :eid, :entid, 'sector_exposure', 0.9)"
+        ),
+        {"xid": str(exp_id1), "eid": str(event_id), "entid": str(entity_id)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO entity_event_exposures "
+                "(exposure_id, event_id, entity_id, exposure_type, confidence) "
+                "VALUES (:xid, :eid, :entid, 'sector_exposure', 0.7)"
+            ),
+            {"xid": str(exp_id2), "eid": str(event_id), "entid": str(entity_id)},
+        )
+    conn.rollback()
+
+
+def test_relations_has_updated_at_column(conn: sa.engine.Connection) -> None:
+    """relations table has updated_at TIMESTAMPTZ column (needed by AgeSyncWorker watermark)."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = 'relations' AND column_name = 'updated_at'"
+        )
+    )
+    row = result.fetchone()
+    assert row is not None, "relations.updated_at column missing"
+    assert "timestamp" in row[1].lower(), f"Unexpected data_type: {row[1]}"
+
+
+def test_age_extension_active(conn: sa.engine.Connection) -> None:
+    """Apache AGE extension is installed (required for Cypher path queries)."""
+    result = conn.execute(text("SELECT extname FROM pg_extension WHERE extname = 'age'"))
+    assert result.fetchone() is not None, "AGE extension not installed"
+
+
+def test_prd_0018_relation_types_seeded(conn: sa.engine.Connection) -> None:
+    """3 new relation types from PRD-0018 are seeded in relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT canonical_type FROM relation_type_registry "
+            "WHERE canonical_type IN ('has_executive', 'revenue_from_country', 'operates_in_country') "
+            "ORDER BY canonical_type"
+        )
+    )
+    seeded = {row[0] for row in result}
+    assert seeded == {"has_executive", "revenue_from_country", "operates_in_country"}
