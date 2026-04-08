@@ -365,7 +365,6 @@ def _make_uow_with_fields(fields: list[ScreenFieldMetadata]) -> MagicMock:
     return uow
 
 
-@pytest.mark.asyncio
 async def test_screen_fields_use_case_cache_hit() -> None:
     """Cache hit: use case returns cached list and does NOT query DB."""
     cache = _make_cache(_SAMPLE_FIELDS)
@@ -380,7 +379,6 @@ async def test_screen_fields_use_case_cache_hit() -> None:
     cache.set_all.assert_not_awaited()
 
 
-@pytest.mark.asyncio
 async def test_screen_fields_use_case_cache_miss_db_fallback() -> None:
     """Cache miss: use case queries DB and warms cache with result."""
     cache = _make_cache(None)  # cache miss
@@ -394,7 +392,6 @@ async def test_screen_fields_use_case_cache_miss_db_fallback() -> None:
     cache.set_all.assert_awaited_once_with(_SAMPLE_FIELDS)
 
 
-@pytest.mark.asyncio
 async def test_screen_fields_use_case_cache_miss_empty_db() -> None:
     """Cache miss + empty DB: returns empty list; does NOT call set_all (nothing to cache)."""
     cache = _make_cache(None)

@@ -110,6 +110,9 @@
 | [BP-121](#bp-121) | ML / Ollama | BGE-large BERT context window overflow crashes Ollama GGML runner with `GGML_ASSERT(i01 >= 0 && i01 < ne01) failed` | Any service using OllamaEmbeddingAdapter with document-length texts |
 | [BP-122](#bp-122) | Kafka / Avro deserialization | S6 Confluent-Avro wire format not detected — consumer crashes on binary `bytes` instead of JSON dict | `article_consumer.py`, any consumer expecting JSON from Schema Registry topics |
 | [BP-123](#bp-123) | ML / GLiNER | `model.predict_entities(list_of_texts)` returns `[]` — batch API unsupported; must iterate texts individually | `infra/gliner/server.py`, any GLiNER batch endpoint |
+| [BP-124](#bp-124) | Kafka consumer / embedding | Entity exists but `embedding IS NULL` permanently — consumer early-return skips enrichment on replay | S7 `instrument_consumer.py`, any consumer with two-phase entity+enrichment writes |
+| [BP-125](#bp-125) | pgvector / ANN | ANN similarity scores can be negative — pgvector cosine distance is `[0, 2]`, not `[0, 1]`; use `max(0.0, 1.0 - d)` floor | Any ANN query converting distance to similarity |
+| [BP-126](#bp-126) | Alembic / DDL | `NotNullViolation` on NOT NULL column — ORM `server_default` not inherited by Alembic migration | Every Alembic migration with a NOT NULL column with server_default |
 
 ---
 
@@ -4651,3 +4654,51 @@ except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
 **Prevention**: When using GLiNER: always pass a single string to `predict_entities`, wrap iteration at the call site. Do not assume the batch overload works — verify with a quick unit test.
 
 **First seen**: 2026-04-08 E2E NLP pipeline investigation.
+
+---
+
+## BP-124 — Kafka Consumer Idempotency Check Skips Embedding on Entity Replay
+
+**Symptom**: Entity exists in `canonical_entities` table but `entity_embedding_state.embedding` is permanently NULL for that entity. Embedding refresh worker never generates an embedding for it.
+
+**Root cause**: `InstrumentEntityConsumer.process_message()` checks `if entity exists → early return`. If the pod crashes after the DB commit (entity created) but before offset commit, the message is replayed. On replay, the early return at `entity_repo.get()` is triggered, and `_def_worker.refresh_for_entity()` is never called. The definition embedding row is left permanently absent.
+
+**Fix**: Change the idempotency check to be embedding-aware. If the entity exists but the definition embedding row is absent (or `embedding IS NULL`), still call `refresh_for_entity`. Alternatively, fold `refresh_for_entity` into the same DB transaction scope as entity creation.
+
+**Affected areas**: Any Kafka consumer in S7 that creates an entity and then calls a worker with a separate DB session (two-phase write). Specifically `instrument_consumer.py`.
+
+**Prevention**: When splitting consumer work into "create entity" + "trigger enrichment" phases, ensure the idempotency guard covers both phases. A "entity present but embedding absent" state must still trigger enrichment.
+
+**First seen**: PLAN-0017 QA pass 2026-04-08.
+
+---
+
+## BP-125 — pgvector Cosine Distance Formula Off-By-Two
+
+**Symptom**: ANN similarity scores can be negative; final_score returns < 0 to API caller despite `min_score=0.0` filter.
+
+**Root cause**: pgvector `<=>` cosine distance range is `[0, 2]` (not `[0, 1]`). Using `similarity = 1.0 - distance` produces negative values when distance > 1.0. For L2-normalized embeddings cosine distance is always in `[0, 1]`, making the formula safe in practice — but without an explicit floor clamp, any unnormalized embedding produces negative scores.
+
+**Fix**: Use `ann_similarity = max(0.0, 1.0 - ann.distance)` as a safety floor. If the team wants the mathematically correct formula for the full `[0, 2]` range: `ann_similarity = 1.0 - ann.distance / 2.0`.
+
+**Affected areas**: Any service performing pgvector ANN search and converting distance to similarity: `entity_embedding_ann.py`, `relation_summary.py`, any future ANN use case.
+
+**Prevention**: Always add `max(0.0, ...)` floor when converting pgvector distances to similarity scores.
+
+**First seen**: PLAN-0017 QA pass 2026-04-08.
+
+---
+
+## BP-126 — Alembic Migration NOT NULL Column Missing server_default
+
+**Symptom**: `psycopg.errors.NotNullViolation: null value in column "X"` when inserting from seed scripts, tools, or future workers that omit the column.
+
+**Root cause**: SQLAlchemy ORM models can declare `server_default=text("now()")` on a column, but Alembic migrations do NOT inherit `server_default` from the ORM model. If the migration `sa.Column(...)` definition omits `server_default`, the DDL column has no server-side default even though the ORM model appears to.
+
+**Fix**: Always explicitly set `server_default=sa.text("now()")` (or the appropriate literal) in the Alembic `op.create_table(...)` column definition when the ORM model has a `server_default`.
+
+**Affected areas**: Every Alembic migration that adds a NOT NULL column with a `server_default` in the ORM model.
+
+**Prevention**: In code review, always cross-check: if ORM model has `server_default`, migration must too. If ORM model has `nullable=False`, either migration has `server_default` or all code paths explicitly provide the column.
+
+**First seen**: PLAN-0017 migration 004 QA pass 2026-04-08.

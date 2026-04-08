@@ -1,5 +1,6 @@
 """ml-clients — ML model client protocols and adapters."""
 
+from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
 from ml_clients.config import MLClientsSettings
 from ml_clients.dataclasses import (
     EmbeddingInput,
@@ -19,6 +20,7 @@ __all__ = [
     "EmbeddingInput",
     "EmbeddingOutput",
     "EntityDescriptionClient",
+    "GeminiDescriptionAdapter",
     "EntityMention",
     "ExtractionClient",
     "ExtractionInput",

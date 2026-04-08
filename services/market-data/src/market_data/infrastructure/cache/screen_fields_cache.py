@@ -58,6 +58,9 @@ class ScreenFieldsCache(ScreenFieldsCachePort):
 
     async def set_all(self, fields: list[ScreenFieldMetadata]) -> None:
         """Overwrite the cached field list; silently degrades on error (fail-open)."""
+        # TTL is 2x the refresh interval (6 h) so stale data auto-expires if
+        # the background refresh loop dies before the next write cycle.
+        _TTL_SECONDS = 7 * 3600  # 7 h = 6 h refresh + 1 h grace  # noqa: N806
         try:
             payload = json.dumps(
                 [
@@ -74,6 +77,6 @@ class ScreenFieldsCache(ScreenFieldsCachePort):
                     for f in fields
                 ]
             )
-            await self._client.set(_KEY, payload)
+            await self._client.set(_KEY, payload, ttl=_TTL_SECONDS)
         except Exception:
             logger.warning("screen_fields_cache_unavailable_set", key=_KEY)

@@ -79,7 +79,8 @@ class FindSimilarEntitiesUseCase:
         if not ann_results:
             return entity_dict, []
 
-        # Step 5 — batch fetch competes_with relations
+        # Steps 4 & 5 — batch fetch competes_with relations (step 4 distance→similarity
+        # happens inline in the scoring loop below)
         candidate_ids = [r.entity_id for r in ann_results]
         competes_map = await relation_repo.find_competes_with_batch(
             entity_id=entity_id,
@@ -87,7 +88,7 @@ class FindSimilarEntitiesUseCase:
             min_confidence=_COMPETES_WITH_MIN_CONFIDENCE,
         )
 
-        # Steps 4 / 6 / 7 — score, filter, sort
+        # Steps 6 / 7 / 8 — score, filter, sort
         scored: list[tuple[float, SimilarEntityResult]] = []
         for ann in ann_results:
             ann_similarity = 1.0 - ann.distance

@@ -28,7 +28,7 @@ class TimeseriesResponse(BaseModel):
 class ScreenFilterRequest(BaseModel):
     """A single metric filter for screening."""
 
-    metric: str
+    metric: str = Field(..., pattern=r"^[a-z_][a-z0-9_]{0,63}$")
     min_value: float | None = None
     max_value: float | None = None
     period_type: str | None = None
@@ -42,7 +42,7 @@ class ScreenRequest(BaseModel):
     offset max tightened to 5000. Coordinate with API consumers before deploying.
     """
 
-    filters: list[ScreenFilterRequest] = Field(..., min_length=1)
+    filters: list[ScreenFilterRequest] = Field(..., min_length=1, max_length=20)
     limit: int = Field(50, ge=1, le=200)
     offset: int = Field(0, ge=0, le=5000)
     sort_by: str | None = None
