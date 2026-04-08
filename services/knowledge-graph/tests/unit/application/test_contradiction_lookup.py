@@ -61,7 +61,7 @@ class TestEntityContradictionsUseCase:
         expected = [_contradiction()]
         repo = _make_claim_repo(contradictions=expected)
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=entity_id,
@@ -81,7 +81,7 @@ class TestEntityContradictionsUseCase:
 
         repo = _make_claim_repo(contradictions=[])
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=uuid4(),
@@ -98,7 +98,7 @@ class TestEntityContradictionsUseCase:
 
         repo = _make_claim_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=uuid4(),
@@ -117,7 +117,7 @@ class TestEntityContradictionsUseCase:
 
         repo = _make_claim_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=uuid4(),

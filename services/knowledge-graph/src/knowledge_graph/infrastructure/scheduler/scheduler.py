@@ -110,6 +110,23 @@ class KnowledgeGraphScheduler:
                 coalesce=True,
             )
 
+        # EODHD workers: cron-scheduled (PRD-0018 §6 Workers 13D-6, 13D-7, 13D-8)
+        cron_jobs: list[tuple[str, str, dict[str, object]]] = [
+            ("economic_events", "worker_13d6_economic_events", {"hour": 6, "minute": 0}),
+            ("macro_indicator", "worker_13d7_macro_indicator", {"day_of_week": "sun", "hour": 3}),
+            ("insider_transactions", "worker_13d8_insider_transactions", {"day_of_week": "mon", "hour": 2}),
+        ]
+        for name, job_id, cron_kwargs in cron_jobs:
+            fn = self._resolve_job(name)
+            self._scheduler.add_job(
+                fn,
+                "cron",
+                id=job_id,
+                max_instances=1,
+                coalesce=True,
+                **cron_kwargs,
+            )
+
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
         worker = self._workers.get(name)
@@ -193,6 +210,62 @@ def build_workers(
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
         workers["age_sync"] = AgeSyncWorker(session_factory, valkey_client, settings)
+
+    eodhd_api_key = settings.eodhd_api_key.get_secret_value()
+    if eodhd_api_key:
+        import httpx  # type: ignore[import-untyped]
+
+        from knowledge_graph.infrastructure.eodhd.client import EodhDClient
+        from knowledge_graph.infrastructure.workers.economic_events_worker import EconomicEventsWorker
+        from knowledge_graph.infrastructure.workers.insider_transactions_worker import InsiderTransactionsWorker
+        from knowledge_graph.infrastructure.workers.macro_indicator_worker import MacroIndicatorWorker
+
+        http_client = httpx.AsyncClient(timeout=30.0)
+        eodhd_client = EodhDClient(
+            api_key=eodhd_api_key,
+            http=http_client,
+            base_url=settings.eodhd_base_url,
+        )
+
+        # Parse comma-separated alpha-2 codes (e.g. "US,DE,GB,JP,CN,EU")
+        eco_countries = [c.strip() for c in settings.economic_event_countries.split(",") if c.strip()]
+
+        # Parse comma-separated alpha-3 codes and map to alpha-2 for entity lookups
+        iso3_to_iso2: dict[str, str] = {
+            "USA": "US",
+            "GBR": "GB",
+            "DEU": "DE",
+            "JPN": "JP",
+            "CHN": "CN",
+            "FRA": "FR",
+            "ITA": "IT",
+            "CAN": "CA",
+            "AUS": "AU",
+            "BRA": "BR",
+            "IND": "IN",
+            "RUS": "RU",
+            "KOR": "KR",
+            "MEX": "MX",
+            "IDN": "ID",
+        }
+        macro_country_map = {
+            iso3.strip(): iso3_to_iso2.get(iso3.strip(), iso3.strip()[:2])
+            for iso3 in settings.macro_indicator_countries.split(",")
+            if iso3.strip()
+        }
+
+        workers.update(
+            {
+                "economic_events": EconomicEventsWorker(session_factory, eodhd_client, eco_countries),
+                "macro_indicator": MacroIndicatorWorker(session_factory, eodhd_client, macro_country_map),
+                "insider_transactions": InsiderTransactionsWorker(session_factory, eodhd_client),
+            }
+        )
+    else:
+        logger.warning(  # type: ignore[no-any-return]
+            "eodhd_workers_disabled",
+            message="KNOWLEDGE_GRAPH_EODHD_API_KEY is empty; Workers 13D-6/7/8 will run as stubs",
+        )
 
     if llm_client is not None:
         description_client = _build_description_client(settings)

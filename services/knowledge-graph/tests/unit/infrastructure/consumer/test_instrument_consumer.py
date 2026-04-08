@@ -156,7 +156,7 @@ class TestInstrumentEntityConsumerNew:
                 return_value=emb_repo,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args
@@ -190,7 +190,7 @@ class TestInstrumentEntityConsumerNew:
                 return_value=emb_repo,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_not_awaited()
 
@@ -223,7 +223,7 @@ class TestInstrumentEntityConsumerReplay:
                 return_value=emb_repo,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_not_awaited()
 
@@ -254,7 +254,7 @@ class TestInstrumentEntityConsumerReplay:
                 return_value=emb_repo,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
+            asyncio.run(consumer.process_message(None, msg, {}))
 
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args

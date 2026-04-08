@@ -76,7 +76,15 @@ class EconomicEventsWorker:
         total_ingested = 0
 
         for country in self._countries:
-            ingested = await self._process_country(country, yesterday, today)
+            try:
+                ingested = await self._process_country(country, yesterday, today)
+            except Exception:
+                logger.error(  # type: ignore[no-any-return]
+                    "economic_events_worker_country_failed",
+                    country=country,
+                    exc_info=True,
+                )
+                continue
             s7_economic_events_ingested_total.labels(country=country).inc(ingested)
             total_ingested += ingested
 
@@ -209,7 +217,10 @@ class EconomicEventsWorker:
         active_until = active_from + timedelta(hours=24)
 
         event_id = new_uuid7()
-        await event_repo.upsert_by_natural_key(
+        # Capture the returned db_event_id — on conflict this is the EXISTING row's
+        # UUID, not the freshly-generated one. The exposure FK must reference the
+        # canonical DB event_id to avoid a ForeignKeyViolationError on re-runs.
+        db_event_id = await event_repo.upsert_by_natural_key(
             event_id=event_id,
             event_type=EventType.MACRO,
             scope=EventScope.NATIONAL,
@@ -227,7 +238,7 @@ class EconomicEventsWorker:
             exposure_id = new_uuid7()
             await exposure_repo.upsert(
                 exposure_id=exposure_id,
-                event_id=event_id,
+                event_id=db_event_id,
                 entity_id=country_entity_id,
                 exposure_type=ExposureType.DIRECTLY_AFFECTED,
                 confidence=_EODHD_CONFIDENCE,

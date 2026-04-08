@@ -61,7 +61,7 @@ class TestRelationSummarySearchUseCase:
         item = _make_result(confidence=confidence, evidence_count=evidence_count)
         repo = _make_repo(results=[item])
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
@@ -80,7 +80,7 @@ class TestRelationSummarySearchUseCase:
         entity_id = uuid4()
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
@@ -99,7 +99,7 @@ class TestRelationSummarySearchUseCase:
 
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
@@ -118,7 +118,7 @@ class TestRelationSummarySearchUseCase:
 
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
@@ -137,7 +137,7 @@ class TestRelationSummarySearchUseCase:
 
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
@@ -156,7 +156,7 @@ class TestRelationSummarySearchUseCase:
 
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,

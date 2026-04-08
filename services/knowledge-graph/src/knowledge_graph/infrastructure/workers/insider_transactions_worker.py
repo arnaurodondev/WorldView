@@ -133,7 +133,15 @@ class InsiderTransactionsWorker:
         total_skipped = 0
 
         for instrument in instruments:
-            relations, skipped = await self._process_instrument(instrument)
+            try:
+                relations, skipped = await self._process_instrument(instrument)
+            except Exception:
+                logger.error(  # type: ignore[no-any-return]
+                    "insider_transactions_worker_instrument_failed",
+                    ticker=instrument.ticker,
+                    exc_info=True,
+                )
+                continue
             total_relations += relations
             total_skipped += skipped
 

@@ -86,7 +86,16 @@ class MacroIndicatorWorker:
         total_updated = 0
 
         for iso3, iso2 in self._country_map.items():
-            updated = await self._process_country(iso3, iso2)
+            try:
+                updated = await self._process_country(iso3, iso2)
+            except Exception:
+                logger.error(  # type: ignore[no-any-return]
+                    "macro_indicator_worker_country_failed",
+                    iso3=iso3,
+                    iso2=iso2,
+                    exc_info=True,
+                )
+                continue
             if updated:
                 s7_macro_indicator_updates_total.labels(country=iso2).inc()
                 total_updated += 1

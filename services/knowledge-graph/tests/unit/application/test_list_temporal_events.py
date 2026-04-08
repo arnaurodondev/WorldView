@@ -54,7 +54,7 @@ class TestListTemporalEventsUseCase:
         row = _make_event_row()
         repo = _make_repo(rows=[row], total=1)
 
-        rows, total = asyncio.get_event_loop().run_until_complete(ListTemporalEventsUseCase().execute(repo))
+        rows, total = asyncio.run(ListTemporalEventsUseCase().execute(repo))
 
         assert total == 1
         assert len(rows) == 1
@@ -70,7 +70,7 @@ class TestListTemporalEventsUseCase:
         from_date = date(2026, 1, 1)
         to_date = date(2026, 3, 31)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ListTemporalEventsUseCase().execute(
                 repo,
                 scope="NATIONAL",
@@ -102,7 +102,7 @@ class TestListTemporalEventsUseCase:
 
         repo = _make_repo()
 
-        asyncio.get_event_loop().run_until_complete(ListTemporalEventsUseCase().execute(repo))
+        asyncio.run(ListTemporalEventsUseCase().execute(repo))
 
         call_kwargs = repo.list_active.call_args.kwargs
         assert call_kwargs["scope"] is None
@@ -121,7 +121,7 @@ class TestListTemporalEventsUseCase:
 
         repo = _make_repo(rows=[], total=0)
 
-        rows, total = asyncio.get_event_loop().run_until_complete(ListTemporalEventsUseCase().execute(repo))
+        rows, total = asyncio.run(ListTemporalEventsUseCase().execute(repo))
 
         assert rows == []
         assert total == 0
@@ -134,7 +134,7 @@ class TestListTemporalEventsUseCase:
         row2 = _make_event_row(event_type="macro", scope="NATIONAL")
         repo = _make_repo(rows=[row1, row2], total=2)
 
-        rows, total = asyncio.get_event_loop().run_until_complete(ListTemporalEventsUseCase().execute(repo))
+        rows, total = asyncio.run(ListTemporalEventsUseCase().execute(repo))
 
         assert total == 2
         assert len(rows) == 2

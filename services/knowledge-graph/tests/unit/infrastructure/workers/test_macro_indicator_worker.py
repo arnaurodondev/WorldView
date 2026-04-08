@@ -110,7 +110,7 @@ def _run_worker(
     )
 
     with patch(_ENTITY_REPO, return_value=entity_repo):
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
     return entity_repo, direct_producer
 
@@ -160,7 +160,7 @@ class TestMacroIndicatorWorkerUpdate:
             country_map={"USA": "US"},
         )
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         assert eodhd_client.get_macro_indicator.await_count == len(MACRO_INDICATORS)
         called_codes = [c.args[1] for c in eodhd_client.get_macro_indicator.call_args_list]
@@ -180,7 +180,7 @@ class TestMacroIndicatorWorkerUpdate:
             country_map={"USA": "US"},
         )
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         # The session mock is accessible via the factory's return_value
         sf.return_value.commit.assert_awaited_once()
@@ -200,7 +200,7 @@ class TestMacroIndicatorWorkerUpdate:
             country_map=country_map,
         )
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         # 6 indicators x 2 countries = 12 EODHD calls
         assert eodhd_client.get_macro_indicator.await_count == len(MACRO_INDICATORS) * 2
@@ -259,7 +259,7 @@ class TestMacroIndicatorWorkerNoChange:
             country_map={"USA": "US"},
         )
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         sf.return_value.commit.assert_not_awaited()
 
@@ -304,7 +304,7 @@ class TestMacroIndicatorWorkerEmptyResponse:
             direct_producer=producer,
         )
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
         entity_repo.find_country_entity.assert_not_awaited()
         entity_repo.update_metadata.assert_not_awaited()

@@ -80,7 +80,7 @@ def _run_worker(
         patch(_EXPOSURE_REPO, return_value=exposure_repo),
         patch(_ENTITY_REPO, return_value=entity_repo),
     ):
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
 
     return event_repo, exposure_repo, entity_repo
 
@@ -267,14 +267,13 @@ class TestEconomicEventsWorkerDeduplication:
             eodhd_client=eodhd_client,
             countries=["US"],
         )
-        loop = asyncio.get_event_loop()
         with (
             patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
             patch(_EXPOSURE_REPO, return_value=exposure_repo),
             patch(_ENTITY_REPO, return_value=entity_repo),
         ):
-            loop.run_until_complete(worker.run())
-            loop.run_until_complete(worker.run())
+            asyncio.run(worker.run())
+            asyncio.run(worker.run())
 
         # Worker called upsert twice — DB constraint handles the conflict
         assert event_repo.upsert_by_natural_key.await_count == 2

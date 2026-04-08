@@ -52,7 +52,7 @@ class TestEventSearchUseCase:
         expected = [_event_result(entity_id=entity_id, structured_data=payload)]
         repo = _make_event_repo(results=expected)
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[entity_id],
@@ -69,7 +69,7 @@ class TestEventSearchUseCase:
 
         repo = _make_event_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[uuid4()],
@@ -88,7 +88,7 @@ class TestEventSearchUseCase:
         d_from = date(2026, 1, 1)
         d_to = date(2026, 3, 31)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[uuid4()],
@@ -107,7 +107,7 @@ class TestEventSearchUseCase:
 
         repo = _make_event_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[uuid4()],
@@ -124,7 +124,7 @@ class TestEventSearchUseCase:
 
         repo = _make_event_repo()
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[],

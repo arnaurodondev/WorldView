@@ -51,7 +51,7 @@ class TestRelationRepository:
         session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
 
         repo = RelationRepository(session)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             repo.upsert(
                 subject_entity_id=uuid4(),
                 object_entity_id=uuid4(),
@@ -82,7 +82,7 @@ class TestRelationRepository:
         session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
 
         repo = RelationRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.upsert(
                 subject_entity_id=uuid4(),
                 object_entity_id=uuid4(),
@@ -112,7 +112,7 @@ class TestRelationRepository:
         session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
 
         repo = RelationRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.upsert(
                 subject_entity_id=uuid4(),
                 object_entity_id=uuid4(),
@@ -144,7 +144,7 @@ class TestRelationEvidenceRepository:
 
         session = _make_session(fetchone_return=(str(uuid4()),))
         repo = RelationEvidenceRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.insert_raw(
                 subject_entity_id=uuid4(),
                 object_entity_id=uuid4(),
@@ -167,7 +167,7 @@ class TestRelationEvidenceRepository:
         raw_id = uuid4()
         session = _make_session(fetchone_return=(str(raw_id),))
         repo = RelationEvidenceRepository(session)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             repo.insert_raw(
                 subject_entity_id=uuid4(),
                 object_entity_id=uuid4(),
@@ -202,7 +202,7 @@ class TestRelationSummaryRepository:
         session.execute = AsyncMock(side_effect=[update_result, insert_result])
 
         repo = RelationSummaryRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.insert_new(
                 relation_id=uuid4(),
                 summary_text="test",
@@ -235,7 +235,7 @@ class TestContradictionRepository:
 
         session = _make_session()
         repo = ContradictionRepository(session)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             repo.find_opposing_claims(
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
@@ -256,7 +256,7 @@ class TestContradictionRepository:
 
         session = _make_session(fetchall_return=[])
         repo = ContradictionRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.find_opposing_claims(
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
@@ -279,7 +279,7 @@ class TestContradictionRepository:
 
         session = _make_session(fetchall_return=[])
         repo = ContradictionRepository(session)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.find_opposing_claims(
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
@@ -306,7 +306,7 @@ class TestOutboxRepository:
         event_id = uuid4()
         session = _make_session(fetchone_return=(str(event_id),))
         repo = OutboxRepository(session)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             repo.append(
                 topic="graph.state.changed.v1",
                 partition_key="entity-123",
@@ -325,7 +325,7 @@ class TestOutboxRepository:
 
         session = _make_session(fetchall_return=[])
         repo = OutboxRepository(session)
-        asyncio.get_event_loop().run_until_complete(repo.fetch_pending(batch_size=10))
+        asyncio.run(repo.fetch_pending(batch_size=10))
         sql = str(session.execute.call_args_list[0][0][0])
         assert "SKIP LOCKED" in sql.upper()
 
@@ -393,7 +393,7 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
         session.execute = AsyncMock(return_value=MagicMock())
         repo = EntityEmbeddingStateRepository(session)
 
-        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
+        asyncio.run(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
 
         assert (
             session.execute.call_count == 3
@@ -414,7 +414,7 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
         session.execute = AsyncMock(return_value=MagicMock())
         repo = EntityEmbeddingStateRepository(session)
 
-        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "person"))
+        asyncio.run(repo.ensure_rows_exist(uuid4(), "person"))
 
         assert session.execute.call_count == 2, f"Expected 2 execute calls for person, got {session.execute.call_count}"
         all_view_types_used = [call[0][1]["view_type"] for call in session.execute.call_args_list]
@@ -437,7 +437,7 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
             session.execute = AsyncMock(return_value=MagicMock())
             repo = EntityEmbeddingStateRepository(session)
 
-            asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), entity_type))
+            asyncio.run(repo.ensure_rows_exist(uuid4(), entity_type))
 
             assert (
                 session.execute.call_count == 2
@@ -455,7 +455,7 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
         session.execute = AsyncMock(return_value=MagicMock())
         repo = EntityEmbeddingStateRepository(session)
 
-        asyncio.get_event_loop().run_until_complete(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
+        asyncio.run(repo.ensure_rows_exist(uuid4(), "financial_instrument"))
 
         for call in session.execute.call_args_list:
             sql = str(call[0][0])
@@ -480,7 +480,7 @@ class TestCanonicalEntityRepositoryGetBatch:
         session = AsyncMock()
         repo = CanonicalEntityRepository(session)
 
-        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([]))
+        result = asyncio.run(repo.get_batch([]))
 
         assert result == []
         session.execute.assert_not_awaited()
@@ -499,7 +499,7 @@ class TestCanonicalEntityRepositoryGetBatch:
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 
-        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([eid]))
+        result = asyncio.run(repo.get_batch([eid]))
 
         assert len(result) == 1
         assert result[0]["entity_id"] == eid
@@ -524,7 +524,7 @@ class TestCanonicalEntityRepositoryGetBatch:
         session = _make_session(fetchall_return=rows)
         repo = CanonicalEntityRepository(session)
 
-        result = asyncio.get_event_loop().run_until_complete(repo.get_batch(ids))
+        result = asyncio.run(repo.get_batch(ids))
 
         # ONE execute call for all IDs (not N)
         session.execute.assert_awaited_once()
@@ -545,7 +545,7 @@ class TestCanonicalEntityRepositoryGetBatch:
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 
-        result = asyncio.get_event_loop().run_until_complete(repo.get_batch([existing_id, missing_id]))
+        result = asyncio.run(repo.get_batch([existing_id, missing_id]))
 
         assert len(result) == 1
         assert result[0]["entity_id"] == existing_id
@@ -562,7 +562,7 @@ class TestCanonicalEntityRepositoryGetBatch:
         repo = CanonicalEntityRepository(session)
         ids = [uuid4(), uuid4()]
 
-        asyncio.get_event_loop().run_until_complete(repo.get_batch(ids))
+        asyncio.run(repo.get_batch(ids))
 
         call_sql = str(session.execute.call_args[0][0])
         assert "ANY" in call_sql.upper(), "get_batch must use WHERE entity_id = ANY(:ids)"
@@ -585,7 +585,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
         session = _make_session()
         repo = EntityEmbeddingStateRepository(session)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.upsert(
                 uuid4(),
                 "definition",
@@ -612,7 +612,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
         session = _make_session()
         repo = EntityEmbeddingStateRepository(session)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             repo.upsert(
                 uuid4(),
                 "definition",

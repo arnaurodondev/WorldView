@@ -150,7 +150,7 @@ This lifecycle is managed entirely in the application layer. The DB stores only 
 
 List active or historical temporal events.
 
-- **Auth**: none (public read)
+- **Auth**: none (public read). **Uses read replica session (R27 / `ReadUoWDep`)** — same pattern as all existing S7 read endpoints.
 - **Query Parameters**:
 
 | Param | Type | Required | Default | Validation | Description |
@@ -174,6 +174,7 @@ List active or historical temporal events.
       "event_id": "...",
       "event_type": "geopolitical",
       "scope": "GLOBAL",
+      "region": "GLOBAL",
       "title": "US-China Technology Trade Restrictions",
       "description": "Escalating semiconductor export controls affecting US-China tech trade",
       "active_from": "2022-10-07T00:00:00Z",
@@ -188,6 +189,8 @@ List active or historical temporal events.
   "total": 47
 }
 ```
+
+`region` is `null` for LOCAL events with no region tag; a string otherwise (ISO-3166 alpha-2 or special value).
 
 #### NEW — `POST /api/v1/graph/cypher/path` (S7)
 
@@ -266,42 +269,59 @@ Get egocentric neighborhood using Cypher (richer than existing SQL-based `/entit
 
 ```sql
 -- Step 1: Enable AGE extension
+-- NOTE: LOAD 'age' and SET search_path are session-level commands. They must be
+-- executed once per migration session. For production use, add 'age' to
+-- shared_preload_libraries in postgresql.conf (Docker image config). Every DB
+-- session issuing AGE Cypher queries must also call LOAD + SET search_path before use.
 CREATE EXTENSION IF NOT EXISTS age;
 LOAD 'age';
 SET search_path = ag_catalog, "$user", public;
 
+-- Step 1b: Add updated_at to relations table
+-- The relations table (migration 0001) has no updated_at column. Worker 13F (AGE sync)
+-- uses watermark-based incremental sync via updated_at. This column is required.
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX idx_relations_updated_at ON relations (updated_at DESC);
+
 -- Step 2: Create AGE graph
-SELECT create_graph('worldview_graph');
+SELECT * FROM create_graph('worldview_graph');
 
 -- Step 3: Create vertex labels
-SELECT create_vlabel('worldview_graph', 'Entity');
-SELECT create_vlabel('worldview_graph', 'TemporalEvent');
+SELECT * FROM create_vlabel('worldview_graph', 'Entity');
+SELECT * FROM create_vlabel('worldview_graph', 'TemporalEvent');
 
--- Step 4: Create edge labels (one per canonical relation type)
-SELECT create_elabel('worldview_graph', 'EMPLOYS');
-SELECT create_elabel('worldview_graph', 'BOARD_MEMBER_OF');
-SELECT create_elabel('worldview_graph', 'SUBSIDIARY_OF');
-SELECT create_elabel('worldview_graph', 'ACQUIRED_BY');
-SELECT create_elabel('worldview_graph', 'LISTED_ON');
-SELECT create_elabel('worldview_graph', 'SUPPLIER_OF');
-SELECT create_elabel('worldview_graph', 'PARTNER_OF');
-SELECT create_elabel('worldview_graph', 'COMPETES_WITH');
-SELECT create_elabel('worldview_graph', 'REGULATES');
-SELECT create_elabel('worldview_graph', 'HEADQUARTERED_IN');
-SELECT create_elabel('worldview_graph', 'ANALYST_RATING');
-SELECT create_elabel('worldview_graph', 'MARKET_SHARE_CLAIM');
-SELECT create_elabel('worldview_graph', 'PRICE_TARGET');
-SELECT create_elabel('worldview_graph', 'EARNINGS_GUIDANCE');
-SELECT create_elabel('worldview_graph', 'SENTIMENT_SIGNAL');
-SELECT create_elabel('worldview_graph', 'CREDIT_RATING');
-SELECT create_elabel('worldview_graph', 'INVESTMENT_IN');
-SELECT create_elabel('worldview_graph', 'OWNS_STAKE_IN');
-SELECT create_elabel('worldview_graph', 'ISSUES_DEBT');
-SELECT create_elabel('worldview_graph', 'PRODUCES');
-SELECT create_elabel('worldview_graph', 'HAS_EXECUTIVE');
-SELECT create_elabel('worldview_graph', 'REVENUE_FROM_COUNTRY');
-SELECT create_elabel('worldview_graph', 'OPERATES_IN_COUNTRY');
-SELECT create_elabel('worldview_graph', 'EVENT_EXPOSES');  -- TemporalEvent → Entity edge
+-- Step 4: Create edge labels — one per canonical relation type across ALL migrations
+-- (0001 seed: 20 types) + (0002 seed: 4 types) + (0004 new: 3 types) + EVENT_EXPOSES
+SELECT * FROM create_elabel('worldview_graph', 'EMPLOYS');
+SELECT * FROM create_elabel('worldview_graph', 'BOARD_MEMBER_OF');
+SELECT * FROM create_elabel('worldview_graph', 'SUBSIDIARY_OF');
+SELECT * FROM create_elabel('worldview_graph', 'ACQUIRED_BY');
+SELECT * FROM create_elabel('worldview_graph', 'LISTED_ON');
+SELECT * FROM create_elabel('worldview_graph', 'SUPPLIER_OF');
+SELECT * FROM create_elabel('worldview_graph', 'PARTNER_OF');
+SELECT * FROM create_elabel('worldview_graph', 'COMPETES_WITH');
+SELECT * FROM create_elabel('worldview_graph', 'REGULATES');
+SELECT * FROM create_elabel('worldview_graph', 'HEADQUARTERED_IN');
+SELECT * FROM create_elabel('worldview_graph', 'ANALYST_RATING');
+SELECT * FROM create_elabel('worldview_graph', 'MARKET_SHARE_CLAIM');
+SELECT * FROM create_elabel('worldview_graph', 'PRICE_TARGET');
+SELECT * FROM create_elabel('worldview_graph', 'EARNINGS_GUIDANCE');
+SELECT * FROM create_elabel('worldview_graph', 'SENTIMENT_SIGNAL');
+SELECT * FROM create_elabel('worldview_graph', 'CREDIT_RATING');
+SELECT * FROM create_elabel('worldview_graph', 'INVESTMENT_IN');
+SELECT * FROM create_elabel('worldview_graph', 'OWNS_STAKE_IN');
+SELECT * FROM create_elabel('worldview_graph', 'ISSUES_DEBT');
+SELECT * FROM create_elabel('worldview_graph', 'PRODUCES');
+-- Migration 0002 relation types (must be present before Worker 13F syncs those edges)
+SELECT * FROM create_elabel('worldview_graph', 'IS_IN_SECTOR');
+SELECT * FROM create_elabel('worldview_graph', 'IS_IN_INDUSTRY');
+SELECT * FROM create_elabel('worldview_graph', 'EARNINGS_RELEASED');
+SELECT * FROM create_elabel('worldview_graph', 'CORPORATE_ACTION');
+-- Migration 0004 new relation types
+SELECT * FROM create_elabel('worldview_graph', 'HAS_EXECUTIVE');
+SELECT * FROM create_elabel('worldview_graph', 'REVENUE_FROM_COUNTRY');
+SELECT * FROM create_elabel('worldview_graph', 'OPERATES_IN_COUNTRY');
+SELECT * FROM create_elabel('worldview_graph', 'EVENT_EXPOSES');  -- TemporalEvent → Entity edge
 ```
 
 **AGE storage estimate**: Each vertex ~200 bytes + each edge ~150 bytes.
@@ -334,7 +354,7 @@ SELECT create_elabel('worldview_graph', 'EVENT_EXPOSES');  -- TemporalEvent → 
 - `(active_from, active_until)` — for temporal range queries
 - `(event_type, scope)` — for type+scope filter
 - `(region, active_from DESC)` — for query-time global event filtering by region
-- UNIQUE `(event_type, region, title, date_trunc('day', active_from))` — natural deduplication key for EODHD economic events
+- `CREATE UNIQUE INDEX uidx_temporal_events_natural_key ON temporal_events (event_type, region, title, date_trunc('day', active_from))` — natural deduplication key for EODHD economic events (functional expression requires index syntax, not table CONSTRAINT)
 
 **Estimated rows**: ~10K/year (geopolitical + MACRO economic events; MACRO events alone: ~6 countries × 20 events/month × 12 = ~1,440/year)
 
@@ -389,7 +409,7 @@ SELECT create_elabel('worldview_graph', 'EVENT_EXPOSES');  -- TemporalEvent → 
 | event_id | string | — | no | UUIDv7 |
 | event_type | string | — | no | `geopolitical\|regulatory\|macro\|sanctions\|natural_disaster\|other` |
 | scope | string | — | no | `LOCAL\|REGIONAL\|NATIONAL\|GLOBAL` |
-| region | string | `""` | no | ISO-3166 alpha-2 or `EU\|APAC\|LatAm\|MENA\|GLOBAL`; empty for local events |
+| region | string | `""` | no | ISO-3166 alpha-2 or `EU\|APAC\|LatAm\|MENA\|GLOBAL`; **empty string = no region** (local events). **Consumer must convert `""` → `None` before DB insert** (DB column is `TEXT NULL`, not empty string) |
 | title | string | — | no | Short title (max 500) |
 | description | string | `""` | no | Narrative description; for MACRO includes surprise magnitude |
 | source_article_ids | `{type:"array",items:"string"}` | `[]` | no | CanonicalDocument UUIDs; empty for structured EODHD events |
@@ -471,10 +491,14 @@ def current_impact_weight(self) -> float:
 | confidence | float | yes | 0.0–1.0 |
 
 **`EventScope`** (StrEnum): `LOCAL`, `REGIONAL`, `NATIONAL`, `GLOBAL`
+- Values (uppercase, matching DB CHECK): `LOCAL = "LOCAL"`, `REGIONAL = "REGIONAL"`, `NATIONAL = "NATIONAL"`, `GLOBAL = "GLOBAL"`
 
 **`EventType`** (StrEnum): `GEOPOLITICAL`, `REGULATORY`, `MACRO`, `SANCTIONS`, `NATURAL_DISASTER`, `OTHER`
+- Values (lowercase, matching DB CHECK and Avro schema): `GEOPOLITICAL = "geopolitical"`, `REGULATORY = "regulatory"`, `MACRO = "macro"`, `SANCTIONS = "sanctions"`, `NATURAL_DISASTER = "natural_disaster"`, `OTHER = "other"`
+- Note: `EventScope` uses uppercase values; `EventType` uses lowercase values — this matches their respective DB CHECK constraints. Use `EventType.MACRO` (not `"MACRO"`) in all application code.
 
 **`ExposureType`** (StrEnum): `DIRECTLY_AFFECTED`, `OPERATIONALLY_IMPACTED`, `SUPPLY_CHAIN`, `REVENUE_GEOGRAPHY`, `SECTOR_EXPOSURE`
+- Values (lowercase, matching DB CHECK and Avro schema): `DIRECTLY_AFFECTED = "directly_affected"`, `OPERATIONALLY_IMPACTED = "operationally_impacted"`, `SUPPLY_CHAIN = "supply_chain"`, `REVENUE_GEOGRAPHY = "revenue_geography"`, `SECTOR_EXPOSURE = "sector_exposure"`
 
 ---
 
@@ -490,11 +514,18 @@ class AgeSyncWorker:
 
     Watermark stored in Valkey: s7:age:sync:watermark (ISO-8601 UTC string).
     Initial watermark: epoch (syncs all existing data on first run).
+
+    IMPORTANT — AGE session setup: Every DB connection that issues AGE Cypher must
+    execute the following before any Cypher call:
+        await session.execute(text("LOAD 'age'"))
+        await session.execute(text("SET search_path = ag_catalog, public"))
+    This is enforced in _setup_age_session() called at the start of run().
     """
 
     async def run(self) -> None:
         watermark = await self._get_watermark()
         new_watermark = utc_now()
+        await self._setup_age_session()  # LOAD 'age' + SET search_path
         await self._sync_entities(since=watermark)
         await self._sync_relations(since=watermark)
         await self._sync_temporal_events(since=watermark)
@@ -1090,7 +1121,7 @@ S8 RELATIONSHIP intent → POST /api/v1/graph/cypher/path (S7)
 | A-2 | S7: `TemporalEvent` + `EntityEventExposure` domain models + `TemporalEventRepository` | S7 | 3h |
 | A-3 | `libs/contracts`: `intelligence.temporal_event.v1` Avro schema | libs/contracts | 2h |
 | A-4 | S7: `TemporalEventConsumer` (new Kafka consumer, `intelligence.temporal_event.v1`) | S7 | 4h |
-| B-1 | S6: Block 13E temporal event detection (Qwen classification + Kafka produce) | S6 | 5h |
+| B-1 | S6: Block 13E temporal event detection (Qwen classification + Kafka produce) | S6 | 5h | **⚠ File conflict**: PRD-0020 (PLAN-0020) also modifies `enriched_consumer.py` (Block 5 price-impact). Implement PRD-0018 Wave B-1 before PRD-0020 Wave B-1, or coordinate merge. |
 | B-2 | S7: Enhanced `FundamentalsConsumer` — metadata enrichment (FullTimeEmployees, RevenueTTM, PercentInsiders, PercentInstitutions); Workers 13D-6 (Economic Events), 13D-7 (Macro Indicators), 13D-8 (Insider Transactions) | S7 | 8h |
 | C-1 | S7: `AgeSyncWorker` (Worker 13F) — watermark sync, Cypher MERGE, metrics | S7 | 6h |
 | C-2 | S7: `CypherPathUseCase` + `GET /api/v1/temporal-events` + `POST /api/v1/graph/cypher/path` + `POST /api/v1/graph/cypher/neighborhood` endpoints | S7 | 6h |
