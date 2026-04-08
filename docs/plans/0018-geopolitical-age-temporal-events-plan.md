@@ -8,7 +8,7 @@ updated: 2026-04-08
 
 
 total_waves: 10
-waves_done: 4
+waves_done: 5
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -137,23 +137,37 @@ waves_done: 4
 
 ---
 
-### Wave B-3: S7 — Worker 13D-7 EODHD Macro Indicator Enrichment
+### Wave B-3: S7 — Worker 13D-7 EODHD Macro Indicator Enrichment ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 375 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `MacroIndicatorWorker` class (APScheduler weekly Sunday 03:00 UTC)
-- [ ] EODHD client method: `get_macro_indicator(iso3_country, indicator_code)`
-- [ ] 6 indicators: gdp_current_usd, gdp_growth_annual, inflation_consumer_prices_annual, real_interest_rate, unemployment_total_pct, current_account_balance_bop_usd
-- [ ] JSON hash comparison to detect changes; skip re-embed if unchanged
-- [ ] Produce `entity.dirtied.v1` when indicators change
-- [ ] ISO 3166-1 alpha-3 → alpha-2 country code mapping
-- [ ] Unit tests: update on change, no update on same hash, missing country entity
+- [x] `MacroIndicatorWorker` class (APScheduler weekly Sunday 03:00 UTC)
+- [x] EODHD client method: `get_macro_indicator(iso3_country, indicator_code)` (already in client from B-2)
+- [x] 6 indicators: gdp_current_usd, gdp_growth_annual, inflation_consumer_prices_annual, real_interest_rate, unemployment_total_pct, current_account_balance_bop_usd
+- [x] JSON hash comparison to detect changes; skip re-embed if unchanged
+- [x] Produce `entity.dirtied.v1` when indicators change
+- [x] ISO 3166-1 alpha-3 → alpha-2 country code mapping (constructor `country_map: dict[str, str]`)
+- [x] `EntityRepository.get_metadata_hash()` — SHA-256 of stored `metadata[key]` JSONB value
+- [x] Prometheus metric: `s7_macro_indicator_updates_total{country}`
+- [x] Config: `KNOWLEDGE_GRAPH_MACRO_INDICATOR_COUNTRIES` (default: `USA,GBR,DEU,JPN,CHN`)
+- [x] Unit tests: 16 tests — update on change, no update on same hash, missing country entity, empty response, partial indicators, no producer, Prometheus counter, _sha256_hex helper
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (95 source files, 0 issues)
+- [x] Unit tests pass: 375 tests, 0 failures (16 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: A-1, B-1 (update_metadata pattern established)
 **Estimated effort**: 3h
 **Files**:
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/macro_indicator_worker.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/entity_repository.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/metrics/prometheus.py`
+- `services/knowledge-graph/src/knowledge_graph/config.py`
+- `services/knowledge-graph/configs/dev.local.env.example`
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_macro_indicator_worker.py`
 
 ---

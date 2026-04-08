@@ -51,3 +51,9 @@ s7_economic_events_ingested_total = Counter(
     "Total economic events upserted by Worker 13D-6, by country.",
     ["country"],
 )
+
+s7_macro_indicator_updates_total = Counter(
+    "s7_macro_indicator_updates_total",
+    "Total country entities re-enriched with macro indicators by Worker 13D-7, by country.",
+    ["country"],
+)
