@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Wave D-4 complete — REST API + health/metrics/DLQ + integration tests · Service feature-complete
+> **Status**: PLAN-0018 Wave E-2 complete — AGE Cypher path + neighborhood endpoints · All 10 waves done
 
 ---
 
@@ -37,6 +37,8 @@ and performs read/write operations only.
 | POST | `/api/v1/events/search` | — | Search `events` table (migration 0002); body: `{entity_ids[] (empty=no filter), event_types[], date_from, date_to, top_k(1–100)}`. Returns ordered by `event_date DESC`. Includes `event_subtype` and `structured_data` (JSONB) |
 | POST | `/api/v1/search/relations` | — | HNSW ANN semantic search over `relation_summaries`; body: `{query_embedding[1024], top_k(1–50), min_confidence, entity_ids[], relation_types[], semantic_mode}`. Returns ordered by cosine distance ASC. `summary_authority = confidence * log1p(evidence_count)` computed at query time |
 | POST | `/api/v1/entities/similar` | — | Similarity search: top-K financial instrument entities by `fundamentals_ohlcv` pgvector ANN + `competes_with` edge boost (+0.15, capped at 1.0); body: `{entity_id, top_k(1–50), min_score(0–1), include_competitors_only}`. Returns `SimilarEntitiesResponse`. 404 if entity not found; 422 if no fundamentals_ohlcv embedding; 503 if pgvector unavailable. Uses read-replica session (R27). |
+| POST | `/api/v1/graph/cypher/path` | — | AGE Cypher shortest-path between two entities. Body: `{source_entity_id, target_entity_id, max_hops(1–5, default 3), min_confidence(0–1, default 0.3), relation_types[], all_paths(bool)}`. Returns `{paths[], paths_found, query_time_ms}`. 503 if `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false`, 504 on 5 s AGE timeout, 404 if entity missing. Uses **write session** (AGE requires LOAD 'age' — R27 exception). |
+| POST | `/api/v1/graph/cypher/neighborhood` | — | AGE Cypher egocentric neighborhood (multi-hop). Body: `{entity_id, max_hops(1–3, default 2), min_confidence(0–1, default 0.4), include_temporal_events(bool, default true), limit(1–200, default 50)}`. Returns `{center, relations[], entities{}, temporal_events[]}`. Same error codes as /path. |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
 | GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
 | POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |
