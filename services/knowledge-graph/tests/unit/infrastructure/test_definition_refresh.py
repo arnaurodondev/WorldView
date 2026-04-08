@@ -250,6 +250,110 @@ class TestFinancialInstrumentSkipsDescriptionClient:
 # ---------------------------------------------------------------------------
 
 
+class TestDefinitionRefreshWorkerPhasedRun:
+    """Tests for the three-phase run() method (Phase Read → Process → Write).
+
+    The key invariant: NO DB session is open during external I/O
+    (description generation or embedding calls).
+    """
+
+    async def test_run_closes_session_before_embed(self) -> None:
+        """Session is closed (Phase 1 done) before _embed is called (Phase 2)."""
+
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        # Track whether the session context manager has exited before embed is called
+        session_exited: list[bool] = [False]
+
+        session = AsyncMock()
+        session.commit = AsyncMock()
+
+        session_cm = AsyncMock()
+
+        async def _cm_enter(_self=None):
+            session_exited[0] = False
+            return session
+
+        async def _cm_exit(*args):
+            session_exited[0] = True
+            return False
+
+        session_cm.__aenter__ = _cm_enter
+        session_cm.__aexit__ = _cm_exit
+
+        sf = MagicMock()
+        sf.return_value = session_cm
+
+        emb_repo_mock = AsyncMock()
+        due_row = _make_due_row(
+            entity_type="financial_instrument",
+            source_text="Apple Inc. is a company.",
+            source_hash="different_hash",  # force re-embed
+        )
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[due_row])
+        emb_repo_mock.upsert = AsyncMock()
+
+        session_open_during_embed_check: list[bool] = []
+
+        llm_client = AsyncMock()
+
+        async def _embed_and_record(inp, entity_id):
+            # Record whether session was open (exited = closed) when embed was called
+            # session_exited[0] is True when Phase 1 session context exited
+            session_open_during_embed_check.append(session_exited[0])
+            return [AsyncMock(embedding=[0.1, 0.2, 0.3])]
+
+        llm_client.embed = _embed_and_record
+
+        worker = DefinitionRefreshWorker(sf, llm_client)
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        # Embed must have been called
+        assert len(session_open_during_embed_check) == 1
+        # When embed was called, the Phase 1 session must have already been closed
+        assert (
+            session_open_during_embed_check[0] is True
+        ), "DB session must be closed before _embed is called (R24 compliance)"
+
+    async def test_run_empty_due_returns_early(self) -> None:
+        """When no rows are due, run() returns without opening a write session."""
+        from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
+
+        session = AsyncMock()
+        session_cm = AsyncMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+
+        open_count = [0]
+        sf = MagicMock()
+
+        def _track():
+            open_count[0] += 1
+            return session_cm
+
+        sf.side_effect = _track
+
+        emb_repo_mock = AsyncMock()
+        emb_repo_mock.get_due_for_refresh = AsyncMock(return_value=[])
+
+        llm_client = AsyncMock()
+        worker = DefinitionRefreshWorker(sf, llm_client)
+
+        with patch(
+            "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+            return_value=emb_repo_mock,
+        ):
+            await worker.run()
+
+        # Only 1 session open (Phase 1 read); no Phase 3 write session
+        assert open_count[0] == 1
+
+
 class TestBuildDescriptionClient:
     def test_none_provider_returns_null_adapter(self) -> None:
         """description_provider='none' returns NullDescriptionAdapter."""

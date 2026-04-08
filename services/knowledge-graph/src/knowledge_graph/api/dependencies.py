@@ -58,3 +58,68 @@ def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_session)]) -> 
 
 
 DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
+
+
+# ── Entity graph use cases (read-only) ───────────────────────────────────────
+# These factories encapsulate all infrastructure imports so that API route files
+# never import from the infrastructure layer directly (R25 compliance).
+
+
+class _EntityGraphUseCaseBundle:
+    """Pre-bound bundle of repos for read-only entity graph queries."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
+        self.entity_repo = CanonicalEntityRepository(session)
+        self.relation_repo = RelationRepository(session)
+
+
+def get_entity_graph_repos(session: ReadOnlyDbSessionDep) -> _EntityGraphUseCaseBundle:
+    """Build read-only repos for graph neighbourhood queries."""
+    return _EntityGraphUseCaseBundle(session)
+
+
+EntityGraphReposDep = Annotated[_EntityGraphUseCaseBundle, Depends(get_entity_graph_repos)]
+
+
+class _FindSimilarEntitiesBundle:
+    """Pre-bound bundle of repos for the similar-entities ANN query."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_ann import (
+            SqlalchemyEntityEmbeddingANNRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+
+        self.entity_repo = CanonicalEntityRepository(session)
+        self.embedding_repo = SqlalchemyEntityEmbeddingANNRepository(session)
+        self.relation_repo = RelationRepository(session)
+
+
+def get_find_similar_entities_repos(
+    session: ReadOnlyDbSessionDep,
+) -> _FindSimilarEntitiesBundle:
+    """Build read-only repos for the similar-entities ANN query."""
+    return _FindSimilarEntitiesBundle(session)
+
+
+FindSimilarEntitiesReposDep = Annotated[_FindSimilarEntitiesBundle, Depends(get_find_similar_entities_repos)]
+
+
+def get_entity_contradictions_repo(session: ReadOnlyDbSessionDep) -> object:
+    """Build the ClaimRepository for entity contradiction queries."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
+        ClaimRepository,
+    )
+
+    return ClaimRepository(session)
+
+
+EntityContradictionsRepoDep = Annotated[object, Depends(get_entity_contradictions_repo)]

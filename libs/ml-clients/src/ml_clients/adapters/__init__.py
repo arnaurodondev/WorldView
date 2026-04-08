@@ -13,9 +13,9 @@ __all__ = [
     "AnthropicExtractionAdapter",
     "ChatGPTExtractionAdapter",
     "DeepSeekExtractionAdapter",
+    "GLiNERLocalAdapter",
     "GeminiDescriptionAdapter",
     "GeminiExtractionAdapter",
-    "GLiNERLocalAdapter",
     "OllamaEmbeddingAdapter",
     "OllamaExtractionAdapter",
 ]

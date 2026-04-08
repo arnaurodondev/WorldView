@@ -1053,3 +1053,86 @@ class TestGeminiDescriptionAdapter:
 
         adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
         assert isinstance(adapter, EntityDescriptionClient)
+
+    async def test_cost_cap_5pct_margin_blocks_at_95pct(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """Cost cap guard fires at 95% of cap (5% margin buffer — F-DS-001).
+
+        At $9.50 (= 95% of $10 cap), the adapter must return None without
+        making an API call.  At $9.40 (< 95%), the API MUST be called.
+        """
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        # ── $9.50 → blocked (95% of $10) ────────────────────────────────────
+        tracker_at_95 = AsyncMock()
+        tracker_at_95.get.return_value = b"9.50"
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker_at_95,
+            max_monthly_usd=10.0,
+        )
+        result = await adapter.generate_description(
+            entity_id="e1",
+            canonical_name="Germany",
+            entity_type="country",
+            context_hints={},
+        )
+        assert result is None, "At 95% of cap, generate_description must return None"
+
+        # ── $9.40 → not blocked (< 95%) ─────────────────────────────────────
+        tracker_below = AsyncMock()
+        tracker_below.get.return_value = b"9.40"
+        tracker_below.incrbyfloat.return_value = 9.4001
+
+        description_text = "Germany is a country in central Europe."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        adapter2 = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker_below,
+            max_monthly_usd=10.0,
+        )
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result2 = await adapter2.generate_description(
+                entity_id="e2",
+                canonical_name="Germany",
+                entity_type="country",
+                context_hints={},
+            )
+        assert result2 == description_text, "Below 95% of cap, API must be called"
+
+    async def test_genai_client_reused_across_calls(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """genai.Client is instantiated ONCE per adapter instance — not per call (F-DS-013)."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(api_key="my-key", semaphore=semaphore)
+        description_text = "A test description."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            # Call twice
+            await adapter.generate_description(
+                entity_id="e1",
+                canonical_name="Apple Inc.",
+                entity_type="financial_instrument",
+                context_hints={},
+            )
+            await adapter.generate_description(
+                entity_id="e2",
+                canonical_name="Microsoft Corp.",
+                entity_type="financial_instrument",
+                context_hints={},
+            )
+
+        # genai.Client() constructor called exactly ONCE (lazy init + reuse)
+        assert (
+            mock_genai.Client.call_count == 1
+        ), f"genai.Client should be instantiated once; got {mock_genai.Client.call_count}"

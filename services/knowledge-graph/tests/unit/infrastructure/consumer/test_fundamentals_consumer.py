@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 _INSTRUMENT_ID = str(uuid4())
 
 
-def _make_consumer(*, current_hash: str | None = None):
+def _make_consumer():
     """Build a FundamentalsDescriptionConsumer with mocked dependencies."""
     from knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsDescriptionConsumer
 
@@ -36,22 +36,20 @@ def _make_consumer(*, current_hash: str | None = None):
 
     storage = AsyncMock()
 
-    # Patch _get_current_hash to avoid real DB
     consumer = FundamentalsDescriptionConsumer(
         config=config,
         session_factory=sf,
         definition_worker=def_worker,
         storage_client=storage,
     )
-    consumer._get_current_hash = AsyncMock(return_value=current_hash)
 
     return consumer, def_worker, storage
 
 
 class TestFundamentalsConsumerDescriptionChange:
     def test_changed_description_triggers_reembed(self) -> None:
-        """New hash != stored hash -> refresh_for_entity() called."""
-        consumer, def_worker, storage = _make_consumer(current_hash="old_hash_value")
+        """Any description found -> refresh_for_entity() always called (hash check delegated to worker)."""
+        consumer, def_worker, storage = _make_consumer()
 
         description = "Updated description about Apple Inc."
         storage.get_json = AsyncMock(return_value={"General": {"Description": description}})
@@ -67,14 +65,11 @@ class TestFundamentalsConsumerDescriptionChange:
 
         def_worker.refresh_for_entity.assert_awaited_once()
 
-    def test_unchanged_description_skips_reembed(self) -> None:
-        """Same hash -> refresh_for_entity() NOT called."""
-        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import sha256_hex
-
+    def test_unchanged_description_delegates_to_worker(self) -> None:
+        """Consumer always delegates to refresh_for_entity; worker handles SHA-256 dedup internally."""
         description = "Stable description, no change."
-        current_hash = sha256_hex(description)
 
-        consumer, def_worker, storage = _make_consumer(current_hash=current_hash)
+        consumer, def_worker, storage = _make_consumer()
         storage.get_json = AsyncMock(return_value={"General": {"Description": description}})
 
         msg = {
@@ -86,7 +81,8 @@ class TestFundamentalsConsumerDescriptionChange:
 
         asyncio.get_event_loop().run_until_complete(consumer.process_message(None, msg, {}))
 
-        def_worker.refresh_for_entity.assert_not_awaited()
+        # Consumer delegates to worker for ALL descriptions; hash dedup is inside refresh_for_entity.
+        def_worker.refresh_for_entity.assert_awaited_once()
 
     def test_non_fundamentals_event_skipped(self) -> None:
         """dataset_type != 'fundamentals' -> process_message returns early."""
@@ -106,7 +102,7 @@ class TestFundamentalsConsumerDescriptionChange:
 
     def test_no_description_in_payload_skips_reembed(self) -> None:
         """Payload has no General.Description -> refresh_for_entity not called."""
-        consumer, def_worker, storage = _make_consumer(current_hash=None)
+        consumer, def_worker, storage = _make_consumer()
         storage.get_json = AsyncMock(return_value={"General": {}})
 
         msg = {

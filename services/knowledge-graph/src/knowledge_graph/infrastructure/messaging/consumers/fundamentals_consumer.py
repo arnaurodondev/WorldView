@@ -16,7 +16,6 @@ import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import sha256_hex
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -106,18 +105,8 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
             )
             return
 
-        # SHA-256 change detection
-        new_hash = sha256_hex(description)
-        old_hash = await self._get_current_hash(instrument_id)
-
-        if old_hash == new_hash:
-            logger.debug(  # type: ignore[no-any-return]
-                "fundamentals_consumer_description_unchanged",
-                instrument_id=str(instrument_id),
-            )
-            return
-
-        # Description changed — trigger definition re-embed
+        # Delegate to definition worker — refresh_for_entity handles SHA-256 change
+        # detection internally, so a redundant outer check here is not needed.
         await self._def_worker.refresh_for_entity(instrument_id, description)
 
         logger.info(  # type: ignore[no-any-return]
@@ -141,18 +130,6 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
                 error=str(exc),
             )
             return None
-
-    async def _get_current_hash(self, entity_id: UUID) -> str | None:
-        """Fetch the stored source_hash for the definition view."""
-        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
-            VIEW_DEFINITION,
-            EntityEmbeddingStateRepository,
-        )
-
-        async with self._sf() as session:
-            emb_repo = EntityEmbeddingStateRepository(session)
-            row = await emb_repo.get(entity_id, VIEW_DEFINITION)
-            return str(row["source_hash"]) if row and row.get("source_hash") else None
 
     # ------------------------------------------------------------------
     # Idempotency

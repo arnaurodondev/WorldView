@@ -113,6 +113,8 @@
 | [BP-124](#bp-124) | Kafka consumer / embedding | Entity exists but `embedding IS NULL` permanently — consumer early-return skips enrichment on replay | S7 `instrument_consumer.py`, any consumer with two-phase entity+enrichment writes |
 | [BP-125](#bp-125) | pgvector / ANN | ANN similarity scores can be negative — pgvector cosine distance is `[0, 2]`, not `[0, 1]`; use `max(0.0, 1.0 - d)` floor | Any ANN query converting distance to similarity |
 | [BP-126](#bp-126) | Alembic / DDL | `NotNullViolation` on NOT NULL column — ORM `server_default` not inherited by Alembic migration | Every Alembic migration with a NOT NULL column with server_default |
+| [BP-128](#bp-128) | AGE extension / PostgreSQL session | AGE functions fail on new connections — `LOAD 'age'` and `SET search_path` must be re-executed per session | `AgeSyncWorker`, `CypherPathUseCase`, all AGE Cypher code paths |
+| [BP-129](#bp-129) | Watermark sync / DDL | Incremental watermark sync fails when source table lacks `updated_at` — partitioned tables often have only `created_at` and domain-specific timestamp columns | `AgeSyncWorker` Worker 13F on `relations` table |
 
 ---
 
@@ -4702,3 +4704,67 @@ except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
 **Prevention**: In code review, always cross-check: if ORM model has `server_default`, migration must too. If ORM model has `nullable=False`, either migration has `server_default` or all code paths explicitly provide the column.
 
 **First seen**: PLAN-0017 migration 004 QA pass 2026-04-08.
+
+---
+
+## BP-127 — pre-commit ruff-format Version Mismatch Causes Phantom Reformat Loop
+
+**Symptom**: `git commit` fails with `ruff-format: 1 file reformatted, N files left unchanged` even after running `uvx ruff format` on all staged files. The hook passes when run via `pre-commit run ruff-format` standalone but fails on commit. Re-staging after formatting doesn't help if the wrong ruff version is used.
+
+**Root cause**: The pre-commit config pins `ruff-pre-commit` to a specific version (e.g., `v0.4.0`) in `.pre-commit-config.yaml`. Running `uvx ruff format` uses a newer version of ruff from the default uvx cache. When the two versions produce different formatting for the same file, `uvx ruff format` marks the file as clean but the hook's pinned version reformats it again on commit.
+
+**Fix**:
+1. Identify the pinned ruff binary: `find ~/.cache/pre-commit -name "ruff" -path "*ruff-pre-commit*"`.
+2. Use the pinned binary to format before staging: `~/.cache/pre-commit/repo*/py_env-python3.14/bin/ruff format <file>`.
+3. Verify staged content is clean: `git show ":$file" | <pinned-ruff> format --stdin-filename "$file" -` should produce no diff.
+
+**Prevention**: Always format using the same version as the pre-commit hook. Either pin `uvx ruff` to match (`uvx ruff@0.4.0 format`), or add a Makefile target that uses the pre-commit-managed binary.
+
+**Affected areas**: Any Python file in any service/lib when the pre-commit ruff version differs from the local/uvx ruff version.
+
+**First seen**: nlp-pipeline Issues 1–3 commit, 2026-04-08.
+
+## BP-128 — AGE Extension Functions Fail on New Connections Due to Missing Session Setup
+
+**Symptom**: `ERROR: function create_graph does not exist` or `ERROR: type "agtype" does not exist` when calling Apache AGE functions (e.g., `create_graph`, `cypher`, `create_vlabel`) inside a migration or worker. Works in one session but fails in a fresh connection.
+
+**Root cause**: Apache AGE requires two session-level commands before any AGE function can be used:
+```sql
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+```
+These are **not persistent** — they must be re-executed at the start of every database connection. If not configured via `shared_preload_libraries = 'age'` in `postgresql.conf`, every session (Alembic migration, async SQLAlchemy connection, direct psql) must call them explicitly. Workers with connection pooling will silently fail on connections that were created before the session setup.
+
+**Fix**:
+1. Preferred: add `'age'` to `shared_preload_libraries` in `postgresql.conf` (Docker image config). This makes AGE available to every connection automatically.
+2. Fallback: add session setup in every code path that issues AGE commands:
+   ```python
+   await session.execute(text("LOAD 'age'"))
+   await session.execute(text("SET search_path = ag_catalog, public"))
+   ```
+3. For Alembic migrations: include `LOAD 'age'` and `SET search_path` in the migration script itself (before any `create_graph()` call).
+
+**Prevention**: Add `_setup_age_session()` helper to `AgeSyncWorker` and call it at the start of every `run()`. Add connection event listener in the session factory that auto-issues these commands for AGE-enabled sessions.
+
+**Affected areas**: `intelligence-migrations` migration 0004, `AgeSyncWorker` (Worker 13F), `CypherPathUseCase`, `CypherNeighborhoodUseCase`.
+
+**First seen**: PRD-0018 audit, 2026-04-08.
+
+## BP-129 — Watermark-Based Incremental Sync Fails When Target Table Lacks `updated_at`
+
+**Symptom**: An incremental sync worker (watermark pattern: `WHERE updated_at > :watermark`) silently syncs zero rows or crashes with `column does not exist` for tables that only have `created_at` or `latest_evidence_at` but not `updated_at`.
+
+**Root cause**: The `relations` table (and similar append-heavy tables) often track `created_at` and `latest_evidence_at` but not a generic `updated_at`. When a watermark-based sync worker queries `WHERE updated_at > :watermark`, it either: (a) fails with a column error, or (b) silently misses rows whose confidence was recomputed (which updates `confidence_last_computed_at` but not `updated_at`).
+
+**Fix**: Before implementing a watermark sync worker, verify every source table has an `updated_at` column that is updated on ALL mutation paths (initial insert + subsequent updates). If missing, add it via a non-destructive migration:
+```sql
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX idx_relations_updated_at ON relations (updated_at DESC);
+```
+Also add an `ON UPDATE` trigger or ensure all application-layer update paths explicitly set `updated_at = utc_now()`.
+
+**Prevention**: PRD §6.4 DB table definitions should always include `updated_at` for any table used as a sync source. Plan migrations should verify the column exists before implementing the worker.
+
+**Affected areas**: `AgeSyncWorker` (Worker 13F) — `relations` table required migration 0004 to add `updated_at`.
+
+**First seen**: PRD-0018 audit, 2026-04-08.
