@@ -22,12 +22,12 @@ class OllamaEmbeddingAdapter:
     EXPECTED_DIMENSION = 1024
     MODEL_ID = "bge-large-en-v1.5"
 
-    # BGE-large BERT context window = 512 tokens.  Financial text with numbers and
-    # symbols tokenizes at ~3 chars/token (wordpiece is dense on digits).  Keeping
-    # the combined (prefix + text) under 1500 chars leaves a comfortable margin for
-    # the CLS/SEP special tokens and avoids the GGML_ASSERT crash in llama.cpp when
-    # the position-embedding matrix index goes out of bounds (i01 >= ne01).
-    _MAX_CHARS = 1500
+    # BGE-large BERT context window = 512 tokens.  Word-count approximation:
+    # financial text tokenises at ~1.3 tokens/word (wordpiece, dense on digits).
+    # 384 words * 1.3 ~= 499 tokens — safely under 512 and avoids the
+    # GGML_ASSERT crash (i01 >= ne01) in llama.cpp when the position-embedding
+    # matrix index goes out of bounds.
+    _MAX_WORDS = 384
 
     def __init__(self, base_url: str, model_id: str, semaphore: asyncio.Semaphore) -> None:
         self._base_url = base_url.rstrip("/")
@@ -41,8 +41,11 @@ class OllamaEmbeddingAdapter:
                 try:
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         text = f"{inp.instruction_prefix} {inp.text}" if inp.instruction_prefix else inp.text
-                        # Truncate to stay within the model's 512-token context window.
-                        text = text[: self._MAX_CHARS]
+                        # Truncate to stay within the model's 512-token context window
+                        # using word count as an approximation (1.3 tokens/word).
+                        words = text.split()
+                        if len(words) > self._MAX_WORDS:
+                            text = " ".join(words[: self._MAX_WORDS])
                         resp = await client.post(
                             f"{self._base_url}/api/embeddings",
                             json={"model": self._model_id, "prompt": text},

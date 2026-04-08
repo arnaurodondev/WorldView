@@ -218,6 +218,83 @@ class TestRunEmbeddingsBlock:
 
 
 @pytest.mark.unit
+class TestRunEmbeddingsBlockOptionC:
+    """Option C: section embedding uses first chunk as representative (not full section text)."""
+
+    @pytest.mark.asyncio
+    async def test_section_embedding_uses_first_chunk_text(self) -> None:
+        """Section embedding must be called with the first chunk's text, not the full section text."""
+        # Build a section with multiple sentences that will produce at least one chunk
+        text = "Apple reported record earnings. Revenue grew strongly. Investors cheered."
+        section = _make_section(text)
+        captured_texts: list[str] = []
+
+        async def _fake_embed(inputs: list) -> list:
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            for inp in inputs:
+                captured_texts.append(inp.text)
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024)]
+
+        client = MagicMock()
+        client.embed = _fake_embed
+
+        _, _, section_embeddings, _ = await run_embeddings_block(
+            [section],
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        assert len(section_embeddings) == 1
+        # The text sent to the embedding client must be the first chunk's text
+        # (which for a single-sentence/short section equals the section text)
+        assert len(captured_texts) == 1
+        assert captured_texts[0] in text  # first chunk text is a substring/equal of section
+
+    @pytest.mark.asyncio
+    async def test_pending_entry_carries_embedding_text(self) -> None:
+        """On failure, EmbeddingPendingEntry.embedding_text is populated (not empty)."""
+        client = MagicMock()
+        client.embed = AsyncMock(side_effect=Exception("Ollama OOM"))
+
+        sections = [_make_section("Apple reported record revenue this quarter.")]
+
+        _, _, _, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        assert len(failures) >= 1
+        assert failures[0].embedding_text != "", "embedding_text must be populated for retry"
+
+    @pytest.mark.asyncio
+    async def test_chunk_pending_entry_carries_chunk_text(self) -> None:
+        """Failed chunk embeddings also store the chunk text for retry."""
+        client = MagicMock()
+        client.embed = AsyncMock(side_effect=Exception("timeout"))
+
+        sections = [_make_section("Apple. Tesla. Google. Amazon. Microsoft. IBM reported results.")]
+
+        _, _, _, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+        )
+
+        chunk_failures = [f for f in failures if f.chunk_id is not None]
+        assert chunk_failures, "Expected at least one chunk embedding failure"
+        for failure in chunk_failures:
+            assert failure.embedding_text != "", f"chunk failure must have text: {failure}"
+
+
+@pytest.mark.unit
 class TestRunEmbeddingsBlockChunkTextStore:
     """Tests for the chunk_text_store integration in Block 7."""
 

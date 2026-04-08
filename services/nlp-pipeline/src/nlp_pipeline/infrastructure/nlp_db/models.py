@@ -214,3 +214,23 @@ class DocumentSourceMetadataModel(Base):
     source_type: Mapped[str | None] = mapped_column(VARCHAR(50), nullable=True)
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class EmbeddingPendingModel(Base):
+    """Retry queue for section/chunk embedding failures (migration 0004).
+
+    Populated by the S6 consumer when Block 7 embedding calls fail.
+    Consumed by EmbeddingRetryWorker which re-embeds with exponential backoff.
+    """
+
+    __tablename__ = "embedding_pending"
+
+    pending_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    section_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    embedding_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

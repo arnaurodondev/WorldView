@@ -249,9 +249,17 @@ async def run_embeddings_block(
     now = common.time.utc_now()  # type: ignore[no-any-return]
 
     for section in sections:
-        # ── Section embedding (ALL tiers) ─────────────────────────────────
+        # ── Chunk splitting (done first so Option C can use chunks[0]) ────
+        section_chunks = chunk_section(section, max_tokens=max_tokens, overlap_tokens=overlap_tokens)
+        all_chunks.extend(section_chunks)
+
+        # ── Section embedding (ALL tiers) — Option C: use first chunk as
+        #    representative.  Consecutive chunks already carry CHUNK_OVERLAP_TOKENS
+        #    of context from the previous chunk, so embeddings preserve local
+        #    context across boundaries.  Fall back to section.text if no chunks.
+        sec_emb_text = section_chunks[0].text if section_chunks else section.text
         sec_vec = await _embed_text(
-            section.text,
+            sec_emb_text,
             model_id=model_id,
             instruction_prefix=instruction_prefix,
             embedding_client=embedding_client,
@@ -266,17 +274,17 @@ async def run_embeddings_block(
                     section_id=section.section_id,
                     error_detail="section embedding failed",
                     created_at=now,
+                    embedding_text=sec_emb_text,
                 ),
             )
-
-        # ── Chunk splitting ───────────────────────────────────────────────
-        section_chunks = chunk_section(section, max_tokens=max_tokens, overlap_tokens=overlap_tokens)
-        all_chunks.extend(section_chunks)
 
         if not generate_chunk_embeddings:
             continue
 
         # ── Chunk embeddings (MEDIUM/DEEP only) ───────────────────────────
+        # Each chunk already includes CHUNK_OVERLAP_TOKENS of overlap text
+        # from the adjacent chunk (built by chunk_section), so embeddings
+        # capture cross-boundary context without extra re-processing.
         for chunk in section_chunks:
             chunk_vec = await _embed_text(
                 chunk.text,
@@ -294,6 +302,7 @@ async def run_embeddings_block(
                         section_id=chunk.section_id,
                         error_detail="chunk embedding failed",
                         created_at=now,
+                        embedding_text=chunk.text,
                     ),
                 )
 

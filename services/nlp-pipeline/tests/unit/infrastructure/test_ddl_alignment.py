@@ -20,6 +20,7 @@ from nlp_pipeline.infrastructure.nlp_db.models import (
     DeadLetterQueueModel,
     DocumentEntityStatsModel,
     DocumentSourceMetadataModel,
+    EmbeddingPendingModel,
     EntityMentionModel,
     MentionResolutionModel,
     OutboxEventModel,
@@ -166,3 +167,8 @@ class TestDeadLetterQueueDDLAlignment:
 class TestDocumentSourceMetadataDDLAlignment:
     def test_document_source_metadata_ddl_matches_orm(self) -> None:
         _assert_aligned("document_source_metadata", DocumentSourceMetadataModel)
+
+
+class TestEmbeddingPendingDDLAlignment:
+    def test_embedding_pending_ddl_matches_orm(self) -> None:
+        _assert_aligned("embedding_pending", EmbeddingPendingModel)

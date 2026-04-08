@@ -62,4 +62,4 @@ class TestAlembicGuard:
         # Dispose immediately — no real connection attempted in unit test
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(engine.dispose())
+        asyncio.run(engine.dispose())

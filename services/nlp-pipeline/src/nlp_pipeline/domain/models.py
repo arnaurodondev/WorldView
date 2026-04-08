@@ -141,6 +141,7 @@ class EmbeddingPendingEntry:
     section_id: UUID | None
     error_detail: str
     created_at: datetime
+    embedding_text: str = ""  # text to embed on retry; populated at creation time
 
 
 @dataclass(frozen=True)

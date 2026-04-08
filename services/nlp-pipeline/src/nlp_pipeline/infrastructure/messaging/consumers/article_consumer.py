@@ -260,7 +260,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
 
         # ── Block 7: Embeddings (runs for ALL tiers; chunks only for FULL) ───
         generate_chunks = should_generate_chunk_embeddings(initial_path)
-        chunks, chunk_embs, section_embs, _pending = await run_embeddings_block(
+        chunks, chunk_embs, section_embs, pending = await run_embeddings_block(
             sections=sections,
             embedding_client=self._emb,
             model_id=self._settings.embedding_model_id,
@@ -348,6 +348,15 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             # Write embeddings directly (no dedicated repo)
             _write_section_embeddings(session, section_embs, model_id=self._settings.embedding_model_id)
             _write_chunk_embeddings(session, chunk_embs, model_id=self._settings.embedding_model_id)
+
+            # Persist failed embeddings for retry by EmbeddingRetryWorker
+            if pending:
+                from nlp_pipeline.infrastructure.nlp_db.repositories.embedding_pending import (
+                    EmbeddingPendingRepository,
+                )
+
+                pending_repo = EmbeddingPendingRepository(session)
+                await pending_repo.save_batch(pending)
 
             # Link chunk↔mention by char offset overlap
             pairs = _compute_chunk_mention_pairs(chunks, final_mentions)
