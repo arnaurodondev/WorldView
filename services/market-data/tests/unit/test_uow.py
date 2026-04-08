@@ -176,3 +176,43 @@ class TestUoWPostCommitHooks:
 
         # Session.commit() must still have been called
         mock_session.commit.assert_called_once()
+
+    async def test_post_commit_hook_failure_increments_prometheus_counter(self):
+        """Hook failure must increment s3_post_commit_hook_failures_total (Option C observability)."""
+        from market_data.infrastructure.metrics.prometheus import s3_post_commit_hook_failures_total
+
+        mock_session = AsyncMock()
+        factory = _make_session_factory(mock_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=factory, read_factory=factory)
+
+        before = s3_post_commit_hook_failures_total._value.get()
+
+        async def _failing_hook() -> None:
+            raise RuntimeError("valkey down")
+
+        async with uow:
+            uow.schedule_post_commit(_failing_hook())
+            await uow.commit()
+
+        after = s3_post_commit_hook_failures_total._value.get()
+        assert after == before + 1, f"Expected counter to increment by 1 (before={before}, after={after})"
+
+    async def test_post_commit_hook_success_does_not_increment_counter(self):
+        """Counter must NOT increment when the hook succeeds."""
+        from market_data.infrastructure.metrics.prometheus import s3_post_commit_hook_failures_total
+
+        mock_session = AsyncMock()
+        factory = _make_session_factory(mock_session)
+        uow = SqlAlchemyUnitOfWork(write_factory=factory, read_factory=factory)
+
+        before = s3_post_commit_hook_failures_total._value.get()
+
+        async def _ok_hook() -> None:
+            pass
+
+        async with uow:
+            uow.schedule_post_commit(_ok_hook())
+            await uow.commit()
+
+        after = s3_post_commit_hook_failures_total._value.get()
+        assert after == before, "Counter must not change when hook succeeds"

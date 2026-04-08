@@ -35,6 +35,7 @@ from market_data.infrastructure.db.repositories.ohlcv_repo import PgOHLCVReposit
 from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutboxEventRepository
 from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
+from market_data.infrastructure.metrics.prometheus import s3_post_commit_hook_failures_total
 
 logger = structlog.get_logger(__name__)
 
@@ -134,6 +135,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             try:
                 await hook
             except Exception as exc:
+                s3_post_commit_hook_failures_total.inc()
                 logger.warning("post_commit_hook_failed", error=str(exc))
 
     async def rollback(self) -> None:
