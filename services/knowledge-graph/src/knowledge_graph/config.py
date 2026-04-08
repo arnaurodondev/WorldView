@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     # Note: Macro Indicator API uses alpha-3 (USA/GBR/DEU/JPN/CHN), not alpha-2
     macro_indicator_countries: str = "USA,GBR,DEU,JPN,CHN"
 
+    # AGE Cypher shadow sync (Worker 13F — PRD-0018)
+    # Feature flag: set to true after AGE backfill is verified.
+    cypher_enabled: bool = False
+    worker_age_sync_interval_s: int = 900  # 15 min
+
     # Outbox dispatcher
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50

@@ -8,7 +8,7 @@ updated: 2026-04-08
 
 
 total_waves: 10
-waves_done: 5
+waves_done: 6
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -252,25 +252,37 @@ waves_done: 5
 
 ---
 
-### Wave D-1: S7 — AgeSyncWorker (Worker 13F)
+### Wave D-1: S7 — AgeSyncWorker (Worker 13F) ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 423 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `AgeSyncWorker` class (APScheduler every 15 min)
-- [ ] `_setup_age_session()` — `LOAD 'age'` + `SET search_path = ag_catalog, public`
-- [ ] `_sync_entities(since)` — watermark-based `MERGE Entity` vertices (paginated, 1000 per batch)
-- [ ] `_sync_relations(since)` — watermark-based `MERGE relation edges` (paginated, 5000 per batch); confidence > 0.1 filter
-- [ ] `_sync_temporal_events(since)` — `MERGE TemporalEvent` vertices + `EVENT_EXPOSES` edges
-- [ ] Valkey watermark: `s7:age:sync:watermark` (ISO-8601 UTC; default epoch)
-- [ ] Prometheus metrics: `s7_age_sync_entities_total`, `s7_age_sync_relations_total`, `s7_age_sync_duration_seconds`
-- [ ] `KNOWLEDGE_GRAPH_CYPHER_ENABLED` feature flag check before each run
-- [ ] Unit tests: watermark update after run, entities synced, relation edge label derivation, sync skipped when disabled
+- [x] `AgeSyncWorker` class (APScheduler every 15 min)
+- [x] `_setup_age_session()` — `LOAD 'age'` + `SET search_path = ag_catalog, public`
+- [x] `_sync_entities(since)` — watermark-based `MERGE Entity` vertices (paginated, 1000 per batch)
+- [x] `_sync_relations(since)` — watermark-based `MERGE relation edges` (paginated, 5000 per batch); confidence > 0.1 filter
+- [x] `_sync_temporal_events(since)` — `MERGE TemporalEvent` vertices + `EVENT_EXPOSES` edges
+- [x] Valkey watermark: `s7:age:sync:watermark` (ISO-8601 UTC; default epoch)
+- [x] Prometheus metrics: `s7_age_sync_entities_total`, `s7_age_sync_relations_total`, `s7_age_sync_duration_seconds`
+- [x] `KNOWLEDGE_GRAPH_CYPHER_ENABLED` feature flag check before each run
+- [x] Unit tests: watermark update after run, entities synced, relation edge label derivation, sync skipped when disabled
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (97 source files, 0 issues)
+- [x] Unit tests pass: 423 tests, 0 failures (19 new tests added)
+- [ ] Integration tests (requires live intelligence_db with AGE extension)
 
 **Depends on**: A-1, C-1
 **Estimated effort**: 5h
 **Files**:
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/age_sync_worker.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/metrics/prometheus.py`
+- `services/knowledge-graph/src/knowledge_graph/config.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler_main.py`
+- `services/knowledge-graph/configs/dev.local.env.example`
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_age_sync_worker.py`
 
 ---

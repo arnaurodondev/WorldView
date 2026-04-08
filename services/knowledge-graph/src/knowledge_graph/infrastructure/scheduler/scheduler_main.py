@@ -52,8 +52,12 @@ async def main() -> None:
 
     engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
+    from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
+
+    valkey_client = create_valkey_client_from_url(settings.valkey_url)
+
     # LLM workers use stubs when no adapters are configured (matches original app.py behaviour)
-    workers = build_workers(settings, write_factory, llm_client=None)
+    workers = build_workers(settings, write_factory, llm_client=None, valkey_client=valkey_client)
     scheduler = KnowledgeGraphScheduler(settings, workers=workers)
 
     # Standalone scheduler: no consumer coroutine — use an async no-op

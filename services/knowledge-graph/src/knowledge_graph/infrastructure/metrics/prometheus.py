@@ -5,7 +5,7 @@ Custom counters track the volume of each background worker's main operation.
 
 from __future__ import annotations
 
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 # ── Counters ─────────────────────────────────────────────────────────────────
 
@@ -56,4 +56,20 @@ s7_macro_indicator_updates_total = Counter(
     "s7_macro_indicator_updates_total",
     "Total country entities re-enriched with macro indicators by Worker 13D-7, by country.",
     ["country"],
+)
+
+s7_age_sync_entities_total = Counter(
+    "s7_age_sync_entities_total",
+    "Total canonical_entities vertices synced to AGE by Worker 13F per run.",
+)
+
+s7_age_sync_relations_total = Counter(
+    "s7_age_sync_relations_total",
+    "Total relation edges synced to AGE by Worker 13F per run.",
+)
+
+s7_age_sync_duration_seconds = Histogram(
+    "s7_age_sync_duration_seconds",
+    "Duration of a single Worker 13F AGE shadow sync run in seconds.",
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600),
 )
