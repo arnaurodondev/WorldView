@@ -56,3 +56,29 @@ WHERE entity_id = :entity_id
                 "updates": json.dumps(updates),
             },
         )
+
+    async def find_country_entity(self, iso2: str) -> UUID | None:
+        """Find the canonical entity_id for a country by ISO-3166 alpha-2 code.
+
+        Looks up ``canonical_entities`` where ``entity_type = 'country'`` and
+        ``metadata->>'country_iso' = :iso2``.
+
+        Returns ``None`` if no country entity is found (e.g. the entity has not
+        been seeded or the ISO-2 code is not tracked).
+
+        Args:
+            iso2: ISO-3166 alpha-2 country code (e.g. ``"US"``, ``"DE"``).
+        """
+        from uuid import UUID as _UUID
+
+        result = await self._session.execute(
+            text("""
+SELECT entity_id FROM canonical_entities
+WHERE entity_type = 'country'
+  AND metadata->>'country_iso' = :iso2
+LIMIT 1
+"""),
+            {"iso2": iso2},
+        )
+        row = result.fetchone()
+        return _UUID(str(row[0])) if row else None

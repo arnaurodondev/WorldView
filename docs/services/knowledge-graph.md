@@ -118,6 +118,7 @@ Key invariants:
 |----|----------|-------|-------|--------|
 | 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed |
 | 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed. **Wave B-1**: also extracts `General.FullTimeEmployees`, `Highlights.RevenueTTM`, `SharesStats.PercentInsiders/PercentInstitutions` → `canonical_entities.metadata` JSONB patch (keys: `employee_count`, `revenue_ttm_usd`, `pct_insiders`, `pct_institutions`). Idempotent; no `entity.dirtied.v1` emitted. |
+| 13D-6 | `EconomicEventsWorker` | APScheduler daily 06:00 UTC | EODHD `GET /economic-events` | Polls economic event calendar per country (configurable: `KNOWLEDGE_GRAPH_ECONOMIC_EVENT_COUNTRIES`, default `US,DE,GB,JP,CN,EU`). Skips unreleased events (`actual=null`). Computes surprise magnitude (`actual - estimate`). Upserts into `temporal_events` (`event_type=macro, scope=NATIONAL, region=<iso2>`). Links to country canonical entity via `entity_event_exposures` (`exposure_type=directly_affected`). Natural-key deduplication prevents duplicate rows. Metric: `s7_economic_events_ingested_total{country}`. |
 
 ### LLM Fallback Chain (`infrastructure/llm/fallback_chain.py`)
 

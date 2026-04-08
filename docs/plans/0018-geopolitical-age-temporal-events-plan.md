@@ -6,8 +6,9 @@ status: in-progress
 created: 2026-04-08
 updated: 2026-04-08
 
+
 total_waves: 10
-waves_done: 3
+waves_done: 4
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -100,25 +101,38 @@ waves_done: 3
 
 ---
 
-### Wave B-2: S7 — Worker 13D-6 EODHD Economic Events Ingestion
+### Wave B-2: S7 — Worker 13D-6 EODHD Economic Events Ingestion ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 359 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `EconomicEventsWorker` class (APScheduler daily 06:00 UTC)
-- [ ] EODHD client method: `get_economic_events(country, from_date)`
-- [ ] Processing: skip `actual=null` events; compute surprise magnitude
-- [ ] `TemporalEventRepository.upsert_by_natural_key()` (idempotent by `(event_type, region, title, active_from::date)`)
-- [ ] Link to country canonical entity via `entity_event_exposures`
-- [ ] Config: `KNOWLEDGE_GRAPH_ECONOMIC_EVENT_COUNTRIES` (default: `US,DE,GB,JP,CN,EU`)
-- [ ] Prometheus metrics: `s7_economic_events_ingested_total{country}`
-- [ ] Unit tests: happy path, skips unreleased, deduplication
+- [x] `EconomicEventsWorker` class (APScheduler daily 06:00 UTC)
+- [x] EODHD client method: `get_economic_events(country, from_date)` (new `infrastructure/eodhd/client.py`)
+- [x] Processing: skip `actual=null` events; compute surprise magnitude
+- [x] `TemporalEventRepository.upsert_by_natural_key()` (idempotent by `(event_type, region, title, active_from::date)`)
+- [x] Link to country canonical entity via `entity_event_exposures`
+- [x] Config: `KNOWLEDGE_GRAPH_ECONOMIC_EVENT_COUNTRIES` (default: `US,DE,GB,JP,CN,EU`); `KNOWLEDGE_GRAPH_EODHD_API_KEY`; `KNOWLEDGE_GRAPH_EODHD_BASE_URL`
+- [x] Prometheus metrics: `s7_economic_events_ingested_total{country}`
+- [x] `EntityRepository.find_country_entity(iso2)` — lookup by `metadata->>'country_iso'`
+- [x] Unit tests: 10 tests — happy path (title/description/active_until), skips unreleased (null actual), mixed released/unreleased, empty list, deduplication idempotency, no country entity, Prometheus counter
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (6 source files checked, 0 issues)
+- [x] Unit tests pass: 359 tests, 0 failures (10 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: A-1, C-1 (TemporalEventRepository)
 **Estimated effort**: 4h
 **Files**:
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/economic_events_worker.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/eodhd/__init__.py`
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/eodhd/client.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/economic_events_worker.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/entity_repository.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/metrics/prometheus.py`
+- `services/knowledge-graph/src/knowledge_graph/config.py`
+- `services/knowledge-graph/configs/dev.local.env.example`
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_economic_events_worker.py`
 
 ---
