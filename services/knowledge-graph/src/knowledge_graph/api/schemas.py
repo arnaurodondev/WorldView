@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ── Entity summary ─────────────────────────────────────────────────────────
 
@@ -270,3 +270,102 @@ class TemporalEventsListResponse(BaseModel):
 
     events: list[TemporalEventResponse]
     total: int
+
+
+# ── POST /api/v1/graph/cypher/path ─────────────────────────────────────────────
+
+
+class CypherPathRequest(BaseModel):
+    """Request body for POST /api/v1/graph/cypher/path (PRD-0018 §6.3)."""
+
+    source_entity_id: UUID
+    target_entity_id: UUID
+    max_hops: int = Field(default=3, ge=1, le=5)
+    min_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+    relation_types: list[str] | None = Field(
+        default=None,
+        description="Filter path edges by canonical_type; null = all types.",
+    )
+    all_paths: bool = Field(
+        default=False,
+        description="If true, return up to 5 shortest paths; if false, return only shortest.",
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> CypherPathRequest:
+        if self.source_entity_id == self.target_entity_id:
+            raise ValueError("source_entity_id must differ from target_entity_id")
+        if self.relation_types is not None:
+            for rt in self.relation_types:
+                if len(rt) > 50:
+                    msg = f"relation_type too long (max 50 chars): {rt!r}"
+                    raise ValueError(msg)
+        return self
+
+
+class CypherNodeItem(BaseModel):
+    """A single entity node in a Cypher path."""
+
+    entity_id: str
+    canonical_name: str
+    entity_type: str
+
+
+class CypherEdgeItem(BaseModel):
+    """A single directed edge in a Cypher path."""
+
+    from_entity_id: str
+    to_entity_id: str
+    canonical_type: str
+    confidence: float
+    direction: str = "forward"
+
+
+class CypherPathItem(BaseModel):
+    """One shortest path between source and target entities."""
+
+    hops: int
+    nodes: list[CypherNodeItem]
+    edges: list[CypherEdgeItem]
+    path_confidence: float = Field(
+        description="Product of edge confidences — lower is weaker.",
+    )
+
+
+class CypherPathResponse(BaseModel):
+    """Response for POST /api/v1/graph/cypher/path."""
+
+    source_entity_id: UUID
+    target_entity_id: UUID
+    paths: list[CypherPathItem]
+    paths_found: int
+    query_time_ms: int
+
+
+# ── POST /api/v1/graph/cypher/neighborhood ────────────────────────────────────
+
+
+class CypherNeighborhoodRequest(BaseModel):
+    """Request body for POST /api/v1/graph/cypher/neighborhood (PRD-0018 §6.3)."""
+
+    entity_id: UUID
+    max_hops: int = Field(default=2, ge=1, le=3)
+    min_confidence: float = Field(default=0.4, ge=0.0, le=1.0)
+    include_temporal_events: bool = Field(
+        default=True,
+        description="Include active temporal event nodes adjacent to entities.",
+    )
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class CypherNeighborhoodResponse(BaseModel):
+    """Response for POST /api/v1/graph/cypher/neighborhood.
+
+    Same shape as GET /api/v1/entities/{id}/graph, plus an optional
+    ``temporal_events`` list when ``include_temporal_events=true``.
+    """
+
+    center: EntitySummary
+    relations: list[RelationResponse]
+    entities: dict[str, EntitySummary]
+    temporal_events: list[TemporalEventResponse] = Field(default_factory=list)

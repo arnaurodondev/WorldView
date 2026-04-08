@@ -2,13 +2,13 @@
 id: PLAN-0018
 title: Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync
 prd: docs/specs/0018-geopolitical-intelligence-age-cypher.md
-status: in-progress
+status: completed
 created: 2026-04-08
 updated: 2026-04-09
 
 
 total_waves: 10
-waves_done: 9
+waves_done: 10
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -331,20 +331,20 @@ waves_done: 9
 
 ---
 
-### Wave E-2: S7 — POST /api/v1/graph/cypher/path + neighborhood Endpoints
+### Wave E-2: S7 — POST /api/v1/graph/cypher/path + neighborhood Endpoints ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-09 · 507 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] `CypherPathUseCase` — validate entities, execute AGE shortestPath query, parse path result
-- [ ] `CypherNeighborhoodUseCase` — egocentric neighborhood via AGE Cypher
-- [ ] AGE session setup (LOAD + SET search_path) per request
-- [ ] `POST /api/v1/graph/cypher/path` route (PRD §6.3)
-- [ ] `POST /api/v1/graph/cypher/neighborhood` route (PRD §6.3)
-- [ ] 503 response when `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false`
-- [ ] 504 response on AGE timeout (5s `statement_timeout`)
-- [ ] Parameterized `$entity_id` — never string-interpolated (security)
-- [ ] Unit tests: disabled feature flag → 503, parameterized query construction, timeout → 504
+- [x] `CypherPathUseCase` — validate entities, execute AGE shortestPath query, parse path result
+- [x] `CypherNeighborhoodUseCase` — egocentric neighborhood via AGE Cypher
+- [x] AGE session setup (LOAD + SET search_path) per request
+- [x] `POST /api/v1/graph/cypher/path` route (PRD §6.3)
+- [x] `POST /api/v1/graph/cypher/neighborhood` route (PRD §6.3)
+- [x] 503 response when `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false`
+- [x] 504 response on AGE timeout (5s `statement_timeout`)
+- [x] Parameterized `$entity_id` — never string-interpolated (security)
+- [x] Unit tests: disabled feature flag → 503, parameterized query construction, timeout → 504
 
 **Depends on**: D-1
 **Estimated effort**: 5h

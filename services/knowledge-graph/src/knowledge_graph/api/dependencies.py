@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from knowledge_graph.application.ports.temporal_event_repository import TemporalEventRepositoryPort
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 
 # ── Database sessions ─────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ def get_entity_contradictions_repo(session: ReadOnlyDbSessionDep) -> object:
 EntityContradictionsRepoDep = Annotated[object, Depends(get_entity_contradictions_repo)]
 
 
-def get_temporal_event_repo(session: ReadOnlyDbSessionDep) -> object:
+def get_temporal_event_repo(session: ReadOnlyDbSessionDep) -> TemporalEventRepositoryPort:
     """Build a TemporalEventRepository for the current read-only request session."""
     from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
         TemporalEventRepository,
@@ -134,4 +135,43 @@ def get_temporal_event_repo(session: ReadOnlyDbSessionDep) -> object:
     return TemporalEventRepository(session)
 
 
-TemporalEventRepoDep = Annotated[object, Depends(get_temporal_event_repo)]
+TemporalEventRepoDep = Annotated[TemporalEventRepositoryPort, Depends(get_temporal_event_repo)]
+
+
+# ── Cypher (AGE) endpoint bundle ─────────────────────────────────────────────
+# Uses the write session (DbSessionDep) because AGE requires LOAD 'age' which
+# is a session-level command. Read-replica connections may reject it.
+
+
+class _CypherBundle:
+    """Pre-bound bundle of repos + session for AGE Cypher endpoints (R25 compliance).
+
+    Infrastructure imports are deferred to this factory so that route files
+    never import from the infrastructure layer directly.
+    """
+
+    def __init__(self, session: AsyncSession, cypher_enabled: bool) -> None:
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+        from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
+            TemporalEventRepository,
+        )
+
+        self.session = session
+        self.entity_repo = CanonicalEntityRepository(session)
+        self.relation_repo = RelationRepository(session)
+        self.temporal_event_repo = TemporalEventRepository(session)
+        self.cypher_enabled = cypher_enabled
+
+
+def get_cypher_bundle(session: DbSessionDep, request: Request) -> _CypherBundle:
+    """Build a Cypher repo bundle for the current write-session request."""
+    from knowledge_graph.config import Settings
+
+    settings: Settings = request.app.state.settings
+    return _CypherBundle(session=session, cypher_enabled=settings.cypher_enabled)
+
+
+CypherBundleDep = Annotated[_CypherBundle, Depends(get_cypher_bundle)]
