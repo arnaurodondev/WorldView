@@ -5,8 +5,9 @@ prd: docs/specs/0018-geopolitical-intelligence-age-cypher.md
 status: in-progress
 created: 2026-04-08
 updated: 2026-04-08
+
 total_waves: 10
-waves_done: 0
+waves_done: 2
 ---
 
 # PLAN-0018: Geopolitical Intelligence, EODHD Deep Enrichment & AGE Cypher
@@ -70,18 +71,25 @@ waves_done: 0
 
 ---
 
-### Wave B-1: S7 — FundamentalsConsumer Metadata Enrichment
+### Wave B-1: S7 — FundamentalsConsumer Metadata Enrichment ✅
 
-**Status**: pending
+**Status**: **DONE** — 2026-04-08 · 327 unit tests pass · ruff + mypy clean
 
 **Tasks**:
-- [ ] Extract `General.FullTimeEmployees` → `entity.metadata["employee_count"]`
-- [ ] Extract `Highlights.RevenueTTM` → `entity.metadata["revenue_ttm_usd"]`
-- [ ] Extract `SharesStats.PercentInsiders` → `entity.metadata["pct_insiders"]`
-- [ ] Extract `SharesStats.PercentInstitutions` → `entity.metadata["pct_institutions"]`
-- [ ] `EntityRepository.update_metadata()` method (partial patch — merge, not replace)
-- [ ] Idempotency: same payload twice → same metadata, no re-emit of `entity.dirtied.v1`
-- [ ] Unit tests: happy path, missing fields, idempotent re-processing
+- [x] Extract `General.FullTimeEmployees` → `entity.metadata["employee_count"]`
+- [x] Extract `Highlights.RevenueTTM` → `entity.metadata["revenue_ttm_usd"]`
+- [x] Extract `SharesStats.PercentInsiders` → `entity.metadata["pct_insiders"]`
+- [x] Extract `SharesStats.PercentInstitutions` → `entity.metadata["pct_institutions"]`
+- [x] `EntityRepository.update_metadata()` method (partial patch — merge, not replace)
+- [x] Idempotency: same payload twice → same metadata, no re-emit of `entity.dirtied.v1`
+- [x] Unit tests: happy path, missing fields, idempotent re-processing
+
+**Validation gate**:
+- [x] ruff check passes
+- [x] ruff format passes
+- [x] mypy passes (89 source files, 0 issues)
+- [x] Unit tests pass: 327 tests, 0 failures (14 new tests added)
+- [ ] Integration tests (requires live intelligence_db)
 
 **Depends on**: A-1
 **Estimated effort**: 3h
