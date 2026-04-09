@@ -275,3 +275,60 @@ async def find_similar_entities(request: Request) -> Any:
         headers={"Content-Type": "application/json"},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
+
+
+@router.get("/signals/prediction-markets")
+async def list_prediction_markets(request: Request) -> Any:
+    """Proxy GET /api/v1/prediction-markets → S3 Market Data.
+
+    Requires authentication. Forwards query params (status, limit, offset)
+    and auth headers derived from the JWT payload.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/prediction-markets",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/signals/prediction-markets/{market_id}")
+async def get_prediction_market(market_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.
+
+    Requires authentication. S3 returns 404 if the market_id is unknown.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/prediction-markets/{market_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/signals/prediction-markets/{market_id}/history")
+async def get_prediction_market_history(market_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/prediction-markets/{id}/history → S3 Market Data.
+
+    Requires authentication. Forwards from/to/limit query params.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/prediction-markets/{market_id}/history",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

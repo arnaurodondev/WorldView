@@ -4,7 +4,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-09
 > **Updated**: 2026-04-09
-> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅, B-2 ✅)
+> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅, B-2 ✅, C-1 ✅)
 
 ---
 
@@ -1111,12 +1111,13 @@ Import and register `prediction_markets_router` in `app.py` under the existing A
 
 ## SUB-PLAN C — S9 API Gateway
 
-### Wave C-1: Gateway Proxy Routes for Prediction Markets
+### Wave C-1: Gateway Proxy Routes for Prediction Markets ✅
 
 **Goal**: Expose prediction market endpoints through S9 with JWT auth and tenant forwarding.
 **Depends on**: Wave B-2 complete (S3 endpoints must exist)
 **Estimated effort**: 30–45 min
 **Architecture layer**: API (proxy layer)
+**Status**: **DONE** — 2026-04-09 · 32 tests pass (28 existing + 4 new) · ruff + mypy clean
 
 #### Tasks
 
@@ -1175,8 +1176,8 @@ GET /v1/signals/prediction-markets/{id}/history → proxy → S3 GET /api/v1/pre
 - `services/api-gateway/tests/` — existing test patterns
 
 #### Validation Gate C-1
-- [ ] `uvx ruff check + format --check + mypy --strict services/api-gateway/src/` — zero violations
-- [ ] `python -m pytest services/api-gateway/tests/ -v` — all 28+ existing tests pass; 4 new tests pass
+- [x] `uvx ruff check + format --check + mypy --strict services/api-gateway/src/` — zero violations
+- [x] `python -m pytest services/api-gateway/tests/ -v` — all 28+ existing tests pass; 4 new tests pass
 - [ ] End-to-end: gateway proxies to S3 in Docker Compose with a test JWT
 
 #### Regression Guardrails
