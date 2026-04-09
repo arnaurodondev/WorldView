@@ -163,11 +163,12 @@ python -m mypy src/ --config-file mypy.ini
 
 ---
 
-### Wave A-2: Domain Entity + ORM Model + Repository Port
+### Wave A-2: Domain Entity + ORM Model + Repository Port ✅
 
 **Goal**: Add `ArticlePriceImpact` frozen dataclass (domain), `ArticlePriceImpactModel` ORM model, and `PriceImpactRepository` port.
 **Depends on**: T-A-1-01 (migration must be in place before ORM alignment test can pass)
 **Estimated effort**: 0.5 wave (Low-Medium complexity)
+**Status**: **DONE** — 2026-04-09 · 360 tests pass · ruff + mypy clean
 **Architecture layer**: Domain + Application (ports) + Infrastructure (ORM model)
 
 #### Tasks
@@ -234,10 +235,10 @@ python -m mypy src/ --config-file mypy.ini
 | `test_zero_factory` | `zero()` creates entity with `impact_score=Decimal("0.0")` | unit |
 
 **Acceptance criteria**:
-- [ ] `ArticlePriceImpact` is frozen dataclass in `domain/models.py`
-- [ ] `PriceImpactError(DomainError)` in `domain/errors.py`
-- [ ] All 9 unit tests pass
-- [ ] mypy strict passes on domain layer (no infrastructure imports)
+- [x] `ArticlePriceImpact` is frozen dataclass in `domain/models.py`
+- [x] `PriceImpactError(DomainError)` in `domain/errors.py`
+- [x] All 9 unit tests pass
+- [x] mypy strict passes on domain layer (no infrastructure imports)
 
 ##### T-A-2-02: ORM model + repository port
 
@@ -287,11 +288,11 @@ python -m mypy src/ --config-file mypy.ini
 | `test_price_impact_repo_port_is_abstract` | `PriceImpactRepositoryPort` cannot be instantiated directly | unit |
 
 **Acceptance criteria**:
-- [ ] `ArticlePriceImpactModel` in `models.py` with all 13 columns
-- [ ] DDL alignment test still passes (update to include new model)
-- [ ] `PriceImpactRepositoryPort` abstract methods defined
-- [ ] `ArticlePriceImpactRepository` implements all 4 methods
-- [ ] mypy strict passes on all 3 files
+- [x] `ArticlePriceImpactModel` in `models.py` with all 13 columns
+- [x] DDL alignment test still passes (update to include new model)
+- [x] `PriceImpactRepositoryPort` abstract methods defined
+- [x] `ArticlePriceImpactRepository` implements all 4 methods
+- [x] mypy strict passes on all 3 files
 
 #### Pre-read
 - `services/nlp-pipeline/src/nlp_pipeline/domain/errors.py` — existing DomainError base
