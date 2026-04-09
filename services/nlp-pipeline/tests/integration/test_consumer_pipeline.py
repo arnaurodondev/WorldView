@@ -143,10 +143,17 @@ def _make_consumer(
         watchlist_cache = wc
 
     if storage is None:
+        import json as _json
+
         st = MagicMock()
-        st.get_object_bytes = MagicMock(
-            return_value=b"Apple Inc. posted strong quarterly earnings. "
-            b"Revenue grew 12% year-over-year driven by services."
+        st.get_bytes = AsyncMock(
+            return_value=_json.dumps(
+                {
+                    "body": "Apple Inc. posted strong quarterly earnings. "
+                    "Revenue grew 12% year-over-year driven by services.",
+                    "source_type": "article",
+                }
+            ).encode()
         )
         storage = st
 

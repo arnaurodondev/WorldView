@@ -192,6 +192,7 @@ class TestHolding:
         return Holding(
             portfolio_id=uuid.uuid4(),
             instrument_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
             currency="USD",
             quantity=Decimal(quantity),
             average_cost=Decimal(average_cost),

@@ -90,6 +90,7 @@ async def test_get_holdings_returns_correct_data(
     holding = Holding(
         portfolio_id=portfolio.id,
         instrument_id=instrument_id,
+        tenant_id=active_tenant.id,
         currency="USD",
         quantity=Decimal("10"),
         average_cost=Decimal("150"),

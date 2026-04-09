@@ -69,6 +69,7 @@ def _seed_full_context(uow: FakeUnitOfWork) -> tuple:
         id=uuid4(),
         portfolio_id=portfolio.id,
         instrument_id=instrument.id,
+        tenant_id=tenant_id,
         quantity=Decimal("7.5"),
         currency="USD",
     )

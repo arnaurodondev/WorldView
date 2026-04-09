@@ -37,7 +37,7 @@ class TestPostgresContainer:
         await conn.close()
 
         version_nums = {row["version_num"] for row in rows}
-        assert "003" in version_nums, f"Expected migration '003' to be head, got: {version_nums}"
+        assert "004" in version_nums, f"Expected migration '004' to be head, got: {version_nums}"
 
 
 class TestKafkaContainer:

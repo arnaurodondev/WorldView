@@ -24,6 +24,7 @@ class Holding:
 
     portfolio_id: UUID
     instrument_id: UUID
+    tenant_id: UUID
     currency: str
     quantity: Decimal = Decimal("0")
     average_cost: Decimal = Decimal("0")

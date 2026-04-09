@@ -151,6 +151,7 @@ class RecordTransactionUseCase:
                 id=new_uuid(),
                 portfolio_id=cmd.portfolio_id,
                 instrument_id=cmd.instrument_id,
+                tenant_id=cmd.tenant_id,
                 currency=cmd.currency,
             )
 

@@ -50,11 +50,12 @@ def _make_instrument(symbol: str = "AAPL") -> InstrumentRef:
     )
 
 
-def _make_holding(portfolio_id, instrument_id, quantity: str = "10.0") -> Holding:
+def _make_holding(portfolio_id, instrument_id, tenant_id, quantity: str = "10.0") -> Holding:
     return Holding(
         id=uuid4(),
         portfolio_id=portfolio_id,
         instrument_id=instrument_id,
+        tenant_id=tenant_id,
         quantity=Decimal(quantity),
         currency="USD",
     )
@@ -98,7 +99,7 @@ async def test_portfolio_context_returns_holdings_and_watchlist() -> None:
     instrument = _make_instrument("AAPL")
     uow.seed_instrument(instrument)
 
-    holding = _make_holding(portfolio.id, instrument.id, "5.0")
+    holding = _make_holding(portfolio.id, instrument.id, tenant_id, "5.0")
     uow._holdings._store[(holding.portfolio_id, holding.instrument_id)] = holding
 
     watchlist = _make_watchlist(user.id, tenant_id)
@@ -173,7 +174,7 @@ async def test_portfolio_context_instrument_not_found() -> None:
     uow.seed_portfolio(portfolio)
 
     missing_instrument_id = uuid4()
-    holding = _make_holding(portfolio.id, missing_instrument_id)
+    holding = _make_holding(portfolio.id, missing_instrument_id, tenant_id)
     uow._holdings._store[(holding.portfolio_id, holding.instrument_id)] = holding
 
     uc = PortfolioContextUseCase()
