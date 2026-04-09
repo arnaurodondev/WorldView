@@ -20,17 +20,27 @@ import httpx
 
 from content_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from content_ingestion.application.use_cases.execute_task import ExecuteContentTaskUseCase
+from content_ingestion.application.use_cases.fetch_and_write_prediction_markets import (
+    FetchAndWritePredictionMarketsUseCase,
+)
 from content_ingestion.config import Settings
+from content_ingestion.domain.entities import SourceType
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters.polymarket.adapter import PolymarketAdapter
+from content_ingestion.infrastructure.adapters.polymarket.client import PolymarketClient
 from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
 from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
+from content_ingestion.infrastructure.db.repositories.prediction_market_fetch_log import (
+    PredictionMarketFetchLogRepository,
+)
 from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
+from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -40,7 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from content_ingestion.application.ports.source_adapter import SourceAdapterPort
-    from content_ingestion.domain.entities import ContentIngestionTask, SourceType
+    from content_ingestion.domain.entities import ContentIngestionTask
 
 logger = get_logger(__name__)
 
@@ -210,14 +220,17 @@ class WorkerProcess:
     async def _execute_task(self, task: ContentIngestionTask) -> None:
         """Execute a single claimed task through the pipeline.
 
-        Uses a dedicated write session for task status updates so the
-        ExecuteContentTaskUseCase can manage its own sessions internally
-        (R24 session optimization).
+        Routes POLYMARKET tasks to the prediction-market-specific pipeline;
+        all other source types use the standard FetchAndWriteUseCase path.
 
         Infrastructure concerns (metrics recording, adapter client
         construction) are handled here in the infra layer, keeping the
         use case free of infrastructure imports (R25).
         """
+        if task.source_type == SourceType.POLYMARKET:
+            await self._execute_polymarket_task(task)
+            return
+
         bronze = MinioBronzeAdapter(self._storage)
         use_case = ExecuteContentTaskUseCase(
             write_factory=self._write_factory,
@@ -335,6 +348,110 @@ class WorkerProcess:
             rate_limiter=rate_limiter,
             exists_fn=exists_fn,
         )
+
+    async def _execute_polymarket_task(self, task: ContentIngestionTask) -> None:
+        """Execute a Polymarket prediction-market task through the dedicated pipeline.
+
+        Pipeline (mirrors ExecuteContentTaskUseCase but uses prediction-market repos):
+        1. Mark RUNNING.
+        2. Build PolymarketAdapter with fetch_log_exists_fn from a short-lived session.
+        3. Fetch from Gamma API (no session held during I/O — R24).
+        4. If no results → mark SUCCEEDED.
+        5. Under advisory lock: write fetch_log + outbox rows atomically; mark SUCCEEDED.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            try:
+                # 1. Mark RUNNING
+                task.start()
+                await task_repo.update_status(task.id, task.status)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("polymarket_task_start_failed", task_id=str(task.id), error=str(exc))
+                return
+
+        # 2. Build adapter with dedup function from a short-lived session
+        from content_ingestion.domain.entities import Source
+
+        source = Source(
+            id=task.source_id,
+            name=task.source_name,
+            source_type=task.source_type,
+            enabled=True,
+            config={},
+        )
+        settings = self._settings
+
+        async with self._write_factory() as dedup_session:
+            pm_log_repo = PredictionMarketFetchLogRepository(dedup_session)
+            polymarket_client = PolymarketClient(
+                http_client=self._http_client,
+                settings=settings.polymarket,
+            )
+            adapter = PolymarketAdapter(
+                client=polymarket_client,
+                fetch_log_exists_fn=pm_log_repo.exists_by_market_snapshot,
+                settings=settings.polymarket,
+                storage=self._storage,
+            )
+
+            # 3. Fetch (no session held during Gamma API I/O)
+            try:
+                results = await adapter.fetch(source)
+            except Exception as exc:
+                logger.error("polymarket_fetch_failed", task_id=str(task.id), error=str(exc))
+                async with self._write_factory() as fail_session:
+                    task_repo = TaskRepository(fail_session)
+                    task.fail(str(exc))
+                    await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                    await fail_session.commit()
+                return
+
+        # 4. Empty results → SUCCEEDED immediately
+        if not results:
+            async with self._write_factory() as session:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+            return
+
+        # 5. Write under advisory lock — fetch_log + outbox atomically
+        async with (
+            self._write_factory() as session,
+            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
+        ):
+            if not acquired:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+                return
+
+            pm_log_repo_write = PredictionMarketFetchLogRepository(session)
+            outbox_repo = OutboxRepository(session)
+            write_use_case = FetchAndWritePredictionMarketsUseCase(
+                fetch_log_repo=pm_log_repo_write,
+                outbox_repo=outbox_repo,
+                commit_fn=session.commit,
+            )
+            summary = await write_use_case.execute(results, source_id=task.source_id)
+
+            task_repo = TaskRepository(session)
+            await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            await session.commit()
+            task.succeed()
+
+            record_fetch(
+                task.source_name,
+                fetched=summary.fetched,
+                skipped=summary.skipped,
+                failed=summary.failed,
+                duration=summary.duration_seconds,
+            )
 
 
 async def _run_worker() -> None:
