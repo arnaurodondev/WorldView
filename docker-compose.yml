@@ -274,6 +274,21 @@ services:
       kafka:
         condition: service_healthy
 
+  svc-market-data-prediction-market-consumer:
+    build:
+      context: .
+      dockerfile: services/market-data/Dockerfile
+    profiles: [runtime]
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main"]
+    env_file:
+      - services/market-data/configs/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   svc-content-ingestion:
     build:
       context: .

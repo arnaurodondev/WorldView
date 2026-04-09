@@ -30,6 +30,8 @@ from market_data.infrastructure.db.models import (
     OHLCVBarModel,
     OutboxEventModel,
     OutstandingSharesModel,
+    PredictionMarketModel,
+    PredictionMarketSnapshotModel,
     QuoteModel,
     SecurityModel,
     ShareStatisticsModel,
@@ -235,6 +237,50 @@ class TestInfrastructureModels:
         assert "leased_until" not in cols
 
 
+class TestPredictionMarketModels:
+    """DDL alignment tests for prediction market tables (PRD-0019, BP-019)."""
+
+    def test_prediction_market_tablename(self) -> None:
+        assert PredictionMarketModel.__tablename__ == "prediction_markets"
+
+    def test_prediction_market_columns(self) -> None:
+        cols = _columns(PredictionMarketModel)
+        assert "id" in cols
+        assert "market_id" in cols
+        assert "source" in cols
+        assert "question" in cols
+        assert "description" in cols
+        assert "outcomes" in cols
+        assert "close_time" in cols
+        assert "resolution_status" in cols
+        assert "resolved_answer" in cols
+        assert "created_at" in cols
+        assert "updated_at" in cols
+
+    def test_prediction_market_unique_market_id(self) -> None:
+        table = _table(PredictionMarketModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_prediction_markets_market_id" in constraint_names
+
+    def test_prediction_market_snapshot_tablename(self) -> None:
+        assert PredictionMarketSnapshotModel.__tablename__ == "prediction_market_snapshots"
+
+    def test_prediction_market_snapshot_columns(self) -> None:
+        cols = _columns(PredictionMarketSnapshotModel)
+        assert "id" in cols
+        assert "market_id" in cols
+        assert "snapshot_at" in cols
+        assert "outcomes_prices" in cols
+        assert "volume_24h" in cols
+        assert "liquidity" in cols
+        assert "source_event_id" in cols
+
+    def test_prediction_market_snapshot_unique_market_snapshot(self) -> None:
+        table = _table(PredictionMarketSnapshotModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_pms_market_snapshot" in constraint_names
+
+
 class TestBaseMetadataCompleteness:
     EXPECTED_TABLES: ClassVar[set[str]] = {
         "securities",
@@ -262,6 +308,9 @@ class TestBaseMetadataCompleteness:
         "ingestion_events",
         "failed_tasks",
         "outbox_events",
+        # PRD-0019: prediction markets
+        "prediction_markets",
+        "prediction_market_snapshots",
     }
 
     def test_all_tables_in_metadata(self):

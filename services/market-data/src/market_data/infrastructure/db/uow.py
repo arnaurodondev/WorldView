@@ -33,6 +33,10 @@ from market_data.infrastructure.db.repositories.ingestion_event_repo import PgIn
 from market_data.infrastructure.db.repositories.instrument_repo import PgInstrumentRepository
 from market_data.infrastructure.db.repositories.ohlcv_repo import PgOHLCVRepository
 from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutboxEventRepository
+from market_data.infrastructure.db.repositories.prediction_market_repo import (
+    PgPredictionMarketRepository,
+    PgPredictionMarketSnapshotRepository,
+)
 from market_data.infrastructure.db.repositories.quote_repo import PgQuoteRepository
 from market_data.infrastructure.db.repositories.security_repo import PgSecurityRepository
 from market_data.infrastructure.metrics.prometheus import s3_post_commit_hook_failures_total
@@ -53,6 +57,8 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OHLCVRepository,
         OutboxEventRepository,
+        PredictionMarketRepository,
+        PredictionMarketSnapshotRepository,
         QuoteRepository,
         SecurityRepository,
     )
@@ -96,6 +102,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._ingestion_events_repo: PgIngestionEventRepository | None = None
         self._failed_tasks_repo: PgFailedTaskRepository | None = None
         self._outbox_events_repo: PgOutboxEventRepository | None = None
+        self._prediction_markets_repo: PgPredictionMarketRepository | None = None
+        self._prediction_market_snapshots_repo: PgPredictionMarketSnapshotRepository | None = None
 
     # ── context manager ───────────────────────────────────────────────────────
 
@@ -246,6 +254,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         """Alias for ``outbox_events`` — satisfies ``UnitOfWorkWithOutboxProtocol``."""
         return self.outbox_events
 
+    @property
+    def prediction_markets(self) -> PredictionMarketRepository:
+        if self._prediction_markets_repo is None:
+            self._prediction_markets_repo = PgPredictionMarketRepository(self._write())
+        return self._prediction_markets_repo
+
+    @property
+    def prediction_market_snapshots(self) -> PredictionMarketSnapshotRepository:
+        if self._prediction_market_snapshots_repo is None:
+            self._prediction_market_snapshots_repo = PgPredictionMarketSnapshotRepository(self._write())
+        return self._prediction_market_snapshots_repo
+
     # ── read-side repository accessors (use read/replica session) ─────────────
 
     @property
@@ -277,6 +297,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
         """Fundamental metrics query repository bound to the read (replica) session."""
         return PgFundamentalMetricsQueryRepository(self._read())
+
+    @property
+    def prediction_markets_read(self) -> PredictionMarketRepository:
+        """Prediction market repository bound to the read (replica) session."""
+        return PgPredictionMarketRepository(self._read())
+
+    @property
+    def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
+        """Prediction market snapshot repository bound to the read (replica) session."""
+        return PgPredictionMarketSnapshotRepository(self._read())
 
 
 class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
@@ -346,3 +376,13 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
     def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
         """Fundamental metrics query repository bound to the read (replica) session."""
         return PgFundamentalMetricsQueryRepository(self._read())
+
+    @property
+    def prediction_markets_read(self) -> PredictionMarketRepository:
+        """Prediction market repository bound to the read (replica) session."""
+        return PgPredictionMarketRepository(self._read())
+
+    @property
+    def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
+        """Prediction market snapshot repository bound to the read (replica) session."""
+        return PgPredictionMarketSnapshotRepository(self._read())

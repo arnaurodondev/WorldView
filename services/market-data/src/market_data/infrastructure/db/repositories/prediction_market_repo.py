@@ -1,0 +1,218 @@
+"""PostgreSQL adapters for PredictionMarketRepository and PredictionMarketSnapshotRepository."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from market_data.application.ports.repositories import (
+    PredictionMarketRepository,
+    PredictionMarketSnapshotRepository,
+)
+from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
+from market_data.infrastructure.db.models.prediction_markets import (
+    PredictionMarketModel,
+    PredictionMarketSnapshotModel,
+)
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _row_to_market(row: Any) -> PredictionMarket:
+    """Map a raw DB row to a ``PredictionMarket`` domain entity."""
+    return PredictionMarket(
+        id=str(row.id),
+        market_id=row.market_id,
+        source=row.source,
+        question=row.question,
+        description=row.description,
+        outcomes=row.outcomes if row.outcomes is not None else [],
+        close_time=row.close_time,
+        resolution_status=row.resolution_status,
+        resolved_answer=row.resolved_answer,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _row_to_snapshot(row: Any) -> PredictionMarketSnapshot:
+    """Map a raw DB row to a ``PredictionMarketSnapshot`` domain entity."""
+    prices: dict[str, float] = row.outcomes_prices if row.outcomes_prices is not None else {}
+    return PredictionMarketSnapshot(
+        id=str(row.id),
+        market_id=row.market_id,
+        snapshot_at=row.snapshot_at,
+        outcomes_prices=prices,
+        volume_24h=Decimal(str(row.volume_24h)) if row.volume_24h is not None else None,
+        liquidity=Decimal(str(row.liquidity)) if row.liquidity is not None else None,
+        source_event_id=row.source_event_id,
+    )
+
+
+class PgPredictionMarketRepository(PredictionMarketRepository):
+    """SQLAlchemy-backed implementation of PredictionMarketRepository."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def upsert(self, market: PredictionMarket) -> PredictionMarket:
+        """Insert or update a prediction market; return the persisted entity."""
+        stmt = (
+            pg_insert(PredictionMarketModel)
+            .values(
+                id=market.id,
+                market_id=market.market_id,
+                source=market.source,
+                question=market.question,
+                description=market.description,
+                outcomes=market.outcomes,
+                close_time=market.close_time,
+                resolution_status=market.resolution_status,
+                resolved_answer=market.resolved_answer,
+            )
+            .on_conflict_do_update(
+                index_elements=["market_id"],
+                set_={
+                    "question": pg_insert(PredictionMarketModel).excluded.question,
+                    "description": pg_insert(PredictionMarketModel).excluded.description,
+                    "outcomes": pg_insert(PredictionMarketModel).excluded.outcomes,
+                    "close_time": pg_insert(PredictionMarketModel).excluded.close_time,
+                    "resolution_status": pg_insert(PredictionMarketModel).excluded.resolution_status,
+                    "resolved_answer": pg_insert(PredictionMarketModel).excluded.resolved_answer,
+                    "updated_at": text("now()"),
+                },
+            )
+            .returning(
+                PredictionMarketModel.id,
+                PredictionMarketModel.market_id,
+                PredictionMarketModel.source,
+                PredictionMarketModel.question,
+                PredictionMarketModel.description,
+                PredictionMarketModel.outcomes,
+                PredictionMarketModel.close_time,
+                PredictionMarketModel.resolution_status,
+                PredictionMarketModel.resolved_answer,
+                PredictionMarketModel.created_at,
+                PredictionMarketModel.updated_at,
+            )
+        )
+        result = await self._session.execute(stmt)
+        row = result.fetchone()
+        if row is None:
+            # Should never happen — upsert always returns a row
+            return market
+        return _row_to_market(row)
+
+    async def find_by_market_id(self, market_id: str) -> PredictionMarket | None:
+        result = await self._session.execute(
+            text(
+                "SELECT id, market_id, source, question, description, outcomes, "
+                "close_time, resolution_status, resolved_answer, created_at, updated_at "
+                "FROM prediction_markets WHERE market_id = :market_id LIMIT 1"
+            ).bindparams(market_id=market_id)
+        )
+        row = result.fetchone()
+        return _row_to_market(row) if row is not None else None
+
+    async def list_markets(
+        self,
+        *,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[PredictionMarket], int]:
+        """Return paginated markets and the total count via window function."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        where_clauses = ["1=1"]
+
+        if status is not None:
+            where_clauses.append("resolution_status = :status")
+            params["status"] = status
+
+        if query is not None:
+            where_clauses.append("question ILIKE :query_like")
+            params["query_like"] = f"%{query}%"
+
+        where_sql = " AND ".join(where_clauses)
+        sql = text(
+            f"SELECT id, market_id, source, question, description, outcomes, "
+            f"close_time, resolution_status, resolved_answer, created_at, updated_at, "
+            f"COUNT(*) OVER() AS total "
+            f"FROM prediction_markets "
+            f"WHERE {where_sql} "
+            f"ORDER BY updated_at DESC "
+            f"LIMIT :limit OFFSET :offset"
+        ).bindparams(**params)
+
+        result = await self._session.execute(sql)
+        rows = result.fetchall()
+        if not rows:
+            return [], 0
+        total = int(rows[0].total)
+        markets = [_row_to_market(row) for row in rows]
+        return markets, total
+
+
+class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
+    """SQLAlchemy-backed implementation of PredictionMarketSnapshotRepository."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_if_not_exists(self, snapshot: PredictionMarketSnapshot) -> bool:
+        """Atomically insert a snapshot; return ``True`` if new, ``False`` on conflict."""
+        stmt = (
+            pg_insert(PredictionMarketSnapshotModel)
+            .values(
+                id=snapshot.id,
+                market_id=snapshot.market_id,
+                snapshot_at=snapshot.snapshot_at,
+                outcomes_prices=snapshot.outcomes_prices,
+                volume_24h=snapshot.volume_24h,
+                liquidity=snapshot.liquidity,
+                source_event_id=snapshot.source_event_id,
+            )
+            .on_conflict_do_nothing(constraint="uq_pms_market_snapshot")
+            .returning(PredictionMarketSnapshotModel.id)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def list_snapshots(
+        self,
+        market_id: str,
+        *,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketSnapshot]:
+        params: dict[str, Any] = {"market_id": market_id, "limit": limit}
+        where_clauses = ["market_id = :market_id"]
+
+        if from_dt is not None:
+            where_clauses.append("snapshot_at >= :from_dt")
+            params["from_dt"] = from_dt
+
+        if to_dt is not None:
+            where_clauses.append("snapshot_at <= :to_dt")
+            params["to_dt"] = to_dt
+
+        where_sql = " AND ".join(where_clauses)
+        sql = text(
+            f"SELECT id, market_id, snapshot_at, outcomes_prices, "
+            f"volume_24h, liquidity, source_event_id "
+            f"FROM prediction_market_snapshots "
+            f"WHERE {where_sql} "
+            f"ORDER BY snapshot_at DESC "
+            f"LIMIT :limit"
+        ).bindparams(**params)
+
+        result = await self._session.execute(sql)
+        return [_row_to_snapshot(row) for row in result.fetchall()]
