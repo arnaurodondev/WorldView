@@ -408,7 +408,15 @@ def create_app() -> FastAPI:
         return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 
     # Register API routers
-    from market_data.api.routers import fundamental_metrics, fundamentals, instruments, ohlcv, quotes, securities
+    from market_data.api.routers import (
+        fundamental_metrics,
+        fundamentals,
+        instruments,
+        ohlcv,
+        prediction_markets,
+        quotes,
+        securities,
+    )
 
     app.include_router(instruments.router, prefix="/api/v1")
     app.include_router(ohlcv.router, prefix="/api/v1")
@@ -418,5 +426,8 @@ def create_app() -> FastAPI:
     app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
+    # prediction_markets: /prediction-markets/{market_id}/history registered
+    # before /{market_id} inside the router to avoid path-param conflicts
+    app.include_router(prediction_markets.router, prefix="/api/v1")
 
     return app

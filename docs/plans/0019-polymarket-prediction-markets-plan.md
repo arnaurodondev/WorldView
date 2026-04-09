@@ -4,7 +4,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-09
 > **Updated**: 2026-04-09
-> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅)
+> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅, B-2 ✅)
 
 ---
 
@@ -919,12 +919,13 @@ market-data-prediction-market-consumer:
 
 ---
 
-### Wave B-2: S3 API Endpoints + Use Cases + Read Repositories
+### Wave B-2: S3 API Endpoints + Use Cases + Read Repositories ✅
 
 **Goal**: Expose the three prediction market query endpoints from S3.
 **Depends on**: Wave B-1 complete
 **Estimated effort**: 60–90 min
 **Architecture layer**: application + API
+**Status**: **DONE** — 2026-04-09 · 24 new unit tests + 429 total S3 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -1095,10 +1096,10 @@ Import and register `prediction_markets_router` in `app.py` under the existing A
 - `services/market-data/src/market_data/app.py` — router registration
 
 #### Validation Gate B-2
-- [ ] `uvx ruff check + format --check + mypy --strict services/market-data/src/` — zero violations
-- [ ] `python -m pytest services/market-data/tests/ -v` — all 516+ existing tests pass; 9+ new tests pass
-- [ ] Docker Compose: `curl http://localhost:8003/api/v1/prediction-markets` → 200 with `{"items":[],"total":0,...}`
-- [ ] `GET /api/v1/prediction-markets/unknown` → 404
+- [x] `uvx ruff check + format --check + mypy --strict services/market-data/src/` — zero violations
+- [x] `python -m pytest services/market-data/tests/ -v` — 429 unit tests pass; 24 new B-2 tests pass
+- [ ] Docker Compose: `curl http://localhost:8003/api/v1/prediction-markets` → 200 with `{"items":[],"total":0,...}` (requires live DB)
+- [ ] `GET /api/v1/prediction-markets/unknown` → 404 (requires live DB)
 
 #### Regression Guardrails
 - **R25**: No infrastructure imports in router file — router must only call use cases

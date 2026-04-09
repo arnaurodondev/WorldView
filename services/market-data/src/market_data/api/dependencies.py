@@ -30,6 +30,11 @@ if TYPE_CHECKING:
         GetOHLCVBulkUseCase,
         GetOHLCVRangeUseCase,
     )
+    from market_data.application.use_cases.query_prediction_markets import (
+        GetPredictionMarketHistoryUseCase,
+        GetPredictionMarketUseCase,
+        ListPredictionMarketsUseCase,
+    )
     from market_data.application.use_cases.query_quotes import GetQuotesBatchUseCase, GetQuoteUseCase
     from market_data.application.use_cases.query_securities import GetSecurityUseCase, ListSecuritiesUseCase
 
@@ -191,6 +196,29 @@ def get_screen_fields_uc(
 
     cache: ScreenFieldsCachePort = request.app.state.screen_fields_cache
     return ScreenFieldsMetadataUseCase(uow=uow, cache=cache)
+
+
+# ── Prediction market use case deps ──────────────────────────────────────────
+
+
+def get_list_prediction_markets_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> ListPredictionMarketsUseCase:
+    from market_data.application.use_cases.query_prediction_markets import ListPredictionMarketsUseCase
+
+    return ListPredictionMarketsUseCase(uow)
+
+
+def get_prediction_market_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetPredictionMarketUseCase:
+    from market_data.application.use_cases.query_prediction_markets import GetPredictionMarketUseCase
+
+    return GetPredictionMarketUseCase(uow)
+
+
+def get_prediction_market_history_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> GetPredictionMarketHistoryUseCase:
+    from market_data.application.use_cases.query_prediction_markets import GetPredictionMarketHistoryUseCase
+
+    return GetPredictionMarketHistoryUseCase(uow)
 
 
 # ── Internal auth (M-004 — metrics endpoint protection) ──────────────────────

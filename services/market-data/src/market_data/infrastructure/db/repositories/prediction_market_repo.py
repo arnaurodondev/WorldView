@@ -216,3 +216,21 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
 
         result = await self._session.execute(sql)
         return [_row_to_snapshot(row) for row in result.fetchall()]
+
+    async def get_latest_prices_batch(
+        self,
+        market_ids: list[str],
+    ) -> dict[str, dict[str, float]]:
+        """Return latest ``outcomes_prices`` per market using a single DISTINCT ON query."""
+        if not market_ids:
+            return {}
+        sql = text(
+            "SELECT DISTINCT ON (market_id) market_id, outcomes_prices "
+            "FROM prediction_market_snapshots "
+            "WHERE market_id = ANY(CAST(:market_ids AS TEXT[])) "
+            "ORDER BY market_id, snapshot_at DESC"
+        ).bindparams(market_ids=market_ids)
+        result = await self._session.execute(sql)
+        return {
+            row.market_id: (row.outcomes_prices if row.outcomes_prices is not None else {}) for row in result.fetchall()
+        }
