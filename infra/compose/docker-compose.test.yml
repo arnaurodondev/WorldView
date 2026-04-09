@@ -17,6 +17,8 @@
 #   content-store-test      — Postgres(pgvector) + MinIO + Valkey + Kafka + Schema Registry + content-store migrate + API
 #   intelligence-test       — Postgres(pgvector) + MinIO + Valkey + Kafka + intelligence-migrations + nlp-pipeline migrate + nlp-pipeline API + knowledge-graph API + Schema Registry
 #   alert-test              — Postgres(pgvector) + Valkey + Kafka + Schema Registry + alert migrate + alert API
+#   rag-chat-test           — Postgres + Valkey + rag-chat migrate + rag-chat API
+#   api-gateway-test        — Valkey + api-gateway API (stateless BFF)
 #   dev-tools               — infra + developer UIs (Kafka UI, pgAdmin)
 #   all                     — starts every service in this compose file
 #
@@ -1224,6 +1226,61 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # ── RAG Chat (S8) ───────────────────────────────────────────────────────────
+  rag-chat-migrate:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [rag-chat-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  rag-chat:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [rag-chat-test, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    ports:
+      - "8008:8008"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ── API Gateway (S9) ─────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    profiles: [api-gateway-test, all]
+    depends_on:
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/api-gateway/configs/docker.env
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
 volumes:
   pgadmin_data:

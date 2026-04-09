@@ -131,10 +131,11 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
             return
 
         instrument_id = UUID(str(instrument_id_raw))
-        object_key = value.get("object_key")
+        bucket = value.get("canonical_ref_bucket")
+        object_key = value.get("canonical_ref_key")
 
         # Download full payload from MinIO once
-        payload = await self._download_payload(object_key)
+        payload = await self._download_payload(bucket, object_key)
         if payload is None:
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_consumer_no_payload",
@@ -165,16 +166,17 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
                 fields=sorted(metadata_updates.keys()),
             )
 
-    async def _download_payload(self, object_key: str | None) -> dict[str, Any] | None:
+    async def _download_payload(self, bucket: str | None, object_key: str | None) -> dict[str, Any] | None:
         """Download the MinIO claim-check payload and return the full JSON dict."""
-        if not object_key or not self._storage:
+        if not bucket or not object_key or not self._storage:
             return None
         try:
-            data: dict[str, Any] | None = await self._storage.get_json(object_key)
+            data: dict[str, Any] | None = await self._storage.get_json(bucket, object_key)
             return data
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_consumer_storage_error",
+                bucket=bucket,
                 object_key=object_key,
                 error=str(exc),
             )

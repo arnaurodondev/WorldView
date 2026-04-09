@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 TOPIC_GRAPH_STATE_CHANGED = "graph.state.changed.v1"
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
+TOPIC_ENTITY_CANONICAL_CREATED = "entity.canonical.created.v1"
 
 
 class OutboxRepository:

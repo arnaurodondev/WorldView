@@ -1,10 +1,11 @@
 """Outbox dispatcher for intelligence_db (PRD §6.7 Block D).
 
 Polls ``intelligence_db.outbox_events`` and publishes to Kafka.
-Publishes 3 topics:
+Publishes 4 topics:
   - graph.state.changed.v1
   - intelligence.contradiction.v1
   - relation.type.proposed.v1
+  - entity.canonical.created.v1 (emitted by ProvisionalEnrichmentWorker)
 
 NOTE: entity.dirtied.v1 is produced DIRECTLY in Block 12a — it must NOT
 appear in outbox_events.  If found, a WARNING is logged and the row is
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     TOPIC_CONTRADICTION,
+    TOPIC_ENTITY_CANONICAL_CREATED,
     TOPIC_GRAPH_STATE_CHANGED,
     TOPIC_RELATION_PROPOSED,
     OutboxRepository,
@@ -37,6 +39,7 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_GRAPH_STATE_CHANGED,
         TOPIC_CONTRADICTION,
         TOPIC_RELATION_PROPOSED,
+        TOPIC_ENTITY_CANONICAL_CREATED,
     }
 )
 _ENTITY_DIRTIED_TOPIC = "entity.dirtied.v1"
