@@ -100,6 +100,29 @@ class TestOutboxDispatcherAllowedTopics:
 
         assert dispatched == 1
 
+    def test_entity_canonical_created_topic_dispatched(self) -> None:
+        """entity.canonical.created.v1 is an allowed topic (ProvisionalEnrichmentWorker)."""
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
+
+        event = _make_event("entity.canonical.created.v1")
+        sf, _session, outbox_repo = _make_session_factory([event])
+
+        producer = MagicMock()
+        producer.produce = MagicMock()
+        producer.flush = MagicMock(return_value=0)
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
+            dispatcher = OutboxDispatcher(sf, producer)
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
+
+        assert dispatched == 1
+        producer.produce.assert_called_once()
+        outbox_repo.mark_dispatched.assert_awaited_once()
+        outbox_repo.mark_failed.assert_not_awaited()
+
 
 class TestOutboxDispatcherEntityDirtied:
     def test_entity_dirtied_logs_warning_and_marks_dispatched(self) -> None:

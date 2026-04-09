@@ -124,7 +124,7 @@ class TestThreadRepository:
         await repo.create(to_archive)
         await db_session.flush()
 
-        await repo.soft_delete(to_archive.thread_id)
+        await repo.soft_delete(to_archive.thread_id, user_id, tenant_id)
         await db_session.flush()
 
         threads, total = await repo.list_active(user_id=user_id, tenant_id=tenant_id, limit=10, offset=0)
@@ -154,7 +154,7 @@ class TestThreadRepository:
         assert threads[0].thread_id == thread_a.thread_id
 
     async def test_soft_delete_sets_archived_at(self, db_session: AsyncSession) -> None:
-        """soft_delete() returns a UTC datetime and the thread is excluded from list_active."""
+        """soft_delete() with correct owner returns a UTC datetime."""
         from rag_chat.infrastructure.db.repositories.thread_repository import SqlAlchemyThreadRepository
 
         thread = _make_thread()
@@ -163,12 +163,38 @@ class TestThreadRepository:
         await db_session.flush()
 
         before = datetime.now(tz=UTC)
-        archived_at = await repo.soft_delete(thread.thread_id)
+        archived_at = await repo.soft_delete(thread.thread_id, thread.user_id, thread.tenant_id)
         after = datetime.now(tz=UTC)
 
         assert isinstance(archived_at, datetime)
         assert archived_at.tzinfo is not None
         assert before <= archived_at <= after
+
+    async def test_soft_delete_wrong_user_raises(self, db_session: AsyncSession) -> None:
+        """soft_delete() with wrong user_id raises ThreadNotFoundError (TOCTOU guard)."""
+        from rag_chat.domain.errors import ThreadNotFoundError
+        from rag_chat.infrastructure.db.repositories.thread_repository import SqlAlchemyThreadRepository
+
+        thread = _make_thread()
+        repo = SqlAlchemyThreadRepository(db_session)
+        await repo.create(thread)
+        await db_session.flush()
+
+        with pytest.raises(ThreadNotFoundError):
+            await repo.soft_delete(thread.thread_id, uuid4(), thread.tenant_id)
+
+    async def test_soft_delete_wrong_tenant_raises(self, db_session: AsyncSession) -> None:
+        """soft_delete() with wrong tenant_id raises ThreadNotFoundError (TOCTOU guard)."""
+        from rag_chat.domain.errors import ThreadNotFoundError
+        from rag_chat.infrastructure.db.repositories.thread_repository import SqlAlchemyThreadRepository
+
+        thread = _make_thread()
+        repo = SqlAlchemyThreadRepository(db_session)
+        await repo.create(thread)
+        await db_session.flush()
+
+        with pytest.raises(ThreadNotFoundError):
+            await repo.soft_delete(thread.thread_id, thread.user_id, uuid4())
 
     async def test_update_last_msg_persists(self, db_session: AsyncSession) -> None:
         """update_last_msg() sets last_msg_at and entity_ids on the thread row."""

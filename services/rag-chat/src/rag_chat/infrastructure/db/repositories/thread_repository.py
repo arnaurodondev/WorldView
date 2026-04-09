@@ -160,15 +160,28 @@ class SqlAlchemyThreadRepository(ThreadRepository):
         )
         await self._session.flush()
 
-    async def soft_delete(self, thread_id: UUID) -> datetime:
-        """Set archived_at to UTC now; return the timestamp."""
+    async def soft_delete(self, thread_id: UUID, user_id: UUID, tenant_id: UUID) -> datetime:
+        """Set archived_at to UTC now; return the timestamp.
+
+        Filters by user_id and tenant_id in the UPDATE so ownership check and
+        write are a single atomic operation (no TOCTOU window).
+        """
         from common.time import utc_now  # type: ignore[import-untyped]
+        from rag_chat.domain.errors import ThreadNotFoundError
 
         now = utc_now()
-        await self._session.execute(
-            update(ThreadModel).where(ThreadModel.thread_id == thread_id).values(archived_at=now)
+        result = await self._session.execute(
+            update(ThreadModel)
+            .where(
+                ThreadModel.thread_id == thread_id,
+                ThreadModel.user_id == user_id,
+                ThreadModel.tenant_id == tenant_id,
+            )
+            .values(archived_at=now)
         )
         await self._session.flush()
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            raise ThreadNotFoundError(f"Thread {thread_id} not found or access denied")
         return now
 
 

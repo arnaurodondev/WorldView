@@ -96,21 +96,37 @@ class TestThreadRepository:
         mock_session.execute.assert_called_once()
 
     async def test_soft_delete_returns_datetime(self) -> None:
-        """soft_delete() executes UPDATE and returns a UTC datetime."""
+        """soft_delete() executes UPDATE with owner filter and returns a UTC datetime."""
         from rag_chat.infrastructure.db.repositories.thread_repository import SqlAlchemyThreadRepository
 
         mock_session = AsyncMock()
-        mock_session.execute.return_value = MagicMock()
+        mock_result = MagicMock()
+        mock_result.rowcount = 1  # one row updated → success
+        mock_session.execute.return_value = mock_result
 
         repo = SqlAlchemyThreadRepository(mock_session)
 
         before = datetime.now(tz=UTC)
-        result = await repo.soft_delete(thread_id=uuid4())
+        result = await repo.soft_delete(thread_id=uuid4(), user_id=uuid4(), tenant_id=uuid4())
         after = datetime.now(tz=UTC)
 
         assert isinstance(result, datetime)
         assert result.tzinfo is not None, "archived_at must be timezone-aware"
         assert before <= result <= after
+
+    async def test_soft_delete_wrong_owner_raises(self) -> None:
+        """soft_delete() with 0 rows affected (wrong owner) raises ThreadNotFoundError."""
+        from rag_chat.domain.errors import ThreadNotFoundError
+        from rag_chat.infrastructure.db.repositories.thread_repository import SqlAlchemyThreadRepository
+
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.rowcount = 0  # no rows → owner mismatch
+        mock_session.execute.return_value = mock_result
+
+        repo = SqlAlchemyThreadRepository(mock_session)
+        with pytest.raises(ThreadNotFoundError):
+            await repo.soft_delete(thread_id=uuid4(), user_id=uuid4(), tenant_id=uuid4())
 
     async def test_soft_delete_excludes_from_list_active(self) -> None:
         """list_active() only returns threads where archived_at IS NULL."""

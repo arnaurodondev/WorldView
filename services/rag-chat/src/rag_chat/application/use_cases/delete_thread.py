@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from observability import get_logger  # type: ignore[import-untyped]
-from rag_chat.domain.errors import ThreadNotFoundError
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -20,8 +19,9 @@ class DeleteThreadUseCase:
     """Soft-delete a thread by setting ``archived_at``.
 
     Raises ``ThreadNotFoundError`` when the thread does not exist or the
-    requesting user is not the owner (ownership enforced by the repository's
-    ``get`` method which filters on ``user_id``).
+    requesting user/tenant is not the owner.  Ownership is enforced atomically
+    inside ``soft_delete`` (single UPDATE with user_id + tenant_id filter),
+    eliminating any TOCTOU window.
     """
 
     async def execute(
@@ -29,13 +29,9 @@ class DeleteThreadUseCase:
         uow: RagUnitOfWorkPort,
         thread_id: UUID,
         user_id: UUID,
-        tenant_id: UUID | None = None,
+        tenant_id: UUID,
     ) -> datetime:
-        thread = await uow.threads.get(thread_id, user_id, tenant_id=tenant_id)
-        if thread is None:
-            raise ThreadNotFoundError(f"Thread {thread_id} not found")
-
-        archived_at = await uow.threads.soft_delete(thread_id)
+        archived_at = await uow.threads.soft_delete(thread_id, user_id, tenant_id)
         await uow.commit()
         logger.info(  # type: ignore[no-any-return]
             "thread_deleted",

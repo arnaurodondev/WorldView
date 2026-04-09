@@ -105,8 +105,8 @@ class SignalsQueryPort(ABC):
         ...
 
     @abstractmethod
-    async def vector_search_sections(self, limit: int) -> list[dict[str, Any]]:
-        """Return sections for vector search (keyword fallback)."""
+    async def vector_search_sections(self, query: str, limit: int) -> list[dict[str, Any]]:
+        """Return sections for vector search (keyword ILIKE fallback until embedding client injected)."""
         ...
 
     @abstractmethod

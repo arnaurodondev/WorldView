@@ -183,14 +183,15 @@ class GetEntityArticlesUseCase:
 
 
 class VectorSearchUseCase:
-    """Semantic section search (keyword fallback until ML client injected)."""
+    """Semantic section search (keyword ILIKE fallback until ML client injected)."""
 
     async def execute(
         self,
         repo: SignalsQueryPort,
+        query: str,
         limit: int,
     ) -> list[VectorSearchHitData]:
-        rows = await repo.vector_search_sections(limit=limit)
+        rows = await repo.vector_search_sections(query=query, limit=limit)
         return [
             VectorSearchHitData(
                 doc_id=row["doc_id"],
