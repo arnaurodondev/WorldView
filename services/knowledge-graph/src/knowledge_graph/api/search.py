@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
+from knowledge_graph.api.dependencies import RelationSummaryRepoDep
 from knowledge_graph.api.schemas import (
     RelationSearchRequest,
     RelationSearchResponse,
@@ -27,7 +27,7 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 @router.post("/relations", response_model=RelationSearchResponse)
 async def search_relations(
     body: RelationSearchRequest,
-    session: ReadOnlyDbSessionDep,
+    repo: RelationSummaryRepoDep,
 ) -> RelationSearchResponse:
     """ANN search over relation summaries using a query embedding.
 
@@ -35,11 +35,6 @@ async def search_relations(
     ``summary_authority`` is computed at query time as
     ``confidence * log1p(evidence_count)`` — NOT a cached column.
     """
-    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
-        RelationSummaryRepository,
-    )
-
-    repo = RelationSummaryRepository(session)
     results = await RelationSummarySearchUseCase().execute(
         repo=repo,  # type: ignore[arg-type]
         query_embedding=body.query_embedding,

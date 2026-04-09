@@ -136,7 +136,9 @@ class ChatOrchestrator:
         conversation_history = []
         if request.thread_id:
             try:
-                thread = await self._get_thread.execute(uow, request.thread_id, request.user_id)
+                thread = await self._get_thread.execute(
+                    uow, request.thread_id, request.user_id, tenant_id=request.tenant_id
+                )
                 conversation_history = list(thread.recent_history(5))
             except Exception:
                 log.debug("thread_load_skipped")  # type: ignore[no-any-return]

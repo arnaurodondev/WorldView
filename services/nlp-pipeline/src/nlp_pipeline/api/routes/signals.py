@@ -15,7 +15,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from nlp_pipeline.api.dependencies import SignalsQueryRepoDep
+from nlp_pipeline.api.dependencies import AdminAuthDep, SignalsQueryRepoDep
 from nlp_pipeline.api.schemas import (
     EntityArticleResponse,
     EntityArticlesResponse,
@@ -190,6 +190,7 @@ async def get_entity_articles(
 async def reprocess_article(
     article_id: UUID,
     repo: SignalsQueryRepoDep,
+    _auth: AdminAuthDep,
 ) -> ReprocessResponse:
     """Requeue an article for reprocessing by inserting a synthetic outbox event.
 

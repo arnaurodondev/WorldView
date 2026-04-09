@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
+from knowledge_graph.api.dependencies import EventRepoDep
 from knowledge_graph.api.schemas import (
     EventResponse,
     EventsSearchRequest,
@@ -25,7 +25,7 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 @router.post("/events/search", response_model=EventsSearchResponse)
 async def search_events(
     body: EventsSearchRequest,
-    session: ReadOnlyDbSessionDep,
+    event_repo: EventRepoDep,
 ) -> EventsSearchResponse:
     """Search events for a set of entities with optional filters.
 
@@ -34,11 +34,6 @@ async def search_events(
     Omitting ``entity_ids`` (or passing an empty list) returns events
     across all entities subject to the other filters.
     """
-    from knowledge_graph.infrastructure.intelligence_db.repositories.event_repository import (
-        EventRepository,
-    )
-
-    event_repo = EventRepository(session)
     results = await EventSearchUseCase().execute(
         event_repo=event_repo,  # type: ignore[arg-type]
         entity_ids=body.entity_ids,

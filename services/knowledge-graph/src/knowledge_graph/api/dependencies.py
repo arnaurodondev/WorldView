@@ -9,6 +9,9 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from knowledge_graph.application.ports.claim_repository import ClaimRepositoryPort
+from knowledge_graph.application.ports.event_repository import EventRepositoryPort
+from knowledge_graph.application.ports.relation_summary_repository import RelationSummaryRepositoryPort
 from knowledge_graph.application.ports.temporal_event_repository import TemporalEventRepositoryPort
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 
@@ -175,3 +178,44 @@ def get_cypher_bundle(session: DbSessionDep, request: Request) -> _CypherBundle:
 
 
 CypherBundleDep = Annotated[_CypherBundle, Depends(get_cypher_bundle)]
+
+
+# ── R25-compliant repo factories for claims / events / search routes ──────────
+# Infrastructure imports are deferred inside each factory so that route files
+# never need to import from the infrastructure layer directly.
+
+
+def get_claim_repo(session: ReadOnlyDbSessionDep) -> ClaimRepositoryPort:
+    """Build ClaimRepository for read-only claims search queries."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
+        ClaimRepository,
+    )
+
+    return ClaimRepository(session)  # type: ignore[return-value]
+
+
+ClaimRepoDep = Annotated[ClaimRepositoryPort, Depends(get_claim_repo)]
+
+
+def get_event_repo(session: ReadOnlyDbSessionDep) -> EventRepositoryPort:
+    """Build EventRepository for read-only event search queries."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.event_repository import (
+        EventRepository,
+    )
+
+    return EventRepository(session)  # type: ignore[return-value]
+
+
+EventRepoDep = Annotated[EventRepositoryPort, Depends(get_event_repo)]
+
+
+def get_relation_summary_repo(session: ReadOnlyDbSessionDep) -> RelationSummaryRepositoryPort:
+    """Build RelationSummaryRepository for ANN relation search queries."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+        RelationSummaryRepository,
+    )
+
+    return RelationSummaryRepository(session)  # type: ignore[return-value]
+
+
+RelationSummaryRepoDep = Annotated[RelationSummaryRepositoryPort, Depends(get_relation_summary_repo)]
