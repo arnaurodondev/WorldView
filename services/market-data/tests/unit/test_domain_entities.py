@@ -9,6 +9,8 @@ from market_data.domain.entities import (
     FundamentalsRecord,
     Instrument,
     OHLCVBar,
+    PredictionMarket,
+    PredictionMarketSnapshot,
     Quote,
     Security,
 )
@@ -184,3 +186,85 @@ class TestFundamentalsRecordEntity:
         r1 = FundamentalsRecord(security_id="s1")
         r2 = FundamentalsRecord(security_id="s2")
         assert r1.id != r2.id
+
+
+class TestPredictionMarketEntity:
+    def test_prediction_market_defaults(self) -> None:
+        market = PredictionMarket(market_id="0xabc", question="Will X happen?")
+        assert market.source == "polymarket"
+        assert market.resolution_status == "open"
+        assert market.description is None
+        assert market.outcomes == []
+
+    def test_prediction_market_auto_id(self) -> None:
+        m1 = PredictionMarket(market_id="0x001")
+        m2 = PredictionMarket(market_id="0x002")
+        assert m1.id != m2.id
+
+    def test_prediction_market_mutable(self) -> None:
+        market = PredictionMarket(market_id="0xabc")
+        market.resolution_status = "resolved"
+        assert market.resolution_status == "resolved"
+
+
+class TestPredictionMarketSnapshotEntity:
+    _NOW = __import__("datetime").datetime(2026, 4, 9, 12, 0, 0, tzinfo=__import__("datetime").timezone.utc)
+
+    def test_snapshot_validates_utc_aware(self) -> None:
+        import datetime
+
+        naive = datetime.datetime(2026, 4, 9, 12, 0, 0)  # noqa: DTZ001
+        with pytest.raises(ValueError, match="UTC-aware"):
+            PredictionMarketSnapshot(
+                market_id="0xabc",
+                snapshot_at=naive,
+                outcomes_prices={"Yes": 0.7, "No": 0.3},
+                source_event_id="evt-1",
+            )
+
+    def test_snapshot_validates_min_two_outcomes(self) -> None:
+        with pytest.raises(ValueError, match="at least 2"):
+            PredictionMarketSnapshot(
+                market_id="0xabc",
+                snapshot_at=self._NOW,
+                outcomes_prices={"Yes": 1.0},
+                source_event_id="evt-1",
+            )
+
+    def test_snapshot_valid_creation(self) -> None:
+        snap = PredictionMarketSnapshot(
+            market_id="0xabc",
+            snapshot_at=self._NOW,
+            outcomes_prices={"Yes": 0.72, "No": 0.28},
+            source_event_id="evt-1",
+            volume_24h=Decimal("1500"),
+        )
+        assert snap.market_id == "0xabc"
+        assert snap.outcomes_prices["Yes"] == 0.72
+        assert snap.volume_24h == Decimal("1500")
+        assert snap.liquidity is None
+
+    def test_snapshot_is_frozen(self) -> None:
+        snap = PredictionMarketSnapshot(
+            market_id="0xabc",
+            snapshot_at=self._NOW,
+            outcomes_prices={"Yes": 0.6, "No": 0.4},
+            source_event_id="evt-1",
+        )
+        with pytest.raises(Exception):  # noqa: B017  # FrozenInstanceError (dataclasses.FrozenInstanceError)
+            snap.market_id = "changed"  # type: ignore[misc]
+
+    def test_snapshot_auto_id(self) -> None:
+        s1 = PredictionMarketSnapshot(
+            market_id="0x001",
+            snapshot_at=self._NOW,
+            outcomes_prices={"Yes": 0.5, "No": 0.5},
+            source_event_id="evt-1",
+        )
+        s2 = PredictionMarketSnapshot(
+            market_id="0x002",
+            snapshot_at=self._NOW,
+            outcomes_prices={"Yes": 0.5, "No": 0.5},
+            source_event_id="evt-2",
+        )
+        assert s1.id != s2.id

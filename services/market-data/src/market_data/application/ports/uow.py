@@ -28,6 +28,8 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OHLCVRepository,
         OutboxEventRepository,
+        PredictionMarketRepository,
+        PredictionMarketSnapshotRepository,
         QuoteRepository,
         SecurityRepository,
     )
@@ -91,6 +93,16 @@ class UnitOfWork(ABC):
     def outbox_events(self) -> OutboxEventRepository:
         """Outbox event repository (write session)."""
 
+    @property
+    @abstractmethod
+    def prediction_markets(self) -> PredictionMarketRepository:
+        """Prediction market repository (write session)."""
+
+    @property
+    @abstractmethod
+    def prediction_market_snapshots(self) -> PredictionMarketSnapshotRepository:
+        """Prediction market snapshot repository (write session)."""
+
     # ── event accumulation ────────────────────────────────────────────────────
 
     @abstractmethod
@@ -133,6 +145,16 @@ class UnitOfWork(ABC):
     @abstractmethod
     def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
         """Fundamental metrics query repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_markets_read(self) -> PredictionMarketRepository:
+        """Prediction market repository bound to the read (replica) session."""
+
+    @property
+    @abstractmethod
+    def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
+        """Prediction market snapshot repository bound to the read (replica) session."""
 
     # ── read session ─────────────────────────────────────────────────────────
 
@@ -222,6 +244,16 @@ class ReadOnlyUnitOfWork(abc.ABC):
     @abc.abstractmethod
     def fundamental_metrics_query(self) -> FundamentalMetricsQueryRepository:
         """Fundamental metrics query repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_markets_read(self) -> PredictionMarketRepository:
+        """Prediction market repository bound to the read (replica) session."""
+
+    @property
+    @abc.abstractmethod
+    def prediction_market_snapshots_read(self) -> PredictionMarketSnapshotRepository:
+        """Prediction market snapshot repository bound to the read (replica) session."""
 
     # ── context manager ───────────────────────────────────────────────────────
 

@@ -26,6 +26,8 @@ if TYPE_CHECKING:
         FundamentalsRecord,
         Instrument,
         OHLCVBar,
+        PredictionMarket,
+        PredictionMarketSnapshot,
         Quote,
         ScreenFieldMetadata,
         Security,
@@ -415,3 +417,60 @@ class FundamentalMetricsQueryRepository(ABC):
     @abstractmethod
     async def get_screen_field_metadata(self) -> list[ScreenFieldMetadata]:
         """Return all rows from ``screen_field_metadata`` (DB fallback for cache miss)."""
+
+
+# ── Prediction Market repositories (PRD-0019) ─────────────────────────────────
+
+
+class PredictionMarketRepository(ABC):
+    """Port for prediction market read/write operations."""
+
+    @abstractmethod
+    async def upsert(self, market: PredictionMarket) -> PredictionMarket:
+        """Insert or update a prediction market record.
+
+        Conflict target: ``market_id``.
+        Updates: question, description, outcomes, close_time,
+        resolution_status, resolved_answer, updated_at.
+        """
+
+    @abstractmethod
+    async def find_by_market_id(self, market_id: str) -> PredictionMarket | None:
+        """Return the market with the given ``market_id``, or ``None``."""
+
+    @abstractmethod
+    async def list_markets(
+        self,
+        *,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[PredictionMarket], int]:
+        """Return a paginated list of markets and the total count.
+
+        ``status``: filter by ``resolution_status`` (exact match); ``None`` = all.
+        ``query``: filter by ``question ILIKE '%query%'``; ``None`` = all.
+        """
+
+
+class PredictionMarketSnapshotRepository(ABC):
+    """Port for prediction market snapshot (hypertable) operations."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, snapshot: PredictionMarketSnapshot) -> bool:
+        """Atomically insert the snapshot; return ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, snapshot_at)``.
+        """
+
+    @abstractmethod
+    async def list_snapshots(
+        self,
+        market_id: str,
+        *,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketSnapshot]:
+        """Return snapshots for ``market_id``, ordered by ``snapshot_at DESC``."""

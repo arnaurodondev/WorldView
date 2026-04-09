@@ -166,3 +166,55 @@ class FundamentalsRecord:
     data: dict[str, object] = field(default_factory=dict)
     source: str = ""
     ingested_at: datetime = field(default_factory=_utc_now)
+
+
+@dataclass
+class PredictionMarket:
+    """A Polymarket prediction market record.
+
+    One row per market (keyed on ``market_id``).  Upserted on every poll
+    cycle so that question text, resolution status, and outcomes metadata
+    stay current without accumulating history.
+
+    ``outcomes`` holds only static outcome descriptors
+    (``[{"name": str, "token_id": str}]``).  Per-poll prices live in
+    ``PredictionMarketSnapshot.outcomes_prices``.
+    """
+
+    id: str = field(default_factory=_new_id)
+    market_id: str = ""
+    source: str = "polymarket"
+    question: str = ""
+    description: str | None = None
+    outcomes: list[dict] = field(default_factory=list)
+    close_time: datetime | None = None
+    resolution_status: str = "open"
+    resolved_answer: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
+
+
+@dataclass(frozen=True)
+class PredictionMarketSnapshot:
+    """Per-poll price snapshot for a single Polymarket market.
+
+    Stored in a TimescaleDB hypertable partitioned on ``snapshot_at``.
+    Each row is uniquely identified by ``(market_id, snapshot_at)``.
+
+    ``outcomes_prices`` maps outcome name to implied probability (0-1).
+    ``volume_24h`` and ``liquidity`` are optional; absent from some markets.
+    """
+
+    market_id: str
+    snapshot_at: datetime
+    outcomes_prices: dict[str, float]
+    source_event_id: str
+    volume_24h: Decimal | None = None
+    liquidity: Decimal | None = None
+    id: str = field(default_factory=_new_id)
+
+    def __post_init__(self) -> None:
+        if self.snapshot_at.tzinfo is None:
+            raise ValueError("snapshot_at must be UTC-aware (naive datetime not allowed)")
+        if len(self.outcomes_prices) < 2:
+            raise ValueError("outcomes_prices must contain at least 2 outcome entries")

@@ -9,7 +9,8 @@
 
 **Owns**: Materializing OHLCV bars, quotes, and fundamentals from claim-check pointers.
 Serving query APIs for charts, fundamentals, and instrument metadata. Security/instrument
-master data. Instrument lifecycle events.
+master data. Instrument lifecycle events. Materializing Polymarket prediction market
+snapshots from `market.prediction.v1` Kafka events.
 
 **Never does**: Fetch data from upstream providers (Market Ingestion's job), store news
 or articles, perform NLP processing, manage portfolios.
@@ -78,6 +79,7 @@ or articles, perform NLP processing, manage portfolios.
 | `market.dataset.fetched` | `market-data-ohlcv` | Materialize OHLCV bars | `event_id` in `ingestion_events` |
 | `market.dataset.fetched` | `market-data-quotes` | Materialize quotes | `event_id` |
 | `market.dataset.fetched` | `market-data-fundamentals` | Materialize fundamentals | `event_id` |
+| `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
 
 ### Produced
 
@@ -191,11 +193,42 @@ CREATE INDEX ix_fundamental_metrics_metric_date
     ON fundamental_metrics (metric, as_of_date);
 CREATE INDEX ix_fundamental_metrics_instrument_metric
     ON fundamental_metrics (instrument_id, metric, as_of_date);
+
+-- PRD-0019: Polymarket prediction markets
+CREATE TABLE prediction_markets (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    market_id           TEXT NOT NULL,
+    source              TEXT NOT NULL DEFAULT 'polymarket',
+    question            TEXT NOT NULL,
+    description         TEXT,
+    outcomes            JSONB NOT NULL DEFAULT '[]',
+    close_time          TIMESTAMPTZ,
+    resolution_status   VARCHAR(20) NOT NULL DEFAULT 'open',
+    resolved_answer     TEXT,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_prediction_markets_market_id UNIQUE (market_id)
+);
+CREATE INDEX ix_pm_status_updated ON prediction_markets (resolution_status, updated_at DESC);
+
+-- PRD-0019: One price snapshot per (market_id, timestamp) — TimescaleDB hypertable
+CREATE TABLE prediction_market_snapshots (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    market_id       TEXT NOT NULL,
+    snapshot_at     TIMESTAMPTZ NOT NULL,
+    outcomes_prices JSONB NOT NULL DEFAULT '{}',
+    volume_24h      NUMERIC(20, 4),
+    liquidity       NUMERIC(20, 4),
+    source_event_id TEXT NOT NULL,
+    CONSTRAINT uq_pms_market_snapshot UNIQUE (market_id, snapshot_at)
+);
+CREATE INDEX ix_pms_market_time ON prediction_market_snapshots (market_id, snapshot_at DESC);
+SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_exists => TRUE);
 ```
 
 ---
 
-## Runtime Processes (5)
+## Runtime Processes (6)
 
 | Process | Purpose |
 |---------|---------|
@@ -204,6 +237,7 @@ CREATE INDEX ix_fundamental_metrics_instrument_metric
 | Quotes Consumer | Materialize latest quotes |
 | Fundamentals Consumer | Materialize fundamentals data |
 | Outbox Dispatcher | Publish instrument lifecycle events |
+| Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
 
 ---
 
