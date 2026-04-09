@@ -38,8 +38,8 @@ class TestDocumentStatus:
 
 
 class TestSourceType:
-    def test_all_five_sources(self) -> None:
-        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual"}
+    def test_all_sources(self) -> None:
+        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual", "polymarket"}
         assert {v.value for v in SourceType} == expected
 
 
