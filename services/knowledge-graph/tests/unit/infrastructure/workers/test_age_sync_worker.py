@@ -496,3 +496,180 @@ class TestDeriveEdgeLabelHelper:
         from knowledge_graph.infrastructure.workers.age_sync_worker import _derive_edge_label
 
         assert _derive_edge_label("   ") is None
+
+
+# ── Test: _sync_temporal_events pagination ────────────────────────────────────
+
+
+def _make_event_row(
+    event_id: str = "01930000-0000-7000-8000-000000000001",
+    event_type: str = "MACRO",
+    scope: str = "NATIONAL",
+    region: str = "US",
+    title: str = "CPI m/m",
+    confidence: float = 1.0,
+    updated_at: datetime | None = None,
+) -> Any:
+    from datetime import UTC, datetime
+
+    row = MagicMock()
+    row.event_id = event_id
+    row.event_type = event_type
+    row.scope = scope
+    row.region = region
+    row.title = title
+    row.confidence = confidence
+    row.updated_at = updated_at or datetime(2026, 4, 8, 12, 0, 0, tzinfo=UTC)
+    return row
+
+
+class TestSyncTemporalEventsPagination:
+    """_sync_temporal_events: pagination loop terminates correctly."""
+
+    def test_empty_first_page_issues_no_cypher(self) -> None:
+        """When temporal_events returns an empty first page, no Cypher MERGE is called."""
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        # LOAD 'age', SET search_path, entities→empty, relations→empty,
+        # temporal_events SELECT→empty, exposures SELECT→empty
+        session.execute = AsyncMock(
+            side_effect=[
+                None,  # LOAD
+                None,  # SET search_path
+                _make_result([]),  # entities SELECT
+                _make_result([]),  # relations SELECT
+                _make_result([]),  # temporal_events SELECT
+                _make_result([]),  # exposures SELECT
+            ]
+        )
+        sf = _make_session_factory(session)
+        valkey = _make_valkey()
+        settings = _make_settings()
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+        asyncio.run(worker.run())
+
+        # Exactly 6 execute calls: LOAD, SET, entities, relations, temporal, exposures
+        assert session.execute.await_count == 6
+
+    def test_partial_page_terminates_loop(self) -> None:
+        """A page smaller than event_batch (2000) stops pagination without a second SELECT."""
+        event_row = _make_event_row()
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        # LOAD, SET search_path, entities→empty, relations→empty,
+        # temporal SELECT (1 row < 2000) → Cypher MERGE, exposures SELECT→empty
+        session.execute = AsyncMock(
+            side_effect=[
+                None,
+                None,
+                _make_result([]),  # entities
+                _make_result([]),  # relations
+                _make_result([event_row]),  # temporal SELECT — 1 row < batch
+                None,  # temporal Cypher MERGE
+                _make_result([]),  # exposures SELECT
+            ]
+        )
+        sf = _make_session_factory(session)
+        valkey = _make_valkey()
+        settings = _make_settings()
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+        asyncio.run(worker.run())
+
+        # Should NOT have issued a second temporal SELECT — only one SELECT + one Cypher
+        temporal_selects = [c for c in session.execute.call_args_list if "temporal_events" in str(c[0][0])]
+        assert len(temporal_selects) == 1
+
+    def test_temporal_event_cypher_contains_correct_params(self) -> None:
+        """Cypher MERGE for a temporal event embeds event_id and title in params JSON."""
+        import json
+
+        event_row = _make_event_row(
+            event_id="01930000-0000-7000-8000-000000000099",
+            title="GDP q/q",
+        )
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                None,
+                None,
+                _make_result([]),  # entities
+                _make_result([]),  # relations
+                _make_result([event_row]),  # temporal SELECT
+                None,  # temporal Cypher
+                _make_result([]),  # exposures
+            ]
+        )
+        sf = _make_session_factory(session)
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
+        asyncio.run(worker.run())
+
+        # Cypher call is index 5 (0-based: LOAD, SET, entities, relations, temporal_select, cypher)
+        cypher_call = session.execute.call_args_list[5]
+        cypher_sql = str(cypher_call[0][0])
+        assert "TemporalEvent" in cypher_sql
+
+        params = json.loads(cypher_call[0][1]["params"])
+        assert params["event_id"] == "01930000-0000-7000-8000-000000000099"
+        assert params["title"] == "GDP q/q"
+
+    def test_valkey_error_falls_back_to_epoch(self) -> None:
+        """When Valkey.get() raises, the epoch watermark is used and the run continues."""
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import _EPOCH, AgeSyncWorker
+
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(side_effect=ConnectionError("valkey down"))
+        valkey.set = AsyncMock()
+
+        session = _make_session()
+        sf = _make_session_factory(session)
+        settings = _make_settings()
+
+        captured_watermarks: list[datetime] = []
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+
+        async def _capture(sess: Any, since: datetime) -> int:
+            captured_watermarks.append(since)
+            return 0
+
+        worker._sync_entities = _capture  # type: ignore[method-assign]
+        worker._sync_relations = AsyncMock(return_value=0)  # type: ignore[method-assign]
+        worker._sync_temporal_events = AsyncMock()  # type: ignore[method-assign]
+
+        asyncio.run(worker.run())
+
+        assert captured_watermarks == [_EPOCH]
+
+    def test_valkey_write_error_does_not_crash_worker(self) -> None:
+        """When Valkey.set() raises after sync, the run completes without raising."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(return_value=None)
+        valkey.set = AsyncMock(side_effect=ConnectionError("valkey write failed"))
+
+        session = _make_session()
+        sf = _make_session_factory(session)
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=_make_settings())
+        # Must not raise
+        asyncio.run(worker.run())
