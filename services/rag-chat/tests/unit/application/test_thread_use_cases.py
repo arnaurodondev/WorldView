@@ -156,32 +156,30 @@ class TestGetThreadUseCase:
 
 class TestDeleteThreadUseCase:
     async def test_delete_thread_sets_archived_at(self) -> None:
-        """soft_delete is called; returned archived_at equals repo's value."""
+        """soft_delete is called with thread_id, user_id, tenant_id; returned archived_at equals repo's value."""
         from rag_chat.application.use_cases.delete_thread import DeleteThreadUseCase
 
         expected_archived_at = datetime(2026, 4, 6, 12, 0, 0, tzinfo=UTC)
-        thread = _make_thread()
         uow = _make_mock_uow()
-        uow.threads.get = AsyncMock(return_value=thread)
         uow.threads.soft_delete = AsyncMock(return_value=expected_archived_at)
 
         uc = DeleteThreadUseCase()
-        archived_at = await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID)
+        archived_at = await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID, tenant_id=_TENANT_ID)
 
-        uow.threads.soft_delete.assert_awaited_once_with(_THREAD_ID)
+        uow.threads.soft_delete.assert_awaited_once_with(_THREAD_ID, _USER_ID, _TENANT_ID)
         uow.commit.assert_awaited_once()
         assert archived_at == expected_archived_at
 
     async def test_delete_thread_not_found_raises(self) -> None:
-        """Thread not found → ThreadNotFoundError before soft_delete is called."""
+        """Repo raises ThreadNotFoundError when thread not found / wrong owner."""
         from rag_chat.application.use_cases.delete_thread import DeleteThreadUseCase
         from rag_chat.domain.errors import ThreadNotFoundError
 
         uow = _make_mock_uow()
-        uow.threads.get = AsyncMock(return_value=None)
+        uow.threads.soft_delete = AsyncMock(side_effect=ThreadNotFoundError("not found"))
 
         uc = DeleteThreadUseCase()
         with pytest.raises(ThreadNotFoundError):
-            await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID)
+            await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID, tenant_id=_TENANT_ID)
 
-        uow.threads.soft_delete.assert_not_awaited()
+        uow.commit.assert_not_awaited()

@@ -176,9 +176,8 @@ class TestGetThreadEndpoint:
 class TestDeleteThreadEndpoint:
     async def test_delete_thread_endpoint(self, app_with_mocks: object, mock_uow: MagicMock) -> None:
         """DELETE /api/v1/threads/{id} for owned thread → 200 with archived_at."""
-        thread = _make_thread()
+
         archived_at = datetime(2026, 4, 6, 12, 0, 0, tzinfo=UTC)
-        mock_uow.threads.get = AsyncMock(return_value=thread)
         mock_uow.threads.soft_delete = AsyncMock(return_value=archived_at)
 
         transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
@@ -192,7 +191,9 @@ class TestDeleteThreadEndpoint:
 
     async def test_delete_thread_not_found(self, app_with_mocks: object, mock_uow: MagicMock) -> None:
         """DELETE /api/v1/threads/{id} for unknown thread → 404."""
-        mock_uow.threads.get = AsyncMock(return_value=None)
+        from rag_chat.domain.errors import ThreadNotFoundError
+
+        mock_uow.threads.soft_delete = AsyncMock(side_effect=ThreadNotFoundError("not found"))
 
         transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:

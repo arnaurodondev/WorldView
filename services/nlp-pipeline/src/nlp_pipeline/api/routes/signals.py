@@ -115,7 +115,7 @@ async def vector_search(
     Returns section snippets ranked by cosine similarity to the query embedding.
     The embedding is computed via the app-scoped embedding client at runtime.
     """
-    hits_data = await VectorSearchUseCase().execute(repo, body.limit)
+    hits_data = await VectorSearchUseCase().execute(repo, query=body.query, limit=body.limit)
     return VectorSearchResponse(
         query=body.query,
         hits=[

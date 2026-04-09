@@ -154,17 +154,18 @@ class SqlaSignalsQueryRepo(SignalsQueryPort):
             for row in rows
         ], int(total)
 
-    async def vector_search_sections(self, limit: int) -> list[dict[str, Any]]:
+    async def vector_search_sections(self, query: str, limit: int) -> list[dict[str, Any]]:
         stmt = text(
             """
             SELECT s.section_id, s.doc_id,
-                   left(regexp_replace(s.doc_id::text, '-', ''), 40) AS snippet,
+                   coalesce(s.title, s.section_type, s.doc_id::text) AS snippet,
                    1.0 AS score
             FROM sections s
             WHERE s.doc_id IS NOT NULL
+              AND (:query = '' OR s.title ILIKE '%' || :query || '%')
             LIMIT :limit
             """,
-        ).bindparams(limit=limit)
+        ).bindparams(query=query, limit=limit)
         result = await self._session.execute(stmt)
         rows = result.all()
 

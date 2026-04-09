@@ -46,5 +46,11 @@ class ThreadRepository(ABC):
         """Update last_msg_at and entity_ids after a new message is appended."""
 
     @abstractmethod
-    async def soft_delete(self, thread_id: UUID) -> datetime:
-        """Set archived_at to now; return the timestamp set."""
+    async def soft_delete(self, thread_id: UUID, user_id: UUID, tenant_id: UUID) -> datetime:
+        """Set archived_at to now; return the timestamp set.
+
+        Filters by user_id AND tenant_id so the UPDATE is a single atomic
+        check-and-modify — no TOCTOU race between ownership verification
+        and the write.  Raises ``ThreadNotFoundError`` when the thread is not
+        found or does not belong to the caller.
+        """
