@@ -82,7 +82,7 @@ async def test_first_event_creates_instrument(
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
     from sqlalchemy import select
 
-    await db_session.expire_all()
+    db_session.expire_all()
     result = await db_session.execute(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "AAPL",
@@ -122,7 +122,7 @@ async def test_replay_is_idempotent(
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
     from sqlalchemy import select
 
-    await db_session.expire_all()
+    db_session.expire_all()
     result = await db_session.execute(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "MSFT",
@@ -169,7 +169,7 @@ async def test_instrument_updated_upserts(
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
     from sqlalchemy import select
 
-    await db_session.expire_all()
+    db_session.expire_all()
     result = await db_session.execute(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "GOOGL",
@@ -213,7 +213,7 @@ async def test_malformed_event_dead_lettered(
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
     from sqlalchemy import select
 
-    await db_session.expire_all()
+    db_session.expire_all()
     result = await db_session.execute(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "BAD",

@@ -3,8 +3,8 @@
 Requires a running PostgreSQL instance with intelligence_db schema applied.
 Schema is applied by running intelligence-migrations before tests.
 
-Environment variables (defaults match infra/compose/docker-compose.yml):
-    S7_TEST_DATABASE_URL   — Postgres async URL (default: localhost:5432/intelligence_db)
+Environment variables (defaults match infra/compose/docker-compose.test.yml):
+    S7_TEST_DATABASE_URL   — Postgres async URL (default: localhost:55433/intelligence_db)
     S7_TEST_KAFKA_BOOTSTRAP — Kafka bootstrap (default: localhost:9092)
     S7_TEST_VALKEY_URL     — Valkey URL (default: redis://localhost:6379/0)
 
@@ -31,7 +31,10 @@ if TYPE_CHECKING:
 
 TEST_DB_URL = os.getenv(
     "S7_TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+    os.getenv(
+        "KNOWLEDGE_GRAPH_E2E_DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:55433/intelligence_db",
+    ),
 )
 TEST_KAFKA_BOOTSTRAP = os.getenv("S7_TEST_KAFKA_BOOTSTRAP", "localhost:9092")
 TEST_VALKEY_URL = os.getenv("S7_TEST_VALKEY_URL", "redis://localhost:6379/0")

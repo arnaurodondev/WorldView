@@ -679,7 +679,7 @@ class TestPgFundamentalMetricsRepository:
         await uow.commit()
 
         session = uow.get_read_session()
-        results = await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=20.0)])
+        results, _total = await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=20.0)])
         instrument_ids = [r.instrument_id for r in results]
         assert instr_id in instrument_ids
 
@@ -719,7 +719,7 @@ class TestPgFundamentalMetricsRepository:
 
         session = uow.get_read_session()
         # Both pe_ratio ≤ 20 AND roe_ttm ≥ 0.15 — instrument fails the second
-        results = await query_screen(
+        results, _total = await query_screen(
             session,
             [
                 ScreenFilter(metric="pe_ratio", max_value=20.0),

@@ -350,6 +350,7 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
     holding = Holding(
         portfolio_id=portfolio_id,
         instrument_id=instrument_id,
+        tenant_id=cmd.tenant_id,
         currency="USD",
         quantity=Decimal("20"),
         average_cost=Decimal("100"),
@@ -409,6 +410,7 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
     holding = Holding(
         portfolio_id=portfolio_id,
         instrument_id=instrument_id,
+        tenant_id=cmd.tenant_id,
         currency="USD",
         quantity=Decimal("1"),
         average_cost=Decimal("100"),
