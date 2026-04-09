@@ -5,9 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Integer, cast, func, select, text
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 from nlp_pipeline.application.ports.repositories import SignalsQueryPort
-from nlp_pipeline.infrastructure.nlp_db.models import EntityMentionModel, OutboxEventModel, RoutingDecisionModel
+from nlp_pipeline.infrastructure.nlp_db.models import (
+    ArticlePriceImpactModel,
+    EntityMentionModel,
+    OutboxEventModel,
+    RoutingDecisionModel,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -26,29 +32,41 @@ class SqlaSignalsQueryRepo(SignalsQueryPort):
         limit: int,
         offset: int,
         doc_id: UUID | None,
+        min_impact_score: float = 0.0,
+        order_by: str = "created_at",
     ) -> tuple[list[dict[str, Any]], int]:
+        impact_score_col = func.coalesce(ArticlePriceImpactModel.impact_score, 0.0).label("impact_score")
         q = (
-            select(OutboxEventModel)
+            select(OutboxEventModel, impact_score_col)
+            .outerjoin(
+                ArticlePriceImpactModel,
+                ArticlePriceImpactModel.article_id == cast(OutboxEventModel.partition_key, PGUUID(as_uuid=True)),
+            )
             .where(OutboxEventModel.topic == "nlp.signal.detected.v1")
-            .order_by(OutboxEventModel.created_at.desc())
         )
         if doc_id is not None:
             q = q.where(OutboxEventModel.partition_key == str(doc_id))
+        if min_impact_score > 0.0:
+            q = q.where(func.coalesce(ArticlePriceImpactModel.impact_score, 0.0) >= min_impact_score)
+
+        if order_by == "market_impact_score":
+            q = q.order_by(func.coalesce(ArticlePriceImpactModel.impact_score, 0.0).desc())
+        else:
+            q = q.order_by(OutboxEventModel.created_at.desc())
 
         count_q = select(func.count()).select_from(q.subquery())
         total = (await self._session.execute(count_q)).scalar_one()
 
         result = await self._session.execute(q.limit(limit).offset(offset))
-        rows = result.scalars().all()
-
         return [
             {
-                "event_id": row.event_id,
-                "partition_key": row.partition_key,
-                "payload_avro": row.payload_avro,
-                "created_at": row.created_at,
+                "event_id": outbox_event.event_id,
+                "partition_key": outbox_event.partition_key,
+                "payload_avro": outbox_event.payload_avro,
+                "created_at": outbox_event.created_at,
+                "impact_score": float(impact_score if impact_score is not None else 0.0),
             }
-            for row in rows
+            for outbox_event, impact_score in result.all()
         ], int(total)
 
     async def search_entity_mentions(

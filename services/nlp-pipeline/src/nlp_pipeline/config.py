@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     chunk_bucket: str = "worldview"
     silver_bucket: str = "worldview-silver"
 
+    # Price-impact labelling worker (PRD-0020 §6.5)
+    impact_normalisation_cap_pct: float = 5.0
+    price_impact_cycle_seconds: int = 14400
+    price_impact_min_age_hours: int = 25
+    market_data_internal_url: str = "http://market-data:8003"
+
     # Admin API
     admin_token: str = ""
 

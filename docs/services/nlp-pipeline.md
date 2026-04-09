@@ -31,7 +31,7 @@ performs read/write operations only.
 | GET | `/healthz` | Liveness | — |
 | GET | `/readyz` | Readiness (DB + Ollama) | — |
 | GET | `/metrics` | Prometheus | — |
-| GET | `/api/v1/signals` | Signal feed (query: entity_id, type, severity) | fast |
+| GET | `/api/v1/signals` | Signal feed (query: doc_id, min_impact_score, order_by) — returns `market_impact_score` per signal | fast |
 | GET | `/api/v1/entities` | Search entities | medium |
 | GET | `/api/v1/entities/{id}` | Entity detail + aliases | medium |
 | GET | `/api/v1/entities/{id}/articles` | Articles linked to entity | fast |
