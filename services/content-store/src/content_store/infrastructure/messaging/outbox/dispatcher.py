@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from content_store.config import Settings
     from messaging.kafka.dispatcher.base import UnitOfWorkWithOutboxProtocol
 
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
 logger = get_logger(__name__)
 
 

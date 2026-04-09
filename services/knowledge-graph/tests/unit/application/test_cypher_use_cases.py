@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+pytestmark = pytest.mark.unit
 
 _SRC = uuid4()
 _TGT = uuid4()
