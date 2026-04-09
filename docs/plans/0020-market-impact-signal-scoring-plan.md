@@ -314,11 +314,12 @@ python -m mypy src/ --config-file mypy.ini
 
 ---
 
-### Wave A-3: Avro Schema Update
+### Wave A-3: Avro Schema Update ✅
 
 **Goal**: Add `market_impact_score` field to `nlp.signal.detected.v1.avsc` with backward-compatible default.
 **Depends on**: T-A-2-01 (domain entity must exist before schema update)
 **Estimated effort**: 0.25 wave (Low complexity)
+**Status**: **DONE** — 2026-04-09 · 3 contract tests pass · ruff clean
 **Architecture layer**: Infrastructure — Contracts
 
 #### Tasks
@@ -358,10 +359,10 @@ python -m mypy src/ --config-file mypy.ini
 | `test_signal_detected_v1_serialise_with_score` | Signal with `market_impact_score=0.75` serialises/deserialises correctly | contract |
 
 **Acceptance criteria**:
-- [ ] `nlp.signal.detected.v1.avsc` has new `market_impact_score` field as the last field
-- [ ] `"default": 0.0` is present
-- [ ] `scripts/gen-contracts.sh` passes (or equivalent avro-tools validation)
-- [ ] 3 contract tests pass
+- [x] `nlp.signal.detected.v1.avsc` has new `market_impact_score` field as the last field
+- [x] `"default": 0.0` is present
+- [x] `scripts/gen-contracts.sh` passes (or equivalent avro-tools validation)
+- [x] 3 contract tests pass
 
 #### Pre-read
 - `infra/kafka/schemas/nlp.signal.detected.v1.avsc` — current schema (13 fields)
