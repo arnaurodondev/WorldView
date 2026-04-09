@@ -47,6 +47,7 @@ TOPICS=(
     "entity.canonical.created.v1:12:1"
     "alert.delivered.v1:12:1"
     "claim.extracted.v1:12:1"
+    "market.prediction.v1:8:1"
     "kg.dead-letter.v1:12:1"
     "alert.dead-letter.v1:12:1"
     "nlp.dead-letter.v1:12:1"
@@ -107,6 +108,12 @@ echo "Setting 30-day retention on relation.type.proposed.v1"
 "$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
     --entity-type topics \
     --entity-name relation.type.proposed.v1 \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on market.prediction.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name market.prediction.v1 \
     --add-config retention.ms=2592000000
 
 # ── Verification ──────────────────────────────────────────────────────────────

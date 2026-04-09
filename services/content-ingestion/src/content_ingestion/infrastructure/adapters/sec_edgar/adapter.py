@@ -8,8 +8,9 @@ User-Agent: Required by SEC policy (ConfigurationError if missing).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 import common.ids
 import common.time
@@ -18,8 +19,11 @@ from content_ingestion.infrastructure.adapters.base import RetryConfig, SourceAd
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from content_ingestion.config import SECEdgarProviderSettings
     from content_ingestion.domain.entities import Source
     from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
+
+_NY_TZ = ZoneInfo("America/New_York")
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -47,6 +51,7 @@ class SECEdgarAdapter(SourceAdapter):
         client: HTTP client for SEC EDGAR endpoints.
         exists_fn: Async callable that checks if a url_hash already exists.
         retry_config: Retry parameters.
+        provider_cfg: Provider settings (market-hours intervals, etc.).
     """
 
     def __init__(
@@ -54,10 +59,33 @@ class SECEdgarAdapter(SourceAdapter):
         client: SECEdgarClient,
         exists_fn: Any = None,
         retry_config: RetryConfig | None = None,
+        provider_cfg: SECEdgarProviderSettings | None = None,
     ) -> None:
         self._client = client
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
+        self._provider_cfg = provider_cfg
+
+    def _is_market_hours(self, now_utc: datetime) -> bool:
+        """Return True if ``now_utc`` falls within NYSE market hours (09:30-16:00 ET, Mon-Fri)."""
+        now_ny = now_utc.astimezone(_NY_TZ)
+        return now_ny.weekday() < 5 and time(9, 30) <= now_ny.time() <= time(16, 0)
+
+    def calculate_next_run_time(self, now_utc: datetime) -> datetime:
+        """Return the next scheduled run time based on market hours.
+
+        Uses ``market_hours_interval_seconds`` (default 60s) during NYSE hours
+        and ``off_hours_interval_seconds`` (default 1800s) outside them.
+        """
+        if self._provider_cfg is not None:
+            interval = (
+                self._provider_cfg.market_hours_interval_seconds
+                if self._is_market_hours(now_utc)
+                else self._provider_cfg.off_hours_interval_seconds
+            )
+        else:
+            interval = 60 if self._is_market_hours(now_utc) else 1800
+        return now_utc + timedelta(seconds=interval)
 
     async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch and deduplicate SEC EDGAR filings.

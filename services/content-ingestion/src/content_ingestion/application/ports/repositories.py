@@ -168,3 +168,20 @@ class DLQPort(Protocol):
     async def requeue(self, dlq_id: UUID) -> UUID | None: ...
 
     async def count_failed(self) -> int: ...
+
+
+@runtime_checkable
+class PredictionMarketFetchLogPort(Protocol):
+    """Port for the prediction_market_fetch_log repository."""
+
+    async def exists_by_market_snapshot(self, market_id: str, snapshot_at: datetime) -> bool: ...
+
+    async def create_market_fetch_log(
+        self,
+        *,
+        source_id: UUID | None,
+        market_id: str,
+        snapshot_at: datetime,
+        resolution_status: str,
+        fetched_at: datetime,
+    ) -> UUID: ...

@@ -146,12 +146,17 @@ class FetchAndWriteUseCase:
                 )
 
         # 2. Process each result with batch commits
+        seen_url_hashes: set[str] = set()  # intra-batch dedup (prevents UNIQUE violation on batched commits)
         for result in results:
             try:
-                # 2a. Dedup check
+                # 2a. Dedup check (DB + intra-batch)
                 if await self._fetch_log.exists_by_url_hash(result.url_hash):
                     skipped += 1
                     continue
+                if result.url_hash in seen_url_hashes:
+                    skipped += 1
+                    continue
+                seen_url_hashes.add(result.url_hash)
 
                 # 2b. Write to MinIO bronze
                 minio_key = await self._bronze.put_object(

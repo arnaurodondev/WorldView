@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -134,3 +135,68 @@ class TestSECEdgarAdapterFetch:
         results = await adapter.fetch(_make_source(), is_backfill=True)
         assert len(results) == 1
         assert results[0].is_backfill is True
+
+
+class TestSECEdgarAdapterMarketHours:
+    """Tests for _is_market_hours() and calculate_next_run_time()."""
+
+    def _make_adapter(self) -> SECEdgarAdapter:
+        from unittest.mock import MagicMock
+
+        from content_ingestion.infrastructure.adapters.sec_edgar.client import SECEdgarClient
+
+        cfg = SECEdgarProviderSettings(market_hours_interval_seconds=60, off_hours_interval_seconds=1800)
+        return SECEdgarAdapter(client=MagicMock(spec=SECEdgarClient), provider_cfg=cfg)
+
+    def _utc(self, iso: str) -> object:
+        from datetime import datetime
+
+        return datetime.fromisoformat(iso).replace(tzinfo=UTC)
+
+    def test_is_market_hours_tuesday_10am_et(self) -> None:
+        """Tuesday 10:00 ET (15:00 UTC) is within market hours."""
+        adapter = self._make_adapter()
+        # 2026-04-07 is a Tuesday. 10:00 ET = 14:00 UTC (EDT, UTC-4)
+        assert adapter._is_market_hours(self._utc("2026-04-07T14:00:00+00:00")) is True  # type: ignore[arg-type]
+
+    def test_is_market_hours_saturday_noon_et(self) -> None:
+        """Saturday noon ET is outside market hours."""
+        adapter = self._make_adapter()
+        # 2026-04-11 is a Saturday. Noon ET = 16:00 UTC (EDT)
+        assert adapter._is_market_hours(self._utc("2026-04-11T16:00:00+00:00")) is False  # type: ignore[arg-type]
+
+    def test_is_market_hours_weekday_before_open(self) -> None:
+        """Tuesday 08:00 ET (before 09:30 open) is outside market hours."""
+        adapter = self._make_adapter()
+        # 2026-04-07 Tuesday 08:00 ET = 12:00 UTC (EDT)
+        assert adapter._is_market_hours(self._utc("2026-04-07T12:00:00+00:00")) is False  # type: ignore[arg-type]
+
+    def test_is_market_hours_weekday_after_close(self) -> None:
+        """Tuesday 17:00 ET (after 16:00 close) is outside market hours."""
+        adapter = self._make_adapter()
+        # 2026-04-07 Tuesday 17:00 ET = 21:00 UTC (EDT)
+        assert adapter._is_market_hours(self._utc("2026-04-07T21:00:00+00:00")) is False  # type: ignore[arg-type]
+
+    def test_is_market_hours_dst_transition(self) -> None:
+        """DST switch day (March 8, 2026) at 10:00 local time → market hours."""
+        adapter = self._make_adapter()
+        # 2026-03-08 Sunday DST starts; 2026-03-09 Monday 10:00 ET = 14:00 UTC (EDT, UTC-4)
+        assert adapter._is_market_hours(self._utc("2026-03-09T14:00:00+00:00")) is True  # type: ignore[arg-type]
+
+    def test_calculate_next_run_market_hours(self) -> None:
+        """During market hours → next run = now + 60s."""
+        from datetime import timedelta
+
+        adapter = self._make_adapter()
+        now_utc = self._utc("2026-04-07T14:00:00+00:00")
+        expected = now_utc + timedelta(seconds=60)  # type: ignore[operator]
+        assert adapter.calculate_next_run_time(now_utc) == expected  # type: ignore[arg-type]
+
+    def test_calculate_next_run_off_hours(self) -> None:
+        """Outside market hours → next run = now + 1800s."""
+        from datetime import timedelta
+
+        adapter = self._make_adapter()
+        now_utc = self._utc("2026-04-07T21:00:00+00:00")
+        expected = now_utc + timedelta(seconds=1800)  # type: ignore[operator]
+        assert adapter.calculate_next_run_time(now_utc) == expected  # type: ignore[arg-type]

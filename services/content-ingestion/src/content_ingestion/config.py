@@ -37,6 +37,16 @@ class SECEdgarProviderSettings(BaseModel):
     filing_base_url: str = "https://www.sec.gov/Archives/edgar/data"
     default_forms: str = "10-K,10-Q,8-K,DEF14A"
     max_concurrent: int = 8
+    market_hours_interval_seconds: int = 60
+    off_hours_interval_seconds: int = 1800
+
+
+class PolymarketProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket Gamma API provider."""
+
+    base_url: str = "https://gamma-api.polymarket.com/markets"
+    page_size: int = Field(default=500, ge=1, le=1000)
+    max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
 
 
 class HTTPClientSettings(BaseModel):
@@ -130,6 +140,7 @@ class Settings(BaseSettings):
     finnhub: FinnhubProviderSettings = FinnhubProviderSettings()
     newsapi: NewsAPIProviderSettings = NewsAPIProviderSettings()
     sec_edgar: SECEdgarProviderSettings = SECEdgarProviderSettings()
+    polymarket: PolymarketProviderSettings = PolymarketProviderSettings()
     http_client: HTTPClientSettings = HTTPClientSettings()
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────

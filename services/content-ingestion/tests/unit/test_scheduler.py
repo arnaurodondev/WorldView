@@ -37,9 +37,9 @@ class TestAdapterRegistry:
     def test_manual_not_in_registry(self) -> None:
         assert SourceType.MANUAL not in ADAPTER_REGISTRY
 
-    def test_polymarket_not_yet_in_registry(self) -> None:
-        """PolymarketAdapter is registered in Wave A-2 (PLAN-0019); confirm placeholder until then."""
-        assert SourceType.POLYMARKET not in ADAPTER_REGISTRY
+    def test_polymarket_in_registry(self) -> None:
+        """PolymarketAdapter is registered in ADAPTER_REGISTRY (added in Wave A-2, PLAN-0019)."""
+        assert SourceType.POLYMARKET in ADAPTER_REGISTRY
 
 
 class TestIngestionScheduler:
