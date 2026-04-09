@@ -15,12 +15,12 @@ class TestContentSourceType:
     def test_is_str_enum(self) -> None:
         assert issubclass(ContentSourceType, StrEnum)
 
-    def test_all_five_values(self) -> None:
-        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual"}
+    def test_all_values(self) -> None:
+        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual", "polymarket"}
         assert {v.value for v in ContentSourceType} == expected
 
     def test_member_count(self) -> None:
-        assert len(ContentSourceType) == 5
+        assert len(ContentSourceType) == 6
 
     def test_string_comparison(self) -> None:
         assert ContentSourceType.EODHD == "eodhd"
@@ -28,6 +28,13 @@ class TestContentSourceType:
         assert ContentSourceType.FINNHUB == "finnhub"
         assert ContentSourceType.NEWSAPI == "newsapi"
         assert ContentSourceType.MANUAL == "manual"
+        assert ContentSourceType.POLYMARKET == "polymarket"
+
+    def test_content_source_type_polymarket(self) -> None:
+        assert ContentSourceType.POLYMARKET == "polymarket"
+
+    def test_polymarket_in_all_values(self) -> None:
+        assert "polymarket" in [v.value for v in ContentSourceType]
 
     def test_importable_from_root(self) -> None:
         from contracts import ContentSourceType as RootType

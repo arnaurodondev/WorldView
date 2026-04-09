@@ -13,7 +13,7 @@
 | PLAN-0015 | S8 RAG/Chat: Hybrid Intelligence Pipeline | PRD-0015 | completed | 22/22 | 2026-04-09 | 2026-04-09 |
 | PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | completed | 11/11 | 2026-04-09 | 2026-04-09 |
 | PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | completed | 10/10 | 2026-04-09 | 2026-04-09 |
-| PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | draft | 0/6 | — | 2026-04-09 |
+| PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | in-progress | 1/6 | — | 2026-04-09 |
 | PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | draft | 0/0 | — | 2026-04-06 |
@@ -44,7 +44,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | 2026-03-29 | 11 | 2026-03-30 |
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 | — |
 | PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | 2026-03-26 | 2 | — |
-| PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 | 2026-03-27 |
+| PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 | 2026-04-09 |
 | PLAN-0001-B-R4 | S4+S5 QA Review Fixes: DLQ Fidelity, SSRF Hardening, DDL Alignment, Process Compounding | QA Review | 2026-03-27 | 4 | — |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | 2026-03-26 | 7 | — |
 | PLAN-0001-B-R2 | S4+S5 QA Fixes: DDL, DLQ, SSRF, LSH, Contract Tests, Compounding | QA Review | 2026-03-27 | 4 | — |
@@ -68,6 +68,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | QA-S1S2S3-2026-04-07 | QA Pass S1+S2+S3: PASS_WITH_WARNINGS — 8 MAJOR (ULID/metrics/cache-hook/contract-tests), 0 BLOCKING/CRITICAL, all unit+lint+mypy PASS | N/A | 2026-04-07 | — | 2026-04-07 |
 | PLAN-0017 | Entity Screener + Similarity Search + Embedding View Fix + EODHD Description LLM | PRD-0017 | 2026-04-08 | 11 | 2026-04-08 |
 | QA-S6S7S8-2026-04-09 | Deep QA Pass S6/S7/S8: TOCTOU soft_delete (CRITICAL), VectorSearch query wiring, entity.canonical.created.v1 dispatcher fix, S8 integration tests (14), 506+313+212 tests green | N/A | 2026-04-09 | — | 2026-04-09 |
+| QA-S4S5-2026-04-09 | Deep QA Pass S4+S5: 5-agent review, 9 missing use-case unit tests added, F-DS-014 intra-batch dedup fix, 490+289 tests green, PASS_WITH_WARNINGS | N/A | 2026-04-09 | — | 2026-04-09 |
 
 ## Conventions
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,15 +22,24 @@ def _make_source(
 
 
 class TestAdapterRegistry:
+    # Source types whose adapters are registered in ADAPTER_REGISTRY.
+    # MANUAL: not polled — delivered via webhook/submit endpoint, no adapter needed.
+    # POLYMARKET: adapter added in Wave A-2 (PLAN-0019); excluded here until then.
+    _NO_ADAPTER: ClassVar[set[SourceType]] = {SourceType.MANUAL, SourceType.POLYMARKET}
+
     def test_all_source_types_have_adapters(self) -> None:
-        """Every SourceType except MANUAL should have an adapter."""
+        """Every SourceType except non-polled types should have an adapter."""
         for st in SourceType:
-            if st == SourceType.MANUAL:
+            if st in self._NO_ADAPTER:
                 continue
             assert st in ADAPTER_REGISTRY, f"Missing adapter for {st}"
 
     def test_manual_not_in_registry(self) -> None:
         assert SourceType.MANUAL not in ADAPTER_REGISTRY
+
+    def test_polymarket_not_yet_in_registry(self) -> None:
+        """PolymarketAdapter is registered in Wave A-2 (PLAN-0019); confirm placeholder until then."""
+        assert SourceType.POLYMARKET not in ADAPTER_REGISTRY
 
 
 class TestIngestionScheduler:
