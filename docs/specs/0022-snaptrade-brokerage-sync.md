@@ -205,6 +205,42 @@ Brokerage portfolio sync eliminates this friction: users connect their brokerage
 
 ---
 
+#### GET /api/v1/brokerage-connections/{connection_id}/sync-errors (S1)
+
+- **Purpose**: Returns the list of sync errors for a specific brokerage connection
+- **Auth**: required; `user_id` injected by S9. Use case verifies ownership before returning data.
+- **Path parameter**: `connection_id` (UUID)
+- **Query parameters**:
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `limit` | int | no | 50 | Max number of errors to return (1–200) |
+
+- **Response** (200):
+
+`GetSyncErrorsResponse` fields:
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `items` | `SyncErrorResponse[]` | no | Sync errors for this connection, newest first |
+
+`SyncErrorResponse` fields:
+
+| Field | Type | Nullable | Description |
+|-------|------|----------|-------------|
+| `id` | UUID | no | Error record ID |
+| `connection_id` | UUID | no | Source connection |
+| `snaptrade_transaction_id` | str | no | SnapTrade's transaction identifier |
+| `error_type` | str | no | `unknown_instrument` / `unsupported_type` / `api_error` / `validation_error` |
+| `error_detail` | str | yes | Human-readable description |
+| `created_at` | datetime | no | Error record creation time |
+
+> **Privacy note**: `raw_transaction` (§6.4) is intentionally **excluded** from this response schema. It may contain raw brokerage positions, balances, and account metadata — it is stored for admin DB-level debugging only. `resolved_at` is also excluded: no code path in PLAN-0022 sets it (reserved for a future `AcknowledgeSyncError` use case).
+
+- **Error responses**: 404 (connection not found or wrong user)
+
+---
+
 #### S9 Gateway proxy routes (new)
 
 | Method | Gateway Path | Proxied To |
@@ -213,6 +249,7 @@ Brokerage portfolio sync eliminates this friction: users connect their brokerage
 | GET | `/api/v1/brokerage-connections` | `S1 GET /api/v1/brokerage-connections` |
 | DELETE | `/api/v1/brokerage-connections/{id}` | `S1 DELETE /api/v1/brokerage-connections/{id}` |
 | GET | `/api/v1/brokerage-connections/{id}/callback` | `S1 GET /api/v1/brokerage-connections/{id}/callback` |
+| GET | `/api/v1/brokerage-connections/{id}/sync-errors` | `S1 GET /api/v1/brokerage-connections/{id}/sync-errors` |
 
 All: JWT auth required (S9 injects `user_id`), 30 req/min per user (lower than default — these endpoints involve external API calls).
 
@@ -589,6 +626,7 @@ This feature is inherently low-throughput for a thesis application (≤5 connect
 | `test_activate_connection_user_id_mismatch` | `ActivateBrokerageConnectionUseCase` with wrong userId → error | HIGH |
 | `test_disconnect_revokes_snaptrade_authorization` | `FakeSnapTradeClient.revoke_authorization()` called once | HIGH |
 | `test_disconnect_retains_transactions` | After disconnect, existing transactions remain | HIGH |
+| `test_get_sync_errors_raw_transaction_excluded` | `GET /api/v1/brokerage-connections/{id}/sync-errors` response items do not contain a `raw_transaction` field — verified with `assert "raw_transaction" not in response.json()["items"][0]` | HIGH |
 
 ### Integration Tests (S1)
 
