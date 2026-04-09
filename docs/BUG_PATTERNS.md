@@ -115,6 +115,8 @@
 | [BP-126](#bp-126) | Alembic / DDL | `NotNullViolation` on NOT NULL column — ORM `server_default` not inherited by Alembic migration | Every Alembic migration with a NOT NULL column with server_default |
 | [BP-128](#bp-128) | AGE extension / PostgreSQL session | AGE functions fail on new connections — `LOAD 'age'` and `SET search_path` must be re-executed per session | `AgeSyncWorker`, `CypherPathUseCase`, all AGE Cypher code paths |
 | [BP-129](#bp-129) | Watermark sync / DDL | Incremental watermark sync fails when source table lacks `updated_at` — partitioned tables often have only `created_at` and domain-specific timestamp columns | `AgeSyncWorker` Worker 13F on `relations` table |
+| [BP-130](#bp-130) | Kafka / Protocol adapter | `AttributeError: 'cimpl.Producer' has no attribute 'produce_bytes'` — Protocol interface defined but no concrete adapter wraps `confluent_kafka.Producer` | `enriched_consumer_main.py`, `graph_write.py`, any EODHD worker wired with a direct producer |
+| [BP-131](#bp-131) | PostgreSQL / unique index | NULL values in multi-column unique index allow semantic duplicates — `ON CONFLICT` never fires when nullable column is NULL | `temporal_events.uidx_temporal_events_natural_key`, any table with nullable columns in a unique constraint |
 
 ---
 
@@ -4768,3 +4770,58 @@ Also add an `ON UPDATE` trigger or ensure all application-layer update paths exp
 **Affected areas**: `AgeSyncWorker` (Worker 13F) — `relations` table required migration 0004 to add `updated_at`.
 
 **First seen**: PRD-0018 audit, 2026-04-08.
+
+## BP-130 — `DirectKafkaProducerProtocol.produce_bytes` Has No Concrete Adapter — AttributeError in Production
+
+**Symptom**: `AttributeError: 'cimpl.Producer' object has no attribute 'produce_bytes'` in S7 hot-path graph write (every enriched article that materialises relations/claims). The `EnrichedArticleConsumer` processes the article, reaches step 5 of `materialize_entities()`, and crashes. Articles end up in the DLQ. `entity.dirtied.v1` is never produced.
+
+**Root cause**: `DirectKafkaProducerProtocol` in `graph_write.py` defines a `produce_bytes(topic, key, value)` method as the interface. However `confluent_kafka.Producer` has no such method — only `produce(topic, value, key, ...)`. The `enriched_consumer_main.py` passes a raw `confluent_kafka.Producer` with `# type: ignore[arg-type]`, masking the duck-type mismatch. At runtime, `direct_producer.produce_bytes(...)` raises `AttributeError`.
+
+**Fix**: Create a `ConfluentDirectProducer` adapter class that wraps `confluent_kafka.Producer` and implements `produce_bytes`:
+```python
+class ConfluentDirectProducer:
+    def __init__(self, producer: Producer) -> None:
+        self._producer = producer
+
+    def produce_bytes(self, *, topic: str, key: bytes, value: bytes) -> None:
+        """Enqueue to librdkafka buffer — non-blocking, no flush."""
+        self._producer.produce(topic, value=value, key=key)
+```
+Do NOT call `flush()` — `produce()` alone enqueues to the internal librdkafka buffer and is sub-millisecond. `flush()` is synchronous-blocking and would block the asyncio event loop. Delivery is handled by librdkafka's background thread.
+
+In `enriched_consumer_main.py`:
+```python
+raw_producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+direct_producer = ConfluentDirectProducer(raw_producer)  # remove # type: ignore
+```
+
+**Prevention**:
+- Never use `# type: ignore[arg-type]` to pass a dependency that doesn't satisfy the Protocol — this suppresses the type mismatch that would have caught the bug.
+- When defining a Protocol for an external library type, immediately create the adapter in the same commit.
+- Add a protocol conformance test: `isinstance(direct_producer, DirectKafkaProducerProtocol)` or mypy structural check.
+
+**Affected areas**: `enriched_consumer_main.py`, `graph_write.py` step 5, any EODHD worker wired with a direct producer, `provisional_enrichment.py`.
+
+**First seen**: PRD-0018 investigation, 2026-04-09.
+
+## BP-131 — NULL Values in Multi-Column Unique Index Allow Semantic Duplicates
+
+**Symptom**: Two rows exist in a table that should have been deduplicated by an `ON CONFLICT` upsert. One or more of the unique index columns is NULL. The upsert succeeds without conflict and creates a duplicate row.
+
+**Root cause**: PostgreSQL standard behavior — `NULL ≠ NULL` in unique indexes. Two rows where the nullable column is NULL and all other columns are identical do NOT conflict with each other. The `ON CONFLICT (col_a, col_b, nullable_col, col_c) DO UPDATE` clause never fires for these rows.
+
+**Examples in this codebase**:
+- `temporal_events.uidx_temporal_events_natural_key` on `(event_type, region, title, date_trunc('day', active_from))` — LOCAL events have `region=NULL`; two LOCAL events with the same type/title/date create two rows
+- BP-007 is a related pattern
+
+**Fix options** (pick one):
+1. **PostgreSQL 15+**: `CREATE UNIQUE INDEX ... ON table (...) NULLS NOT DISTINCT` — treats NULL as a distinct value in the uniqueness check. Requires dropping and recreating the index.
+2. **Partial index** (all PG versions): `CREATE UNIQUE INDEX ... ON table (col_a, col_b, col_c) WHERE nullable_col IS NULL` plus the original index for non-NULL values. Requires two `INSERT` branches (one per NULL/non-NULL case).
+3. **Sentinel value**: Replace NULL with a sentinel string (e.g., `__NULL__`). Ugly but universally compatible.
+4. **Accept it**: If a compensating dedup mechanism (Valkey event-id dedup, application-level guard) covers the most common re-delivery paths, accepting rare semantic duplicates may be the pragmatic choice.
+
+**Prevention**: When designing tables with nullable columns in unique constraints, explicitly decide which option to use and document it in the migration DDL comment. Verify the PostgreSQL version supports NULLS NOT DISTINCT if that option is chosen (PG ≥ 15).
+
+**Affected areas**: `temporal_events.uidx_temporal_events_natural_key` (LOCAL events with NULL region), any table with nullable columns in a multi-column unique constraint.
+
+**First seen**: PRD-0018 investigation, 2026-04-09.

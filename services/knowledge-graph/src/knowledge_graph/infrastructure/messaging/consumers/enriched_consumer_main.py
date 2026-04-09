@@ -34,6 +34,7 @@ async def main() -> None:
     from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
         EnrichedArticleConsumer,
     )
+    from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
@@ -70,8 +71,12 @@ async def main() -> None:
         semaphore=asyncio.Semaphore(4),
     )
 
-    # Direct Kafka producer for entity.dirtied.v1 (produced outside outbox)
-    direct_producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    # Direct Kafka producer for entity.dirtied.v1 (produced outside outbox).
+    # ConfluentDirectProducer wraps confluent_kafka.Producer to expose
+    # produce_bytes() — confluent_kafka.Producer itself does not have this
+    # method (BP-130).
+    raw_producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    direct_producer = ConfluentDirectProducer(raw_producer)
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
@@ -82,7 +87,7 @@ async def main() -> None:
         config=config,
         session_factory=write_factory,
         embedding_client=embedding_client,  # type: ignore[arg-type]
-        direct_producer=direct_producer,  # type: ignore[arg-type]
+        direct_producer=direct_producer,
         entity_dirtied_topic=settings.kafka_topic_entity_dirtied,
         canonicalization_threshold=settings.relation_canonicalization_threshold,
         dedup_client=valkey,
