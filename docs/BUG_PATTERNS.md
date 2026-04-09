@@ -4857,3 +4857,29 @@ direct_producer = ConfluentDirectProducer(raw_producer)  # remove # type: ignore
 **Affected areas**: `infra/compose/docker-compose.test.yml`, any service adding a new consumer or worker process entry point.
 
 **First seen**: PLAN-0019 QA pass, 2026-04-09.
+
+
+## BP-134 — Live/Network Tests Missing `pytest.mark.live` Causes Fixture Scope Mismatch
+
+**Symptom**: Running `pytest tests/ -m "not integration and not e2e"` still collects tests from `tests/live/` that fail with `ScopeMismatch: You tried to access the function scoped fixture _function_scoped_runner with a module scoped request object`. 55 errors in market-ingestion, 11 in market-data.
+
+**Root cause**: Tests in `tests/live/` use `pytestmark = [pytest.mark.skipif(...)]` for network gating but are not decorated with `@pytest.mark.live`. Without a `live` marker, the `-m "not live"` filter does not exclude them. The fixture uses `scope="module"` on an asyncio fixture that pytest-asyncio resolves at function scope, causing a scope mismatch error.
+
+**Fix**: Add `pytest.mark.live` to `pytestmark` in all `tests/live/*.py` files:
+```python
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(not _is_network_available(), reason="No network connectivity"),
+]
+```
+Then register `live` as a custom marker in `pyproject.toml`:
+```toml
+[tool.pytest.ini_options]
+markers = ["live: requires live network access to external APIs"]
+```
+
+**Prevention**: Include `@pytest.mark.live` as a required marker in the `/test-feature` skill and REVIEW_CHECKLIST when writing tests in `tests/live/`.
+
+**Affected**: `services/market-ingestion/tests/live/`, `services/market-data/tests/live/`.
+
+**First seen**: Pre-Hetzner deployment QA pass, 2026-04-09.

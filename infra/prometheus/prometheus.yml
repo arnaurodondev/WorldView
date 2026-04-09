@@ -40,3 +40,23 @@ scrape_configs:
     static_configs:
       - targets: ["api-gateway:8000"]
     metrics_path: /metrics
+
+  - job_name: "nlp-pipeline"
+    static_configs:
+      - targets: ["nlp-pipeline:8006"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph"
+    static_configs:
+      - targets: ["knowledge-graph:8007"]
+    metrics_path: /metrics
+
+  - job_name: "rag-chat"
+    static_configs:
+      - targets: ["rag-chat:8008"]
+    metrics_path: /metrics
+
+  - job_name: "alert"
+    static_configs:
+      - targets: ["alert:8010"]
+    metrics_path: /metrics
