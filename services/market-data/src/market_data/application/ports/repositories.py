@@ -474,3 +474,16 @@ class PredictionMarketSnapshotRepository(ABC):
         limit: int,
     ) -> list[PredictionMarketSnapshot]:
         """Return snapshots for ``market_id``, ordered by ``snapshot_at DESC``."""
+
+    @abstractmethod
+    async def get_latest_prices_batch(
+        self,
+        market_ids: list[str],
+    ) -> dict[str, dict[str, float]]:
+        """Return the latest ``outcomes_prices`` for each market in ``market_ids``.
+
+        Uses ``DISTINCT ON (market_id)`` ordered by ``snapshot_at DESC`` — a single
+        query regardless of how many markets are requested (avoids N+1).
+
+        Returns a dict keyed by ``market_id``; missing markets are not included.
+        """
