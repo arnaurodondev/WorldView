@@ -76,6 +76,10 @@ class ProvisionalEnrichmentWorker:
         enriched = 0
         failed = 0
 
+        # Accumulate entity_ids that need entity.dirtied.v1 — produced AFTER commit
+        # to avoid orphaned Kafka messages when the DB transaction fails.
+        entity_ids_to_dirty: list[UUID] = []
+
         async with self._sf() as session:
             result = await session.execute(
                 text("""
@@ -114,6 +118,7 @@ WHERE queue_id = :queue_id
 """),
                             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
                         )
+                        entity_ids_to_dirty.append(entity_id)
                         enriched += 1
                     else:
                         # LLM failed; increment retry_count
@@ -135,6 +140,18 @@ WHERE queue_id = :queue_id
                     failed += 1
 
             await session.commit()
+
+        # Produce entity.dirtied.v1 AFTER successful DB commit to guarantee
+        # no orphaned Kafka messages if the transaction rolled back.
+        import json
+
+        for dirty_id in entity_ids_to_dirty:
+            if self._producer:
+                self._producer.produce_bytes(
+                    topic=self._dirtied_topic,
+                    key=str(dirty_id).encode(),
+                    value=json.dumps({"entity_id": str(dirty_id)}).encode(),
+                )
 
         logger.info(  # type: ignore[no-any-return]
             "provisional_enrichment_worker_complete",
@@ -246,14 +263,6 @@ WHERE provisional_queue_id = :queue_id
             partition_key=str(entity_id),
             payload_avro=payload,
         )
-
-        # ---- Step 9: entity.dirtied.v1 direct produce ----
-        if self._producer:
-            self._producer.produce_bytes(
-                topic=self._dirtied_topic,
-                key=str(entity_id).encode(),
-                value=json.dumps({"entity_id": str(entity_id)}).encode(),
-            )
 
         return entity_id  # type: ignore[no-any-return]
 

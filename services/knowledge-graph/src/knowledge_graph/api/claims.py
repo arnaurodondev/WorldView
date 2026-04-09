@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
+from knowledge_graph.api.dependencies import ClaimRepoDep
 from knowledge_graph.api.schemas import (
     ClaimResponse,
     ClaimsSearchRequest,
@@ -25,18 +25,13 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 @router.post("/claims/search", response_model=ClaimsSearchResponse)
 async def search_claims(
     body: ClaimsSearchRequest,
-    session: ReadOnlyDbSessionDep,
+    claim_repo: ClaimRepoDep,
 ) -> ClaimsSearchResponse:
     """Search claims for a set of entities with optional filters.
 
     Returns claims ordered by ``extraction_confidence DESC``.
     At most 10 entity IDs accepted per request.
     """
-    from knowledge_graph.infrastructure.intelligence_db.repositories.claim_repository import (
-        ClaimRepository,
-    )
-
-    claim_repo = ClaimRepository(session)
     results = await ArticleClaimSearchUseCase().execute(
         claim_repo=claim_repo,  # type: ignore[arg-type]
         entity_ids=body.entity_ids,

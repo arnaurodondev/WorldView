@@ -96,7 +96,8 @@ def test_prompt_builder_includes_conversation_history(builder: PromptBuilder) ->
         contradiction_block=_no_contradictions(),
     )
     assert "Conversation History:" in prompt
-    # Should contain recent messages
+    # Should contain recent messages — content is XML-wrapped
+    assert "<msg>" in prompt
     assert "Question 7" in prompt or "Answer 2" in prompt
 
 

@@ -66,7 +66,8 @@ class PromptBuilder:
             history_lines: list[str] = []
             for msg in recent:
                 role = "User" if msg.role == "user" else "Assistant"
-                history_lines.append(f"{role}: {msg.content[:500]}")
+                # XML-wrap content to prevent prompt injection from stored messages
+                history_lines.append(f"{role}: <msg>{msg.content[:500]}</msg>")
             parts.append("Conversation History:\n" + "\n".join(history_lines))
 
         query_section = f"Query: {rephrased_query}"
