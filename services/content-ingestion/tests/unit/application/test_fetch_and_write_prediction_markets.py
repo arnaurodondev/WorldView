@@ -58,6 +58,7 @@ def _build_use_case(
     fetch_log: object = None,
     outbox: object = None,
     commit_fn: object = None,
+    rollback_fn: object = None,
 ) -> FetchAndWritePredictionMarketsUseCase:
     return FetchAndWritePredictionMarketsUseCase(
         fetch_log_repo=fetch_log
@@ -67,6 +68,7 @@ def _build_use_case(
         ),
         outbox_repo=outbox or AsyncMock(append=AsyncMock()),
         commit_fn=commit_fn or AsyncMock(),
+        rollback_fn=rollback_fn or AsyncMock(),
     )
 
 
@@ -107,6 +109,24 @@ class TestFetchAndWritePredictionMarketsUseCase:
         assert summary.skipped == 1
         fetch_log.create_market_fetch_log.assert_not_awaited()
         outbox.append.assert_not_awaited()
+        commit.assert_not_awaited()
+
+    async def test_exception_triggers_rollback_not_commit(self) -> None:
+        """On a write error the session is rolled back so subsequent results can proceed."""
+        result = _make_result()
+        fetch_log = AsyncMock(
+            exists_by_market_snapshot=AsyncMock(return_value=False),
+            create_market_fetch_log=AsyncMock(side_effect=RuntimeError("db down")),
+        )
+        commit = AsyncMock()
+        rollback = AsyncMock()
+        use_case = _build_use_case(fetch_log=fetch_log, commit_fn=commit, rollback_fn=rollback)
+
+        summary = await use_case.execute([result])
+
+        assert summary.failed == 1
+        assert summary.fetched == 0
+        rollback.assert_awaited_once()
         commit.assert_not_awaited()
 
     async def test_use_case_outbox_payload_matches_avro_schema(self) -> None:

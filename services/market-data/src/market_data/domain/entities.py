@@ -194,7 +194,7 @@ class PredictionMarket:
     updated_at: datetime = field(default_factory=_utc_now)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PredictionMarketSnapshot:
     """Per-poll price snapshot for a single Polymarket market.
 

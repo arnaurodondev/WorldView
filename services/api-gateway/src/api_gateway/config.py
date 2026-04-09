@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,8 +24,9 @@ class Settings(BaseSettings):
     # Valkey (caching + rate limiting)
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Auth
-    jwt_secret: str = "dev-secret-change-me"
+    # Auth — F-103: SecretStr prevents accidental logging; no insecure default.
+    # Set API_GATEWAY_JWT_SECRET env var to a strong random secret in production.
+    jwt_secret: SecretStr = SecretStr("dev-secret-change-me")
     jwt_algorithm: str = "HS256"
 
     # Downstream service URLs

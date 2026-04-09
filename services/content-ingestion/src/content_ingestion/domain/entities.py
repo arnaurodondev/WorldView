@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from datetime import datetime
     from uuid import UUID
 
 import common.ids
@@ -293,10 +292,8 @@ class PredictionMarketFetchResult:
         close_time: datetime | None = None
         raw_end_date = raw.get("endDate")
         if raw_end_date:
-            from datetime import datetime as _dt
-
             try:
-                close_time = _dt.fromisoformat(raw_end_date.replace("Z", "+00:00")).astimezone(UTC)
+                close_time = datetime.fromisoformat(raw_end_date.replace("Z", "+00:00")).astimezone(UTC)
             except (ValueError, AttributeError):
                 close_time = None
 

@@ -62,8 +62,8 @@ async def main() -> None:
     object_storage = build_object_storage(
         StorageSettings(
             endpoint=endpoint,
-            access_key=settings.storage_access_key,
-            secret_key=settings.storage_secret_key,
+            access_key=settings.storage_access_key.get_secret_value(),
+            secret_key=settings.storage_secret_key.get_secret_value(),
         )
     )
 

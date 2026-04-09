@@ -125,13 +125,18 @@ class TestProcessMessageInsertSnapshot:
         assert snap.source_event_id == _VALID_EVENT["event_id"]
 
     @pytest.mark.asyncio
-    async def test_commit_called_after_writes(self) -> None:
+    async def test_commit_not_called_in_process_message(self) -> None:
+        """M-04: process_message must NOT call commit — the base class owns the commit.
+
+        Calling uow.commit() inside process_message causes a double-commit per
+        message because BaseKafkaConsumer also commits after process_message returns.
+        """
         uow = _make_uow()
         consumer = _make_consumer(uow)
 
         await consumer.process_message(key=None, value=_VALID_EVENT, headers={})
 
-        uow.commit.assert_called_once()
+        uow.commit.assert_not_called()
 
 
 class TestProcessMessageIdempotent:
@@ -147,10 +152,11 @@ class TestProcessMessageIdempotent:
         await consumer.process_message(key=None, value=_VALID_EVENT, headers={})
         await consumer.process_message(key=None, value=_VALID_EVENT, headers={})
 
-        # Writes should happen exactly once
+        # Writes should happen exactly once; commit is owned by base class
         assert uow.prediction_markets.upsert.call_count == 1
         assert uow.prediction_market_snapshots.insert_if_not_exists.call_count == 1
-        assert uow.commit.call_count == 1
+        # M-04: commit is not called inside process_message — base class commits
+        assert uow.commit.call_count == 0
 
 
 class TestProcessMessageDuplicateEventSkipped:

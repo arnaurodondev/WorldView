@@ -47,8 +47,8 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.log_level = "INFO"
     s.log_json = False
     s.storage_endpoint = "http://localhost:9000"
-    s.storage_access_key = "key"
-    s.storage_secret_key = "secret"  # noqa: S105
+    s.storage_access_key = MagicMock(get_secret_value=lambda: "key")
+    s.storage_secret_key = MagicMock(get_secret_value=lambda: "secret")
     s.kafka_bootstrap_servers = "localhost:9092"
     s.valkey_url = "redis://localhost:6379/0"
     for k, v in overrides.items():

@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     worker_idle_sleep_seconds: float = 5.0
     worker_concurrency: int = 2
     worker_task_timeout_seconds: float = 120.0
+    # D-04: Polymarket tasks paginate the full market catalogue via the Gamma API
+    # (up to 20 pages x 500 markets = 10 000 results + MinIO writes per result).
+    # The default 120 s timeout is too short; use a dedicated timeout of 900 s.
+    worker_polymarket_task_timeout_seconds: float = 900.0
 
     # ── Outbox / dispatcher ────────────────────────────────────────────────
     outbox_batch_size: int = 100

@@ -52,6 +52,7 @@ TOPICS=(
     "alert.dead-letter.v1:12:1"
     "nlp.dead-letter.v1:12:1"
     "content.dead-letter.v1:12:1"
+    "market.dead-letter.v1:8:1"
 )
 
 for TOPIC_SPEC in "${TOPICS[@]}"; do

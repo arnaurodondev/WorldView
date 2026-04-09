@@ -184,4 +184,6 @@ class PredictionMarketFetchLogPort(Protocol):
         snapshot_at: datetime,
         resolution_status: str,
         fetched_at: datetime,
-    ) -> UUID: ...
+    ) -> UUID | None:
+        """Insert a fetch log row; return the UUID or None if already exists."""
+        ...
