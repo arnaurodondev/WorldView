@@ -14,7 +14,7 @@
 | PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | completed | 11/11 | 2026-04-09 | 2026-04-09 |
 | PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | completed | 10/10 | 2026-04-09 | 2026-04-09 |
 | PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | completed | 6/6 | 2026-04-09 | 2026-04-09 |
-| PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | draft | 0/0 | — | 2026-04-06 |
+| PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | in-progress | 1/8 | — | 2026-04-09 |
 | PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | draft | 0/0 | — | 2026-04-06 |
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | draft | 0/9 | — | 2026-04-09 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
