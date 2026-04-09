@@ -1,10 +1,10 @@
 # PLAN-0019 — Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling
 
 > **PRD**: `docs/specs/0019-polymarket-prediction-markets.md`
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-04-09
 > **Updated**: 2026-04-09
-> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅, B-2 ✅, C-1 ✅)
+> **Waves**: 6 across 4 sub-plans (A-1 ✅, A-2 ✅, B-1 ✅, B-2 ✅, C-1 ✅, D-1 ✅)
 
 ---
 
@@ -1188,12 +1188,13 @@ GET /v1/signals/prediction-markets/{id}/history → proxy → S3 GET /api/v1/pre
 
 ## SUB-PLAN D — Frontend
 
-### Wave D-1: PredictionMarketsPanel Component
+### Wave D-1: PredictionMarketsPanel Component ✅
 
 **Goal**: Surface open prediction markets in the UI with probability bars and volume indicators.
 **Depends on**: Wave C-1 complete (S9 endpoints must be accessible)
 **Estimated effort**: 45–75 min
 **Architecture layer**: frontend
+**Status**: **DONE** — 2026-04-09 · 8 frontend tests pass (6 new) · pnpm build clean · 0 CVEs
 
 #### Tasks
 
