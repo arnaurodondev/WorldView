@@ -511,3 +511,149 @@ class TestSourceMetadataWrite:
         assert any(
             e.get("event") == "source_metadata_write_failed" for e in cap
         ), f"Expected warning not found in logs: {cap}"
+
+
+# ── T-A-4-02: price_impact signal wiring tests ───────────────────────────────
+
+
+def _make_ok_nlp_session_factory() -> MagicMock:
+    """Build a mock session factory whose session always commits successfully."""
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    return MagicMock(return_value=cm)
+
+
+_PIPELINE_PATCHES_NO_ROUTING = (
+    patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer.section_document", return_value=[]),
+    patch(
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_ner_block",
+        new=AsyncMock(return_value=([], MagicMock())),
+    ),
+    patch(
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.apply_suppression_gate",
+        return_value="halt",
+    ),
+    patch(
+        "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_embeddings_block",
+        new=AsyncMock(return_value=([], [], [], [])),
+    ),
+    patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_enriched", new=AsyncMock()),
+)
+
+
+@pytest.mark.unit
+class TestPriceImpactSignalLookup:
+    """Tests for T-A-4-02: price_impact signal wiring into Block 5 (PRD-0020 §6.7)."""
+
+    @pytest.mark.asyncio
+    async def test_consumer_uses_price_impact_zero_when_no_label(self) -> None:
+        """When article_price_impacts has no row, price_impact_score=0.0 is passed to routing."""
+        from decimal import Decimal
+
+        doc_id = uuid.uuid4()
+        nlp_sf = _make_ok_nlp_session_factory()
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=frozenset())
+
+        routing_kwargs: list[dict] = []
+
+        def _capture_routing(*args: object, **kwargs: object) -> MagicMock:
+            routing_kwargs.append(kwargs)  # type: ignore[arg-type]
+            return MagicMock()
+
+        mock_impact_repo = AsyncMock()
+        mock_impact_repo.get_max_impact_for_doc = AsyncMock(return_value=Decimal("0.0"))
+
+        run_patches = [
+            *_PIPELINE_PATCHES_NO_ROUTING,
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.compute_routing_score",
+                side_effect=_capture_routing,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                return_value=mock_impact_repo,
+            ),
+        ]
+
+        with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+            for p in run_patches:
+                p.start()
+            try:
+                await consumer._run_pipeline(
+                    doc_id=doc_id,
+                    minio_key="bucket/key",
+                    source_type="eodhd",
+                    published_at=None,
+                    extracted_at=datetime.now(UTC),
+                    is_backfill=False,
+                    correlation_id=None,
+                )
+            finally:
+                for p in run_patches:
+                    p.stop()
+
+        assert routing_kwargs, "compute_routing_score was not called"
+        assert routing_kwargs[0].get("price_impact_score") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_consumer_uses_max_price_impact_across_entities(self) -> None:
+        """When article_price_impacts repo returns 0.7, price_impact_score=0.7 is passed to routing."""
+        from decimal import Decimal
+
+        doc_id = uuid.uuid4()
+        nlp_sf = _make_ok_nlp_session_factory()
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=frozenset())
+
+        routing_kwargs: list[dict] = []
+
+        def _capture_routing(*args: object, **kwargs: object) -> MagicMock:
+            routing_kwargs.append(kwargs)  # type: ignore[arg-type]
+            return MagicMock()
+
+        mock_impact_repo = AsyncMock()
+        mock_impact_repo.get_max_impact_for_doc = AsyncMock(return_value=Decimal("0.7"))
+
+        run_patches = [
+            *_PIPELINE_PATCHES_NO_ROUTING,
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.compute_routing_score",
+                side_effect=_capture_routing,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                return_value=mock_impact_repo,
+            ),
+        ]
+
+        with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+            for p in run_patches:
+                p.start()
+            try:
+                await consumer._run_pipeline(
+                    doc_id=doc_id,
+                    minio_key="bucket/key",
+                    source_type="eodhd",
+                    published_at=None,
+                    extracted_at=datetime.now(UTC),
+                    is_backfill=False,
+                    correlation_id=None,
+                )
+            finally:
+                for p in run_patches:
+                    p.stop()
+
+        assert routing_kwargs, "compute_routing_score was not called"
+        assert abs(float(routing_kwargs[0].get("price_impact_score", -1)) - 0.7) < 1e-9
