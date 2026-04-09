@@ -214,8 +214,10 @@ def build_workers(
     eodhd_api_key = settings.eodhd_api_key.get_secret_value()
     if eodhd_api_key:
         import httpx  # type: ignore[import-untyped]
+        from confluent_kafka import Producer  # type: ignore[import-untyped]
 
         from knowledge_graph.infrastructure.eodhd.client import EodhDClient
+        from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
         from knowledge_graph.infrastructure.workers.economic_events_worker import EconomicEventsWorker
         from knowledge_graph.infrastructure.workers.insider_transactions_worker import InsiderTransactionsWorker
         from knowledge_graph.infrastructure.workers.macro_indicator_worker import MacroIndicatorWorker
@@ -225,6 +227,11 @@ def build_workers(
             api_key=eodhd_api_key,
             http=http_client,
             base_url=settings.eodhd_base_url,
+        )
+
+        # Shared direct producer for entity.dirtied.v1 (best-effort, compacted topic — BP-130)
+        eodhd_direct_producer = ConfluentDirectProducer(
+            Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
         )
 
         # Parse comma-separated alpha-2 codes (e.g. "US,DE,GB,JP,CN,EU")
@@ -257,7 +264,12 @@ def build_workers(
         workers.update(
             {
                 "economic_events": EconomicEventsWorker(session_factory, eodhd_client, eco_countries),
-                "macro_indicator": MacroIndicatorWorker(session_factory, eodhd_client, macro_country_map),
+                "macro_indicator": MacroIndicatorWorker(
+                    session_factory,
+                    eodhd_client,
+                    macro_country_map,
+                    direct_producer=eodhd_direct_producer,
+                ),
                 "insider_transactions": InsiderTransactionsWorker(session_factory, eodhd_client),
             }
         )

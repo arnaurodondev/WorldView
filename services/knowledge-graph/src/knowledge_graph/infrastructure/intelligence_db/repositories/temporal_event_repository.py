@@ -58,6 +58,15 @@ class TemporalEventRepository(TemporalEventRepositoryPort):
 
         Note: ``source_article_ids`` is passed as a Python list of UUID strings;
         asyncpg binds Python lists to PostgreSQL array columns automatically.
+
+        Note on NULL ``region`` (BP-131): PostgreSQL treats NULL ≠ NULL in unique
+        indexes.  LOCAL events with ``region=None`` and identical
+        ``(event_type, title, active_from::date)`` do NOT conflict — two rows
+        can coexist.  The Valkey event-id dedup in the Kafka consumer prevents
+        re-delivery of the same Kafka message; semantic duplicates from
+        independently-triggered NLP enrichment of the same content are
+        theoretically possible but rare.  A future ``NULLS NOT DISTINCT`` index
+        (PG 15+) would eliminate this gap.
         """
         ids: list[str] = [str(uid) for uid in (source_article_ids or [])]
 
