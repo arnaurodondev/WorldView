@@ -442,7 +442,7 @@ async def test_content_pipeline_article_stored_within_timeout(
             outbox_row = await s4_session.execute(
                 text(
                     "SELECT status, event_type FROM outbox_events "
-                    "WHERE aggregate_id = :doc_id::uuid AND event_type = 'content.article.raw.v1' "
+                    "WHERE aggregate_id = CAST(:doc_id AS uuid) AND event_type = 'content.article.raw.v1' "
                     "LIMIT 1"
                 ),
                 {"doc_id": s4_doc_id},
