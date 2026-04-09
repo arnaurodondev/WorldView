@@ -1,7 +1,8 @@
 """Block 5 — Document Routing Score (PRD §6.7 Block 5).
 
-7-signal weighted formula. Weights sum to exactly 1.0 (module-level assertion).
+8-signal weighted formula. Weights sum to exactly 1.0 (module-level assertion).
 Watchlist signal sourced from Valkey SET maintained by the watchlist consumer.
+price_impact signal sourced from article_price_impacts table (PRD-0020 §6.5).
 """
 
 from __future__ import annotations
@@ -16,16 +17,17 @@ from nlp_pipeline.domain.models import EntityMention, RoutingDecision
 if TYPE_CHECKING:
     from uuid import UUID
 
-# ── Signal weights (PRD §6.7 Block 5) ────────────────────────────────────────
+# ── Signal weights (PRD §6.7 Block 5 / PRD-0020 §6.5 rebalance) ─────────────
 
 SIGNAL_WEIGHTS: dict[str, float] = {
-    "entity_density": 0.30,
+    "entity_density": 0.25,
     "source_reliability": 0.20,
     "novelty": 0.15,
     "recency": 0.10,
     "watchlist": 0.10,
-    "document_type": 0.10,
+    "document_type": 0.05,
     "extraction_yield": 0.05,
+    "price_impact": 0.10,
 }
 
 # Module-level assertion: weights must sum to exactly 1.0
@@ -123,8 +125,9 @@ def compute_routing_score(
     source_trust_weight: float,
     novelty_score: float,
     watched_entity_ids: frozenset[UUID],
+    price_impact_score: float = 0.0,
 ) -> RoutingDecision:
-    """Compute the 7-signal routing score and assign a RoutingTier.
+    """Compute the 8-signal routing score and assign a RoutingTier.
 
     Args:
         doc_id: Document being routed.
@@ -137,6 +140,9 @@ def compute_routing_score(
         source_trust_weight: From intelligence_db.source_trust_weights.
         novelty_score: Stage 1 novelty output [0, 1].
         watched_entity_ids: Resolved entity IDs currently on any watchlist.
+        price_impact_score: Normalised price-impact score [0, 1] from
+            article_price_impacts table. Defaults to 0.0 for articles not
+            yet labelled (< 25h old) or when lookup fails (best-effort).
 
     Returns:
         RoutingDecision with composite_score, feature_scores, and routing_tier.
@@ -149,6 +155,7 @@ def compute_routing_score(
         "watchlist": _watchlist_signal(mentions, watched_entity_ids),
         "document_type": DOCUMENT_TYPE_SIGNAL.get(source_type, _DEFAULT_DOCUMENT_TYPE_SIGNAL),
         "extraction_yield": _extraction_yield_signal(len(mentions), section_count),
+        "price_impact": max(0.0, min(1.0, price_impact_score)),
     }
 
     composite = sum(SIGNAL_WEIGHTS[signal] * value for signal, value in feature_scores.items())

@@ -241,6 +241,25 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
 
         # ── Block 5: Routing score (initial, novelty_score=0.0 provisional) ───
         watched_ids = await self._watchlist.get_all_watched()
+
+        # Fetch price_impact signal — best-effort; defaults to 0.0 for articles
+        # < 25h old (not yet labelled) or on any lookup error (PRD-0020 §6.7).
+        price_impact_score = 0.0
+        try:
+            from nlp_pipeline.infrastructure.nlp_db.repositories.price_impact import (
+                ArticlePriceImpactRepository,
+            )
+
+            async with self._nlp_sf() as impact_session:
+                impact_repo = ArticlePriceImpactRepository(impact_session)
+                max_impact = await impact_repo.get_max_impact_for_doc(doc_id)
+                price_impact_score = float(max_impact)
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "price_impact_lookup_failed",
+                doc_id=str(doc_id),
+            )
+
         decision_id = common.ids.new_uuid7()
         routing_decision = compute_routing_score(
             doc_id=doc_id,
@@ -253,6 +272,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             source_trust_weight=_DEFAULT_SOURCE_TRUST,
             novelty_score=0.0,
             watched_entity_ids=watched_ids,
+            price_impact_score=price_impact_score,
         )
 
         # ── Block 6: Initial suppression gate ────────────────────────────────

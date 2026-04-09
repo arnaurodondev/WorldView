@@ -382,11 +382,12 @@ python -m pytest tests/contract/ -v -m contract --no-header 2>/dev/null || echo 
 
 ---
 
-### Wave A-4: Block 5 Weight Rebalance + `price_impact` Signal
+### Wave A-4: Block 5 Weight Rebalance + `price_impact` Signal ✅
 
 **Goal**: Rebalance Block 5 routing weights and add `price_impact` as the 8th signal.
 **Depends on**: T-A-2-02 (repository port must exist for Block 5 to query impact scores)
 **Estimated effort**: 0.5 wave (Low-Medium complexity)
+**Status**: **DONE** — 2026-04-09 · 369 tests pass · ruff + mypy clean
 **Architecture layer**: Application — Business logic
 
 #### Tasks
@@ -443,12 +444,12 @@ python -m pytest tests/contract/ -v -m contract --no-header 2>/dev/null || echo 
 | `test_feature_scores_has_8_keys` | `len(decision.feature_scores) == 8` | unit |
 
 **Acceptance criteria**:
-- [ ] `SIGNAL_WEIGHTS` has 8 entries summing to exactly 1.0
-- [ ] Module-level assertion still passes (verified at import time)
-- [ ] `compute_routing_score()` signature accepts `price_impact_score: float = 0.0`
-- [ ] `feature_scores` dict has 8 keys including `price_impact`
-- [ ] All existing routing tests pass (no regression)
-- [ ] 7 new tests pass
+- [x] `SIGNAL_WEIGHTS` has 8 entries summing to exactly 1.0
+- [x] Module-level assertion still passes (verified at import time)
+- [x] `compute_routing_score()` signature accepts `price_impact_score: float = 0.0`
+- [x] `feature_scores` dict has 8 keys including `price_impact`
+- [x] All existing routing tests pass (no regression)
+- [x] 7 new tests pass
 
 ##### T-A-4-02: Wire price_impact into article consumer pipeline
 
@@ -482,9 +483,9 @@ python -m pytest tests/contract/ -v -m contract --no-header 2>/dev/null || echo 
 | `test_consumer_uses_max_price_impact_across_entities` | Consumer with two labels (0.3 and 0.7) → `price_impact_signal=0.7` | unit |
 
 **Acceptance criteria**:
-- [ ] Article consumer passes `price_impact_score` to `compute_routing_score()`
-- [ ] Consumer falls back to 0.0 on `PriceImpactRepository` error
-- [ ] 2 unit tests pass
+- [x] Article consumer passes `price_impact_score` to `compute_routing_score()`
+- [x] Consumer falls back to 0.0 on `PriceImpactRepository` error
+- [x] 2 unit tests pass
 
 #### Pre-read
 - `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py` — current implementation
