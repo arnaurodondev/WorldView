@@ -4825,3 +4825,35 @@ direct_producer = ConfluentDirectProducer(raw_producer)  # remove # type: ignore
 **Affected areas**: `temporal_events.uidx_temporal_events_natural_key` (LOCAL events with NULL region), any table with nullable columns in a multi-column unique constraint.
 
 **First seen**: PRD-0018 investigation, 2026-04-09.
+
+## BP-132 — Hardcoded StrEnum Count Test Breaks When Shared Lib Enum Is Extended
+
+**Symptom**: A downstream service unit test fails with `AssertionError` after adding a new member to `ContentSourceType` (or any other shared-lib StrEnum). The test in the downstream service hardcodes the expected set of values as an exact frozenset.
+
+**Root cause**: Tests like `assert {v.value for v in SourceType} == {"eodhd", "sec_edgar", ...}` are membership-exact: they fail if any new value is added. When `libs/contracts.ContentSourceType` is extended with a new member (e.g., `POLYMARKET`), the test in `content-store`, `nlp-pipeline`, or any service that re-exports `ContentSourceType` as `SourceType` will fail.
+
+**Example (PLAN-0019)**: `services/content-store/tests/unit/domain/test_enums.py::test_all_five_sources` hardcoded 5 values. Adding `POLYMARKET` in Wave A-1 caused an extra `"polymarket"` value that was not in the expected set.
+
+**Fix**: Update the expected set to include the new value, and rename the test to avoid encoding the count in the test name (e.g., `test_all_five_sources` → `test_all_sources`).
+
+**Prevention**: When adding a member to any StrEnum in `libs/contracts`, `libs/messaging`, or any shared library, search for `{v.value for v in SourceType}` / `== expected` patterns in ALL service test directories and update every hardcoded expected set in one atomic PR. Prefer additive assertions (`assert "polymarket" in {v.value for v in SourceType}`) over equality assertions for extensible enums.
+
+**Affected areas**: `services/content-store/tests/unit/domain/test_enums.py`, any service that aliases or re-exports `ContentSourceType`.
+
+**First seen**: PLAN-0019 QA pass, 2026-04-09.
+
+## BP-133 — New Consumer Entry Point Missing From docker-compose.test.yml
+
+**Symptom**: Architecture test `COMPOSE-MAIN-MISSING` fails with `<service>: <consumer_main.py> has no matching container in docker-compose.test.yml`. All unit tests pass but the architecture gate fails.
+
+**Root cause**: When a new `*_consumer_main.py` (or `*_worker_main.py`) entry point is added to a service, a matching container must be registered in `infra/compose/docker-compose.test.yml`. The architecture test `test_every_entry_point_has_compose_container` scans all `*_main.py` files in `infrastructure/messaging/consumers/` and verifies a matching container command exists.
+
+**Example (PLAN-0019)**: `prediction_market_consumer_main.py` was added to market-data in Wave B-1 but the `market-data-prediction-market-consumer` container was not added to `docker-compose.test.yml`.
+
+**Fix**: Add a container entry following the pattern of sibling consumers (e.g., `market-data-ohlcv-consumer`). The container must appear under the same profiles and depend on `market-data-migrate`, `schema-registry-init`, `kafka-init`.
+
+**Prevention**: Include the `docker-compose.test.yml` entry as an explicit task in every plan wave that adds a `*_main.py` entry point. The `/implement` skill should verify no `COMPOSE-MAIN-MISSING` violations remain before committing.
+
+**Affected areas**: `infra/compose/docker-compose.test.yml`, any service adding a new consumer or worker process entry point.
+
+**First seen**: PLAN-0019 QA pass, 2026-04-09.
