@@ -20,7 +20,7 @@
 | `SnapTradeClient` adapter | S1 infra | new | absent (`infrastructure/brokerage/` doesn't exist) | create in Wave B-1 |
 | `brokerage_connections` repo | S1 infra | new | absent | create in Wave B-2 |
 | `UnitOfWork.brokerage_connections` | S1 UoW | new | absent | extend in Wave B-2 |
-| `/api/v1/brokerage-connections` routes | S1 API | new | absent | create in Wave C-2 |
+| `/api/v1/brokerage-connections` routes (5 total) | S1 API | new | absent | create in Wave C-2 |
 | `BrokerageTransactionSyncWorker` | S1 process | new | absent (`workers/` directory absent) | create in Wave D-1 |
 | S9 brokerage-connections proxy | S9 proxy | new | absent (`proxy.py` has portfolio/market/news/chat routes) | create in Wave D-2 |
 | `SNAPTRADE_CLIENT_ID` config | S1 config | new | absent from `config.py` | add in Wave A-2 |
@@ -71,7 +71,7 @@ Wave B-1 (IBrokerageClient port +            Wave B-2 (Brokerage repos +
 | Services modified | S1 (Portfolio), S9 (API Gateway), Frontend |
 | New DB tables | 2 (`brokerage_connections`, `brokerage_sync_errors`) |
 | New use cases | 5 |
-| New API endpoints | 4 (S1) + 4 (S9 proxy) |
+| New API endpoints | 5 (S1) + 5 (S9 proxy) |
 | New processes | 1 (`BrokerageTransactionSyncWorker`) |
 | Estimated total effort | 8–14 hours |
 
@@ -1064,6 +1064,14 @@ FastAPI router with 4 endpoints. All routes require authentication (JWT via S9 i
    - Uses `UoWDep` (write — updates status)
    - Returns `ActivateBrokerageConnectionResponse`
 
+5. **`GET /api/v1/brokerage-connections/{connection_id}/sync-errors`** (status_code=200)
+   - Path param: `connection_id: UUID`
+   - Query param: `limit: int = 50` (1–200)
+   - Uses `ReadUoWDep` (read-only — R27)
+   - Returns `GetSyncErrorsResponse`
+   - **Privacy**: `SyncErrorResponse` must NEVER include a `raw_transaction` field — add a comment in the schema class as a permanent guard: `# raw_transaction intentionally excluded — contains sensitive brokerage data (see PRD §6.4 privacy note)`
+   - **Future**: `resolved_at` is also excluded from `SyncErrorResponse` until an `AcknowledgeSyncError` use case is added that actually sets it — add a comment: `# resolved_at excluded: no code path in this plan sets it (reserved for future AcknowledgeSyncError use case)`
+
 **Header extraction helper** (reuse pattern from `internal.py`):
 ```python
 def _require_user_headers(request: Request) -> tuple[UUID, UUID]:
@@ -1075,9 +1083,10 @@ def _require_user_headers(request: Request) -> tuple[UUID, UUID]:
 ```
 
 **Acceptance criteria**:
-- [ ] All 4 routes implemented with correct HTTP status codes
+- [ ] All 5 routes implemented with correct HTTP status codes
 - [ ] No direct infrastructure imports in router (R16 / R25)
 - [ ] `IBrokerageClient` injected from `app.state`, not instantiated inline
+- [ ] `SyncErrorResponse` schema has comments marking `raw_transaction` and `resolved_at` as intentionally excluded
 - [ ] ruff + mypy pass
 
 ---
@@ -1126,6 +1135,7 @@ BrokerageApiError: 503,
 - **BP-043**: Use `Annotated[bool, Field(...)]` not `Field(strip_whitespace=True)` for schema validators
 - **R25 / IG-LAYER-002**: API router must NOT import from `infrastructure/` — use `request.app.state.brokerage_client` (already app.state, not direct import)
 - **R27**: `ListBrokerageConnectionsUseCase` and `GetSyncErrorsUseCase` routes must use `ReadUoWDep`, not `UoWDep`
+- **Privacy**: `SyncErrorResponse` must NOT include `raw_transaction` — add a `# raw_transaction intentionally excluded` comment to the schema class as a permanent guard against accidental addition
 
 ---
 
@@ -1438,6 +1448,7 @@ Add 4 passthrough proxy routes to S9's `proxy.py`. S9 injects JWT-derived `X-Use
 @router.get("/brokerage-connections")   # → S1 GET /api/v1/brokerage-connections
 @router.delete("/brokerage-connections/{connection_id}")  # → S1 DELETE ...
 @router.get("/brokerage-connections/{connection_id}/callback")  # → S1 GET .../callback
+@router.get("/brokerage-connections/{connection_id}/sync-errors")  # → S1 GET .../sync-errors
 ```
 
 **Implementation pattern**: Follow existing proxy patterns in `proxy.py` — forward request body + query params, inject auth headers from `_auth_headers(request)`, forward response as-is.
@@ -1445,7 +1456,7 @@ Add 4 passthrough proxy routes to S9's `proxy.py`. S9 injects JWT-derived `X-Use
 **S9 config** — ensure `portfolio_service_url` is in `api_gateway/config.py` (verify it exists; if not, add `portfolio_service_url: str = "http://portfolio:8001"`).
 
 **Acceptance criteria**:
-- [ ] All 4 routes registered with correct HTTP methods and paths
+- [ ] All 5 routes registered with correct HTTP methods and paths
 - [ ] Auth headers injected from JWT payload (`X-User-Id`, `X-Tenant-Id`)
 - [ ] ruff + mypy pass on `proxy.py`
 
@@ -1513,13 +1524,14 @@ Unit tests for domain entities and all 5 use cases using `FakeBrokerageClient` a
 | `test_get_sync_errors_requires_ownership` | Wrong `user_id` → `BrokerageConnectionNotFoundError` | unit |
 | `test_initiate_connection_type_is_always_read` | `FakeBrokerageClient.portal_url_calls` confirms `connectionType=read` is hardcoded — `generate_portal_url` received `redirect_uri` containing `connectionId` but NOT `connectionType` (connectionType must be hardcoded server-side per F-22) | unit |
 | `test_sync_worker_uses_history_days_for_initial_cursor` | Worker with `last_sync_cursor=None` computes `start_date = date.today() - timedelta(days=settings.brokerage_sync_history_days)` — verifies F-16 | unit |
+| `test_get_sync_errors_raw_transaction_excluded` | `GET /api/v1/brokerage-connections/{id}/sync-errors` response items do not contain a `raw_transaction` key — `assert "raw_transaction" not in response.json()["items"][0]` — enforces PRD §6.4 privacy invariant at the serialization boundary | unit |
 
-Minimum: **14 unit tests**
+Minimum: **15 unit tests**
 
 **Test infrastructure**: Use `FakeBrokerageClient` (from T-B-1-02) + inline fake UoW (dict-backed repos — similar pattern to existing portfolio unit tests). Do NOT make real SnapTrade API calls.
 
 **Acceptance criteria**:
-- [ ] All 12 tests pass
+- [ ] All 15 tests pass
 - [ ] No real SnapTrade SDK calls (FakeBrokerageClient used)
 - [ ] `pytest -m unit -k brokerage` runs in < 5 seconds
 
@@ -1560,7 +1572,7 @@ Minimum: **9 unit tests**
 #### Validation Gate
 - [ ] `ruff check services/api-gateway/ services/portfolio/tests/unit/test_brokerage*.py` passes
 - [ ] `mypy services/api-gateway/` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — minimum 21 new tests total (12 + 9), all pass
+- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — minimum 24 new tests total (15 + 9), all pass
 - [ ] `docker-compose config` validates
 
 #### Regression Guardrails
@@ -1621,6 +1633,22 @@ export function useBrokerageConnections(portfolioId?: string): {
 
 export async function initiateConnection(portfolioId: string): Promise<{ connection_id: string; redirect_uri: string }>
 export async function disconnectConnection(connectionId: string): Promise<void>
+
+interface SyncError {
+  id: string;
+  connection_id: string;
+  snaptrade_transaction_id: string;
+  error_type: "unknown_instrument" | "unsupported_type" | "api_error" | "validation_error";
+  error_detail: string | null;
+  created_at: string;
+  // raw_transaction intentionally absent — excluded from API (see PRD §6.4 privacy note)
+}
+
+export function useSyncErrors(connectionId: string): {
+  errors: SyncError[];
+  isLoading: boolean;
+  error: string | null;
+}
 ```
 
 The `initiateConnection` call uses `snaptrade_tos_accepted: true` (ToS is always accepted by this point — the modal checkbox guards entry). All API calls go to `/api/v1/brokerage-connections` (via S9).
@@ -1661,8 +1689,8 @@ The `initiateConnection` call uses `snaptrade_tos_accepted: true` (ToS is always
 
 **`SyncErrorsBanner`**:
 - Props: `connectionId: string`
-- Calls `GET /api/v1/brokerage-connections/{id}/sync-errors` (if endpoint added) or skips if not implemented yet
-- Shows: "X sync errors — view details" if count > 0
+- Calls `GET /api/v1/brokerage-connections/{id}/sync-errors`
+- Shows: "X sync errors — view details" if count > 0; renders nothing if `items` is empty
 
 **Acceptance criteria**:
 - [ ] Connect modal only enables "Connect" after checkbox checked
