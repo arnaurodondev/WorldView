@@ -83,7 +83,8 @@ class TestFundamentalsConsumerDescriptionChange:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -101,7 +102,8 @@ class TestFundamentalsConsumerDescriptionChange:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -117,7 +119,8 @@ class TestFundamentalsConsumerDescriptionChange:
             "event_id": str(uuid4()),
             "dataset_type": "ohlcv",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "ohlcv/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "ohlcv/aapl.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -134,7 +137,8 @@ class TestFundamentalsConsumerDescriptionChange:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -150,7 +154,8 @@ class TestFundamentalsConsumerDescriptionChange:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -164,7 +169,8 @@ class TestFundamentalsConsumerDescriptionChange:
         msg = {
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
-            "object_key": "fundamentals/unknown.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/unknown.json",
         }
 
         asyncio.run(consumer.process_message(None, msg, {}))
@@ -184,7 +190,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         with patch(
@@ -213,7 +220,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/some.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/some.json",
         }
 
         with patch(
@@ -238,7 +246,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         with patch(
@@ -263,7 +272,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         with patch(
@@ -286,7 +296,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/aapl.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/aapl.json",
         }
 
         with patch(
@@ -318,7 +329,8 @@ class TestFundamentalsConsumerMetadataEnrichment:
             "event_id": str(uuid4()),
             "dataset_type": "fundamentals",
             "instrument_id": _INSTRUMENT_ID,
-            "object_key": "fundamentals/null.json",
+            "canonical_ref_bucket": "silver",
+            "canonical_ref_key": "fundamentals/null.json",
         }
 
         with patch(
