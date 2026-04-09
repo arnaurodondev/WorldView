@@ -18,6 +18,7 @@ class SignalResponse(BaseModel):
     confidence: float
     evidence_text: str
     detected_at: datetime
+    market_impact_score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class SignalListResponse(BaseModel):

@@ -79,8 +79,14 @@ class SignalsQueryPort(ABC):
         limit: int,
         offset: int,
         doc_id: UUID | None,
+        min_impact_score: float = 0.0,
+        order_by: str = "created_at",
     ) -> tuple[list[dict[str, Any]], int]:
-        """Return outbox events for the signal topic, with total count."""
+        """Return outbox events for the signal topic, with total count.
+
+        Each row dict contains: event_id, partition_key, payload_avro,
+        created_at, and impact_score (float, 0.0 when not yet labelled).
+        """
         ...
 
     @abstractmethod

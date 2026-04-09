@@ -52,9 +52,23 @@ async def list_signals(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     doc_id: UUID | None = Query(default=None),
+    min_impact_score: float = Query(default=0.0, ge=0.0, le=1.0),
+    order_by: str = Query(default="created_at", pattern="^(created_at|market_impact_score)$"),
 ) -> SignalListResponse:
-    """List high-confidence financial signals (from outbox_events)."""
-    items, total = await ListSignalsUseCase().execute(repo, limit, offset, doc_id)
+    """List high-confidence financial signals (from outbox_events).
+
+    Optional filters:
+    - ``min_impact_score``: only return signals where market_impact_score >= threshold
+    - ``order_by``: ``created_at`` (default) or ``market_impact_score`` (desc)
+    """
+    items, total = await ListSignalsUseCase().execute(
+        repo,
+        limit,
+        offset,
+        doc_id,
+        min_impact_score=min_impact_score,
+        order_by=order_by,
+    )
     return SignalListResponse(
         items=[
             SignalResponse(
@@ -65,6 +79,7 @@ async def list_signals(
                 confidence=item.confidence,
                 evidence_text=item.evidence_text,
                 detected_at=item.detected_at,
+                market_impact_score=item.market_impact_score,
             )
             for item in items
         ],

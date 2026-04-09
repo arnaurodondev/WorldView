@@ -157,13 +157,57 @@ class TestListSignalsUseCase:
         assert items[0].entity_id == subj_id
 
     async def test_delegates_doc_id_filter_to_repo(self) -> None:
-        """doc_id filter is forwarded to the repo."""
+        """doc_id filter is forwarded to the repo with default impact params."""
         from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
 
         repo = _make_signals_repo()
         await ListSignalsUseCase().execute(repo=repo, limit=5, offset=10, doc_id=_DOC_ID)
 
-        repo.list_signal_events.assert_called_once_with(limit=5, offset=10, doc_id=_DOC_ID)
+        repo.list_signal_events.assert_called_once_with(
+            limit=5, offset=10, doc_id=_DOC_ID, min_impact_score=0.0, order_by="created_at"
+        )
+
+    async def test_market_impact_score_defaults_to_zero(self) -> None:
+        """market_impact_score is 0.0 when impact_score absent from row."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        row = _signal_row()  # no impact_score key
+        repo = _make_signals_repo(signal_rows=[row])
+
+        items, _ = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+
+        assert items[0].market_impact_score == 0.0
+
+    async def test_market_impact_score_populated_from_row(self) -> None:
+        """market_impact_score is read from impact_score in the repo row."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        row = {**_signal_row(), "impact_score": 0.72}
+        repo = _make_signals_repo(signal_rows=[row])
+
+        items, _ = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+
+        assert items[0].market_impact_score == pytest.approx(0.72)
+
+    async def test_delegates_min_impact_score_to_repo(self) -> None:
+        """min_impact_score is forwarded to repo.list_signal_events."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        repo = _make_signals_repo()
+        await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None, min_impact_score=0.5)
+
+        call_kwargs = repo.list_signal_events.call_args.kwargs
+        assert call_kwargs["min_impact_score"] == 0.5
+
+    async def test_delegates_order_by_to_repo(self) -> None:
+        """order_by is forwarded to repo.list_signal_events."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        repo = _make_signals_repo()
+        await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None, order_by="market_impact_score")
+
+        call_kwargs = repo.list_signal_events.call_args.kwargs
+        assert call_kwargs["order_by"] == "market_impact_score"
 
     async def test_empty_result(self) -> None:
         """Empty repo returns empty list with total=0."""

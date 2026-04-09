@@ -2,7 +2,7 @@
 
 > **PRD**: `docs/specs/0020-market-impact-signal-scoring.md`
 > **Status**: in-progress
-> **Updated**: 2026-04-09
+> **Updated**: 2026-04-09 (Wave A-5 done)
 > **Author**: Arnau Rodon
 > **Generated**: 2026-04-09
 > **Services affected**: S6 (NLP Pipeline), `nlp_db` (Alembic migration owned by S6)
@@ -508,12 +508,13 @@ python -c "from nlp_pipeline.application.blocks.routing import SIGNAL_WEIGHTS; p
 
 ---
 
-### Wave A-5: API Signals Endpoint Update
+### Wave A-5: API Signals Endpoint Update ✅
 
 **Goal**: Add `market_impact_score` to `GET /api/v1/signals` response and support `min_impact_score` / `order_by` query params.
 **Depends on**: T-A-3-01 (Avro schema must be updated), T-A-4-01 (Block 5 must emit market_impact_score)
 **Estimated effort**: 0.5 wave (Low complexity)
 **Architecture layer**: API + Application
+**Status**: **DONE** — 2026-04-09 · 377 unit tests pass · ruff + mypy clean
 
 #### Tasks
 
@@ -579,12 +580,12 @@ python -c "from nlp_pipeline.application.blocks.routing import SIGNAL_WEIGHTS; p
 | `test_signals_api_min_impact_filter` | Integration: `?min_impact_score=0.5` filters correctly | integration |
 
 **Acceptance criteria**:
-- [ ] `SignalResponse` has `market_impact_score: float` field
-- [ ] `GET /api/v1/signals` response includes `market_impact_score` (defaults to 0.0)
-- [ ] `?min_impact_score=0.5` query param filters signals correctly
-- [ ] `?order_by=market_impact_score` sorts by impact DESC
-- [ ] 4 new config settings present in `Settings` (`impact_normalisation_cap_pct`, `price_impact_cycle_seconds`, `price_impact_min_age_hours`, `market_data_internal_url`)
-- [ ] All unit + integration tests pass
+- [x] `SignalResponse` has `market_impact_score: float` field
+- [x] `GET /api/v1/signals` response includes `market_impact_score` (defaults to 0.0)
+- [x] `?min_impact_score=0.5` query param filters signals correctly
+- [x] `?order_by=market_impact_score` sorts by impact DESC
+- [x] 4 new config settings present in `Settings` (`impact_normalisation_cap_pct`, `price_impact_cycle_seconds`, `price_impact_min_age_hours`, `market_data_internal_url`)
+- [x] All unit + integration tests pass
 
 #### Pre-read
 - `services/nlp-pipeline/src/nlp_pipeline/api/routes/signals.py` — current signals route

@@ -34,6 +34,7 @@ class SignalData:
     confidence: float
     evidence_text: str
     detected_at: datetime
+    market_impact_score: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,8 +82,16 @@ class ListSignalsUseCase:
         limit: int,
         offset: int,
         doc_id: UUID | None,
+        min_impact_score: float = 0.0,
+        order_by: str = "created_at",
     ) -> tuple[list[SignalData], int]:
-        rows, total = await repo.list_signal_events(limit=limit, offset=offset, doc_id=doc_id)
+        rows, total = await repo.list_signal_events(
+            limit=limit,
+            offset=offset,
+            doc_id=doc_id,
+            min_impact_score=min_impact_score,
+            order_by=order_by,
+        )
 
         items: list[SignalData] = []
         for row in rows:
@@ -107,6 +116,7 @@ class ListSignalsUseCase:
                         detected_at=datetime.fromisoformat(payload["occurred_at"])
                         if "occurred_at" in payload
                         else row["created_at"],
+                        market_impact_score=float(row.get("impact_score") or 0.0),
                     ),
                 )
             except Exception:
