@@ -87,6 +87,32 @@ export interface ScreenResponse {
   total: number;
 }
 
+// ── Prediction market types (PRD-0019) ──────────────────
+
+export interface OutcomePrice {
+  name: string;
+  token_id: string;
+  price: number; // 0.0–1.0
+}
+
+export interface PredictionMarketSummary {
+  market_id: string;
+  question: string;
+  outcomes: OutcomePrice[];
+  volume_24h: number | null;
+  close_time: string | null; // ISO-8601 UTC
+  resolution_status: string;
+  resolved_answer: string | null;
+  updated_at: string;
+}
+
+export interface PredictionMarketsListResponse {
+  items: PredictionMarketSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ── Similar entities types (PRD-0017) ────────────────────
 
 export interface SimilarEntityResult {
@@ -145,6 +171,18 @@ export const gateway = {
       method: "POST",
       body: JSON.stringify({ entity_id: entityId, ...opts }),
     }),
+
+  getPredictionMarkets: (
+    params: { status?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
+    return request<PredictionMarketsListResponse>(
+      `/v1/signals/prediction-markets?${qs}`,
+    );
+  },
 
   /** Returns an EventSource for streaming chat. */
   streamChat(message: string): EventSource {

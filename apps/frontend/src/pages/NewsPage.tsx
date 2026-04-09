@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { gateway } from "../lib/gateway-client";
 import { NewsList } from "../components/NewsList";
+import { PredictionMarketsPanel } from "../components/PredictionMarketsPanel";
 
 export function NewsPage() {
   const { data, isLoading } = useQuery({
@@ -16,6 +17,7 @@ export function NewsPage() {
       ) : (
         <NewsList articles={data?.articles ?? []} />
       )}
+      <PredictionMarketsPanel />
     </div>
   );
 }
