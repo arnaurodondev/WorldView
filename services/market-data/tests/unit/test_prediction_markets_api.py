@@ -14,6 +14,7 @@ from market_data.api.dependencies import (
     get_list_prediction_markets_uc,
     get_prediction_market_history_uc,
     get_prediction_market_uc,
+    verify_internal_token,
 )
 from market_data.api.routers import prediction_markets
 from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
@@ -68,6 +69,8 @@ def _make_app(
 ) -> tuple[FastAPI, TestClient]:
     app = FastAPI(lifespan=_null_lifespan)
     app.include_router(prediction_markets.router, prefix="/api/v1")
+    # D-02: bypass auth in unit tests — integration tests validate the real token check.
+    app.dependency_overrides[verify_internal_token] = lambda: None
     if list_uc is not None:
         app.dependency_overrides[get_list_prediction_markets_uc] = lambda: list_uc
     if detail_uc is not None:

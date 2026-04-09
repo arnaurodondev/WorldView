@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import common.ids
 import common.time as ct
+from messaging.topics import MARKET_PREDICTION  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -28,8 +29,6 @@ if TYPE_CHECKING:
     from content_ingestion.domain.entities import PredictionMarketFetchResult
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
-_TOPIC = "market.prediction.v1"
 
 
 def build_prediction_market_payload(result: PredictionMarketFetchResult) -> dict[str, Any]:
@@ -72,6 +71,9 @@ class FetchAndWritePredictionMarketsUseCase:
         fetch_log_repo: Repository for prediction_market_fetch_log dedup + writes.
         outbox_repo: Repository for transactional outbox events.
         commit_fn: Async callable to commit the DB session.
+        rollback_fn: Async callable to roll back the DB session on error.
+            MUST be provided; the shared session is poisoned after any
+            exception unless rolled back before the next iteration (M-02).
     """
 
     def __init__(
@@ -79,10 +81,12 @@ class FetchAndWritePredictionMarketsUseCase:
         fetch_log_repo: PredictionMarketFetchLogPort,
         outbox_repo: OutboxPort,
         commit_fn: Callable[[], Coroutine[Any, Any, None]],
+        rollback_fn: Callable[[], Coroutine[Any, Any, None]],
     ) -> None:
         self._fetch_log = fetch_log_repo
         self._outbox = outbox_repo
         self._commit_fn = commit_fn
+        self._rollback_fn = rollback_fn
 
     async def execute(
         self,
@@ -122,19 +126,22 @@ class FetchAndWritePredictionMarketsUseCase:
                     aggregate_type="prediction_market",
                     aggregate_id=result.id,
                     event_type="market.prediction.snapshot",
-                    topic=_TOPIC,
+                    topic=MARKET_PREDICTION,
                     payload=payload,
                 )
                 await self._commit_fn()
                 fetched += 1
 
             except Exception as exc:
+                # M-02: roll back immediately so the shared session is not
+                # poisoned for subsequent loop iterations.
+                await self._rollback_fn()
                 failed += 1
-                errors.append(f"{result.market_id}: {exc}")
+                errors.append(f"{result.market_id}: {type(exc).__name__}")
                 logger.error(
                     "prediction_market_write_failed",
                     market_id=result.market_id,
-                    error=str(exc),
+                    error=type(exc).__name__,
                 )
 
         duration = time.monotonic() - start

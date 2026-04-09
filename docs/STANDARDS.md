@@ -1416,6 +1416,17 @@ Logs are stored and accessible broadly. Use the log sanitization pattern from `l
 **R15 — MUST validate and sanitize all external input**
 Use Pydantic models for request validation, domain allowlists for URLs, and input length limits for all user-facing text fields.
 
+**R27 — All internal service-to-service API endpoints MUST enforce `X-Internal-Token`**
+Any endpoint that is called only by other platform services (not by end users or the frontend) MUST
+require the `X-Internal-Token` header validated via `verify_internal_token` (or equivalent service-local
+implementation using `hmac.compare_digest`).  The token must be:
+- A strong random secret (≥32 bytes) stored in `INTERNAL_SERVICE_TOKEN` env var
+- **`SecretStr`** in pydantic-settings to prevent accidental logging
+- Validated with `hmac.compare_digest` to prevent timing attacks
+Enforcement pattern (established in S3 market-data D-02): add `_auth: InternalAuthDep = None` to each
+internal endpoint signature.  In unit tests, override `verify_internal_token` via
+`app.dependency_overrides`.
+
 ### Process
 
 **R16 — MUST NOT add a new microservice without an ADR**
@@ -1460,6 +1471,7 @@ Each microservice adds operational overhead. The decision must be deliberate and
 | R24 | Infrastructure | MUST NOT |
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
+| R27 | Security | MUST |
 
 ---
 

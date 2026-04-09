@@ -129,29 +129,34 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         offset: int,
     ) -> tuple[list[PredictionMarket], int]:
         """Return paginated markets and the total count via window function."""
+        # F-101: build WHERE clause from static string segments only; all user
+        # values are bound via named parameters — no f-string interpolation of
+        # user data.
         params: dict[str, Any] = {"limit": limit, "offset": offset}
-        where_clauses = ["1=1"]
+
+        # Base query — always-true predicate allows clean appending below.
+        base = (
+            "SELECT id, market_id, source, question, description, outcomes, "
+            "close_time, resolution_status, resolved_answer, created_at, updated_at, "
+            "COUNT(*) OVER() AS total "
+            "FROM prediction_markets"
+        )
+        predicates: list[str] = []
 
         if status is not None:
-            where_clauses.append("resolution_status = :status")
+            predicates.append("resolution_status = :status")
             params["status"] = status
 
         if query is not None:
-            where_clauses.append("question ILIKE :query_like")
-            params["query_like"] = f"%{query}%"
+            # Escape ILIKE metacharacters before building the pattern (M-002).
+            safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            predicates.append("question ILIKE :query_like ESCAPE '\\\\'")
+            params["query_like"] = f"%{safe_query}%"
 
-        where_sql = " AND ".join(where_clauses)
-        sql = text(
-            f"SELECT id, market_id, source, question, description, outcomes, "
-            f"close_time, resolution_status, resolved_answer, created_at, updated_at, "
-            f"COUNT(*) OVER() AS total "
-            f"FROM prediction_markets "
-            f"WHERE {where_sql} "
-            f"ORDER BY updated_at DESC "
-            f"LIMIT :limit OFFSET :offset"
-        ).bindparams(**params)
+        where_sql = (" WHERE " + " AND ".join(predicates)) if predicates else ""
+        full_sql = base + where_sql + " ORDER BY updated_at DESC LIMIT :limit OFFSET :offset"
 
-        result = await self._session.execute(sql)
+        result = await self._session.execute(text(full_sql).bindparams(**params))
         rows = result.fetchall()
         if not rows:
             return [], 0
@@ -193,28 +198,29 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
         to_dt: datetime | None,
         limit: int,
     ) -> list[PredictionMarketSnapshot]:
+        # F-101: static SQL base; all user values bound via named parameters.
         params: dict[str, Any] = {"market_id": market_id, "limit": limit}
-        where_clauses = ["market_id = :market_id"]
+        predicates = ["market_id = :market_id"]
 
         if from_dt is not None:
-            where_clauses.append("snapshot_at >= :from_dt")
+            predicates.append("snapshot_at >= :from_dt")
             params["from_dt"] = from_dt
 
         if to_dt is not None:
-            where_clauses.append("snapshot_at <= :to_dt")
+            predicates.append("snapshot_at <= :to_dt")
             params["to_dt"] = to_dt
 
-        where_sql = " AND ".join(where_clauses)
-        sql = text(
-            f"SELECT id, market_id, snapshot_at, outcomes_prices, "
-            f"volume_24h, liquidity, source_event_id "
-            f"FROM prediction_market_snapshots "
-            f"WHERE {where_sql} "
-            f"ORDER BY snapshot_at DESC "
-            f"LIMIT :limit"
-        ).bindparams(**params)
+        where_sql = " AND ".join(predicates)
+        full_sql = (
+            "SELECT id, market_id, snapshot_at, outcomes_prices, "
+            "volume_24h, liquidity, source_event_id "
+            "FROM prediction_market_snapshots "
+            "WHERE " + where_sql + " "
+            "ORDER BY snapshot_at DESC "
+            "LIMIT :limit"
+        )
 
-        result = await self._session.execute(sql)
+        result = await self._session.execute(text(full_sql).bindparams(**params))
         return [_row_to_snapshot(row) for row in result.fetchall()]
 
     async def get_latest_prices_batch(

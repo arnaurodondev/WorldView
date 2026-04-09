@@ -4883,3 +4883,27 @@ markers = ["live: requires live network access to external APIs"]
 **Affected**: `services/market-ingestion/tests/live/`, `services/market-data/tests/live/`.
 
 **First seen**: Pre-Hetzner deployment QA pass, 2026-04-09.
+
+## BP-135 — Consumer `process_message` Calls `uow.commit()` — Double-Commit Per Message
+
+**Symptom**: Each Kafka message is committed twice: once inside `process_message` and once by the `BaseKafkaConsumer` base class after the method returns. Downstream effects include double-write errors for idempotency constraints, and test assertions like `uow.commit.assert_called_once()` failing unexpectedly.
+
+**Root cause**: `process_message` calls `await uow.commit()` directly. The `BaseKafkaConsumer` already calls `commit()` after `process_message` returns (if no exception), so the transaction is committed twice.
+
+**Fix**: Remove `await uow.commit()` from `process_message`. The base class owns the single commit. If the use case needs to commit mid-method (e.g., for outbox dispatch), use a different pattern or document why explicitly.
+
+**In unit tests**: Assert `uow.commit.assert_not_called()` inside `process_message` tests — the base class mock is the correct location for commit assertions in integration/e2e tests.
+
+**First seen**: QA pass PLAN-0019, 2026-04-09 (M-04). Fixed in `PredictionMarketConsumer.process_message`.
+
+## BP-136 — Shared Session Poisoned After Exception — Missing Rollback in Per-Item Loop
+
+**Symptom**: A use case iterates over a list and writes each item atomically (fetch_log + outbox + commit). If item N fails, the exception handler increments `failed` but does NOT rollback. The shared SQLAlchemy session is now in an aborted transaction state. All subsequent items in the loop fail immediately with `sqlalchemy.exc.InvalidRequestError: Can't reconnect until invalid transaction is rolled back`.
+
+**Root cause**: Missing `await session.rollback()` (or equivalent) in the `except` block of the per-item loop.
+
+**Fix**: Call `await self._rollback_fn()` in the `except` block before continuing to the next iteration. Pass `rollback_fn=session.rollback` from the worker when constructing the use case.
+
+**Prevention**: Any use case that shares a session across multiple loop iterations MUST have a `rollback_fn` parameter. Review checklist: "Does the exception handler rollback before continuing the loop?"
+
+**First seen**: QA pass PLAN-0019, 2026-04-09 (M-02). Fixed in `FetchAndWritePredictionMarketsUseCase.execute`.

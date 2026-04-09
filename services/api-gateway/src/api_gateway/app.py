@@ -131,7 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     add_cors(app, settings.cors_origins)
     app.add_middleware(
         AuthMiddleware,
-        secret=settings.jwt_secret,
+        secret=settings.jwt_secret.get_secret_value(),
         algorithm=settings.jwt_algorithm,
     )
 

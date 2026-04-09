@@ -12,6 +12,7 @@ from market_data.domain.entities import PredictionMarket, PredictionMarketSnapsh
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+from messaging.topics import MARKET_PREDICTION  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -23,7 +24,6 @@ logger = get_logger(__name__)
 
 # Schema directory relative to repo root
 _SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
-_TOPIC = "market.prediction.v1"
 _GROUP_ID = "market-data-prediction-markets"
 
 
@@ -52,7 +52,7 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
         metrics: Any = None,
     ) -> None:
         if config is None:
-            config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
+            config = ConsumerConfig(group_id=_GROUP_ID, topics=[MARKET_PREDICTION])
         super().__init__(config, metrics)
         self._uow_factory = uow_factory
         self._current_uow: UnitOfWork | None = None
@@ -193,10 +193,11 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
             liquidity=Decimal(str(liquidity_raw)) if liquidity_raw is not None else None,
         )
 
-        # Persist both rows
+        # Persist both rows.
+        # M-04: do NOT call uow.commit() here — the base class owns the single
+        # commit per message (after process_message returns successfully).
         await uow.prediction_markets.upsert(market)
         await uow.prediction_market_snapshots.insert_if_not_exists(snapshot)
-        await uow.commit()
 
         logger.info(
             "prediction_market_consumer.materialised",

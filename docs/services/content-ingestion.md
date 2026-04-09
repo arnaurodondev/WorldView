@@ -322,6 +322,68 @@ Both validated with `hmac.compare_digest()` (timing-safe).
 
 ---
 
+## Prediction Markets (PRD-0019)
+
+S4 includes a dedicated Polymarket adapter and worker pipeline separate from the standard article ingestion flow.
+
+### Entities
+
+| Entity | Type | Key Fields | Notes |
+|--------|------|------------|-------|
+| `OutcomeSnapshot` | dataclass (frozen, slots) | `name`, `token_id`, `price: float [0,1]` | Single outcome of a binary market |
+| `PredictionMarketFetchResult` | dataclass (frozen, slots) | `market_id`, `question`, `outcomes`, `fetched_at`, `minio_bronze_key` | Full result from Gamma API |
+| `ContentIngestionTask` | dataclass | `source_id`, `status`, `is_backfill`, `worker_id`, `lease_expires` | Scheduler task state machine |
+
+### Kafka Topic
+
+| Topic | Schema | Description |
+|-------|--------|-------------|
+| `market.prediction.v1` | `market.prediction.v1.avsc` | Polymarket market snapshot per poll cycle |
+
+Use the constant `messaging.topics.MARKET_PREDICTION` — never hardcode the string.
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `prediction_market_fetch_log` | Dedup log: `(market_id, fetched_at)` unique; INSERT ... ON CONFLICT DO NOTHING RETURNING (F-308) |
+| `ingestion_tasks` | Scheduler worker task queue with state machine |
+
+### MinIO Key Pattern
+
+`prediction-markets/polymarket/{market_id}/{fetched_at_iso}/raw.json`
+
+### Worker Pipeline (`_execute_polymarket_task`)
+
+1. **Short-lived dedup session** — build adapter, load known market IDs (session closed before fetch)
+2. **`PolymarketAdapter.fetch(source)`** — calls Gamma API, pages through all markets, stores bronze in MinIO
+3. **Short-lived write session** — upsert `prediction_market_fetch_log` + write `outbox_events` (outbox pattern)
+4. Task marked SUCCEEDED if `summary.fetched > 0`; FAILED if `summary.failed > 0 and summary.fetched == 0` (F-302)
+
+Advisory lock (`pg_advisory_xact_lock`) held **only during the write session** (D-03 / R24 compliance).
+
+### Scheduler / ADAPTER_REGISTRY
+
+`POLYMARKET` is **intentionally excluded** from `ADAPTER_REGISTRY` — the scheduler detects `SourceType.POLYMARKET` and dispatches to `_execute_polymarket_task` directly. The registry is only for article-fetching adapters that return `FetchResult` objects.
+
+### Key ENV Vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONTENT_INGESTION_POLYMARKET__BASE_URL` | Gamma API URL | Polymarket Gamma API endpoint |
+| `CONTENT_INGESTION_POLYMARKET__PAGE_SIZE` | `100` | Markets per page |
+| `CONTENT_INGESTION_WORKER_POLYMARKET_TASK_TIMEOUT_SECONDS` | `900.0` | Dedicated Polymarket fetch timeout (D-04) |
+| `CONTENT_INGESTION_WORKER_CONCURRENT_TASKS` | `4` | Semaphore limiting concurrent tasks |
+
+### Pitfalls
+
+- **POLYMARKET not in ADAPTER_REGISTRY** — `scheduler.py` uses a separate code path for Polymarket; adding it to the registry would double-dispatch
+- **Rollback on per-item exception** — `FetchAndWritePredictionMarketsUseCase` calls `rollback_fn()` after each failed write to unpoison the shared SQLAlchemy session (M-02 / BP-136)
+- **`process_message` must NOT call `uow.commit()`** — base class owns the single commit (M-04 / BP-135)
+- **`prediction_market_fetch_log.create_market_fetch_log()`** returns `UUID | None` — `None` means duplicate (ON CONFLICT DO NOTHING)
+
+---
+
 ## Dead Letter Queue (DLQ)
 
 Events that fail Avro serialization or exceed max dispatch attempts are moved to the DLQ.

@@ -14,7 +14,6 @@ from content_ingestion.domain.entities import SourceType
 from content_ingestion.infrastructure.adapters.eodhd.adapter import EODHDAdapter
 from content_ingestion.infrastructure.adapters.finnhub.adapter import FinnhubAdapter
 from content_ingestion.infrastructure.adapters.newsapi.adapter import NewsAPIAdapter
-from content_ingestion.infrastructure.adapters.polymarket.adapter import PolymarketAdapter
 from content_ingestion.infrastructure.adapters.sec_edgar.adapter import SECEdgarAdapter
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -31,7 +30,11 @@ ADAPTER_REGISTRY: dict[SourceType, type[SourceAdapter]] = {
     SourceType.SEC_EDGAR: SECEdgarAdapter,
     SourceType.FINNHUB: FinnhubAdapter,
     SourceType.NEWSAPI: NewsAPIAdapter,
-    SourceType.POLYMARKET: PolymarketAdapter,  # type: ignore[dict-item]
+    # NOTE: SourceType.POLYMARKET is intentionally NOT registered here.
+    # Polymarket tasks are routed directly to _execute_polymarket_task() in
+    # worker.py (R24 compliance: batch-collect first, then short-lived session
+    # for dedup). The scheduler uses PolymarketAdapter only for the dedup
+    # fetch_log_exists_fn; it does NOT go through the standard adapter path.
 }
 
 

@@ -91,6 +91,8 @@ class WorkerProcess:
         self._stop_event = asyncio.Event()
         self._semaphore = asyncio.Semaphore(settings.worker_concurrency)
         self._task_timeout = settings.worker_task_timeout_seconds
+        # D-04: Polymarket tasks require a longer timeout (paginated API + MinIO writes)
+        self._polymarket_task_timeout = settings.worker_polymarket_task_timeout_seconds
 
         # Build own infrastructure (one instance per worker process — R22)
         _, _, self._write_factory, self._read_factory = _build_factories(settings)
@@ -164,17 +166,21 @@ class WorkerProcess:
         Semaphore is acquired first so timeout only measures actual execution.
         On timeout, the task is explicitly marked FAILED to avoid the 5-minute
         lease-expiry delay before the scheduler can recover it.
+
+        D-04: Polymarket tasks use a dedicated, longer timeout because they
+        paginate the entire Gamma API catalogue and write to MinIO.
         """
+        timeout = self._polymarket_task_timeout if task.source_type == SourceType.POLYMARKET else self._task_timeout
         async with self._semaphore:
             try:
-                async with asyncio.timeout(self._task_timeout):
+                async with asyncio.timeout(timeout):
                     await self._execute_task(task)
             except TimeoutError:
                 logger.warning(
                     "worker_task_timeout",
                     task_id=str(task.id),
                     worker_id=self._worker_id,
-                    timeout=self._task_timeout,
+                    timeout=timeout,
                 )
                 # Mark the task as failed immediately so the scheduler
                 # doesn't have to wait for lease expiry to re-queue it.
@@ -437,13 +443,20 @@ class WorkerProcess:
                 fetch_log_repo=pm_log_repo_write,
                 outbox_repo=outbox_repo,
                 commit_fn=session.commit,
+                rollback_fn=session.rollback,  # M-02: required to unpoison session on failure
             )
             summary = await write_use_case.execute(results, source_id=task.source_id)
 
             task_repo = TaskRepository(session)
-            await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            # F-302: if ALL results failed (no successful writes at all), treat the
+            # task as failed so the scheduler can retry rather than silently succeed.
+            if summary.failed > 0 and summary.fetched == 0:
+                task.fail(f"all_{summary.failed}_markets_failed")
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            else:
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                task.succeed()
             await session.commit()
-            task.succeed()
 
             record_fetch(
                 task.source_name,

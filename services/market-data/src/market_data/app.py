@@ -284,8 +284,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             endpoint = f"http://{endpoint}"
         storage_settings = StorageSettings(
             endpoint=endpoint,
-            access_key=settings.storage_access_key,
-            secret_key=settings.storage_secret_key,
+            access_key=settings.storage_access_key.get_secret_value(),
+            secret_key=settings.storage_secret_key.get_secret_value(),
         )
         object_storage = build_object_storage(storage_settings)
     except Exception:

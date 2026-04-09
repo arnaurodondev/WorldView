@@ -44,6 +44,9 @@ class PredictionMarketModel(TimestampMixin, Base):
     close_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'open'"))
     resolved_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # D-01: tracks the timestamp of the most recent snapshot for this market.
+    # Updated by the consumer on each upsert via trigger or explicit write.
+    last_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PredictionMarketSnapshotModel(Base):
@@ -52,6 +55,9 @@ class PredictionMarketSnapshotModel(Base):
     No ``TimestampMixin`` because hypertables use ``snapshot_at`` as the
     time dimension rather than a separate ``updated_at`` column.
     ``id`` is a PostgreSQL-generated UUID (gen_random_uuid).
+
+    D-01: composite PRIMARY KEY (id, snapshot_at) — TimescaleDB requires the
+    partition column (snapshot_at) to be part of the PK.
     """
 
     __tablename__ = "prediction_market_snapshots"
@@ -66,7 +72,7 @@ class PredictionMarketSnapshotModel(Base):
         server_default=text("gen_random_uuid()"),
     )
     market_id: Mapped[str] = mapped_column(Text, nullable=False)
-    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, primary_key=True)
     outcomes_prices: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     volume_24h: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
     liquidity: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)

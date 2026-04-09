@@ -7,7 +7,7 @@
     {"name": "event_id",          "type": "string",                  "doc": "UUIDv7 event identifier"},
     {"name": "event_type",        "type": "string",                  "default": "market.prediction.snapshot", "doc": "Event type discriminator"},
     {"name": "schema_version",    "type": "int",                     "default": 1},
-    {"name": "occurred_at",       "type": "string",                  "doc": "ISO-8601 UTC timestamp"},
+    {"name": "occurred_at",       "type": "string",                  "default": "", "doc": "ISO-8601 UTC timestamp"},
     {"name": "market_id",         "type": "string",                  "doc": "Polymarket conditionId"},
     {"name": "source",            "type": "string",                  "default": "polymarket", "doc": "polymarket"},
     {"name": "question",          "type": "string",                  "doc": "The market question text"},
