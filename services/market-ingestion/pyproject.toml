@@ -47,4 +47,5 @@ markers = [
     "integration: tests requiring external infra (Docker/Postgres/MinIO)",
     "contract: Avro schema contract tests",
     "e2e: end-to-end tests requiring full infra",
+    "live: tests that make real HTTP calls to external APIs (requires network + api key)",
 ]
