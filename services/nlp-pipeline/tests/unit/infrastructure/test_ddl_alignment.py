@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.models import (
+    ArticlePriceImpactModel,
     ChunkEmbeddingModel,
     ChunkEntityMentionModel,
     ChunkModel,
@@ -176,32 +176,5 @@ class TestEmbeddingPendingDDLAlignment:
 
 
 class TestArticlePriceImpactsDDLAlignment:
-    """DDL-only alignment check for Wave A-1.
-
-    ORM model (ArticlePriceImpactModel) is added in Wave A-2; once it exists,
-    replace this test with ``_assert_aligned("article_price_impacts", ArticlePriceImpactModel)``.
-    """
-
-    _EXPECTED_COLUMNS: ClassVar[set[str]] = {
-        "id",
-        "article_id",
-        "entity_id",
-        "symbol",
-        "published_at",
-        "ohlcv_date",
-        "price_open",
-        "price_close",
-        "price_delta_pct",
-        "next_day_delta_pct",
-        "max_intraday_range_pct",
-        "impact_score",
-        "computed_at",
-    }
-
-    def test_article_price_impacts_ddl_has_all_columns(self) -> None:
-        migration_text = _read_all_migrations()
-        ddl_cols = _extract_ddl_columns(migration_text, "article_price_impacts")
-        missing = self._EXPECTED_COLUMNS - ddl_cols
-        extra = ddl_cols - self._EXPECTED_COLUMNS
-        assert not missing, f"[article_price_impacts] Expected columns missing from DDL: {missing}"
-        assert not extra, f"[article_price_impacts] Unexpected columns in DDL: {extra}"
+    def test_article_price_impacts_ddl_matches_orm(self) -> None:
+        _assert_aligned("article_price_impacts", ArticlePriceImpactModel)

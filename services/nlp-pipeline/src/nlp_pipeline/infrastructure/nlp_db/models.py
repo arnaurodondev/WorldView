@@ -6,9 +6,11 @@ These models MUST stay in sync with alembic/versions/0001_create_nlp_schema.py (
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
+import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
 from sqlalchemy import VARCHAR, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -234,3 +236,32 @@ class EmbeddingPendingModel(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     next_retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ArticlePriceImpactModel(Base):
+    """Retrospective price-impact labels for processed articles (migration 0005).
+
+    One row per article (UNIQUE on article_id).  Populated by
+    ``PriceImpactLabellingWorker`` (Wave B-1) and queried by Block 5 (Wave A-4).
+    Stays in sync with ``ArticlePriceImpact`` domain entity (BP-019).
+    """
+
+    __tablename__ = "article_price_impacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    article_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True)
+    entity_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ohlcv_date: Mapped[date] = mapped_column(sa.Date(), nullable=False)
+    price_open: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    price_close: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    price_delta_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 6), nullable=False)
+    next_day_delta_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    max_intraday_range_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    impact_score: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

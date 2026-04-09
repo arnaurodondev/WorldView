@@ -6,10 +6,14 @@ Pure dataclasses — NO infrastructure imports allowed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
+from nlp_pipeline.domain.errors import PriceImpactError
+
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import date, datetime
     from uuid import UUID
 
     from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome, RoutingTier
@@ -161,3 +165,106 @@ class DocumentSourceMetadata:
     source_name: str | None = None  # e.g. "SEC EDGAR", "Finnhub"
     source_type: str | None = None  # e.g. "sec_10q", "eodhd_news"
     word_count: int | None = None
+
+
+@dataclass(frozen=True)
+class ArticlePriceImpact:
+    """Retrospective price-impact label for a processed article (PRD-0020 §6.5).
+
+    Represents how much the related entity's price moved in the OHLCV bar
+    covering the article's publication time.  All monetary fields use
+    ``Decimal`` (not ``float``) for precision.
+
+    Factories:
+      - ``compute()`` — derives ``price_delta_pct`` and ``impact_score`` from OHLCV
+      - ``zero()``    — no-data sentinel (OHLCV unavailable or article < 25h old)
+    """
+
+    # Required fields (no defaults) — must come before fields with defaults
+    article_id: UUID
+    entity_id: UUID
+    symbol: str
+    published_at: datetime
+    ohlcv_date: date
+    price_open: Decimal
+    price_close: Decimal
+    price_delta_pct: Decimal
+    impact_score: Decimal
+    # Optional fields
+    next_day_delta_pct: Decimal | None = None
+    max_intraday_range_pct: Decimal | None = None
+    # Auto-generated primary key (UUIDv7); override when reconstructing from DB
+    id: UUID = field(default_factory=new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.published_at.tzinfo is None:  # type: ignore[union-attr]
+            raise PriceImpactError("published_at must be UTC-aware (tzinfo required)")
+        if not (Decimal("0.0") <= self.impact_score <= Decimal("1.0")):
+            raise PriceImpactError(f"impact_score must be in [0.0, 1.0], got {self.impact_score}")
+        if not (1 <= len(self.symbol.strip()) <= 20):
+            raise PriceImpactError(f"symbol must be 1-20 chars, got '{self.symbol}'")
+        if self.price_open < Decimal("0"):
+            raise PriceImpactError(f"price_open must be >= 0, got {self.price_open}")
+        if self.price_close < Decimal("0"):
+            raise PriceImpactError(f"price_close must be >= 0, got {self.price_close}")
+
+    @classmethod
+    def compute(
+        cls,
+        article_id: UUID,
+        entity_id: UUID,
+        symbol: str,
+        published_at: datetime,
+        price_open: Decimal,
+        price_close: Decimal,
+        normalisation_cap_pct: Decimal = Decimal("5.0"),
+        next_day_delta_pct: Decimal | None = None,
+        max_intraday_range_pct: Decimal | None = None,
+    ) -> ArticlePriceImpact:
+        """Compute impact_score from OHLCV data (PRD-0020 §6.5).
+
+        Raises:
+            PriceImpactError: if ``published_at`` is naive or ``price_open`` is <= 0.
+        """
+        if published_at.tzinfo is None:  # type: ignore[union-attr]
+            raise PriceImpactError("published_at must be UTC-aware")
+        if price_open <= Decimal("0"):
+            raise PriceImpactError(f"price_open must be > 0 in compute(), got {price_open}")
+        price_delta_pct = (price_close - price_open) / price_open * Decimal("100")
+        impact_score = min(Decimal("1.0"), abs(price_delta_pct) / normalisation_cap_pct)
+        ohlcv_date = published_at.date()  # type: ignore[union-attr]
+        return cls(
+            article_id=article_id,
+            entity_id=entity_id,
+            symbol=symbol.strip(),
+            published_at=published_at,
+            ohlcv_date=ohlcv_date,
+            price_open=price_open,
+            price_close=price_close,
+            price_delta_pct=price_delta_pct,
+            impact_score=impact_score,
+            next_day_delta_pct=next_day_delta_pct,
+            max_intraday_range_pct=max_intraday_range_pct,
+        )
+
+    @classmethod
+    def zero(
+        cls,
+        article_id: UUID,
+        entity_id: UUID,
+        symbol: str,
+        published_at: datetime,
+        ohlcv_date: date,
+    ) -> ArticlePriceImpact:
+        """No-data sentinel: OHLCV unavailable or article < 25h old (PRD-0020 §6.5)."""
+        return cls(
+            article_id=article_id,
+            entity_id=entity_id,
+            symbol=symbol.strip(),
+            published_at=published_at,
+            ohlcv_date=ohlcv_date,
+            price_open=Decimal("0"),
+            price_close=Decimal("0"),
+            price_delta_pct=Decimal("0"),
+            impact_score=Decimal("0.0"),
+        )

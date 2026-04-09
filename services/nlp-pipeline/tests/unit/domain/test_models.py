@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome, RoutingTier
+from nlp_pipeline.domain.errors import PriceImpactError
 from nlp_pipeline.domain.models import (
+    ArticlePriceImpact,
     Chunk,
     DocumentEntityStats,
     DocumentSourceMetadata,
@@ -300,3 +303,137 @@ class TestDocumentSourceMetadata:
         assert dsm.source_name is None
         assert dsm.source_type is None
         assert dsm.word_count is None
+
+
+# ── ArticlePriceImpact tests ──────────────────────────────────────────────────
+
+_PUBLISHED_AT = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+_OHLCV_DATE = date(2026, 4, 1)
+_ARTICLE_ID = uuid.uuid4()
+_ENTITY_ID = uuid.uuid4()
+_SYMBOL = "AAPL"
+_CAP = Decimal("5.0")
+
+
+@pytest.mark.unit
+class TestArticlePriceImpact:
+    def test_impact_score_normalisation_zero(self) -> None:
+        """price_open == price_close → price_delta_pct = 0 → impact_score = 0.0."""
+        impact = ArticlePriceImpact.compute(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            price_open=Decimal("100"),
+            price_close=Decimal("100"),
+            normalisation_cap_pct=_CAP,
+        )
+        assert impact.impact_score == Decimal("0")
+        assert impact.price_delta_pct == Decimal("0")
+
+    def test_impact_score_at_cap(self) -> None:
+        """abs(price_delta_pct) == 5% == cap → impact_score = 1.0."""
+        impact = ArticlePriceImpact.compute(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            price_open=Decimal("100"),
+            price_close=Decimal("105"),
+            normalisation_cap_pct=_CAP,
+        )
+        assert impact.impact_score == Decimal("1.0")
+
+    def test_impact_score_exceeds_cap_capped(self) -> None:
+        """abs(price_delta_pct) = 10% > 5% cap → impact_score capped at 1.0."""
+        impact = ArticlePriceImpact.compute(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            price_open=Decimal("100"),
+            price_close=Decimal("110"),
+            normalisation_cap_pct=_CAP,
+        )
+        assert impact.impact_score == Decimal("1.0")
+
+    def test_impact_score_partial(self) -> None:
+        """abs(price_delta_pct) = 2.5% → impact_score = 0.5."""
+        impact = ArticlePriceImpact.compute(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            price_open=Decimal("100"),
+            price_close=Decimal("102.5"),
+            normalisation_cap_pct=_CAP,
+        )
+        assert impact.impact_score == Decimal("0.5")
+
+    def test_negative_delta_uses_abs(self) -> None:
+        """price_close < price_open → abs applied → impact_score positive."""
+        impact = ArticlePriceImpact.compute(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            price_open=Decimal("100"),
+            price_close=Decimal("97"),  # -3%
+            normalisation_cap_pct=_CAP,
+        )
+        assert impact.price_delta_pct < Decimal("0")
+        assert impact.impact_score == Decimal("0.6")
+
+    def test_naive_datetime_raises(self) -> None:
+        """published_at without tzinfo → PriceImpactError."""
+        naive = datetime(2026, 4, 1, 12, 0, 0)  # noqa: DTZ001
+        with pytest.raises(PriceImpactError, match="UTC-aware"):
+            ArticlePriceImpact.compute(
+                article_id=_ARTICLE_ID,
+                entity_id=_ENTITY_ID,
+                symbol=_SYMBOL,
+                published_at=naive,  # type: ignore[arg-type]
+                price_open=Decimal("100"),
+                price_close=Decimal("105"),
+            )
+
+    def test_impact_score_out_of_range_raises(self) -> None:
+        """Direct construction with impact_score < 0 → PriceImpactError via __post_init__."""
+        with pytest.raises(PriceImpactError, match="impact_score"):
+            ArticlePriceImpact(
+                article_id=_ARTICLE_ID,
+                entity_id=_ENTITY_ID,
+                symbol=_SYMBOL,
+                published_at=_PUBLISHED_AT,
+                ohlcv_date=_OHLCV_DATE,
+                price_open=Decimal("100"),
+                price_close=Decimal("105"),
+                price_delta_pct=Decimal("5"),
+                impact_score=Decimal("-0.1"),
+            )
+
+    def test_symbol_too_long_raises(self) -> None:
+        """symbol > 20 chars → PriceImpactError."""
+        with pytest.raises(PriceImpactError, match="symbol"):
+            ArticlePriceImpact.compute(
+                article_id=_ARTICLE_ID,
+                entity_id=_ENTITY_ID,
+                symbol="X" * 21,
+                published_at=_PUBLISHED_AT,
+                price_open=Decimal("100"),
+                price_close=Decimal("105"),
+            )
+
+    def test_zero_factory(self) -> None:
+        """zero() creates entity with impact_score=0.0 and zero prices."""
+        impact = ArticlePriceImpact.zero(
+            article_id=_ARTICLE_ID,
+            entity_id=_ENTITY_ID,
+            symbol=_SYMBOL,
+            published_at=_PUBLISHED_AT,
+            ohlcv_date=_OHLCV_DATE,
+        )
+        assert impact.impact_score == Decimal("0.0")
+        assert impact.price_open == Decimal("0")
+        assert impact.price_close == Decimal("0")
+        assert impact.ohlcv_date == _OHLCV_DATE

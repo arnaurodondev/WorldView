@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datetime import datetime
+    from decimal import Decimal
     from uuid import UUID
+
+    from nlp_pipeline.domain.models import ArticlePriceImpact
 
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
@@ -173,4 +176,47 @@ class DocumentSourceMetadataRepository(ABC):
     @abstractmethod
     async def batch_get(self, doc_ids: list[UUID]) -> dict[UUID, Any]:
         """Return metadata keyed by doc_id; only present doc_ids are included."""
+        ...
+
+
+# ── PriceImpact repository port ───────────────────────────────────────────────
+
+
+class PriceImpactRepositoryPort(ABC):
+    """Port for article price-impact label persistence (PRD-0020 §6.5).
+
+    Used by ``PriceImpactLabellingWorker`` (writes) and Block 5 (reads).
+    Concrete implementation: ``ArticlePriceImpactRepository`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def upsert(self, impact: ArticlePriceImpact) -> None:
+        """Persist a price-impact label; ON CONFLICT (article_id) DO NOTHING — idempotent."""
+        ...
+
+    @abstractmethod
+    async def get_by_article_id(self, article_id: UUID) -> ArticlePriceImpact | None:
+        """Return the label for a given article, or ``None`` if not yet labelled."""
+        ...
+
+    @abstractmethod
+    async def get_max_impact_for_doc(self, doc_id: UUID) -> Decimal:
+        """Return the max ``impact_score`` across all entities for an article.
+
+        Returns ``Decimal("0.0")`` when no labels exist (article not yet labelled).
+        Block 5 uses this to up-weight articles that coincide with large price moves.
+        """
+        ...
+
+    @abstractmethod
+    async def get_unlabelled_articles(self, min_age_hours: int, batch_size: int) -> list[tuple[UUID, list[UUID]]]:
+        """Return ``[(doc_id, [entity_id, ...])]`` for unlabelled articles.
+
+        Selects articles that:
+          - have at least one resolved entity_mention
+          - are NOT already in ``article_price_impacts``
+          - were published more than ``min_age_hours`` ago (OHLCV bar must be closed)
+
+        Returns at most ``batch_size`` rows, grouped by ``doc_id``.
+        """
         ...
