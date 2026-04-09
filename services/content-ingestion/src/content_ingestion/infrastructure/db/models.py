@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     SmallInteger,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -142,6 +143,35 @@ class ContentIngestionTaskModel(Base):
             postgresql_where=text("window_start IS NOT NULL"),
         ),
         Index("ix_cit_worker_lease", "worker_id", "lease_expires"),
+    )
+
+
+class PredictionMarketFetchLogModel(Base):
+    """Deduplication log for Polymarket poll cycles.
+
+    Each row records a market snapshot captured during a single poll.
+    The unique index on ``(market_id, snapshot_at)`` prevents double-publishing
+    the same market state within a single poll window.
+
+    Notes:
+        - ``id`` is always app-generated via ``new_uuid7()`` (BP: no gen_random_uuid() on PKs)
+        - ``resolution_status`` carries a server_default of ``'open'`` (BP-126)
+        - ``source_id`` is nullable to allow manual/webhook snapshot submissions
+    """
+
+    __tablename__ = "prediction_market_fetch_log"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    source_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True)
+    market_id: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolution_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'open'"))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("market_id", "snapshot_at", name="uq_pmfl_market_snapshot"),
+        Index("ix_pmfl_source_fetched", "source_id", "fetched_at"),
     )
 
 

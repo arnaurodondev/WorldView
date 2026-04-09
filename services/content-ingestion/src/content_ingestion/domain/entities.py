@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -197,4 +198,120 @@ class ContentIngestionTask:
             source_type=source.source_type,
             is_backfill=is_backfill,
             window_start=window_start,
+        )
+
+
+# ── Prediction Market entities ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeSnapshot:
+    """A single binary outcome of a prediction market (e.g. "Yes" or "No").
+
+    Invariants:
+        - ``name`` and ``token_id`` must be non-empty strings.
+        - ``price`` must be in the closed interval [0.0, 1.0].
+    """
+
+    name: str
+    token_id: str
+    price: float
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("OutcomeSnapshot.name must not be empty")
+        if not self.token_id:
+            raise ValueError("OutcomeSnapshot.token_id must not be empty")
+        if not (0.0 <= self.price <= 1.0):
+            raise ValueError(f"OutcomeSnapshot.price must be in [0.0, 1.0], got {self.price}")
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketFetchResult:
+    """Immutable result of fetching one prediction market from Polymarket.
+
+    This is a pure domain object — no infrastructure imports.  The adapter
+    constructs instances via :meth:`from_gamma_response` and may attach the
+    MinIO key via ``dataclasses.replace()`` after upload.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``outcomes`` must contain at least 2 entries.
+    """
+
+    source_type: SourceType
+    market_id: str
+    question: str
+    outcomes: list[OutcomeSnapshot]
+    raw_bytes: bytes
+    fetched_at: datetime
+    description: str | None = None
+    volume_24h: float | None = None
+    liquidity: float | None = None
+    close_time: datetime | None = None
+    resolution_status: str = "open"
+    resolved_answer: str | None = None
+    minio_bronze_key: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionMarketFetchResult.fetched_at must be UTC-aware")
+        if len(self.outcomes) < 2:
+            raise ValueError("PredictionMarketFetchResult.outcomes must have at least 2 entries")
+
+    @classmethod
+    def from_gamma_response(
+        cls,
+        raw: dict,
+        fetched_at: datetime,
+    ) -> PredictionMarketFetchResult:
+        """Construct from a Polymarket Gamma API market dict.
+
+        Maps Gamma API field names to domain attributes.  All optional fields
+        use defensive ``.get()`` with None defaults to tolerate absent keys.
+        """
+        tokens: list[dict] = raw.get("tokens") or []
+        outcomes = [
+            OutcomeSnapshot(
+                name=t.get("outcome", ""),
+                token_id=t.get("token_id", ""),
+                price=float(t.get("price", 0.0)),
+            )
+            for t in tokens
+        ]
+
+        # Map Gamma "closed" status → domain "cancelled" (R15: stable values)
+        raw_status = raw.get("status", "active")
+        if raw_status == "closed":
+            resolution_status = "cancelled"
+        elif raw_status == "resolved":
+            resolution_status = "resolved"
+        else:
+            resolution_status = "open"
+
+        close_time: datetime | None = None
+        raw_end_date = raw.get("endDate")
+        if raw_end_date:
+            from datetime import datetime as _dt
+
+            try:
+                close_time = _dt.fromisoformat(raw_end_date.replace("Z", "+00:00")).astimezone(UTC)
+            except (ValueError, AttributeError):
+                close_time = None
+
+        return cls(
+            source_type=SourceType.POLYMARKET,
+            market_id=raw.get("conditionId", ""),
+            question=raw.get("question", ""),
+            description=raw.get("description"),
+            outcomes=outcomes,
+            volume_24h=float(raw["volume24hr"]) if raw.get("volume24hr") is not None else None,
+            liquidity=float(raw["liquidity"]) if raw.get("liquidity") is not None else None,
+            close_time=close_time,
+            resolution_status=resolution_status,
+            resolved_answer=raw.get("resolvedAnswer"),
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
         )
