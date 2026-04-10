@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useAlertStream } from "../src/hooks/useAlertStream";
+import { useAlertStream, MAX_CRITICAL_QUEUE } from "../src/hooks/useAlertStream";
 import type { AlertPayload } from "../src/hooks/useAlertStream";
 
 // ── Mock WebSocket ────────────────────────────────────────────────────────────
@@ -10,6 +10,7 @@ type WsEventHandler = (event: { data: string }) => void;
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
 
+  onopen: (() => void) | null = null;
   onmessage: WsEventHandler | null = null;
   onclose: (() => void) | null = null;
   onerror: ((e: unknown) => void) | null = null;
@@ -21,6 +22,7 @@ class MockWebSocket {
 
   close() {
     this.readyState = 3; // CLOSED
+    this.onclose?.();
   }
 
   /** Helper: simulate server pushing a message to this socket. */
@@ -123,5 +125,68 @@ describe("useAlertStream", () => {
     unmount();
 
     expect(ws.readyState).toBe(3); // CLOSED
+  });
+
+  it("onclose_triggers_reconnect_after_delay", () => {
+    vi.useFakeTimers();
+    try {
+      renderHook(() => useAlertStream("user-uuid-123"));
+      expect(MockWebSocket.instances).toHaveLength(1);
+
+      const ws1 = MockWebSocket.instances[0];
+      // Simulate server closing the connection (without going through cleanup)
+      act(() => {
+        ws1.readyState = 3;
+        ws1.onclose?.();
+      });
+
+      // No new WS yet — reconnect is scheduled after 1s delay
+      expect(MockWebSocket.instances).toHaveLength(1);
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // After the delay a new WS is created
+      expect(MockWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("onerror_calls_close_and_does_not_crash", () => {
+    renderHook(() => useAlertStream("user-uuid-123"));
+    const ws = MockWebSocket.instances[0];
+
+    // Should not throw; onerror delegates to ws.close()
+    expect(() => {
+      act(() => {
+        ws.onerror?.(new Event("error"));
+      });
+    }).not.toThrow();
+
+    expect(ws.readyState).toBe(3); // CLOSED by onerror handler
+  });
+
+  it("critical_queue_capped_at_MAX_CRITICAL_QUEUE", () => {
+    const { result } = renderHook(() => useAlertStream("user-uuid-123"));
+    const ws = MockWebSocket.instances[0];
+
+    const total = MAX_CRITICAL_QUEUE + 5; // 15 alerts
+
+    act(() => {
+      for (let i = 0; i < total; i++) {
+        ws.simulateMessage(
+          makeAlert({ alert_id: `a${i}`, severity: "critical" }),
+        );
+      }
+    });
+
+    expect(result.current.criticalQueue).toHaveLength(MAX_CRITICAL_QUEUE);
+    // Most recent 10 should be kept (a5 … a14)
+    expect(result.current.criticalQueue[0].alert_id).toBe("a5");
+    expect(result.current.criticalQueue[MAX_CRITICAL_QUEUE - 1].alert_id).toBe(
+      `a${total - 1}`,
+    );
   });
 });

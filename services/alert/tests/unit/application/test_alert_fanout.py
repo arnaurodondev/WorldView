@@ -283,6 +283,21 @@ class TestAlertFanoutExecute:
         assert result.suppressed is True
         assert result.suppression_reason == "no_entity_id"
 
+    @pytest.mark.unit
+    async def test_dedup_race_condition_returns_suppressed(self) -> None:
+        """Concurrent writes with same dedup_key: DuplicateAlertError → suppressed result."""
+        from alert.domain.errors import DuplicateAlertError
+
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        use_case, mock_ws, _ = _make_use_case(
+            watchers=watchers,
+            save_alert_raises=DuplicateAlertError("race condition: duplicate dedup_key"),
+        )
+        result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1")
+        assert result.suppressed is True
+        assert result.suppression_reason == "dedup"
+        mock_ws.send_to_user.assert_not_called()
+
 
 # ── Severity computation (PRD-0021 §6.5) ─────────────────────────────────────
 
@@ -290,14 +305,42 @@ class TestAlertFanoutExecute:
 class TestAlertFanoutSeverity:
     @pytest.mark.unit
     async def test_alert_fanout_severity_critical_from_score(self) -> None:
-        """Signal event with score=0.90 → Alert.severity == CRITICAL."""
+        """Signal event with score=0.90 → saved Alert.severity == CRITICAL."""
         watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
-        use_case, _, _ = _make_use_case(watchers=watchers)
-        result = await use_case.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1", market_impact_score=0.90)
-        assert result.suppressed is False
-        # Verify the alert was created — we can't directly inspect it from FanoutResult
-        # but non-suppressed + has alert_id confirms creation
-        assert result.alert_id is not None
+        saved_alerts: list[Alert] = []
+
+        mock_ws = AsyncMock()
+        mock_ws.send_to_user = AsyncMock(return_value=True)
+        mock_cache = AsyncMock()
+        mock_cache.get_watchers = AsyncMock(return_value=watchers)
+        mock_dedup_repo = AsyncMock()
+        mock_dedup_repo.exists = AsyncMock(return_value=False)
+        mock_alert_repo = AsyncMock()
+        mock_alert_repo.save = AsyncMock(side_effect=lambda a: saved_alerts.append(a))
+        mock_pending_repo = AsyncMock()
+        mock_pending_repo.save = AsyncMock()
+        mock_outbox_repo = AsyncMock()
+        mock_outbox_repo.append = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_sf = MagicMock()
+        mock_sf.return_value = mock_session
+
+        def _repo_factory(_s):  # type: ignore[no-untyped-def]
+            return mock_alert_repo, mock_pending_repo, mock_dedup_repo, mock_outbox_repo
+
+        uc = AlertFanoutUseCase(
+            session_factory=mock_sf,
+            watchlist_cache=mock_cache,
+            notification_publisher=mock_ws,
+            repo_factory=_repo_factory,
+        )
+        await uc.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1", market_impact_score=0.90)
+
+        assert len(saved_alerts) == 1
+        assert saved_alerts[0].severity == AlertSeverity.CRITICAL
 
     @pytest.mark.unit
     async def test_alert_fanout_severity_low_for_missing_score(self) -> None:

@@ -76,8 +76,8 @@ class GetPendingAlertsUseCase:
             pairs.append((p, alert))
 
         if min_severity is not None:
-            min_rank = _SEVERITY_RANK[min_severity]
-            pairs = [(p, a) for p, a in pairs if _SEVERITY_RANK[a.severity] >= min_rank]
+            min_rank = _SEVERITY_RANK.get(min_severity, 0)
+            pairs = [(p, a) for p, a in pairs if _SEVERITY_RANK.get(a.severity, 0) >= min_rank]
 
         return pairs
 

@@ -41,7 +41,9 @@ class AlertRepository:
         try:
             await self._session.flush()
         except IntegrityError as exc:
-            await self._session.rollback()
+            # DO NOT call self._session.rollback() here — the outer async with session_factory()
+            # context manager owns the session lifecycle and handles rollback via __aexit__.
+            # Calling rollback here would poison the shared session (BP-141).
             raise DuplicateAlertError(f"Duplicate dedup_key: {alert.dedup_key}") from exc
 
     async def get_by_id(self, alert_id: UUID) -> Alert | None:
@@ -60,6 +62,10 @@ class AlertRepository:
 
     @staticmethod
     def _to_entity(row: AlertModel) -> Alert:
+        try:
+            sev = AlertSeverity(row.severity)
+        except ValueError:
+            sev = AlertSeverity.LOW  # safe default — forward-compat guard (F-106)
         return Alert(
             alert_id=row.alert_id,
             entity_id=row.entity_id,
@@ -68,6 +74,6 @@ class AlertRepository:
             source_topic=row.source_topic,
             payload=dict(row.payload),
             dedup_key=row.dedup_key,
-            severity=AlertSeverity(row.severity),
+            severity=sev,
             created_at=row.created_at,
         )
