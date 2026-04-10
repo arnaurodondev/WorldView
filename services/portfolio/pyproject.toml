@@ -21,6 +21,7 @@ dependencies = [
     "messaging",
     "observability",
     "storage",
+    "snaptrade-python-sdk>=1.0,<2",  # pinned: update only after reviewing migration guide
 ]
 
 [project.optional-dependencies]

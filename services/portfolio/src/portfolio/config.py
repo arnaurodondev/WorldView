@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import structlog
-from pydantic import SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +64,23 @@ class Settings(BaseSettings):
     # Internal service-to-service auth (S10 → S1)
     internal_service_token: str = ""
 
+    # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
+    # AliasChoices supports both bare SNAPTRADE_* and PORTFOLIO_SNAPTRADE_* env vars.
+    snaptrade_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("SNAPTRADE_CLIENT_ID", "PORTFOLIO_SNAPTRADE_CLIENT_ID"),
+    )
+    snaptrade_consumer_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("SNAPTRADE_CONSUMER_KEY", "PORTFOLIO_SNAPTRADE_CONSUMER_KEY"),
+    )
+    snaptrade_redirect_uri: str = Field(
+        default="http://localhost:5173/portfolio/brokerage/callback",
+        validation_alias=AliasChoices("SNAPTRADE_REDIRECT_URI", "PORTFOLIO_SNAPTRADE_REDIRECT_URI"),
+    )
+    brokerage_sync_cycle_seconds: int = 14400  # 4 hours
+    brokerage_sync_history_days: int = 730  # 2 years initial import
+
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
     log_json: bool = True
@@ -96,6 +113,19 @@ class Settings(BaseSettings):
                 message=(
                     "PORTFOLIO_INTERNAL_SERVICE_TOKEN is not set — all internal API endpoints "
                     "will return 401. Set this env var before deploying to production."
+                ),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_missing_snaptrade_credentials(self) -> Settings:
+        """Warn at startup if SnapTrade credentials are unset (PRD-0022 F-23)."""
+        if not self.snaptrade_client_id:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_snaptrade_client_id",
+                message=(
+                    "SNAPTRADE_CLIENT_ID is not set — brokerage connection endpoints will fail. "
+                    "Set this env var to enable SnapTrade brokerage sync."
                 ),
             )
         return self

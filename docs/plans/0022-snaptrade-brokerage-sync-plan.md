@@ -307,11 +307,12 @@ SQLAlchemy 2.x declarative ORM models aligned exactly with the DDL in §6.4. Use
 
 ---
 
-### Wave A-2: Alembic Migration + Config + Dependency
+### Wave A-2: Alembic Migration + Config + Dependency ✅
 
 **Goal**: Create DB migration for the two new tables and extend S1 configuration with SnapTrade settings.
 **Depends on**: Wave A-1 (ORM models must exist before generating migration)
 **Estimated effort**: 30–45 minutes
+**Status**: **DONE** — 2026-04-10 · 346 unit tests pass · ruff + mypy clean · migration round-trip verified
 **Architecture layer**: infrastructure (DB migration) + config
 
 #### Pre-read (agent must read before starting)
@@ -417,10 +418,10 @@ Check PyPI for latest stable version before pinning. Note: `cryptography` may al
 ---
 
 #### Validation Gate
-- [ ] `alembic upgrade head` + `alembic downgrade -1` + `alembic upgrade head` (round-trip) passes
-- [ ] `ruff check services/portfolio/src/portfolio/config.py` passes
-- [ ] `mypy services/portfolio/src/portfolio/config.py` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests still pass
+- [x] `alembic upgrade head` + `alembic downgrade -1` + `alembic upgrade head` (round-trip) passes
+- [x] `ruff check services/portfolio/src/portfolio/config.py` passes
+- [x] `mypy services/portfolio/src/portfolio/config.py` passes
+- [x] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests still pass
 
 #### Regression Guardrails
 - **BP-008**: Migration DDL must exactly match ORM model columns — cross-check `BrokerageConnectionModel` columns against the `CREATE TABLE` in `upgrade()` before committing
