@@ -281,3 +281,54 @@ class TestIntelligenceConsumerMarketImpactScore:
 
         call_kwargs = mock_fanout.execute.call_args.kwargs
         assert call_kwargs["market_impact_score"] == pytest.approx(1.0)
+
+    @pytest.mark.unit
+    async def test_consumer_clamps_score_below_0(self) -> None:
+        """market_impact_score=-0.5 → clamped to 0.0 before passing to fanout."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            "market_impact_score": -0.5,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
+
+    @pytest.mark.unit
+    async def test_consumer_handles_none_score(self) -> None:
+        """market_impact_score=None in event → defaults to 0.0 (TypeError guard, BP-138)."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            "market_impact_score": None,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
+
+    @pytest.mark.unit
+    async def test_consumer_handles_non_numeric_score(self) -> None:
+        """market_impact_score='N/A' → defaults to 0.0 (ValueError guard, BP-138)."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            "market_impact_score": "N/A",
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
