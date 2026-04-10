@@ -55,3 +55,17 @@ class AlertType(StrEnum):
     CONTRADICTION = "contradiction"
     CONFIDENCE_DROP = "confidence_drop"
     NEW_EVENT = "new_event"
+
+
+class ConnectionStatus(StrEnum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    ERROR = "error"
+    DISCONNECTED = "disconnected"
+
+
+class SyncErrorType(StrEnum):
+    UNKNOWN_INSTRUMENT = "unknown_instrument"
+    UNSUPPORTED_TYPE = "unsupported_type"
+    API_ERROR = "api_error"
+    VALIDATION_ERROR = "validation_error"

@@ -1,8 +1,9 @@
 # PLAN-0022 — SnapTrade Brokerage Portfolio Sync
 
 > **PRD**: [PRD-0022](../specs/0022-snaptrade-brokerage-sync.md)
-> **Status**: draft
+> **Status**: in-progress
 > **Created**: 2026-04-09
+> **Updated**: 2026-04-10
 > **Services affected**: S1 (Portfolio), S9 (API Gateway), Frontend
 
 ---
@@ -67,7 +68,7 @@ Wave B-1 (IBrokerageClient port +            Wave B-2 (Brokerage repos +
 | Metric | Value |
 |--------|-------|
 | Total waves | 9 |
-| Total tasks | 35 |
+| Total tasks | 36 |
 | Services modified | S1 (Portfolio), S9 (API Gateway), Frontend |
 | New DB tables | 2 (`brokerage_connections`, `brokerage_sync_errors`) |
 | New use cases | 5 |
@@ -90,11 +91,12 @@ Wave B-1 (IBrokerageClient port +            Wave B-2 (Brokerage repos +
 
 ## Sub-plan A: S1 Domain + DB Foundations
 
-### Wave A-1: Domain Entities, Enums, Errors, and ORM Models
+### Wave A-1: Domain Entities, Enums, Errors, and ORM Models ✅
 
 **Goal**: Establish the S1 domain layer foundation for brokerage connections — all types the upper layers depend on.
 **Depends on**: none
 **Estimated effort**: 45–75 minutes
+**Status**: **DONE** — 2026-04-10 · 17 tests pass · ruff + mypy clean
 **Architecture layer**: domain + infrastructure/db/models
 
 #### Pre-read (agent must read before starting)
@@ -293,10 +295,10 @@ SQLAlchemy 2.x declarative ORM models aligned exactly with the DDL in §6.4. Use
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/domain/ services/portfolio/src/portfolio/infrastructure/db/models/` passes
-- [ ] `mypy services/portfolio/src/portfolio/domain/ services/portfolio/src/portfolio/infrastructure/db/models/` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -k "brokerage" -v` — minimum 7 new tests pass
-- [ ] No domain entity imports infrastructure modules (CLAUDE.md Hard Rule — domain layer independence; not to be confused with RULES.md R12 which is the claim-check rule)
+- [x] `ruff check services/portfolio/src/portfolio/domain/ services/portfolio/src/portfolio/infrastructure/db/models/` passes
+- [x] `mypy services/portfolio/src/portfolio/domain/ services/portfolio/src/portfolio/infrastructure/db/models/` passes
+- [x] `python -m pytest services/portfolio/tests/ -m unit -k "brokerage" -v` — minimum 7 new tests pass (17 pass)
+- [x] No domain entity imports infrastructure modules (CLAUDE.md Hard Rule — domain layer independence; not to be confused with RULES.md R12 which is the claim-check rule)
 
 #### Regression Guardrails
 - **BP-021**: No ORM column named `metadata` — check both new models before committing
@@ -1225,12 +1227,21 @@ async def main() -> None:
     setup_logging(settings)
     session_factory = create_session_factory(settings)
     brokerage_client = SnapTradeClient(settings.snaptrade_client_id, settings.snaptrade_consumer_key)
-    worker = BrokerageTransactionSyncWorker(session_factory, brokerage_client, settings)
+    # R-001 FIX: construct Fernet cipher here and thread it to every SqlAlchemyUnitOfWork the
+    # worker creates. Without this, when SNAPTRADE_SECRET_ENCRYPTION_KEY is set the worker would
+    # load encrypted ciphertext as the user secret and pass it to SnapTrade — causing all sync
+    # operations to fail with invalid credentials (silently caught as BrokerageApiError).
+    from cryptography.fernet import Fernet  # noqa: PLC0415
+    cipher = Fernet(settings.snaptrade_secret_encryption_key.encode()) \
+        if settings.snaptrade_secret_encryption_key else None
+    worker = BrokerageTransactionSyncWorker(session_factory, brokerage_client, settings, cipher=cipher)
     await worker.run()
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+**`BrokerageTransactionSyncWorker.__init__`** must accept `cipher: Fernet | None = None` and store it as `self._cipher`.
 
 **`BrokerageTransactionSyncWorker.run()`**:
 ```python
@@ -1249,6 +1260,8 @@ async def run(self) -> None:
 **Acceptance criteria**:
 - [ ] `python -m portfolio.workers.brokerage_sync_worker` is the entry point
 - [ ] `run()` loops on `brokerage_sync_cycle_seconds` (default 14400 = 4h)
+- [ ] `BrokerageTransactionSyncWorker.__init__` accepts `cipher: Fernet | None = None`
+- [ ] `cipher` is passed to every `SqlAlchemyUnitOfWork(self._session_factory, snaptrade_cipher=self._cipher)` the worker creates
 - [ ] ruff + mypy pass
 
 ---
@@ -1267,7 +1280,9 @@ The `sync_cycle()` method that fetches all `active/error` connections and iterat
 **Logic**:
 ```
 sync_cycle():
-    1. async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+    # Use self._cipher (from R-001 fix) when constructing UoW so that brokerage_connections
+    # repo decrypts snaptrade_user_secret correctly.
+    1. async with SqlAlchemyUnitOfWork(self._session_factory, snaptrade_cipher=self._cipher) as uow:
          connections = await uow.brokerage_connections.list_active_or_error()
     2. For each connection in connections:
          await self._sync_connection(connection)
@@ -1292,10 +1307,11 @@ sync_cycle():
 8. save connection, commit uow
 ```
 
-**Important**: Open a NEW `UnitOfWork` per connection (not one UoW for the entire cycle) to avoid long-running transactions (BP-057). Explicitly close session before calling SnapTrade API.
+**Important**: Open a NEW `UnitOfWork` per connection (not one UoW for the entire cycle) to avoid long-running transactions (BP-057). Explicitly close session before calling SnapTrade API. **Always pass `snaptrade_cipher=self._cipher`** when constructing any `SqlAlchemyUnitOfWork` in this worker — omitting it means encrypted secrets are returned as raw ciphertext and passed to SnapTrade (R-001 fix).
 
 **Acceptance criteria**:
 - [ ] New UoW opened per connection in `_sync_connection`
+- [ ] Every `SqlAlchemyUnitOfWork(...)` call passes `snaptrade_cipher=self._cipher`
 - [ ] `BrokerageApiError` → sets `status=ERROR`, logs warning, continues to next connection
 - [ ] `snaptrade_user_secret` never in structlog calls
 - [ ] ruff + mypy pass
@@ -1341,6 +1357,14 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
 **S3 instrument resolution** (step 3b):
 - Use `httpx.AsyncClient` to call `GET http://{S3_HOST}/api/v1/instruments/{symbol}`
 - S3 hostname from new config setting: `market_data_service_url: str = "http://market-data:8003"` (add to config in this task)
+- **SECURITY (R-002)**: URL-encode the symbol before embedding it in the path — SnapTrade symbols like `"BRK.B"`, `"BTC/USD"`, or `"BF.B"` contain characters that corrupt path routing without encoding:
+  ```python
+  import urllib.parse
+  encoded_symbol = urllib.parse.quote(activity.symbol, safe="")
+  response = await http_client.get(
+      f"{settings.market_data_service_url}/api/v1/instruments/{encoded_symbol}"
+  )
+  ```
 - If S3 returns 404 → instrument not found → proceed to create sync error
 - If S3 returns 200 → upsert instrument via `uow.instruments.upsert(InstrumentRef(...))` then use
 
@@ -1354,6 +1378,7 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
 - [ ] All other types → `SyncErrorType.UNSUPPORTED_TYPE` row, worker continues
 - [ ] Unknown instrument creates `SyncErrorType.UNKNOWN_INSTRUMENT` row, worker continues
 - [ ] `IdempotencyConflictError` silently skipped (dedup is correct behavior)
+- [ ] Symbol URL-encoded via `urllib.parse.quote(symbol, safe="")` before S3 path construction (R-002)
 - [ ] ruff + mypy pass
 
 ---
@@ -1483,6 +1508,7 @@ portfolio-brokerage-sync:
     - SNAPTRADE_CONSUMER_KEY=${SNAPTRADE_CONSUMER_KEY:-}
     - SNAPTRADE_REDIRECT_URI=${SNAPTRADE_REDIRECT_URI:-http://localhost:5173/portfolio/brokerage/callback}
     - SNAPTRADE_SECRET_ENCRYPTION_KEY=${SNAPTRADE_SECRET_ENCRYPTION_KEY:-}  # Logs warning if empty; required for production
+    - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}  # R-005: instrument fallback lookup
   depends_on:
     portfolio-migrate:
       condition: service_completed_successfully
@@ -1569,15 +1595,56 @@ Minimum: **9 unit tests**
 
 ---
 
+---
+
+##### T-D-2-05: Update .env.example with SnapTrade env vars
+
+**Type**: config
+**depends_on**: [T-A-2-02]
+**blocks**: none
+**Target files**: `.env.example` (or `dev.local.env.example` — check repo root for the actual filename)
+**PRD reference**: §12 (Migration Plan), §4.3 F-23
+
+**What to build**:
+Add all 5 new env vars required for SnapTrade brokerage sync to the project's env example file. This is the single reference a developer needs to set up local testing with a real brokerage account (e.g. TastyTrade).
+
+**Entries to add** (under a new `# ── SnapTrade Brokerage Sync (S1) ──` section):
+```bash
+# ── SnapTrade Brokerage Sync (S1) ──────────────────────────────────────────────
+# Register at https://app.snaptrade.com (free tier, self-service) to receive these credentials.
+# Required for: portfolio brokerage connection flow + BrokerageTransactionSyncWorker.
+# Leave blank in CI — service logs a startup warning but still starts.
+SNAPTRADE_CLIENT_ID=
+SNAPTRADE_CONSUMER_KEY=
+# Redirect URI — must be reachable by the user's browser after SnapTrade OAuth completes.
+# For local dev, localhost:5173 works (the browser redirect, NOT a server-side callback).
+SNAPTRADE_REDIRECT_URI=http://localhost:5173/portfolio/brokerage/callback
+# Fernet encryption key for snaptrade_user_secret at rest in portfolio_db.
+# Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# If empty: plaintext fallback (acceptable for dev; MANDATORY for any deployment with real accounts).
+SNAPTRADE_SECRET_ENCRYPTION_KEY=
+# Market Data service URL for instrument fallback lookup (worker only).
+# In docker-compose: default http://market-data:8003 is correct. Override for non-compose dev.
+PORTFOLIO_MARKET_DATA_SERVICE_URL=http://localhost:8003
+```
+
+**Acceptance criteria**:
+- [ ] All 5 env vars present in the example file with comments explaining each
+- [ ] `SNAPTRADE_SECRET_ENCRYPTION_KEY` generation command included as a comment
+- [ ] SnapTrade registration URL included (`https://app.snaptrade.com`)
+
+---
+
 #### Validation Gate
 - [ ] `ruff check services/api-gateway/ services/portfolio/tests/unit/test_brokerage*.py` passes
 - [ ] `mypy services/api-gateway/` passes
 - [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — minimum 24 new tests total (15 + 9), all pass
 - [ ] `docker-compose config` validates
+- [ ] `.env.example` contains all 5 new SnapTrade env vars (T-D-2-05)
 
 #### Regression Guardrails
 - **BP-010**: `portfolio-brokerage-sync` docker-compose entry must NOT inherit the API service healthcheck — it's a background process with no HTTP port
-- **BP-002**: New docker-compose env vars (`SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY`) must be added to `.env.example` / `dev.local.env.example`
+- **R-001**: Every `SqlAlchemyUnitOfWork(...)` in the worker must pass `snaptrade_cipher=self._cipher`; grep for bare `SqlAlchemyUnitOfWork(self._session_factory)` and reject any that omit the cipher arg
 
 ---
 
