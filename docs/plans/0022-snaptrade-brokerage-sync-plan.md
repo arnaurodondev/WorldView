@@ -433,11 +433,12 @@ Check PyPI for latest stable version before pinning. Note: `cryptography` may al
 
 ## Sub-plan B: S1 Infrastructure
 
-### Wave B-1: IBrokerageClient Port + SnapTradeClient Adapter
+### Wave B-1: IBrokerageClient Port + SnapTradeClient Adapter ✅
 
 **Goal**: Define the brokerage client abstraction (port) and implement the real SnapTrade SDK adapter. This enables dependency injection in tests (use `FakeBrokerageClient`).
 **Depends on**: Wave A-2 (config + SDK dependency installed)
 **Estimated effort**: 45–75 minutes
+**Status**: **DONE** — 2026-04-10 · 361 unit tests pass (15 new) · ruff + mypy clean
 **Architecture layer**: application/ports + infrastructure/brokerage
 
 #### Pre-read (agent must read before starting)
@@ -573,13 +574,13 @@ Wraps `snaptrade-python-sdk` to implement `IBrokerageClient`. All SnapTrade SDK 
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/application/ports/brokerage_client.py services/portfolio/src/portfolio/infrastructure/brokerage/` passes
-- [ ] `mypy services/portfolio/src/portfolio/application/ports/brokerage_client.py services/portfolio/src/portfolio/infrastructure/brokerage/` passes
-- [ ] `isinstance(FakeBrokerageClient(...), IBrokerageClient)` is True (Protocol check)
-- [ ] No infrastructure imports in `application/ports/brokerage_client.py` (R12)
+- [x] `ruff check services/portfolio/src/portfolio/application/ports/brokerage_client.py services/portfolio/src/portfolio/infrastructure/brokerage/` passes
+- [x] `mypy services/portfolio/src/portfolio/application/ports/brokerage_client.py services/portfolio/src/portfolio/infrastructure/brokerage/` passes
+- [x] `isinstance(FakeBrokerageClient(...), IBrokerageClient)` is True (Protocol check — assertion in fakes.py fires at import)
+- [x] No infrastructure imports in `application/ports/brokerage_client.py` (R12)
 
 #### Regression Guardrails
-- **BP-100**: SnapTrade SDK method names in this wave (`authentication.register_snap_trade_user`, `authentication.login_snap_trade_user`, `connections.remove_brokerage_authorization`, `transactions_and_reporting.get_activities`) must be verified against the installed SDK before committing. Run `python -c "from snaptrade_client import SnapTrade; help(SnapTrade)"` to confirm.
+- **BP-100**: SDK method names verified against snaptrade-python-sdk==1.0.1 (NOT the high-level `SnapTrade` class the plan assumed — SDK is low-level `ApiClient` + per-resource API objects). Actual methods: `snap_trade_register_user_post`, `snap_trade_login_post`, `authorizations_authorization_id_delete`, `activities_get`.
 - **BP-025**: SnapTrade SDK calls are synchronous (non-async) — must use `asyncio.run_in_executor(None, ...)` to prevent blocking the event loop
 - **BP-057**: Do not hold a DB session while calling SnapTrade API — the adapter receives no session; the calling use case must commit/close DB session before invoking the adapter
 
