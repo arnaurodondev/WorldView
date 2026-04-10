@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from alert.domain.entities import Alert
-from alert.domain.enums import AlertType
+from alert.domain.enums import AlertSeverity, AlertType
 from alert.domain.errors import DuplicateAlertError
 from alert.infrastructure.db.models import AlertModel
 
@@ -34,6 +34,7 @@ class AlertRepository:
             source_topic=alert.source_topic,
             payload=alert.payload,
             dedup_key=alert.dedup_key,
+            severity=str(alert.severity),
             created_at=alert.created_at,
         )
         self._session.add(row)
@@ -67,5 +68,6 @@ class AlertRepository:
             source_topic=row.source_topic,
             payload=dict(row.payload),
             dedup_key=row.dedup_key,
+            severity=AlertSeverity(getattr(row, "severity", "low")),
             created_at=row.created_at,
         )
