@@ -160,7 +160,7 @@ Six shared Python packages in `libs/`, installable via `pip install -e libs/<nam
 
 1. **S4** polls EODHD/EDGAR/Finnhub/NewsAPI (15-30 min); raw to MinIO bronze; `content.article.raw.v1` via outbox
 2. **S5** cleans HTML (readability-lxml + bleach), 3-stage dedup (URL hash, normalized hash, Valkey LSH), canonical text to MinIO silver; `content.article.stored.v1` via outbox
-3. **S6** (Blocks 3-10): sectioning --> GLiNER NER (10 classes) --> routing score (7 signals) --> suppression --> embeddings (BGE 1024-dim) --> novelty gate (MinHash) --> entity resolution (4-step cascade) --> LLM extraction (Qwen2.5-7B). Writes to `nlp_db` + `intelligence_db`; emits `nlp.article.enriched.v1` + `nlp.signal.detected.v1`
+3. **S6** (Blocks 3-10): sectioning --> GLiNER NER (11 classes) --> routing score (8 signals, incl. price_impact) --> suppression --> embeddings (BGE 1024-dim) --> novelty gate (MinHash) --> entity resolution (4-step cascade) --> LLM extraction (Qwen2.5-7B). Background `PriceImpactLabellingWorker` retroactively scores articles vs OHLCV bars. Writes to `nlp_db` + `intelligence_db`; emits `nlp.article.enriched.v1` + `nlp.signal.detected.v1` (with `market_impact_score`)
 4. **S7** (Blocks 11-14): relation canonicalization --> graph materialization + evidence staging --> async workers (confidence recomputation, contradiction detection, summary generation, embedding refresh) --> shadow AGE migration. Emits `graph.state.changed.v1` + `intelligence.contradiction.v1`
 5. **S10** consumes intelligence + watchlist events, resolves affected users, deduplicates, pushes via WebSocket
 

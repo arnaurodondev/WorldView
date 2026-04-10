@@ -317,3 +317,56 @@ async def test_dispatcher_main_stop() -> None:
         await main()
 
     mock_dispatcher.stop.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# price_impact_labelling_worker (entry point) — T-B-2-01
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_price_impact_worker_entrypoint_importable() -> None:
+    """``from nlp_pipeline.workers.price_impact_labelling_worker import main`` imports without error."""
+    from nlp_pipeline.workers.price_impact_labelling_worker import main
+
+    assert callable(main)
+
+
+@pytest.mark.asyncio
+async def test_price_impact_worker_entrypoint_runs_and_stops() -> None:
+    """Entry point runs to completion and disposes nlp_engine when stop is pre-set."""
+    mock_nlp_engine = AsyncMock()
+    mock_worker = MagicMock()
+    mock_worker.run_forever = AsyncMock()
+
+    mock_settings = _mock_settings(
+        impact_normalisation_cap_pct=5.0,
+        price_impact_cycle_seconds=14400,
+        price_impact_min_age_hours=25,
+        market_data_internal_url="http://market-data:8003",
+    )
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=mock_settings),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "nlp_pipeline.infrastructure.http.market_data_client.MarketDataClient",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "nlp_pipeline.infrastructure.workers.price_impact_labelling_worker.PriceImpactLabellingWorker",
+            return_value=mock_worker,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.workers.price_impact_labelling_worker import main
+
+        await main()
+
+    mock_nlp_engine.dispose.assert_called_once()
+    mock_worker.run_forever.assert_called_once()
