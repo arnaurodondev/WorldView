@@ -226,3 +226,20 @@ class PriceImpactRepositoryPort(ABC):
         Returns at most ``batch_size`` rows, grouped by ``doc_id``.
         """
         ...
+
+    @abstractmethod
+    async def get_unlabelled_article_details(
+        self, min_age_hours: int, batch_size: int
+    ) -> list[tuple[UUID, UUID, str, datetime]]:
+        """Return ``(doc_id, entity_id, symbol, published_at)`` rows for unlabelled articles.
+
+        Joins ``entity_mentions`` (``mention_class = 'financial_instrument'``) with
+        ``document_source_metadata`` to retrieve the symbol (``mention_text``) and
+        ``published_at`` in a single query.  Returns one row per
+        ``(doc_id, entity_id)`` pair so the worker can compute a score per entity and
+        keep the maximum.
+
+        Limits to ``batch_size`` *distinct doc_ids* — multiple rows per doc are normal
+        when a document mentions several financial instruments.
+        """
+        ...

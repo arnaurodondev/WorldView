@@ -145,6 +145,83 @@ never commit them.
 
 ---
 
+## Pre-Deployment Checklist (Before Hetzner / Production)
+
+Run these before the first Hetzner deployment, or after any significant infrastructure change.
+
+### Tier 1 — Always Run (< 5 minutes)
+
+```bash
+# 1. Lint Helm charts + render all 10 service values
+./scripts/ci-local.sh --job validate-helm
+
+# 2. Validate OpenTofu HCL syntax (requires: brew install opentofu)
+./scripts/ci-local.sh --job validate-tofu
+
+# 3. Verify all SOPS-encrypted secrets can be decrypted
+./scripts/test-secrets.sh
+
+# 4. Full local CI (lint → schemas → architecture → unit tests)
+./scripts/ci-local.sh
+```
+
+### Tier 2 — Before First Deploy (< 30 minutes)
+
+```bash
+# 5. Build all Docker images locally (catches Dockerfile errors)
+./scripts/test-docker-builds.sh
+
+# 6. Validate ArgoCD YAML with kubeconform (requires: brew install kubeconform)
+./scripts/local-k8s.sh validate-manifests
+```
+
+### Tier 3 — Local Kubernetes Smoke Test (< 2 hours, highest confidence)
+
+Tests Helm rollout, Traefik ingress, and TLS on a real local k3s cluster.
+
+```bash
+# Prerequisites: brew install k3d kubectl helm
+# 1. Build images
+./scripts/test-docker-builds.sh
+
+# 2. Create local cluster
+./scripts/local-k8s.sh create
+
+# 3. Deploy infrastructure (cert-manager + Traefik + Valkey)
+./scripts/local-k8s.sh deploy-infra
+
+# 4. Deploy and verify each service (repeat for all 10)
+./scripts/local-k8s.sh deploy-service api-gateway
+./scripts/local-k8s.sh deploy-service portfolio
+# ...
+
+# 5. Test Traefik ingress + self-signed TLS
+./scripts/local-k8s.sh test-ingress
+curl -k -H 'Host: test.localhost' https://localhost:8443/
+
+# 6. Run deployment readiness E2E tests (requires full Docker Compose stack running)
+docker compose --profile infra --profile runtime up -d && docker compose --profile init up
+python -m pytest tests/e2e/test_deployment_readiness.py -v -m e2e
+
+# 7. Tear down
+./scripts/local-k8s.sh destroy
+```
+
+### Tier 4 — Email Delivery Test
+
+```bash
+# Start monitoring stack
+docker compose --profile monitoring up -d
+
+# Fire test alert (email arrives within 2-5 minutes)
+./scripts/test-alertmanager-email.sh
+
+# Resolve after confirming receipt
+./scripts/test-alertmanager-email.sh --resolve
+```
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -154,3 +231,6 @@ never commit them.
 | Alembic "target database is not up to date" | Run `make migrate` before starting the service |
 | Port conflict | Change host ports in `docker-compose.yml` or stop conflicting processes |
 | `hatch env create` fails | Delete `.venv` / hatch env and retry |
+| `helm template` fails for a service | Check `infra/helm/values/<service>.yaml` key names match the Deployment template |
+| k3d cluster create fails | Ensure Docker is running; check `docker info` |
+| SOPS decrypt fails | Verify `~/.config/sops/age/keys.txt` exists and matches `.sops.yaml` public key |

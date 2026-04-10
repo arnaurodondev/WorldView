@@ -21,7 +21,7 @@ Usage:
 Options:
   --job <name>     One of: all, lint, validate-schemas, validate-service-structure,
                    import-guards, architecture-tests, test-libs, test-services,
-                   test-frontend
+                   test-frontend, validate-helm, validate-tofu, validate-docker-builds
                    Default: all
   --python <bin>   Python executable to use (default: python3)
   -h, --help       Show this help
@@ -33,6 +33,8 @@ Examples:
   ./scripts/ci-local.sh --job architecture-tests
   ./scripts/ci-local.sh --job test-libs
   ./scripts/ci-local.sh --job lint --python python3.12
+  ./scripts/ci-local.sh --job validate-helm
+  ./scripts/ci-local.sh --job validate-tofu
 EOF
 }
 
@@ -188,6 +190,117 @@ run_architecture_tests() {
     run_cmd "$PYTHON_BIN" -m pytest tests/architecture -v --tb=short
 }
 
+run_validate_helm() {
+    echo "=== Job: validate-helm ==="
+
+    if ! command -v helm >/dev/null 2>&1; then
+        echo "helm is not installed — skipping (install: brew install helm)"
+        return 0
+    fi
+
+    cd "$ROOT_DIR"
+
+    if [[ -d "infra/helm/worldview-service" ]]; then
+        echo "Linting worldview-service chart..."
+        helm lint infra/helm/worldview-service
+
+        if [[ -d "infra/helm/values" ]]; then
+            echo "Rendering per-service values..."
+            HELM_FAIL=0
+            for values_file in infra/helm/values/*.yaml; do
+                svc=$(basename "$values_file" .yaml)
+                if helm template "$svc" infra/helm/worldview-service \
+                        -f "$values_file" \
+                        --set "image.tag=test" \
+                        > /dev/null 2>&1; then
+                    echo "  OK: $svc"
+                else
+                    echo "  FAIL: $svc"
+                    helm template "$svc" infra/helm/worldview-service \
+                        -f "$values_file" \
+                        --set "image.tag=test" || true
+                    HELM_FAIL=$((HELM_FAIL + 1))
+                fi
+            done
+            [[ $HELM_FAIL -eq 0 ]] || return 1
+        fi
+    else
+        echo "infra/helm/worldview-service not found — skipping (write PLAN-0024 waves first)"
+    fi
+
+    echo "Validating ArgoCD YAML syntax..."
+    if [[ -d "infra/argocd" ]]; then
+        "$PYTHON_BIN" -c "
+import yaml, pathlib, sys
+failed = []
+for f in sorted(pathlib.Path('infra/argocd').glob('**/*.yaml')):
+    try:
+        list(yaml.safe_load_all(f.read_text()))
+    except yaml.YAMLError as e:
+        print(f'  FAIL: {f}: {e}')
+        failed.append(str(f))
+    else:
+        print(f'  OK: {f}')
+if failed:
+    sys.exit(1)
+" 2>/dev/null || ensure_venv && "$PYTHON_BIN" -c "
+import yaml, pathlib, sys
+failed = []
+for f in sorted(pathlib.Path('infra/argocd').glob('**/*.yaml')):
+    try:
+        list(yaml.safe_load_all(f.read_text()))
+        print(f'  OK: {f}')
+    except yaml.YAMLError as e:
+        print(f'  FAIL: {f}: {e}')
+        failed.append(str(f))
+if failed:
+    sys.exit(1)
+"
+    else
+        echo "infra/argocd not found — skipping (write PLAN-0024 waves first)"
+    fi
+}
+
+run_validate_tofu() {
+    echo "=== Job: validate-tofu ==="
+
+    if ! command -v tofu >/dev/null 2>&1; then
+        echo "OpenTofu not installed — skipping (install: brew install opentofu)"
+        return 0
+    fi
+
+    if [[ ! -d "$ROOT_DIR/infra/tofu" ]]; then
+        echo "infra/tofu not found — skipping (write PLAN-0024 Wave A-1 first)"
+        return 0
+    fi
+
+    cd "$ROOT_DIR/infra/tofu"
+    echo "Running tofu init (no backend)..."
+    tofu init -backend=false -input=false -no-color
+
+    echo "Running tofu validate..."
+    tofu validate -no-color
+
+    echo "OpenTofu validation PASSED."
+}
+
+run_validate_docker_builds() {
+    echo "=== Job: validate-docker-builds ==="
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Docker not installed — skipping"
+        return 0
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "Docker not running — skipping"
+        return 0
+    fi
+
+    cd "$ROOT_DIR"
+    ./scripts/test-docker-builds.sh
+}
+
 run_test_frontend() {
     echo "=== Job: test-frontend ==="
 
@@ -237,6 +350,8 @@ case "$JOB" in
         run_test_libs
         run_test_services
         run_test_frontend
+        run_validate_helm
+        run_validate_tofu
         ;;
     lint)
         run_lint
@@ -261,6 +376,15 @@ case "$JOB" in
         ;;
     test-frontend)
         run_test_frontend
+        ;;
+    validate-helm)
+        run_validate_helm
+        ;;
+    validate-tofu)
+        run_validate_tofu
+        ;;
+    validate-docker-builds)
+        run_validate_docker_builds
         ;;
     *)
         echo "Invalid --job value: $JOB"

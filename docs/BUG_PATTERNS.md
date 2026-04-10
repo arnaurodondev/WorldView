@@ -4907,3 +4907,21 @@ markers = ["live: requires live network access to external APIs"]
 **Prevention**: Any use case that shares a session across multiple loop iterations MUST have a `rollback_fn` parameter. Review checklist: "Does the exception handler rollback before continuing the loop?"
 
 **First seen**: QA pass PLAN-0019, 2026-04-09 (M-02). Fixed in `FetchAndWritePredictionMarketsUseCase.execute`.
+
+## BP-137 — Helm values.yaml Key Mismatch Causes Silent Misconfiguration
+
+**Symptom**: A service is deployed via Helm but starts without a required env var (e.g., `DEEPINFRA_API_KEY` is empty). Kubernetes shows the pod as `Running`/`Ready` because `/health` does not validate all config. The misconfiguration surfaces only at runtime when the first request exercises the missing config path.
+
+**Root cause**: The key name in `infra/helm/values/<service>.yaml` under `env:` does not match what the Deployment template injects, or the key was renamed in the values file but the template variable reference was not updated. `helm install` succeeds silently; the env var is simply absent.
+
+**Fix**: After any change to `infra/helm/values/*.yaml` or the Deployment template:
+1. Run `helm template <svc> infra/helm/worldview-service -f infra/helm/values/<svc>.yaml` and inspect the rendered `env:` block
+2. Run `kubectl -n worldview exec <pod> -- env | grep <KEY>` after deploy to verify presence
+3. Run `./scripts/ci-local.sh --job validate-helm` to catch render failures in CI
+
+**Prevention**:
+- `validate-helm` is now part of `ci-local.sh --job all` and runs on every push
+- For each new env var added to a values file, manually verify the Deployment template propagates it
+- `helm test` hooks with env-var assertions are the most reliable guard (deferred)
+
+**First seen**: Investigation 2026-04-10 — identified as deployment risk for PLAN-0024 Wave A-2.

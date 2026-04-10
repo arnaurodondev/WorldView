@@ -948,6 +948,21 @@ services:
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
     restart: on-failure
 
+  nlp-pipeline-price-impact-worker:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]
+    restart: on-failure
+
   # ── Knowledge Graph (S7) — API + dispatcher + scheduler + 4 consumers ───────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
   knowledge-graph:
