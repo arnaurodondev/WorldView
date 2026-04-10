@@ -12,12 +12,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
-from alert.api.dependencies import DbSessionDep
+from alert.api.dependencies import AckUseCaseDep, GetPendingAlertsUseCaseDep
 from alert.api.schemas import PendingAlertResponse, PendingAlertsResponse
-from alert.application.use_cases.pending_alerts import (
-    AcknowledgeAlertUseCase,
-    GetPendingAlertsUseCase,
-)
+from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -31,26 +28,29 @@ router = APIRouter(prefix="/api/v1", tags=["alerts"])
 @router.get("/alerts/pending", response_model=PendingAlertsResponse)
 async def get_pending_alerts(
     request: Request,
-    session: DbSessionDep,
+    uc: GetPendingAlertsUseCaseDep,
     user_id: UUID = Query(..., description="Authenticated user UUID"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    min_severity: str | None = Query(default=None, description="Minimum severity: low|medium|high|critical"),
 ) -> PendingAlertsResponse:
     """Return paginated unacknowledged alerts for the given user.
 
     In production this user_id should come from a JWT/session; for the
     current deployment the caller passes it as a query parameter (S9
     API gateway will inject it from the auth token).
-    """
-    from alert.infrastructure.db.repositories.alert import AlertRepository
-    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 
-    pending_repo = PendingAlertRepository(session)
-    alert_repo = AlertRepository(session)
-    pairs = await GetPendingAlertsUseCase(
-        pending_repo=pending_repo,  # type: ignore[arg-type]
-        alert_repo=alert_repo,  # type: ignore[arg-type]
-    ).execute(user_id, limit=limit, offset=offset)
+    Optional ``min_severity`` filter returns only alerts at or above the
+    given tier (e.g. ``?min_severity=high`` returns HIGH and CRITICAL only).
+    """
+    severity_filter: AlertSeverity | None = None
+    if min_severity is not None:
+        try:
+            severity_filter = AlertSeverity(min_severity)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid min_severity: {min_severity!r}") from None
+
+    pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
 
     alert_responses = [
         PendingAlertResponse(
@@ -61,6 +61,7 @@ async def get_pending_alerts(
             source_topic=alert.source_topic,
             payload=alert.payload,
             created_at=p.created_at,
+            severity=str(alert.severity),
         )
         for p, alert in pairs
     ]
@@ -80,22 +81,18 @@ async def get_pending_alerts(
 async def acknowledge_alert(
     alert_id: UUID,
     request: Request,
-    session: DbSessionDep,
+    uc: AckUseCaseDep,
     user_id: UUID = Query(..., description="Authenticated user UUID"),
 ) -> dict[str, str]:
     """Acknowledge (mark delivered) an alert for the given user.
 
     Returns 200 on success.  Returns 404 — not 403 — when the alert
     does not exist OR belongs to a different user (avoids user enumeration).
-    """
-    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 
-    pending_repo = PendingAlertRepository(session)
-    # AcknowledgeAlertUseCase commits the session on success (N-04); route must not commit.
-    updated = await AcknowledgeAlertUseCase(
-        pending_repo=pending_repo,  # type: ignore[arg-type]
-        session=session,  # type: ignore[arg-type]
-    ).execute(user_id, alert_id)
+    The use case commits the DB session on success (N-04); the route must NOT
+    call ``session.commit()``.
+    """
+    updated = await uc.execute(user_id, alert_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")
 

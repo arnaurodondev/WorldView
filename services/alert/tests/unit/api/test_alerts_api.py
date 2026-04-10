@@ -18,7 +18,7 @@ import pytest
 from alert.app import create_app
 from alert.config import Settings
 from alert.domain.entities import Alert, PendingAlert
-from alert.domain.enums import AlertType
+from alert.domain.enums import AlertSeverity, AlertType
 from httpx import ASGITransport, AsyncClient
 
 if TYPE_CHECKING:
@@ -53,11 +53,12 @@ def _make_app() -> FastAPI:
     return app, session  # type: ignore[return-value]
 
 
-def _make_alert(entity_id: UUID | None = None) -> Alert:
+def _make_alert(entity_id: UUID | None = None, severity: AlertSeverity = AlertSeverity.LOW) -> Alert:
     return Alert(
         alert_id=uuid4(),
         entity_id=entity_id or uuid4(),
         alert_type=AlertType.SIGNAL,
+        severity=severity,
         source_event_id=uuid4(),
         source_topic="nlp.signal.detected.v1",
         payload={"event_type": "nlp.signal.detected"},
@@ -127,6 +128,7 @@ class TestGetPendingAlerts:
         assert data["total"] == 1
         assert str(data["alerts"][0]["alert_id"]) == str(alert.alert_id)
         assert data["alerts"][0]["alert_type"] == "SIGNAL"
+        assert "severity" in data["alerts"][0]
 
     @pytest.mark.unit
     async def test_pagination_params_respected(self) -> None:
@@ -172,6 +174,78 @@ class TestGetPendingAlerts:
 
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+
+    @pytest.mark.unit
+    async def test_get_pending_response_has_severity(self) -> None:
+        """Response JSON includes the severity field on each alert item."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        user_id = uuid4()
+        alert = _make_alert(severity=AlertSeverity.HIGH)
+        pending = _make_pending(user_id, alert.alert_id)
+
+        with (
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH) as MockAlertRepo,
+        ):
+            MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending])
+            MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert)
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+
+        assert resp.status_code == 200
+        item = resp.json()["alerts"][0]
+        assert item["severity"] == "high"
+
+    @pytest.mark.unit
+    async def test_get_pending_min_severity_query_param(self) -> None:
+        """?min_severity=high filters out LOW and MEDIUM alerts."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        user_id = uuid4()
+        alert_low = _make_alert(severity=AlertSeverity.LOW)
+        alert_high = _make_alert(severity=AlertSeverity.HIGH)
+        pending_low = _make_pending(user_id, alert_low.alert_id)
+        pending_high = _make_pending(user_id, alert_high.alert_id)
+
+        def _get_by_id(alert_id: UUID) -> Alert | None:
+            if alert_id == alert_low.alert_id:
+                return alert_low
+            if alert_id == alert_high.alert_id:
+                return alert_high
+            return None
+
+        with (
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH) as MockAlertRepo,
+        ):
+            MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending_low, pending_high])
+            MockAlertRepo.return_value.get_by_id = AsyncMock(side_effect=_get_by_id)
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}&min_severity=high")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["alerts"][0]["severity"] == "high"
+
+    @pytest.mark.unit
+    async def test_get_pending_invalid_min_severity(self) -> None:
+        """?min_severity=extreme returns HTTP 422."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        user_id = uuid4()
+
+        with (
+            patch(_PENDING_REPO_PATH),
+            patch(_ALERT_REPO_PATH),
+        ):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}&min_severity=extreme")
+
+        assert resp.status_code == 422
 
 
 # ── DELETE /api/v1/alerts/{alert_id}/ack ─────────────────────────────────────
@@ -246,6 +320,26 @@ class TestAcknowledgeAlert:
                 await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
 
         assert captured[0] == (user_id, alert_id)
+
+    @pytest.mark.unit
+    async def test_ack_route_no_commit_in_route(self) -> None:
+        """Route handler does NOT call session.commit() — the use case owns the commit (N-04)."""
+        app, session = _make_app()
+        transport = ASGITransport(app=app)
+        user_id = uuid4()
+        alert_id = uuid4()
+
+        with patch(_PENDING_REPO_PATH) as MockPendingRepo:
+            MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=True)
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+
+        assert resp.status_code == 200
+        # The route must not call commit directly — AcknowledgeAlertUseCase does it (N-04).
+        # The session mock commit was called exactly once: by the use case, not by the route.
+        # We verify the route didn't call it a second time by checking commit call count == 1.
+        assert session.commit.call_count == 1
 
 
 # ── WebSocket route ────────────────────────────────────────────────────────────

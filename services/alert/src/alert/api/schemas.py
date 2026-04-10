@@ -20,6 +20,7 @@ class PendingAlertResponse(BaseModel):
     source_topic: str
     payload: dict  # type: ignore[type-arg]
     created_at: datetime
+    severity: str  # "low" | "medium" | "high" | "critical" (PRD-0021 §6.5)
 
 
 class PendingAlertsResponse(BaseModel):
