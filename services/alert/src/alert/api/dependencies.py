@@ -103,11 +103,12 @@ DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
 # ── Email preference use case factories (R25 — infra wiring lives in DI, not routes) ─────
 
 
-def get_email_prefs_get_uc(session: Annotated[AsyncSession, Depends(get_db_session)]) -> GetEmailPreferencesUseCase:
-    """Build a GetEmailPreferencesUseCase wired to the write DB session.
+def get_email_prefs_get_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetEmailPreferencesUseCase:
+    """Build a GetEmailPreferencesUseCase wired to the read-only DB session (R27).
 
-    The use case calls ``repo.commit()`` internally (N-04), so the route
-    does not need to call ``session.commit()`` itself.
+    Read-only use case — uses read replica per R27.
     """
     from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
 

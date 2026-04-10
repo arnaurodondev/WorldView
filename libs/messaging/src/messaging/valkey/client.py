@@ -270,7 +270,7 @@ class ValkeyClient:
             yield pubsub
         finally:
             await pubsub.unsubscribe(*channels)
-            await pubsub.aclose()
+            await pubsub.close()
 
     # ── Sorted-set / pipeline ─────────────────────────────────────────────────
 

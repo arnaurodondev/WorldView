@@ -28,6 +28,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 async def main() -> None:
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
     from alert.config import Settings
+    from alert.domain.entities import SeverityThresholds
     from alert.infrastructure.cache.watchlist_cache import WatchlistCache
     from alert.infrastructure.clients.s1_client import S1Client
     from alert.infrastructure.db.repositories.alert import AlertRepository
@@ -93,6 +94,11 @@ async def main() -> None:
         repo_factory=_repo_factory,  # type: ignore[arg-type]
         dedup_window_seconds=settings.alert_dedup_window_seconds,
         alert_delivered_topic=settings.kafka_topic_alert_delivered,
+        severity_thresholds=SeverityThresholds(
+            critical=settings.alert_severity_critical_threshold,
+            high=settings.alert_severity_high_threshold,
+            medium=settings.alert_severity_medium_threshold,
+        ),
     )
 
     # Consumer config

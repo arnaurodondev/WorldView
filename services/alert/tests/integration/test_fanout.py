@@ -35,7 +35,6 @@ def _signal_event(entity_id: str, is_backfill: bool = False) -> dict[str, Any]:
     }
 
 
-@pytest.mark.integration
 async def test_fanout_creates_alert_in_db(
     integration_app: Any,
     db_session: Any,
@@ -71,7 +70,6 @@ async def test_fanout_creates_alert_in_db(
     assert row.alert_type == str(AlertType.SIGNAL)
 
 
-@pytest.mark.integration
 async def test_fanout_creates_pending_row_in_db(
     integration_app: Any,
     db_session: Any,
@@ -105,7 +103,6 @@ async def test_fanout_creates_pending_row_in_db(
     assert str(result.alert_id) in pending_ids
 
 
-@pytest.mark.integration
 async def test_fanout_creates_outbox_event(
     integration_app: Any,
     db_session: Any,
@@ -138,7 +135,6 @@ async def test_fanout_creates_outbox_event(
     assert count_after == count_before + 1
 
 
-@pytest.mark.integration
 async def test_fanout_suppresses_backfill(
     integration_app: Any,
     db_session: Any,
@@ -159,7 +155,6 @@ async def test_fanout_suppresses_backfill(
     assert count_after == count_before  # no new alerts
 
 
-@pytest.mark.integration
 async def test_fanout_no_watchers_writes_nothing(
     integration_app: Any,
     db_session: Any,
@@ -188,7 +183,6 @@ async def test_fanout_no_watchers_writes_nothing(
 # ── Severity integration tests (PRD-0021 Wave A-4) ───────────────────────────
 
 
-@pytest.mark.integration
 async def test_alert_severity_stored_in_db(
     integration_app: Any,
     db_session: Any,
@@ -225,7 +219,6 @@ async def test_alert_severity_stored_in_db(
     assert row.severity == str(AlertSeverity.CRITICAL)
 
 
-@pytest.mark.integration
 async def test_pending_alerts_returns_severity(
     integration_app: Any,
     integration_client: Any,
@@ -263,7 +256,6 @@ async def test_pending_alerts_returns_severity(
     assert item["severity"] == "high"
 
 
-@pytest.mark.integration
 async def test_pending_alerts_min_severity_filter(
     integration_app: Any,
     integration_client: Any,
@@ -326,7 +318,6 @@ async def test_pending_alerts_min_severity_filter(
         assert item["severity"] in ("high", "critical")
 
 
-@pytest.mark.integration
 async def test_db_migration_existing_rows_default_low(
     db_session: Any,
 ) -> None:

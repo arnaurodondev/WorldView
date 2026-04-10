@@ -372,16 +372,20 @@ class AlertFanoutUseCase:
             await self._notification_publisher.send_to_user(user_uuid, ws_payload)
 
         # ── 10. Metrics ──────────────────────────────────────────────────────
-        from alert.infrastructure.metrics.prometheus import (
-            s10_alerts_by_severity_total,
-            s10_flash_overlays_triggered_total,
-        )
+        # Metrics are fire-and-forget: must never affect the correctness path.
+        try:
+            from alert.infrastructure.metrics.prometheus import (
+                s10_alerts_by_severity_total,
+                s10_flash_overlays_triggered_total,
+            )
 
-        s10_alerts_by_severity_total.labels(severity=str(severity), alert_type=str(alert_type)).inc(
-            len(watcher_user_ids)
-        )
-        if severity == AlertSeverity.CRITICAL and watcher_user_ids:
-            s10_flash_overlays_triggered_total.inc()
+            s10_alerts_by_severity_total.labels(severity=str(severity), alert_type=str(alert_type)).inc(
+                len(watcher_user_ids)
+            )
+            if severity == AlertSeverity.CRITICAL and watcher_user_ids:
+                s10_flash_overlays_triggered_total.inc()
+        except Exception:
+            logger.warning("alert_fanout.metrics_error", exc_info=True)  # type: ignore[no-any-return]
 
         logger.info(  # type: ignore[no-any-return]
             "alert_fanout.completed",

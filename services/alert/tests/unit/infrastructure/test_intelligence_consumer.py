@@ -190,11 +190,16 @@ class TestIntelligenceConsumer:
 
     @pytest.mark.unit
     def test_resolve_topic_from_header_unknown_logs_warning(self) -> None:
-        """Unknown X-Source-Topic header logs a warning but still returns the header value."""
+        """Unknown X-Source-Topic header logs a warning and falls through to event_type resolution.
+
+        Unknown headers are NOT returned as-is to prevent arbitrary strings being stored
+        in the alerts.source_topic column (F-057).
+        """
         headers = {"X-Source-Topic": "some.unknown.topic.v9"}
         with capture_logs() as cap:
-            result = IntelligenceConsumer._resolve_topic({}, headers)
-        assert result == "some.unknown.topic.v9"
+            result = IntelligenceConsumer._resolve_topic({"event_type": "nlp.signal.detected"}, headers)
+        # Falls through to event_type resolution — returns the canonical topic, not the header
+        assert result == "nlp.signal.detected.v1"
         assert any(
             e.get("event") == "intelligence_consumer.unknown_topic_from_header" for e in cap
         ), f"Expected warning not found in {cap}"

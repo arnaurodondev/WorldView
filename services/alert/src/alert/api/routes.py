@@ -48,7 +48,10 @@ async def get_pending_alerts(
         try:
             severity_filter = AlertSeverity(min_severity)
         except ValueError:
-            raise HTTPException(status_code=422, detail=f"Invalid min_severity: {min_severity!r}") from None
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid min_severity: must be low|medium|high|critical",
+            ) from None
 
     pairs = await uc.execute(user_id=user_id, limit=limit, offset=offset, min_severity=severity_filter)
 
