@@ -1,7 +1,7 @@
 # S10 · Alert Service
 
 > **Owner**: Alert domain · **Database**: `alert_db` · **Port**: 8010
-> **Status**: Mature (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge; ✅ PLAN-0016 complete — Email digest, preferences, scheduler, Avro outbox)
+> **Status**: In-progress (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge; ✅ PLAN-0016 complete — Email digest, preferences, scheduler, Avro outbox; 🔄 PLAN-0021 Wave A-3 — AlertSeverity, SeverityThresholds, min_severity filter)
 
 ---
 
@@ -56,6 +56,7 @@ Migration history:
 - `0001_create_alert_db.py` — initial schema
 - `0002_add_email_tables.py` — email_preferences + email_log
 - `0003_email_idempotency_fixes.py` — UNIQUE(tenant_id, user_id) on email_preferences + updated_at on email_log
+- `0004_add_severity_to_alerts.py` — `severity VARCHAR(10) NOT NULL DEFAULT 'low'` + index on alerts (PRD-0021)
 
 ```sql
 -- alert_db
@@ -79,6 +80,7 @@ CREATE TABLE alerts (
     alert_id        UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     entity_id       UUID        NOT NULL,
     alert_type      VARCHAR(100) NOT NULL,
+    severity        VARCHAR(10)  NOT NULL DEFAULT 'low',  -- PRD-0021: low|medium|high|critical
     source_event_id UUID        NOT NULL,
     source_topic    VARCHAR(200) NOT NULL,
     payload         JSONB       NOT NULL,
@@ -87,6 +89,7 @@ CREATE TABLE alerts (
     UNIQUE (dedup_key)          -- dedup gate; see dedup_key formula below
 );
 CREATE INDEX idx_alerts_entity ON alerts (entity_id, created_at DESC);
+CREATE INDEX idx_alerts_severity ON alerts (severity, created_at DESC);  -- PRD-0021
 
 -- Tracks per-user delivery status for each alert.
 CREATE TABLE alert_deliveries (
@@ -217,12 +220,11 @@ erDiagram
 dedup_key = sha256(
     str(entity_id)
     + alert_type
-    + str(source_event_id)
     + str(floor(epoch_seconds / alert_dedup_window_seconds))
 )
 ```
 
-The floor division over `alert_dedup_window_seconds` (default 3600) groups events that fire within the same dedup window into a single alert. Changing `ALERT_ALERT_DEDUP_WINDOW_SECONDS` changes window size without altering past keys.
+`source_event_id` is intentionally **excluded** — multiple events about the same entity+type within one dedup window are collapsed to a single alert (AD-9). The floor division over `alert_dedup_window_seconds` (default 300s) groups events into time buckets. Changing `ALERT_ALERT_DEDUP_WINDOW_SECONDS` changes window size without altering past keys.
 
 ---
 
