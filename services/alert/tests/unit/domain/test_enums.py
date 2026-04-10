@@ -3,7 +3,25 @@
 from __future__ import annotations
 
 import pytest
-from alert.domain.enums import AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
+from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
+
+
+class TestAlertSeverity:
+    @pytest.mark.unit
+    def test_alert_severity_values(self) -> None:
+        assert AlertSeverity.LOW == "low"
+        assert AlertSeverity.MEDIUM == "medium"
+        assert AlertSeverity.HIGH == "high"
+        assert AlertSeverity.CRITICAL == "critical"
+
+    @pytest.mark.unit
+    def test_alert_severity_is_strenum(self) -> None:
+        assert AlertSeverity.LOW == "low"
+        assert isinstance(AlertSeverity.LOW, str)
+
+    @pytest.mark.unit
+    def test_alert_severity_has_exactly_four_members(self) -> None:
+        assert len(AlertSeverity) == 4
 
 
 class TestAlertType:
