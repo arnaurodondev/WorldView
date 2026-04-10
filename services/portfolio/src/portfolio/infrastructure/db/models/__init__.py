@@ -10,6 +10,8 @@ class Base(DeclarativeBase):
 
 
 from portfolio.infrastructure.db.models.alert_preference import AlertPreferenceModel  # noqa: E402
+from portfolio.infrastructure.db.models.brokerage_connection import BrokerageConnectionModel  # noqa: E402
+from portfolio.infrastructure.db.models.brokerage_sync_error import BrokerageTransactionSyncErrorModel  # noqa: E402
 from portfolio.infrastructure.db.models.entity_suppression import EntitySuppressionModel  # noqa: E402
 from portfolio.infrastructure.db.models.holding import HoldingModel  # noqa: E402
 from portfolio.infrastructure.db.models.idempotency import IdempotencyModel  # noqa: E402
@@ -25,6 +27,8 @@ from portfolio.infrastructure.db.models.watchlist_member import WatchlistMemberM
 __all__ = [
     "AlertPreferenceModel",
     "Base",
+    "BrokerageConnectionModel",
+    "BrokerageTransactionSyncErrorModel",
     "EntitySuppressionModel",
     "HoldingModel",
     "IdempotencyModel",

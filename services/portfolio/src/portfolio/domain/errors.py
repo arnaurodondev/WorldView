@@ -193,3 +193,30 @@ class WatchlistMemberAlreadyExistsError(EntityAlreadyExistsError):
 
 class AlertPreferenceNotFoundError(EntityNotFoundError):
     error_code = "ALERT_PREFERENCE_NOT_FOUND"
+
+
+# ── Brokerage ──────────────────────────────────────────────────────────────────
+
+
+class BrokerageConnectionNotFoundError(EntityNotFoundError):
+    error_code = "BROKERAGE_CONNECTION_NOT_FOUND"
+
+
+class BrokerageConnectionForbiddenError(AuthorizationError):
+    error_code = "BROKERAGE_CONNECTION_FORBIDDEN"
+
+
+class TosNotAcceptedError(ValidationError):
+    error_code = "TOS_NOT_ACCEPTED"
+
+
+class BrokerageConnectionStateError(BusinessRuleViolationError):
+    error_code = "BROKERAGE_CONNECTION_STATE_ERROR"
+
+
+class BrokerageConnectionAlreadyDisconnectedError(BrokerageConnectionStateError):
+    error_code = "BROKERAGE_CONNECTION_ALREADY_DISCONNECTED"
+
+
+class BrokerageApiError(DomainError):
+    error_code = "BROKERAGE_API_ERROR"
