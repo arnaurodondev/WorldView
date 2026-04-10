@@ -5,7 +5,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-10
 > **Updated**: 2026-04-10
-> **Waves done**: 3 / 6
+> **Waves done**: 4 / 6
 > **QA**: —
 
 ---
@@ -666,13 +666,15 @@ async def process_message(self, key, value, headers):
 
 ---
 
-### Wave A-4: API Layer + DI Wiring + Integration Tests
+### Wave A-4: API Layer + DI Wiring + Integration Tests ✅
 
 **Goal**: Fix `GET /api/v1/alerts/pending` (R25 DI factory + R27 ReadDbSessionDep + severity response field + min_severity query param), fix `DELETE /api/v1/alerts/{alert_id}/ack` (R25), update `PendingAlertResponse` schema, add metrics to `prometheus.py`, and write integration tests covering the full severity flow.
 
 **Depends on**: Wave A-3
 
 **Estimated effort**: 35–50 min
+
+**Status**: **DONE** — 2026-04-10 · 381 tests pass (13 unit API + 9 integration fanout + 2 e2e) · ruff + mypy clean
 
 **Architecture layer**: API + integration tests
 
@@ -865,13 +867,13 @@ async def acknowledge_alert(
 ---
 
 #### Validation Gate — Wave A-4
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on changed packages
-- [ ] `python -m pytest services/alert/tests/unit/ -v` — all pass
-- [ ] `python -m pytest services/alert/tests/integration/ -v` — all pass, minimum 4 new integration tests
-- [ ] No lazy infra imports in `routes.py` (grep: `from alert.infrastructure` in routes.py → 0 hits)
-- [ ] R27: GET pending route does NOT use `DbSessionDep` (grep: `DbSessionDep` in `get_pending_alerts` function body → 0 hits)
-- [ ] N-04: `session.commit()` in `routes.py` → 0 hits
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on changed packages
+- [x] `python -m pytest services/alert/tests/unit/ -v` — all pass
+- [x] `python -m pytest services/alert/tests/integration/ -v` — all pass, minimum 4 new integration tests
+- [x] No lazy infra imports in `routes.py` (grep: `from alert.infrastructure` in routes.py → 0 hits)
+- [x] R27: GET pending route does NOT use `DbSessionDep` (grep: `DbSessionDep` in `get_pending_alerts` function body → 0 hits)
+- [x] N-04: `session.commit()` in `routes.py` → 0 hits
 
 #### Regression Guardrails — Wave A-4
 - **BP-064** (FastAPI 204 status code): The GET pending endpoint uses `response_model=PendingAlertsResponse` (200 OK) — no 204 involved. The DELETE ack endpoint returns `dict[str, str]` (200 OK). No 204 usage introduced.

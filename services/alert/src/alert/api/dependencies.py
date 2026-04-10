@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
 from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
+from alert.application.use_cases.pending_alerts import AcknowledgeAlertUseCase, GetPendingAlertsUseCase
 
 # ── Database session (write) ─────────────────────────────────────────────────
 
@@ -126,3 +127,38 @@ def get_email_prefs_update_uc(
 
 
 UpdateEmailPrefsUseCaseDep = Annotated[UpdateEmailPreferencesUseCase, Depends(get_email_prefs_update_uc)]
+
+
+# ── Pending alerts + ack use case factories (R25 — infra wiring lives in DI, not routes) ─────
+
+
+def get_pending_alerts_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetPendingAlertsUseCase:
+    """Build a GetPendingAlertsUseCase wired to the read-replica session (R27).
+
+    Uses ``get_read_db_session`` (read replica) because this is a query-only use case.
+    Lazy repo imports keep infrastructure out of the route layer (R25).
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+
+    return GetPendingAlertsUseCase(PendingAlertRepository(session), AlertRepository(session))  # type: ignore[arg-type]
+
+
+GetPendingAlertsUseCaseDep = Annotated[GetPendingAlertsUseCase, Depends(get_pending_alerts_uc)]
+
+
+def get_ack_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AcknowledgeAlertUseCase:
+    """Build an AcknowledgeAlertUseCase wired to the write session.
+
+    Write session required — the use case commits on success (N-04).
+    """
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+
+    return AcknowledgeAlertUseCase(PendingAlertRepository(session), session)  # type: ignore[arg-type]
+
+
+AckUseCaseDep = Annotated[AcknowledgeAlertUseCase, Depends(get_ack_uc)]

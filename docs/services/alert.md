@@ -1,7 +1,7 @@
 # S10 · Alert Service
 
 > **Owner**: Alert domain · **Database**: `alert_db` · **Port**: 8010
-> **Status**: In-progress (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge; ✅ PLAN-0016 complete — Email digest, preferences, scheduler, Avro outbox; 🔄 PLAN-0021 Wave A-3 — AlertSeverity, SeverityThresholds, min_severity filter)
+> **Status**: In-progress (✅ PLAN-0013 complete — WebSocket delivery, dedup, REST API, outbox, Valkey pub/sub bridge; ✅ PLAN-0016 complete — Email digest, preferences, scheduler, Avro outbox; 🔄 PLAN-0021 Wave A-4 — API DI factories R25/R27, PendingAlertResponse.severity, ?min_severity filter)
 
 ---
 
@@ -21,7 +21,7 @@
 | GET | `/readyz` | Readiness (DB + Valkey + Kafka group assigned) | — |
 | GET | `/metrics` | Prometheus metrics | — |
 | GET | `/api/v1/alerts` | List alerts for the current user | fast |
-| GET | `/api/v1/alerts/pending` | Pending (undelivered) alerts for the current user | fast |
+| GET | `/api/v1/alerts/pending` | Pending (undelivered) alerts for the current user; `?user_id=`, `?min_severity=low\|medium\|high\|critical` | fast |
 | WebSocket | `/ws/alerts` | Real-time alert stream | — |
 | GET | `/api/v1/email/preferences` | Get email digest preferences (X-Tenant-ID + X-User-ID required) | — |
 | PUT | `/api/v1/email/preferences` | Update email digest preferences | — |
