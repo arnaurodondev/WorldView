@@ -1,9 +1,10 @@
-import { useAlertStream } from "../hooks/useAlertStream";
+import { useAlertStreamContext } from "../contexts/AlertStreamContext";
 import { AlertCard } from "../components/alerts/AlertCard";
 
 export function DashboardPage() {
-  // userId is null until auth is wired — hook no-ops gracefully.
-  const { recentAlerts } = useAlertStream(null);
+  // Reads from the shared AlertStreamContext provided by App.tsx
+  // (single WS connection shared across the whole app).
+  const { recentAlerts } = useAlertStreamContext();
 
   return (
     <div>

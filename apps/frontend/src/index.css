@@ -29,3 +29,9 @@ a {
 a:hover {
   color: var(--accent-hover);
 }
+
+/* FlashOverlay countdown progress bar (PRD-0021 §6.6) */
+@keyframes flash-countdown {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
