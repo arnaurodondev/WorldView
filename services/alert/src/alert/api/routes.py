@@ -47,7 +47,10 @@ async def get_pending_alerts(
 
     pending_repo = PendingAlertRepository(session)
     alert_repo = AlertRepository(session)
-    pairs = await GetPendingAlertsUseCase().execute(pending_repo, alert_repo, user_id, limit=limit, offset=offset)  # type: ignore[arg-type]
+    pairs = await GetPendingAlertsUseCase(
+        pending_repo=pending_repo,  # type: ignore[arg-type]
+        alert_repo=alert_repo,  # type: ignore[arg-type]
+    ).execute(user_id, limit=limit, offset=offset)
 
     alert_responses = [
         PendingAlertResponse(
@@ -88,10 +91,13 @@ async def acknowledge_alert(
     from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 
     pending_repo = PendingAlertRepository(session)
-    updated = await AcknowledgeAlertUseCase().execute(pending_repo, user_id, alert_id)  # type: ignore[arg-type]
+    # AcknowledgeAlertUseCase commits the session on success (N-04); route must not commit.
+    updated = await AcknowledgeAlertUseCase(
+        pending_repo=pending_repo,  # type: ignore[arg-type]
+        session=session,  # type: ignore[arg-type]
+    ).execute(user_id, alert_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")
-    await session.commit()
 
     logger.debug(  # type: ignore[no-any-return]
         "alert_acknowledged",

@@ -219,3 +219,60 @@ class TestIntelligenceConsumer:
         assert any(
             e.get("event") == "intelligence_consumer.unresolvable_topic" for e in cap
         ), f"Expected warning not found in {cap}"
+
+
+# ── market_impact_score extraction (PRD-0021 Wave A-3) ───────────────────────
+
+
+class TestIntelligenceConsumerMarketImpactScore:
+    @pytest.mark.unit
+    async def test_consumer_passes_market_impact_score_to_fanout(self) -> None:
+        """process_message() passes market_impact_score=0.9 from event to fanout."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            "market_impact_score": 0.9,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert "market_impact_score" in call_kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(0.9)
+
+    @pytest.mark.unit
+    async def test_consumer_defaults_score_to_zero_if_absent(self) -> None:
+        """Event without market_impact_score → 0.0 passed to fanout."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            # No market_impact_score key
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
+
+    @pytest.mark.unit
+    async def test_consumer_clamps_score_above_1(self) -> None:
+        """market_impact_score=2.0 → clamped to 1.0 before passing to fanout."""
+        consumer, mock_fanout = _make_consumer()
+        value = {
+            "event_id": str(uuid4()),
+            "event_type": "nlp.signal.detected",
+            "subject_entity_id": str(uuid4()),
+            "is_backfill": False,
+            "market_impact_score": 2.0,
+        }
+
+        await consumer.process_message(None, value, {})
+
+        call_kwargs = mock_fanout.execute.call_args.kwargs
+        assert call_kwargs["market_impact_score"] == pytest.approx(1.0)

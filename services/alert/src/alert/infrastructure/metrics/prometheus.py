@@ -25,6 +25,17 @@ s10_websocket_pushes_total = Counter(
     "Total WebSocket push attempts (includes failed sends)",
 )
 
+s10_alerts_by_severity_total = Counter(
+    "s10_alerts_by_severity_total",
+    "Total alerts fanned out, labelled by severity tier and alert type (PRD-0021)",
+    ["severity", "alert_type"],
+)
+
+s10_flash_overlays_triggered_total = Counter(
+    "s10_flash_overlays_triggered_total",
+    "Total CRITICAL-severity alerts that triggered a flash overlay (PRD-0021)",
+)
+
 # ── Gauges ────────────────────────────────────────────────────────────────────
 
 s10_alerts_pending_total = Gauge(

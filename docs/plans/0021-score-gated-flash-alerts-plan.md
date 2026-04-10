@@ -5,7 +5,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-10
 > **Updated**: 2026-04-10
-> **Waves done**: 2 / 6
+> **Waves done**: 3 / 6
 > **QA**: —
 
 ---
@@ -432,13 +432,15 @@ Add `severity` column to `AlertModel`. Update `AlertRepository.save()` to write 
 
 ---
 
-### Wave A-3: Application Layer — Use Cases + Consumer
+### Wave A-3: Application Layer — Use Cases + Consumer ✅
 
 **Goal**: Modify `AlertFanoutUseCase` to accept `market_impact_score`, compute severity (with graph/contradiction override), include severity in WS push and Avro event, and fix the AVRO-FILE-ONLY violation. Refactor `GetPendingAlertsUseCase` to constructor injection + `min_severity` filter. Update `IntelligenceConsumer` to extract `market_impact_score` and pass to fanout. Add metrics counters.
 
 **Depends on**: Wave A-2
 
 **Estimated effort**: 35–50 min
+
+**Status**: **DONE** — 2026-04-10 · 312 unit tests + 18 contract tests pass · ruff + mypy clean
 
 **Architecture layer**: application (use cases) + infrastructure (consumer)
 
@@ -650,11 +652,11 @@ async def process_message(self, key, value, headers):
 ---
 
 #### Validation Gate — Wave A-3
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on changed packages
-- [ ] `python -m pytest services/alert/tests/unit/ -v` — all pass, minimum 17 new tests added (9 fanout + 6 pending + 3 consumer = 18 minimum but some may overlap with existing)
-- [ ] AVRO-FILE-ONLY: grep for `_ALERT_DELIVERED_SCHEMA` in `alert_fanout.py` → should return 0 hits
-- [ ] No lazy infra imports in `pending_alerts.py` (repos are constructor-injected)
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on changed packages
+- [x] `python -m pytest services/alert/tests/unit/ -v` — 312 pass (18 new tests: 9 fanout + 7 pending + 3 consumer)
+- [x] AVRO-FILE-ONLY: grep for `_ALERT_DELIVERED_SCHEMA` in `alert_fanout.py` → 0 hits ✓
+- [x] No lazy infra imports in `pending_alerts.py` (repos are constructor-injected)
 
 #### Regression Guardrails — Wave A-3
 - **BP-119** (AVRO-FILE-ONLY): After removing the inline `_ALERT_DELIVERED_SCHEMA`, verify the `.avsc` file path resolution is correct by running `python -c "from alert.application.use_cases.alert_fanout import _get_parsed_schema; _get_parsed_schema()"` from the service directory.

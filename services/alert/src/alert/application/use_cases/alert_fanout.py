@@ -13,6 +13,10 @@ Dedup key (PRD AD-9): sha256(entity_id:alert_type:window_bucket)
 where window_bucket = epoch_seconds // dedup_window_seconds.
 source_event_id is intentionally excluded so that multiple events about
 the same entity+type within one window are collapsed into one alert.
+
+Severity (PRD-0021 §6.5):
+- nlp.signal.detected.v1: severity = SeverityThresholds.classify(market_impact_score)
+- graph.state.changed.v1 / intelligence.contradiction.v1: severity = MEDIUM (F-13 override)
 """
 
 from __future__ import annotations
@@ -20,13 +24,15 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import fastavro  # type: ignore[import-untyped]
+import fastavro.schema  # type: ignore[import-untyped]
 
-from alert.domain.entities import Alert, OutboxEvent, PendingAlert
-from alert.domain.enums import AlertType
+from alert.domain.entities import Alert, OutboxEvent, PendingAlert, SeverityThresholds
+from alert.domain.enums import AlertSeverity, AlertType
 from alert.domain.errors import DuplicateAlertError
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -70,24 +76,14 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
     "intelligence.contradiction.v1": AlertType.CONTRADICTION,
 }
 
-# Inline fallback Avro schema matching infra/kafka/schemas/alert.delivered.v1.avsc
-_ALERT_DELIVERED_SCHEMA: dict[str, Any] = {
-    "type": "record",
-    "name": "AlertDelivered",
-    "namespace": "com.worldview",
-    "fields": [
-        {"name": "event_id", "type": "string"},
-        {"name": "event_type", "type": "string", "default": "alert.delivered"},
-        {"name": "schema_version", "type": "int", "default": 1},
-        {"name": "occurred_at", "type": "string"},
-        {"name": "alert_id", "type": "string"},
-        {"name": "user_id", "type": "string"},
-        {"name": "entity_id", "type": "string"},
-        {"name": "alert_type", "type": "string"},
-        {"name": "channel", "type": "string"},
-        {"name": "correlation_id", "type": ["null", "string"], "default": None},
-    ],
-}
+# Topics that always get MEDIUM severity regardless of market_impact_score (PRD-0021 F-13)
+_MEDIUM_OVERRIDE_TOPICS: frozenset[str] = frozenset({"graph.state.changed.v1", "intelligence.contradiction.v1"})
+
+# Schema file path — C-04 / BP-119: load from .avsc, never define inline
+# Layout: services/alert/src/alert/application/use_cases/alert_fanout.py
+#                                                          ^ parents[0]
+# parents[6] = repo root
+_SCHEMA_PATH = Path(__file__).parents[6] / "infra" / "kafka" / "schemas" / "alert.delivered.v1.avsc"
 
 _PARSED_SCHEMA: dict[str, Any] | None = None
 
@@ -95,7 +91,7 @@ _PARSED_SCHEMA: dict[str, Any] | None = None
 def _get_parsed_schema() -> dict[str, Any]:
     global _PARSED_SCHEMA
     if _PARSED_SCHEMA is None:
-        _PARSED_SCHEMA = fastavro.parse_schema(_ALERT_DELIVERED_SCHEMA)  # type: ignore[assignment]
+        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)  # type: ignore[assignment, arg-type]
     return _PARSED_SCHEMA  # type: ignore[return-value]
 
 
@@ -161,7 +157,7 @@ def _serialize_alert_delivered(
     record = {
         "event_id": str(new_uuid7()),
         "event_type": "alert.delivered",
-        "schema_version": 1,
+        "schema_version": 2,
         "occurred_at": alert.created_at.isoformat(),
         "alert_id": str(alert.alert_id),
         "user_id": str(user_id),
@@ -169,6 +165,7 @@ def _serialize_alert_delivered(
         "alert_type": str(alert.alert_type),
         "channel": "websocket",
         "correlation_id": correlation_id,
+        "severity": str(alert.severity),
     }
     buf = io.BytesIO()
     fastavro.schemaless_writer(buf, _get_parsed_schema(), record)
@@ -186,8 +183,11 @@ class AlertFanoutUseCase:
         session_factory: SQLAlchemy async session factory for alert_db.
         watchlist_cache: Cache-aside wrapper for S1 watchlist lookups.
         notification_publisher: Real-time notification publisher port (Valkey pub/sub or in-process).
+        repo_factory: Factory to build repos from a session.
         dedup_window_seconds: Deduplication window length (default 300 s).
         alert_delivered_topic: Kafka topic for outbox events.
+        severity_thresholds: Value object for score→severity classification.
+            Defaults to ``SeverityThresholds()`` (PRD-0021 §6.5 defaults).
 
     """
 
@@ -199,6 +199,7 @@ class AlertFanoutUseCase:
         repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
+        severity_thresholds: SeverityThresholds | None = None,
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
@@ -206,12 +207,14 @@ class AlertFanoutUseCase:
         self._repo_factory = repo_factory
         self._dedup_window = dedup_window_seconds
         self._alert_delivered_topic = alert_delivered_topic
+        self._thresholds = severity_thresholds if severity_thresholds is not None else SeverityThresholds()
 
     async def execute(
         self,
         event: dict[str, Any],
         topic: str,
         correlation_id: str | None = None,
+        market_impact_score: float = 0.0,
     ) -> FanoutResult:
         """Fan-out one event to all watchers.
 
@@ -220,6 +223,9 @@ class AlertFanoutUseCase:
             event: Deserialized Kafka message value.
             topic: Source Kafka topic name.
             correlation_id: Optional tracing correlation ID.
+            market_impact_score: Market impact score from the event (0.0-1.0).
+                Used to compute severity for signal events; ignored for
+                graph/contradiction events (F-13 MEDIUM override).
 
         Returns:
         -------
@@ -257,7 +263,13 @@ class AlertFanoutUseCase:
         # ── 3. Resolve alert type ────────────────────────────────────────────
         alert_type = TOPIC_ALERT_TYPE.get(topic, AlertType.SIGNAL)
 
-        # ── 4. Resolve watchers ──────────────────────────────────────────────
+        # ── 4. Compute severity (PRD-0021 §6.5) ─────────────────────────────
+        # Clamp score to [0.0, 1.0] (belt-and-suspenders; consumer also clamps)
+        score = max(0.0, min(1.0, market_impact_score))
+        # F-13: graph/contradiction always MEDIUM; signal events use score
+        severity = AlertSeverity.MEDIUM if topic in _MEDIUM_OVERRIDE_TOPICS else self._thresholds.classify(score)
+
+        # ── 5. Resolve watchers ──────────────────────────────────────────────
         watchers = await self._cache.get_watchers(entity_id_str)
         if not watchers:
             logger.debug(  # type: ignore[no-any-return]
@@ -267,7 +279,7 @@ class AlertFanoutUseCase:
             )
             return FanoutResult(suppressed=False, watchers_count=0)
 
-        # ── 5. Dedup check ───────────────────────────────────────────────────
+        # ── 6. Dedup check ───────────────────────────────────────────────────
         now = utc_now()
         # Use event's occurred_at for the dedup window bucket (stable across re-deliveries).
         # If re-delivered in a different 300s window, the same event still hashes to the
@@ -296,7 +308,7 @@ class AlertFanoutUseCase:
                     watchers_count=len(watchers),
                 )
 
-            # ── 6. Build alert entity ────────────────────────────────────────
+            # ── 7. Build alert entity ────────────────────────────────────────
             source_event_id_raw = event.get("event_id", "")
             try:
                 source_event_id = UUID(str(source_event_id_raw))
@@ -306,6 +318,7 @@ class AlertFanoutUseCase:
             alert = Alert(
                 entity_id=entity_uuid,
                 alert_type=alert_type,
+                severity=severity,
                 source_event_id=source_event_id,
                 source_topic=topic,
                 payload=dict(event),
@@ -313,7 +326,7 @@ class AlertFanoutUseCase:
                 created_at=now,
             )
 
-            # ── 7. Single transaction: alert + pending rows + outbox ─────────
+            # ── 8. Single transaction: alert + pending rows + outbox ─────────
             try:
                 await alert_repo.save(alert)
             except DuplicateAlertError:
@@ -346,22 +359,36 @@ class AlertFanoutUseCase:
 
             await session.commit()
 
-        # ── 8. Post-commit WebSocket push (never inside transaction) ─────────
+        # ── 9. Post-commit WebSocket push (never inside transaction) ─────────
         ws_payload = {
             "alert_id": str(alert.alert_id),
             "entity_id": entity_id_str,
             "alert_type": str(alert_type),
+            "severity": str(severity),
             "topic": topic,
             "occurred_at": now.isoformat(),
         }
         for user_uuid in watcher_user_ids:
             await self._notification_publisher.send_to_user(user_uuid, ws_payload)
 
+        # ── 10. Metrics ──────────────────────────────────────────────────────
+        from alert.infrastructure.metrics.prometheus import (
+            s10_alerts_by_severity_total,
+            s10_flash_overlays_triggered_total,
+        )
+
+        s10_alerts_by_severity_total.labels(severity=str(severity), alert_type=str(alert_type)).inc(
+            len(watcher_user_ids)
+        )
+        if severity == AlertSeverity.CRITICAL and watcher_user_ids:
+            s10_flash_overlays_triggered_total.inc()
+
         logger.info(  # type: ignore[no-any-return]
             "alert_fanout.completed",
             alert_id=str(alert.alert_id),
             entity_id=entity_id_str,
             topic=topic,
+            severity=str(severity),
             watchers=len(watcher_user_ids),
         )
         return FanoutResult(

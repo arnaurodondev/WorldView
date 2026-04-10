@@ -104,7 +104,16 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         topic = self._resolve_topic(value, headers)
         correlation_id: str | None = value.get("correlation_id")  # type: ignore[assignment]
 
-        result = await self._fanout.execute(event=value, topic=topic, correlation_id=correlation_id)
+        # Extract market_impact_score; default 0.0 for events that don't carry it (BP-128)
+        raw_score = value.get("market_impact_score", 0.0)
+        market_impact_score: float = max(0.0, min(1.0, float(raw_score)))
+
+        result = await self._fanout.execute(
+            event=value,
+            topic=topic,
+            correlation_id=correlation_id,
+            market_impact_score=market_impact_score,
+        )
 
         logger.debug(  # type: ignore[no-any-return]
             "intelligence_consumer.processed",
