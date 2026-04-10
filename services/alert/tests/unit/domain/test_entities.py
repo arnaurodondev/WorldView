@@ -5,8 +5,75 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from alert.domain.entities import Alert, AlertDelivery, DeadLetterEntry, OutboxEvent, PendingAlert
-from alert.domain.enums import AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
+from alert.domain.entities import Alert, AlertDelivery, DeadLetterEntry, OutboxEvent, PendingAlert, SeverityThresholds
+from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
+
+
+class TestSeverityThresholds:
+    @pytest.mark.unit
+    def test_severity_thresholds_classify_critical(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.90) == AlertSeverity.CRITICAL
+
+    @pytest.mark.unit
+    def test_severity_thresholds_classify_high(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.70) == AlertSeverity.HIGH
+
+    @pytest.mark.unit
+    def test_severity_thresholds_classify_medium(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.50) == AlertSeverity.MEDIUM
+
+    @pytest.mark.unit
+    def test_severity_thresholds_classify_low(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.20) == AlertSeverity.LOW
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_critical(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.85) == AlertSeverity.CRITICAL
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_below_critical(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.849) == AlertSeverity.HIGH
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_high(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.65) == AlertSeverity.HIGH
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_below_high(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.649) == AlertSeverity.MEDIUM
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_medium(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.40) == AlertSeverity.MEDIUM
+
+    @pytest.mark.unit
+    def test_severity_thresholds_boundary_below_medium(self) -> None:
+        t = SeverityThresholds()
+        assert t.classify(0.399) == AlertSeverity.LOW
+
+    @pytest.mark.unit
+    def test_severity_thresholds_invalid_critical_below_high(self) -> None:
+        with pytest.raises(ValueError):
+            SeverityThresholds(critical=0.60, high=0.65, medium=0.40)
+
+    @pytest.mark.unit
+    def test_severity_thresholds_invalid_high_below_medium(self) -> None:
+        with pytest.raises(ValueError):
+            SeverityThresholds(critical=0.85, high=0.30, medium=0.40)
+
+    @pytest.mark.unit
+    def test_severity_thresholds_invalid_negative_medium(self) -> None:
+        with pytest.raises(ValueError):
+            SeverityThresholds(critical=0.85, high=0.65, medium=-0.1)
 
 
 class TestAlert:
@@ -17,6 +84,16 @@ class TestAlert:
         assert alert.alert_type == AlertType.SIGNAL
         assert alert.payload == {}
         assert alert.dedup_key == ""
+
+    @pytest.mark.unit
+    def test_alert_has_severity_field(self) -> None:
+        alert = Alert()
+        assert alert.severity == AlertSeverity.LOW
+
+    @pytest.mark.unit
+    def test_alert_severity_assigned(self) -> None:
+        alert = Alert(severity=AlertSeverity.CRITICAL)
+        assert alert.severity == AlertSeverity.CRITICAL
 
     @pytest.mark.unit
     def test_explicit_construction(self) -> None:

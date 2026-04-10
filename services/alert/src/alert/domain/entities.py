@@ -11,12 +11,48 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from alert.domain.enums import AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
+from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from uuid import UUID
+
+# ---------------------------------------------------------------------------
+# SeverityThresholds — value object for market_impact_score classification
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SeverityThresholds:
+    """Classifies a market_impact_score float into an AlertSeverity tier (PRD-0021 §6.5).
+
+    Invariant: ``critical > high > medium >= 0.0``; raises ValueError otherwise.
+    """
+
+    critical: float = 0.85
+    high: float = 0.65
+    medium: float = 0.40
+
+    def __post_init__(self) -> None:
+        if self.medium < 0.0:
+            raise ValueError(f"medium threshold must be >= 0.0, got {self.medium}")
+        if not (self.critical > self.high > self.medium):
+            raise ValueError(
+                f"Thresholds must satisfy critical > high > medium; "
+                f"got critical={self.critical}, high={self.high}, medium={self.medium}"
+            )
+
+    def classify(self, market_impact_score: float) -> AlertSeverity:
+        """Return the severity tier for a given market_impact_score."""
+        if market_impact_score >= self.critical:
+            return AlertSeverity.CRITICAL
+        if market_impact_score >= self.high:
+            return AlertSeverity.HIGH
+        if market_impact_score >= self.medium:
+            return AlertSeverity.MEDIUM
+        return AlertSeverity.LOW
+
 
 # ---------------------------------------------------------------------------
 # Alert — the core entity persisted in ``alerts`` table
@@ -35,6 +71,7 @@ class Alert:
     alert_id: UUID = field(default_factory=new_uuid7)
     entity_id: UUID = field(default_factory=new_uuid7)
     alert_type: AlertType = AlertType.SIGNAL
+    severity: AlertSeverity = AlertSeverity.LOW
     source_event_id: UUID = field(default_factory=new_uuid7)
     source_topic: str = ""
     payload: dict[str, object] = field(default_factory=dict)

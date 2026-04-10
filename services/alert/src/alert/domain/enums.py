@@ -5,6 +5,15 @@ from __future__ import annotations
 from enum import StrEnum
 
 
+class AlertSeverity(StrEnum):
+    """Severity tier of an alert, derived from market_impact_score (PRD-0021 §6.5)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class AlertType(StrEnum):
     """The three signal categories that trigger alerts (PRD §6.5.5)."""
 

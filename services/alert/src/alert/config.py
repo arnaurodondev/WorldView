@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     watchlist_cache_ttl_seconds: int = 300
     pending_alert_ttl_days: int = 7
 
+    # Severity classification thresholds (PRD-0021 §6.5)
+    alert_severity_critical_threshold: float = 0.85
+    alert_severity_high_threshold: float = 0.65
+    alert_severity_medium_threshold: float = 0.40
+
     # ── Security ───────────────────────────────────────────────────────────
     admin_token: str = ""
 
