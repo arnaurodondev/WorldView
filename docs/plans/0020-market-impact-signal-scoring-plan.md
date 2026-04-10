@@ -1,8 +1,8 @@
 # PLAN-0020 — Market-Impact Signal Scoring (Option A)
 
 > **PRD**: `docs/specs/0020-market-impact-signal-scoring.md`
-> **Status**: in-progress
-> **Updated**: 2026-04-09 (Wave A-5 done)
+> **Status**: completed
+> **Updated**: 2026-04-10 (All 8 waves done — B-1, B-2, A-6 completed)
 > **Author**: Arnau Rodon
 > **Generated**: 2026-04-09
 > **Services affected**: S6 (NLP Pipeline), `nlp_db` (Alembic migration owned by S6)
@@ -607,11 +607,12 @@ python -m mypy src/ --config-file mypy.ini
 
 ---
 
-### Wave A-6: Unit + Contract Tests + Docs
+### Wave A-6: Unit + Contract Tests + Docs ✅
 
 **Goal**: Complete test coverage for all new components. Update service docs and context file.
 **Depends on**: All preceding waves (A-1 through A-5, B-1, B-2)
 **Estimated effort**: 1 wave (Medium complexity)
+**Status**: **DONE** — 2026-04-10 · 397 unit+contract tests pass · ruff + mypy clean
 **Architecture layer**: Tests + Documentation
 
 #### Tasks
@@ -706,11 +707,12 @@ python -m mypy src/ --config-file mypy.ini
 
 ---
 
-### Wave B-1: `PriceImpactLabellingWorker` Implementation
+### Wave B-1: `PriceImpactLabellingWorker` Implementation ✅
 
 **Goal**: Implement the worker that queries unlabelled articles, calls S3 OHLCV API, and writes `article_price_impacts` rows.
 **Depends on**: T-A-2-01 (domain entity), T-A-2-02 (repository port)
 **Estimated effort**: 1.5 waves (Medium complexity)
+**Status**: **DONE** — 2026-04-10 · 13 unit tests pass · ruff + mypy clean
 **Architecture layer**: Infrastructure — Workers
 
 #### Tasks
@@ -854,11 +856,12 @@ python -m mypy src/infrastructure/workers/price_impact_labelling_worker.py --con
 
 ---
 
-### Wave B-2: Worker Entry Point + Docker Compose
+### Wave B-2: Worker Entry Point + Docker Compose ✅
 
 **Goal**: Create the standalone process entry point and register it in Docker Compose.
 **Depends on**: T-B-1-02 (worker class must exist)
 **Estimated effort**: 0.25 wave (Low complexity)
+**Status**: **DONE** — 2026-04-10 · 2 entrypoint tests pass · ruff + mypy clean
 **Architecture layer**: Infrastructure — Process Architecture
 
 #### Tasks
@@ -1020,9 +1023,9 @@ The `market_impact_score` field in `nlp.signal.detected.v1.avsc` with `"default"
 | T-A-3-01 | Update Avro schema `nlp.signal.detected.v1` | pending | A-3 |
 | T-A-4-01 | Block 5 weight rebalance + `price_impact` signal | pending | A-4 |
 | T-A-4-02 | Wire price_impact into article consumer | pending | A-4 |
-| T-B-1-01 | S3 OHLCV HTTP client | pending | B-1 |
-| T-B-1-02 | `PriceImpactLabellingWorker` class | pending | B-1 |
-| T-B-2-01 | Entry point + Docker Compose | pending | B-2 |
-| T-A-5-01 | API signals endpoint update | pending | A-5 |
-| T-A-6-01 | Contract tests — Avro schema evolution | pending | A-6 |
-| T-A-6-02 | Documentation updates | pending | A-6 |
+| T-B-1-01 | S3 OHLCV HTTP client | done | B-1 |
+| T-B-1-02 | `PriceImpactLabellingWorker` class | done | B-1 |
+| T-B-2-01 | Entry point + Docker Compose | done | B-2 |
+| T-A-5-01 | API signals endpoint update | done | A-5 |
+| T-A-6-01 | Contract tests — Avro schema evolution | done | A-6 |
+| T-A-6-02 | Documentation updates | done | A-6 |
