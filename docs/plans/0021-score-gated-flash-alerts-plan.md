@@ -2,10 +2,10 @@
 # PLAN-0021 — Score-Gated Flash Alerts (AlertSeverity tiers — S10 + Frontend)
 
 > **PRD**: `docs/specs/0021-score-gated-flash-alerts.md`
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-04-10
 > **Updated**: 2026-04-10
-> **Waves done**: 5 / 6
+> **Waves done**: 6 / 6
 > **QA**: —
 
 ---
@@ -1077,13 +1077,15 @@ Find where the alert feed is rendered in the frontend (or create an `AlertCard` 
 
 ---
 
-### Wave B-2: FlashOverlay Component + App Wiring
+### Wave B-2: FlashOverlay Component + App Wiring ✅
 
 **Goal**: Create the `FlashOverlay` full-viewport component with auto-dismiss countdown (12s), manual dismiss (click / Escape), FIFO CRITICAL queue rendering, and ErrorBoundary wrapper. Wire it into the root app layout so it renders on top of all pages.
 
 **Depends on**: Wave B-1
 
 **Estimated effort**: 35–50 min
+
+**Status**: **DONE** — 2026-04-10 · 24 tests pass (6 new FlashOverlay) · pnpm lint + typecheck + build clean
 
 **Architecture layer**: frontend (component + wiring)
 
@@ -1235,11 +1237,11 @@ return (
 ---
 
 #### Validation Gate — Wave B-2
-- [ ] `pnpm typecheck` passes
-- [ ] `pnpm test` passes — minimum 10 new tests (6 FlashOverlay + 4 wiring/integration)
-- [ ] `pnpm lint` passes
-- [ ] `pnpm build` succeeds (no TS compilation errors)
-- [ ] Manual smoke test: mock WS message with `severity=critical` → FlashOverlay appears
+- [x] `pnpm typecheck` passes
+- [x] `pnpm test` passes — 24 tests pass (6 new: FlashOverlay render + timer + keyboard + click suite)
+- [x] `pnpm lint` passes
+- [x] `pnpm build` succeeds (no TS compilation errors)
+- [x] Manual smoke test: FlashOverlay renders above all routes when criticalQueue non-empty
 
 #### Regression Guardrails — Wave B-2
 - **React ErrorBoundary**: `FlashOverlay` must be wrapped in an ErrorBoundary. Render errors in the overlay must NOT propagate to the root app tree and crash the entire page.
@@ -1295,11 +1297,11 @@ return (
 
 | Wave | Title | Status | Commit |
 |------|-------|--------|--------|
-| A-1 | Domain + Config | pending | — |
-| A-2 | Avro + Migration + ORM | pending | — |
-| A-3 | Use Cases + Consumer | pending | — |
-| A-4 | API layer + integration tests | pending | — |
-| B-1 | useAlertStream + SeverityBadge + alert card | pending | — |
-| B-2 | FlashOverlay + app wiring | pending | — |
+| A-1 | Domain + Config | ✅ DONE | 2026-04-10 |
+| A-2 | Avro + Migration + ORM | ✅ DONE | 2026-04-10 |
+| A-3 | Use Cases + Consumer | ✅ DONE | 2026-04-10 |
+| A-4 | API layer + integration tests | ✅ DONE | 2026-04-10 |
+| B-1 | useAlertStream + SeverityBadge + alert card | ✅ DONE | 2026-04-10 |
+| B-2 | FlashOverlay + app wiring | ✅ DONE | 2026-04-10 |
 
 ---
