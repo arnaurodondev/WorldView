@@ -5,7 +5,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-10
 > **Updated**: 2026-04-10
-> **Waves done**: 4 / 6
+> **Waves done**: 5 / 6
 > **QA**: —
 
 ---
@@ -890,13 +890,15 @@ async def acknowledge_alert(
 
 ---
 
-### Wave B-1: useAlertStream Hook + SeverityBadge + Alert Card Integration
+### Wave B-1: useAlertStream Hook + SeverityBadge + Alert Card Integration ✅
 
 **Goal**: Create the `useAlertStream` WebSocket hook that drives the alert feed and CRITICAL queue. Create the `SeverityBadge` component. Integrate severity badges into the existing alert list rendering.
 
 **Depends on**: Wave A-4 (S10 API must return `severity` in WS push payload and REST response)
 
 **Estimated effort**: 30–45 min
+
+**Status**: **DONE** — 2026-04-10 · 18 tests pass (10 new: 6 hook + 4 badge) · pnpm typecheck + lint + test clean
 
 **Architecture layer**: frontend (hook + component)
 
@@ -1064,10 +1066,10 @@ Find where the alert feed is rendered in the frontend (or create an `AlertCard` 
 ---
 
 #### Validation Gate — Wave B-1
-- [ ] `pnpm typecheck` passes in `apps/frontend/`
-- [ ] `pnpm test` passes — minimum 8 new tests (4 hook + 4 badge)
-- [ ] `pnpm lint` passes (ESLint)
-- [ ] No `any` casts in new TypeScript code without explicit comment
+- [x] `pnpm typecheck` passes in `apps/frontend/`
+- [x] `pnpm test` passes — minimum 8 new tests (4 hook + 4 badge) — 10 new (6 hook + 4 badge)
+- [x] `pnpm lint` passes (ESLint)
+- [x] No `any` casts in new TypeScript code without explicit comment
 
 #### Regression Guardrails — Wave B-1
 - **Frontend pnpm enforcement**: Use `pnpm` only (not npm/yarn). Exact version pins in `package.json` (no `^`). Run `pnpm audit` after any new dependency (0 CVEs required).
