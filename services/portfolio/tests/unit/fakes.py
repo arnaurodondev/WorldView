@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradeUser
 from portfolio.application.ports.repositories import (
     AlertPreferenceRepository,
     EntitySuppressionRepository,
@@ -114,13 +115,14 @@ class FakeInstrumentRepository(InstrumentRepository):
         total = len(items)
         return items[offset : offset + limit], total
 
-    async def upsert(self, instrument: InstrumentRef) -> None:
+    async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
         # Check for existing by (symbol, exchange)
         for key, existing in list(self._store.items()):
             if existing.symbol == instrument.symbol and existing.exchange == instrument.exchange:
                 del self._store[key]
                 break
         self._store[instrument.id] = instrument
+        return instrument
 
 
 class FakeTransactionRepository(TransactionRepository):
@@ -315,6 +317,69 @@ class FakeEntitySuppressionRepository(EntitySuppressionRepository):
 
     async def delete(self, user_id: UUID, entity_id: UUID) -> None:
         self._store.pop((user_id, entity_id), None)
+
+
+class FakeBrokerageClient:
+    """In-memory brokerage client for unit and integration tests.
+
+    All methods are async and record calls so tests can assert on interactions.
+    Configure ``should_raise_on_*`` to simulate failure scenarios.
+    """
+
+    def __init__(
+        self,
+        register_user_result: SnapTradeUser | None = None,
+        portal_url: str = "https://fake-snaptrade.example.com/connect",
+        activities: list[SnapTradeActivity] | None = None,
+    ) -> None:
+        self.register_user_result = register_user_result or SnapTradeUser(
+            snaptrade_user_id="fake-snap-user",
+            snaptrade_user_secret="fake-snap-secret",
+        )
+        self.portal_url = portal_url
+        self.activities: list[SnapTradeActivity] = activities if activities is not None else []
+
+        # Call recording
+        self.register_calls: list[str] = []
+        self.portal_url_calls: list[str] = []
+        self.revoke_calls: list[tuple[SnapTradeUser, str]] = []
+
+        # Failure controls
+        self.should_raise_on_revoke: bool = False
+        self.should_raise_on_activities: bool = False
+
+    async def register_user(self, user_id_hint: str) -> SnapTradeUser:
+        self.register_calls.append(user_id_hint)
+        return self.register_user_result
+
+    async def generate_portal_url(self, user: SnapTradeUser, redirect_uri: str) -> str:
+        self.portal_url_calls.append(redirect_uri)
+        return self.portal_url
+
+    async def revoke_authorization(self, user: SnapTradeUser, authorization_id: str) -> None:
+        if self.should_raise_on_revoke:
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError("fake revoke failure")
+        self.revoke_calls.append((user, authorization_id))
+
+    async def get_activities(
+        self,
+        user: SnapTradeUser,
+        start: object,
+        end: object,
+    ) -> list[SnapTradeActivity]:
+        if self.should_raise_on_activities:
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError("fake activities failure")
+        return list(self.activities)
+
+
+# Runtime Protocol check — asserts FakeBrokerageClient satisfies IBrokerageClient
+assert isinstance(
+    FakeBrokerageClient(), IBrokerageClient
+), "FakeBrokerageClient does not satisfy IBrokerageClient Protocol"
 
 
 class FakeUnitOfWork(UnitOfWork):
