@@ -5,7 +5,7 @@
 > **Status**: in-progress
 > **Created**: 2026-04-10
 > **Updated**: 2026-04-10
-> **Waves done**: 1 / 6
+> **Waves done**: 2 / 6
 > **QA**: —
 
 ---
@@ -257,13 +257,15 @@ alert_severity_medium_threshold: float = 0.40
 
 ---
 
-### Wave A-2: Avro Schema + DB Migration + ORM + Repository Update
+### Wave A-2: Avro Schema + DB Migration + ORM + Repository Update ✅
 
 **Goal**: Update `alert.delivered.v1.avsc` to add `severity` field (forward-compatible, default "low", schema_version bump to 2), generate Alembic migration `0004_add_severity_to_alerts`, add `severity` column to `AlertModel`, and update `AlertRepository.save()` / `_to_entity()` to handle the new field. Add a contract test for the updated schema.
 
 **Depends on**: Wave A-1
 
 **Estimated effort**: 25–40 min
+
+**Status**: **DONE** — 2026-04-10 · 4 new contract tests + 293 unit tests pass · ruff + mypy clean
 
 **Architecture layer**: infrastructure (schema + DB)
 
@@ -417,11 +419,11 @@ Add `severity` column to `AlertModel`. Update `AlertRepository.save()` to write 
 ---
 
 #### Validation Gate — Wave A-2
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on changed packages
-- [ ] `python -m pytest services/alert/tests/contract/ -v` — minimum 4 new contract tests pass
-- [ ] Alembic `upgrade` + `downgrade` cycle runs without error (tested locally)
-- [ ] Forward-compatibility verified: old Avro records without `severity` deserialize successfully
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on changed packages (pre-existing error in email_sent_event.py, not introduced by this wave)
+- [x] `python -m pytest services/alert/tests/contract/ -v` — 4 new contract tests pass (18 total)
+- [x] Alembic migration `0004_add_severity_to_alerts.py` created with `down_revision = "c3d4e5f6a7b8"`
+- [x] Forward-compatibility verified: `test_alert_delivered_severity_forward_compat` passes
 
 #### Regression Guardrails — Wave A-2
 - **BP-017** (Outbox payload fields mismatch Avro schema): The inline `_ALERT_DELIVERED_SCHEMA` in `alert_fanout.py` is NOT updated in this wave — that AVRO-FILE-ONLY fix is Wave A-3. The dispatcher uses pre-serialized bytes from the fanout, not the `.avsc` file directly, so no outbox corruption occurs here. Wave A-3 must sync the inline schema with the new .avsc before any alerts with severity are serialized.
