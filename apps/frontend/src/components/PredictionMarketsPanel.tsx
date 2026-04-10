@@ -13,6 +13,7 @@ function formatVolume(vol: number | null): string {
   }).format(vol);
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function formatCloseTime(isoDate: string | null): string | null {
   if (!isoDate) return null;
   const diffMs = new Date(isoDate).getTime() - Date.now();
