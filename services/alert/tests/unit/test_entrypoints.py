@@ -50,6 +50,9 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.internal_service_token = "test-token"  # noqa: S105
     s.alert_dedup_window_seconds = 300
     s.watchlist_cache_ttl_seconds = 300
+    s.alert_severity_critical_threshold = 0.85
+    s.alert_severity_high_threshold = 0.65
+    s.alert_severity_medium_threshold = 0.40
     s.dispatcher_poll_interval_s = 1.0
     s.dispatcher_batch_size = 50
     for k, v in overrides.items():

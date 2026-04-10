@@ -104,9 +104,13 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         topic = self._resolve_topic(value, headers)
         correlation_id: str | None = value.get("correlation_id")  # type: ignore[assignment]
 
-        # Extract market_impact_score; default 0.0 for events that don't carry it (BP-128)
+        # Extract market_impact_score; default 0.0 for events that don't carry it.
+        # Guard float() against None or non-numeric values (e.g. schema mismatch).
         raw_score = value.get("market_impact_score", 0.0)
-        market_impact_score: float = max(0.0, min(1.0, float(raw_score)))
+        try:
+            market_impact_score: float = max(0.0, min(1.0, float(raw_score or 0.0)))
+        except (ValueError, TypeError):
+            market_impact_score = 0.0
 
         result = await self._fanout.execute(
             event=value,
@@ -135,7 +139,9 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
                     "intelligence_consumer.unknown_topic_from_header",
                     topic=topic_header,
                 )
-            return topic_header
+                # Fall through to event_type resolution; don't store arbitrary header values.
+            else:
+                return topic_header
 
         # Fall back to event_type field in the payload
         event_type: str = str(value.get("event_type", ""))

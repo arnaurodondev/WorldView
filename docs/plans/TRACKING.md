@@ -15,7 +15,7 @@
 | PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | completed | 10/10 | 2026-04-09 | 2026-04-09 |
 | PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | completed | 6/6 | 2026-04-09 | 2026-04-09 |
 | PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | completed | 8/8 | 2026-04-10 | 2026-04-10 |
-| PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | completed | 6/6 | — | 2026-04-10 |
+| PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | completed | 6/6 | 2026-04-10 | 2026-04-10 |
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | in-progress | 3/9 | — | 2026-04-10 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | draft | 0/5 | — | 2026-04-09 |

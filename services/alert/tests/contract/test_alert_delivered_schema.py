@@ -89,8 +89,9 @@ def test_alert_delivered_severity_forward_compat(schema: dict) -> None:  # type:
 
 
 @pytest.mark.contract
-def test_alert_delivered_roundtrip_with_severity(schema: dict) -> None:  # type: ignore[type-arg]
-    """Record with severity='critical' serializes and deserializes correctly."""
+@pytest.mark.parametrize("severity", ["low", "medium", "high", "critical"])
+def test_alert_delivered_roundtrip_with_severity(schema: dict, severity: str) -> None:  # type: ignore[type-arg]
+    """All four severity values serialize and deserialize correctly."""
     record = {
         "event_id": "evt-002",
         "event_type": "alert.delivered",
@@ -102,7 +103,7 @@ def test_alert_delivered_roundtrip_with_severity(schema: dict) -> None:  # type:
         "alert_type": "SIGNAL",
         "channel": "websocket",
         "correlation_id": None,
-        "severity": "critical",
+        "severity": severity,
     }
 
     buf = io.BytesIO()
@@ -110,6 +111,6 @@ def test_alert_delivered_roundtrip_with_severity(schema: dict) -> None:  # type:
     buf.seek(0)
 
     result = fastavro.schemaless_reader(buf, schema)
-    assert result["severity"] == "critical"
+    assert result["severity"] == severity
     assert result["schema_version"] == 2
     assert result["alert_id"] == "alert-002"

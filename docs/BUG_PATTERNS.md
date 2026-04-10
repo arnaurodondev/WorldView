@@ -23,6 +23,10 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-138](#bp-138) | Kafka consumer / type coercion | `TypeError: float() argument must be a string or a number, not 'NoneType'` — consumer dead-letters on non-numeric field | Any consumer extracting float fields from Avro events (market_impact_score, etc.) |
+| [BP-139](#bp-139) | Frontend WebSocket / JSON | Uncaught `SyntaxError` in `onmessage` handler crashes React tree on malformed frame | Any React hook wrapping `WebSocket.onmessage` that calls `JSON.parse` |
+| [BP-140](#bp-140) | Config wiring / dead settings | Settings fields defined in `config.py` but never read — operators believe they can tune behavior via env vars but the code ignores them | Any new `Settings` field used to construct domain objects (ValueObjects, thresholds) |
+| [BP-141](#bp-141) | Shared-session rollback / repo layer | `await self._session.rollback()` inside an exception handler within a repo `save()` poisons the outer `async with session_factory()` context and can cause subsequent write loss | Any repository method that catches IntegrityError and calls session.rollback() directly |
 | [BP-001](#bp-001) | Kafka / outbox serialization | `"a bytes-like object is required, not 'OutboxKafkaValue'"` | Any service implementing `BaseOutboxDispatcher` |
 | [BP-002](#bp-002) | Env loading / Docker Compose | Service starts but reads wrong config (wrong DB URL, wrong hostnames, 500 errors at runtime) | All services — `Makefile`, `docker-compose.yml`, `docker-compose.test.yml` |
 | [BP-003](#bp-003) | pytest-asyncio / session fixtures | `RuntimeError: Event loop is closed` at fixture teardown | Any service with `scope="session"` async fixtures (`e2e_client`, `_e2e_engine`) |
@@ -4925,3 +4929,82 @@ markers = ["live: requires live network access to external APIs"]
 - `helm test` hooks with env-var assertions are the most reliable guard (deferred)
 
 **First seen**: Investigation 2026-04-10 — identified as deployment risk for PLAN-0024 Wave A-2.
+
+## BP-138 — Kafka Consumer Crashes on Non-Numeric Float Field
+
+**Symptom**: Consumer dead-letters an event with `TypeError: float() argument must be a string or a number, not 'NoneType'` or `ValueError: could not convert string to float`. The event never reaches the use case; the crash is silent (just logged) and the partition continues processing with offset committed.
+
+**Root cause**: `float(value.get("field", 0.0))` raises `TypeError` when the field is `None` (JSON null) and `ValueError` when it is a non-numeric string. Both arise from Avro union types that include `null` or from schema mismatches between producers.
+
+**Fix**: Guard with try/except:
+```python
+raw = value.get("market_impact_score", 0.0)
+try:
+    score = max(0.0, min(1.0, float(raw or 0.0)))
+except (ValueError, TypeError):
+    score = 0.0
+```
+
+**Prevention**: Any consumer extracting a float from a Kafka event dict must use the guarded pattern above. Add a unit test for `None` and non-numeric string values.
+
+**First seen**: PLAN-0021 QA pass, 2026-04-10 (F-003/F-055/F-157 merged finding).
+
+---
+
+## BP-139 — Unguarded JSON.parse in WebSocket onmessage Crashes React Tree
+
+**Symptom**: Component tree crashes with `SyntaxError: Unexpected token` when the WebSocket server sends a non-JSON frame (keepalive bytes, proxy error, partial flush). Error boundary catches it but the WS connection remains open and state stops updating.
+
+**Root cause**: `JSON.parse(event.data)` called without try/catch inside `ws.onmessage`.
+
+**Fix**:
+```typescript
+ws.onmessage = (event: MessageEvent) => {
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(event.data as string) as Record<string, unknown>;
+  } catch {
+    return; // skip malformed frame
+  }
+  ...
+};
+```
+
+**Prevention**: Every React hook that wraps a WebSocket `onmessage` must wrap `JSON.parse` in try/catch. Add a unit test that passes a non-JSON string as `event.data`.
+
+**First seen**: PLAN-0021 QA pass, 2026-04-10 (F-014/F-152 merged finding).
+
+---
+
+## BP-140 — Settings Fields Defined But Never Read (Dead Config)
+
+**Symptom**: Operators set an env var expecting to tune behavior (e.g., `ALERT_ALERT_SEVERITY_CRITICAL_THRESHOLD=0.9`), but the service ignores it because the Settings field is defined but never passed to the domain object that uses it. Behavior is silently hardcoded.
+
+**Root cause**: Settings field added in `config.py`, but the consumer/service entry-point that constructs the domain object (e.g., `SeverityThresholds`) passes `None` or uses the default, never reading `settings.<field>`.
+
+**Fix**: In the entry-point (`*_main.py` or `app.py`), explicitly pass all threshold/config fields when constructing domain objects:
+```python
+SeverityThresholds(
+    critical=settings.alert_severity_critical_threshold,
+    high=settings.alert_severity_high_threshold,
+    medium=settings.alert_severity_medium_threshold,
+)
+```
+
+**Prevention**: When adding a `Settings` field that controls domain behavior, grep for all constructors of the affected domain object and verify each reads from `settings`. Add the mock value to `_mock_settings()` in entrypoint tests.
+
+**First seen**: PLAN-0021 QA pass, 2026-04-10 (F-202 Architecture finding).
+
+---
+
+## BP-141 — Repository-Level session.rollback() Poisons Shared Session Context
+
+**Symptom**: After a `DuplicateAlertError` (or any IntegrityError caught in a repo `save()` method), subsequent writes in the same request fail silently or raise `InvalidRequestError: Can't operate on rolled-back transaction`.
+
+**Root cause**: A repo method calls `await self._session.rollback()` inside an `except IntegrityError` block. This rolls back the shared session that was created by the outer `async with session_factory() as session:` context manager. The context manager's own rollback-on-exit path then has nothing to do, but any code that continues after catching `DuplicateAlertError` operates on a dead session.
+
+**Fix**: Remove `await self._session.rollback()` from repo-level exception handlers. Let the exception propagate; the `async with session_factory()` context manager handles rollback via `__aexit__`. The use case catches `DuplicateAlertError` and returns early without committing, so the session exits cleanly.
+
+**Prevention**: Repository `save()` methods must NEVER call `session.rollback()` directly. Only the use-case-level `async with session_factory()` context manager owns the rollback.
+
+**First seen**: PLAN-0021 QA pass, 2026-04-10 (F-150 Distributed Systems finding).

@@ -68,6 +68,6 @@ class AlertRepository:
             source_topic=row.source_topic,
             payload=dict(row.payload),
             dedup_key=row.dedup_key,
-            severity=AlertSeverity(getattr(row, "severity", "low")),
+            severity=AlertSeverity(row.severity),
             created_at=row.created_at,
         )

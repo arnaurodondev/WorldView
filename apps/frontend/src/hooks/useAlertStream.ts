@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react"
 
-export type AlertSeverity = "low" | "medium" | "high" | "critical";
+export type AlertSeverity = "low" | "medium" | "high" | "critical"
 
 export interface AlertPayload {
   alert_id: string;
@@ -30,7 +30,13 @@ export function useAlertStream(userId: string | null): {
     const ws = new WebSocket(`/api/v1/alerts/stream?user_id=${userId}`);
 
     ws.onmessage = (event: MessageEvent) => {
-      const data = JSON.parse(event.data as string) as Record<string, unknown>;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(event.data as string) as Record<string, unknown>;
+      } catch {
+        // Malformed frame (e.g. proxy keepalive, partial flush) — skip silently.
+        return;
+      }
       // Ignore heartbeat pings
       if (data["type"] === "ping") return;
 
