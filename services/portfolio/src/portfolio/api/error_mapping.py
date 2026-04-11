@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from portfolio.domain.errors import (
     AuthorizationError,
+    BrokerageApiError,
+    BrokerageConnectionAlreadyDisconnectedError,
+    BrokerageConnectionForbiddenError,
+    BrokerageConnectionNotFoundError,
+    BrokerageConnectionStateError,
     BusinessRuleViolationError,
     ConcurrencyError,
     DomainError,
     EntityAlreadyExistsError,
     EntityNotFoundError,
     IdempotencyKeyConflictError,
+    TosNotAcceptedError,
     ValidationError,
 )
 
@@ -21,6 +27,13 @@ ERROR_STATUS_MAP: dict[type[DomainError], int] = {
     BusinessRuleViolationError: 409,
     IdempotencyKeyConflictError: 409,
     ConcurrencyError: 409,
+    # Brokerage errors (PRD-0022 §6.2)
+    TosNotAcceptedError: 422,
+    BrokerageConnectionNotFoundError: 404,
+    BrokerageConnectionForbiddenError: 403,
+    BrokerageConnectionStateError: 422,  # overrides BusinessRuleViolationError → 409
+    BrokerageConnectionAlreadyDisconnectedError: 422,
+    BrokerageApiError: 503,
 }
 
 

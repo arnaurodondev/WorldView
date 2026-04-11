@@ -3,7 +3,7 @@
 > **PRD**: [PRD-0022](../specs/0022-snaptrade-brokerage-sync.md)
 > **Status**: in-progress
 > **Created**: 2026-04-09
-> **Updated**: 2026-04-11
+> **Updated**: 2026-04-11 (Wave C-2 done)
 > **Services affected**: S1 (Portfolio), S9 (API Gateway), Frontend
 
 ---
@@ -957,11 +957,12 @@ class GetSyncErrorsResult:
 
 ---
 
-### Wave C-2: S1 API Routes + Wiring
+### Wave C-2: S1 API Routes + Wiring ✅
 
 **Goal**: Expose the 4 API endpoints for brokerage connections and wire everything into the S1 FastAPI app.
 **Depends on**: Wave C-1 (use cases complete)
 **Estimated effort**: 45–75 minutes
+**Status**: **DONE** — 2026-04-11 · 433 tests pass (17 new) · ruff + mypy clean
 **Architecture layer**: API
 
 #### Pre-read (agent must read before starting)
@@ -1132,10 +1133,10 @@ BrokerageApiError: 503,
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/api/` passes
-- [ ] `mypy services/portfolio/src/portfolio/api/` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass
-- [ ] No infrastructure imports in `routes/brokerage_connections.py` (R16/R25)
+- [x] `ruff check services/portfolio/src/portfolio/api/` passes
+- [x] `mypy services/portfolio/src/portfolio/api/` passes
+- [x] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass
+- [x] No infrastructure imports in `routes/brokerage_connections.py` (R16/R25)
 
 #### Regression Guardrails
 - **BP-043**: Use `Annotated[bool, Field(...)]` not `Field(strip_whitespace=True)` for schema validators

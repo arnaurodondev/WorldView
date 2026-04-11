@@ -96,13 +96,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         app.state.snaptrade_cipher = None
 
-    # 6. Create Valkey client for watchlist reverse-index cache
+    # 6. Create SnapTrade brokerage client (PRD-0022)
+    from portfolio.infrastructure.brokerage.snaptrade_client import SnapTradeClient
+
+    app.state.brokerage_client = SnapTradeClient(
+        client_id=settings.snaptrade_client_id,
+        consumer_key=settings.snaptrade_consumer_key,
+    )
+
+    # 7. Create Valkey client for watchlist reverse-index cache
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
     valkey_client = ValkeyClient(url=settings.valkey_url)
     app.state.valkey_client = valkey_client
 
-    # 7. Create outbox dispatcher
+    # 8. Create outbox dispatcher
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     dispatcher = create_dispatcher(settings, write_factory)
