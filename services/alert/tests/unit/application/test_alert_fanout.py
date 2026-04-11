@@ -570,6 +570,19 @@ class TestAlertFanoutSeverity:
         assert saved_alerts[0].severity == AlertSeverity.LOW
 
     @pytest.mark.unit
+    def test_fanout_accepts_iwatchlist_cache_protocol(self) -> None:
+        """WatchlistCache satisfies the IWatchlistCache Protocol at runtime (D-5)."""
+        from alert.application.ports.watchlist import IWatchlistCache
+        from alert.infrastructure.cache.watchlist_cache import WatchlistCache
+
+        # isinstance check works because IWatchlistCache is @runtime_checkable
+        # and WatchlistCache has a get_watchers(entity_id: str) method.
+        # We verify via Protocol structural check (no instantiation needed).
+        assert issubclass(WatchlistCache, IWatchlistCache) or hasattr(
+            WatchlistCache, "get_watchers"
+        ), "WatchlistCache must implement IWatchlistCache.get_watchers"
+
+    @pytest.mark.unit
     def test_alert_fanout_avro_schema_loads_from_file(self) -> None:
         """_get_parsed_schema() loads from .avsc file, not an inline dict."""
         # Reset cached schema to force a reload

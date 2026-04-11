@@ -675,12 +675,12 @@ This feature is inherently low-throughput for a thesis application (≤5 connect
 
 ## 14. Open Questions
 
-| ID | Question | Owner | Deadline |
-|----|----------|-------|----------|
-| OQ-001 | SnapTrade Free tier: 5 connected users — does "user" mean SnapTrade user (1 per Worldview user) or 5 total brokerage accounts? If 5 accounts, one user with 2 brokerages counts as 2. Clarify from SnapTrade docs. | Arnau | Before Wave A-1 |
-| OQ-002 | SnapTrade's `get_activities` endpoint pagination — does it support cursor-based pagination? Need to verify SDK behaviour for users with >1000 transactions. | Arnau | Wave A-2 |
-| OQ-003 | Should sync errors be automatically re-attempted on next cycle (after instrument becomes available in S1), or only on user manual trigger? | Arnau | Wave A-3 |
-| OQ-004 | SNAPTRADE_REDIRECT_URI must be a public URL in production (SnapTrade redirects back to it). For local development, use `localhost:5173/portfolio/brokerage/callback`. For thesis demo, confirm URL with evaluators. | Arnau | Before implementation |
+| ID | Question | Status | Resolution |
+|----|----------|--------|-----------|
+| OQ-001 | SnapTrade Free tier: 5 connected users — does "user" mean SnapTrade user (1 per Worldview user) or 5 total brokerage accounts? | **RESOLVED** | Implement 1 SnapTrade user per Worldview user (1:1). The architecture is identical regardless of which interpretation is correct — no code change needed if "5" means accounts. |
+| OQ-002 | SnapTrade's `get_activities` endpoint pagination — does it support cursor-based pagination for users with >1000 transactions? | **DEFERRED** | Default SDK behaviour used. Worker adds `# TODO: verify SDK pagination` comment near `get_activities` call (T-D-1-01). Thesis scope is ≤5 users — not blocking. |
+| OQ-003 | Should sync errors be automatically re-attempted on next cycle, or only on user manual trigger? | **RESOLVED** | Automatic retry on next cycle (simplest). Connections in `ERROR` status are included in every sync cycle; a successful sync sets status back to `ACTIVE`. |
+| OQ-004 | SNAPTRADE_REDIRECT_URI for local dev vs thesis demo. | **RESOLVED** | Default `http://localhost:5173/portfolio/brokerage/callback` works for local testing — SnapTrade redirects the user's browser, not a server-side callback, so localhost is reachable. For thesis demo: update the env var to the public evaluator URL before the demo. |
 
 ---
 

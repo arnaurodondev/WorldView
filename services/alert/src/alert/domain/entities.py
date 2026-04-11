@@ -77,6 +77,7 @@ class Alert:
     payload: dict[str, object] = field(default_factory=dict)
     dedup_key: str = ""
     created_at: datetime = field(default_factory=utc_now)
+    tenant_id: UUID | None = field(default=None)
 
     @staticmethod
     def compute_dedup_key(

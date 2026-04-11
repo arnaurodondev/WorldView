@@ -21,6 +21,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     ArticleProcessingConsumer,
     _compute_chunk_mention_pairs,
     _enqueue_enriched,
+    _enqueue_signal_events,
     _is_valid_uuid,
 )
 from structlog.testing import capture_logs
@@ -657,3 +658,263 @@ class TestPriceImpactSignalLookup:
 
         assert routing_kwargs, "compute_routing_score was not called"
         assert abs(float(routing_kwargs[0].get("price_impact_score", -1)) - 0.7) < 1e-9
+
+
+# ── D-3: signal event emission tests ─────────────────────────────────────────
+
+
+def _make_signal_event(entity_id: uuid.UUID | None = None) -> object:
+    """Build a mock SignalEvent-like object matching the domain model fields."""
+    from nlp_pipeline.domain.models import SignalEvent
+
+    return SignalEvent(
+        signal_id=uuid.uuid4(),
+        doc_id=uuid.uuid4(),
+        entity_id=entity_id or uuid.uuid4(),
+        signal_type="earnings_beat",
+        confidence=0.92,
+        evidence_text="Company beat consensus estimates by 15%.",
+        detected_at=datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC),
+    )
+
+
+@pytest.mark.unit
+class TestEnqueueSignalEvents:
+    """Tests for D-3 bug fix: _enqueue_signal_events writes outbox records."""
+
+    @pytest.mark.asyncio
+    async def test_signal_event_written_to_outbox(self) -> None:
+        """Each SignalEvent produces one outbox.add call with correct payload fields."""
+        signal = _make_signal_event()
+        outbox_repo = AsyncMock()
+        settings = _make_settings()
+
+        await _enqueue_signal_events(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            signals=[signal],
+            doc_id=signal.doc_id,  # type: ignore[union-attr]
+            is_backfill=False,
+            correlation_id="corr-abc",
+        )
+
+        outbox_repo.add.assert_called_once()
+        kwargs = outbox_repo.add.call_args.kwargs
+        assert kwargs["topic"] == "nlp.signal.detected.v1"
+        assert kwargs["partition_key"] == str(signal.entity_id)  # type: ignore[union-attr]
+
+        payload = json.loads(kwargs["payload_avro"])
+        assert payload["event_type"] == "nlp.signal.detected"
+        assert payload["claim_id"] == str(signal.signal_id)  # type: ignore[union-attr]
+        assert payload["subject_entity_id"] == str(signal.entity_id)  # type: ignore[union-attr]
+        assert payload["claim_type"] == signal.signal_type  # type: ignore[union-attr]
+        assert payload["market_impact_score"] == 0.0
+        assert payload["polarity"] == "neutral"
+        assert payload["extraction_confidence"] == pytest.approx(signal.confidence)  # type: ignore[union-attr]
+        assert payload["is_backfill"] is False
+        assert payload["correlation_id"] == "corr-abc"
+        assert payload["schema_version"] == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_signals_produce_multiple_outbox_calls(self) -> None:
+        """Two signals → two outbox.add calls, each with distinct entity partition keys."""
+        entity_a = uuid.uuid4()
+        entity_b = uuid.uuid4()
+        signals = [_make_signal_event(entity_a), _make_signal_event(entity_b)]
+        outbox_repo = AsyncMock()
+        settings = _make_settings()
+
+        await _enqueue_signal_events(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            signals=signals,
+            doc_id=uuid.uuid4(),
+            is_backfill=True,
+            correlation_id=None,
+        )
+
+        assert outbox_repo.add.call_count == 2
+        keys = {c.kwargs["partition_key"] for c in outbox_repo.add.call_args_list}
+        assert str(entity_a) in keys
+        assert str(entity_b) in keys
+
+    @pytest.mark.asyncio
+    async def test_empty_signals_list_skips_outbox(self) -> None:
+        """No signals → outbox.add is never called."""
+        outbox_repo = AsyncMock()
+        settings = _make_settings()
+
+        await _enqueue_signal_events(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            signals=[],
+            doc_id=uuid.uuid4(),
+            is_backfill=False,
+            correlation_id=None,
+        )
+
+        outbox_repo.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_consumer_emits_signal_events_when_deep_extraction_returns_signals(self) -> None:
+        """article_consumer calls _enqueue_signal_events when run_deep_extraction_block
+        returns a non-empty signal list (integration of the full _run_pipeline path)."""
+        from decimal import Decimal
+
+        doc_id = uuid.uuid4()
+        nlp_sf = _make_ok_nlp_session_factory()
+        signal = _make_signal_event()
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=frozenset())
+
+        deep_extraction_mock = AsyncMock(return_value=({"events": [], "claims": [], "relations": []}, [signal]))
+        mock_impact_repo = AsyncMock()
+        mock_impact_repo.get_max_impact_for_doc = AsyncMock(return_value=Decimal("0.0"))
+
+        captured_signal_calls: list[dict] = []
+
+        async def _capture_enqueue_signal(**kwargs: Any) -> None:
+            captured_signal_calls.append(kwargs)
+
+        run_patches = [
+            patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer.section_document", return_value=[]),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_ner_block",
+                new=AsyncMock(return_value=([], MagicMock())),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.compute_routing_score",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.apply_suppression_gate",
+                return_value="full_pipeline",
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.should_run_deep_extraction",
+                return_value=True,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_embeddings_block",
+                new=AsyncMock(return_value=([], [], [], [])),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_deep_extraction_block",
+                new=deep_extraction_mock,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_enriched",
+                new=AsyncMock(),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_signal_events",
+                new=AsyncMock(side_effect=_capture_enqueue_signal),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                return_value=mock_impact_repo,
+            ),
+        ]
+
+        with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+            for p in run_patches:
+                p.start()
+            try:
+                await consumer._run_pipeline(
+                    doc_id=doc_id,
+                    minio_key="bucket/key",
+                    source_type="eodhd",
+                    published_at=None,
+                    extracted_at=datetime.now(UTC),
+                    is_backfill=False,
+                    correlation_id="corr-123",
+                )
+            finally:
+                for p in run_patches:
+                    p.stop()
+
+        assert len(captured_signal_calls) == 1, "Expected _enqueue_signal_events to be called once"
+        call_kwargs = captured_signal_calls[0]
+        assert call_kwargs["signals"] == [signal]
+        assert call_kwargs["doc_id"] == doc_id
+        assert call_kwargs["is_backfill"] is False
+        assert call_kwargs["correlation_id"] == "corr-123"
+
+    @pytest.mark.asyncio
+    async def test_consumer_skips_signal_emission_when_deep_extraction_returns_empty(self) -> None:
+        """article_consumer does NOT call _enqueue_signal_events when signals list is empty."""
+        from decimal import Decimal
+
+        doc_id = uuid.uuid4()
+        nlp_sf = _make_ok_nlp_session_factory()
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf)
+        consumer._watchlist = MagicMock()
+        consumer._watchlist.get_all_watched = AsyncMock(return_value=frozenset())
+
+        deep_extraction_mock = AsyncMock(return_value=({"events": [], "claims": [], "relations": []}, []))
+        mock_impact_repo = AsyncMock()
+        mock_impact_repo.get_max_impact_for_doc = AsyncMock(return_value=Decimal("0.0"))
+
+        enqueue_signal_spy = AsyncMock()
+
+        run_patches = [
+            patch("nlp_pipeline.infrastructure.messaging.consumers.article_consumer.section_document", return_value=[]),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_ner_block",
+                new=AsyncMock(return_value=([], MagicMock())),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.compute_routing_score",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.apply_suppression_gate",
+                return_value="full_pipeline",
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.should_run_deep_extraction",
+                return_value=True,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_embeddings_block",
+                new=AsyncMock(return_value=([], [], [], [])),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.run_deep_extraction_block",
+                new=deep_extraction_mock,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_enriched",
+                new=AsyncMock(),
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.messaging.consumers.article_consumer._enqueue_signal_events",
+                new=enqueue_signal_spy,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                return_value=mock_impact_repo,
+            ),
+        ]
+
+        with patch.object(consumer, "_download_article", new=AsyncMock(return_value="text")):
+            for p in run_patches:
+                p.start()
+            try:
+                await consumer._run_pipeline(
+                    doc_id=doc_id,
+                    minio_key="bucket/key",
+                    source_type="eodhd",
+                    published_at=None,
+                    extracted_at=datetime.now(UTC),
+                    is_backfill=False,
+                    correlation_id=None,
+                )
+            finally:
+                for p in run_patches:
+                    p.stop()
+
+        enqueue_signal_spy.assert_not_called()

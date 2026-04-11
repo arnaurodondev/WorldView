@@ -258,6 +258,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             logger.warning(  # type: ignore[no-any-return]
                 "price_impact_lookup_failed",
                 doc_id=str(doc_id),
+                exc_info=True,
             )
 
         decision_id = common.ids.new_uuid7()
@@ -336,8 +337,9 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             )
 
             claims_repo = ClaimsRepository(session)
+            signals: list = []
             if should_run_deep_extraction(final_path):
-                extraction_result, _signals = await run_deep_extraction_block(
+                extraction_result, signals = await run_deep_extraction_block(
                     doc_id=doc_id,
                     chunks=chunks,
                     mentions=final_mentions,
@@ -398,6 +400,18 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 extraction_result=extraction_result,
                 correlation_id=correlation_id,
             )
+
+            # Enqueue signal events (nlp.signal.detected.v1) — must be inside the
+            # same transaction so signals are never lost on commit failure.
+            if signals:
+                await _enqueue_signal_events(
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
+                    signals=signals,
+                    doc_id=doc_id,
+                    is_backfill=is_backfill,
+                    correlation_id=correlation_id,
+                )
 
             try:
                 await session.commit()
@@ -659,6 +673,45 @@ async def _enqueue_enriched(
         partition_key=str(doc_id),
         payload_avro=json.dumps(payload).encode(),
     )
+
+
+async def _enqueue_signal_events(
+    *,
+    outbox_repo: OutboxRepository,
+    settings: Any,
+    signals: list,
+    doc_id: uuid.UUID,
+    is_backfill: bool,
+    correlation_id: str | None,
+) -> None:
+    """Write nlp.signal.detected.v1 events to the outbox for each high-confidence signal.
+
+    One outbox record per signal.  The partition key is the entity_id so that
+    S10 (alert service) fans out per-entity.  market_impact_score defaults to 0.0
+    here; it is updated later by PriceImpactLabellingWorker (PLAN-0020).
+    """
+    for signal in signals:
+        payload: dict[str, Any] = {
+            "event_id": str(signal.signal_id),
+            "event_type": "nlp.signal.detected",
+            "schema_version": 1,
+            "occurred_at": signal.detected_at.isoformat(),
+            "doc_id": str(signal.doc_id),
+            "claim_id": str(signal.signal_id),
+            "claimer_entity_id": None,
+            "subject_entity_id": str(signal.entity_id),
+            "claim_type": signal.signal_type,
+            "polarity": "neutral",
+            "extraction_confidence": float(signal.confidence),
+            "is_backfill": is_backfill,
+            "correlation_id": correlation_id,
+            "market_impact_score": 0.0,
+        }
+        await outbox_repo.add(
+            topic=settings.topic_signal_detected,
+            partition_key=str(signal.entity_id),
+            payload_avro=json.dumps(payload).encode(),
+        )
 
 
 def _is_valid_uuid(s: str) -> bool:

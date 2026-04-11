@@ -66,7 +66,20 @@ class GetPendingAlertsUseCase:
             min_severity: If given, only return alerts at or above this tier.
 
         """
-        pendings = await self._pending_repo.list_by_user(user_id, limit=limit, offset=offset)
+        # Push severity filter to SQL to avoid pagination-correctness bug (D-4):
+        # Python-side filtering after OFFSET pagination skips valid rows when
+        # filtered rows are present further in the dataset.
+        min_severities: list[str] | None = None
+        if min_severity is not None:
+            min_rank = _SEVERITY_RANK.get(min_severity, 0)
+            min_severities = [str(s) for s, r in _SEVERITY_RANK.items() if r >= min_rank]
+
+        pendings = await self._pending_repo.list_by_user(
+            user_id,
+            limit=limit,
+            offset=offset,
+            min_severities=min_severities,
+        )
 
         pairs: list[tuple[PendingAlert, Alert]] = []
         for p in pendings:
@@ -74,10 +87,6 @@ class GetPendingAlertsUseCase:
             if alert is None:
                 continue
             pairs.append((p, alert))
-
-        if min_severity is not None:
-            min_rank = _SEVERITY_RANK.get(min_severity, 0)
-            pairs = [(p, a) for p, a in pairs if _SEVERITY_RANK.get(a.severity, 0) >= min_rank]
 
         return pairs
 

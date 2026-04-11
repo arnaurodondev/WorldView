@@ -138,7 +138,12 @@ class TestGetPendingAlerts:
 
         captured_args: list[dict] = []
 
-        async def _capture_list(uid: UUID, limit: int = 50, offset: int = 0) -> list:
+        async def _capture_list(
+            uid: UUID,
+            limit: int = 50,
+            offset: int = 0,
+            min_severities: list | None = None,
+        ) -> list:
             captured_args.append({"user_id": uid, "limit": limit, "offset": offset})
             return []
 
@@ -200,28 +205,35 @@ class TestGetPendingAlerts:
 
     @pytest.mark.unit
     async def test_get_pending_min_severity_query_param(self) -> None:
-        """?min_severity=high filters out LOW and MEDIUM alerts."""
+        """?min_severity=high passes min_severities=[HIGH,CRITICAL] to the repo (SQL filter).
+
+        D-4: filtering is now done in SQL (list_by_user receives min_severities list),
+        not in Python post-pagination. The repo mock returns only the SQL-filtered result.
+        """
         app, _session = _make_app()
         transport = ASGITransport(app=app)
         user_id = uuid4()
-        alert_low = _make_alert(severity=AlertSeverity.LOW)
         alert_high = _make_alert(severity=AlertSeverity.HIGH)
-        pending_low = _make_pending(user_id, alert_low.alert_id)
         pending_high = _make_pending(user_id, alert_high.alert_id)
 
-        def _get_by_id(alert_id: UUID) -> Alert | None:
-            if alert_id == alert_low.alert_id:
-                return alert_low
-            if alert_id == alert_high.alert_id:
-                return alert_high
-            return None
+        captured_min_severities: list[list[str] | None] = []
+
+        async def _list_by_user(
+            uid: UUID,
+            limit: int = 50,
+            offset: int = 0,
+            min_severities: list[str] | None = None,
+        ) -> list:
+            captured_min_severities.append(min_severities)
+            # Simulate SQL filtering: only return pending_high because min_severities was applied
+            return [pending_high]
 
         with (
             patch(_PENDING_REPO_PATH) as MockPendingRepo,
             patch(_ALERT_REPO_PATH) as MockAlertRepo,
         ):
-            MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending_low, pending_high])
-            MockAlertRepo.return_value.get_by_id = AsyncMock(side_effect=_get_by_id)
+            MockPendingRepo.return_value.list_by_user = _list_by_user
+            MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert_high)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}&min_severity=high")
@@ -230,6 +242,12 @@ class TestGetPendingAlerts:
         data = resp.json()
         assert data["total"] == 1
         assert data["alerts"][0]["severity"] == "high"
+        # Verify min_severities was passed to the repo (not filtered in Python)
+        # StrEnum str() gives lowercase values: "high", "critical" etc.
+        assert captured_min_severities[0] is not None
+        assert "high" in captured_min_severities[0]
+        assert "critical" in captured_min_severities[0]
+        assert "low" not in captured_min_severities[0]
 
     @pytest.mark.unit
     async def test_get_pending_invalid_min_severity(self) -> None:

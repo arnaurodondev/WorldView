@@ -72,11 +72,13 @@ class AlertModel(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
     dedup_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     severity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="low")
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
         Index("idx_alerts_entity", "entity_id", created_at.desc()),
         Index("idx_alerts_severity", "severity", created_at.desc()),
+        Index("idx_alerts_tenant", "tenant_id", postgresql_where="tenant_id IS NOT NULL"),
     )
 
 

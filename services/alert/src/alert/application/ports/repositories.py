@@ -45,7 +45,13 @@ class PendingAlertRepositoryPort(ABC):
     """Port for pending alert operations."""
 
     @abstractmethod
-    async def list_by_user(self, user_id: UUID, limit: int = 50, offset: int = 0) -> list[PendingAlert]: ...
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        min_severities: list[str] | None = None,
+    ) -> list[PendingAlert]: ...
 
     @abstractmethod
     async def acknowledge(self, user_id: UUID, alert_id: UUID) -> bool: ...
