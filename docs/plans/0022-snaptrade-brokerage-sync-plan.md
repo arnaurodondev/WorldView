@@ -3,7 +3,7 @@
 > **PRD**: [PRD-0022](../specs/0022-snaptrade-brokerage-sync.md)
 > **Status**: in-progress
 > **Created**: 2026-04-09
-> **Updated**: 2026-04-11 (Wave C-2 done)
+> **Updated**: 2026-04-11 (Wave D-1 done)
 > **Services affected**: S1 (Portfolio), S9 (API Gateway), Frontend
 
 ---
@@ -1148,11 +1148,12 @@ BrokerageApiError: 503,
 
 ## Sub-plan D: Worker + S9 Gateway
 
-### Wave D-1: BrokerageTransactionSyncWorker
+### Wave D-1: BrokerageTransactionSyncWorker ✅
 
 **Goal**: Implement the background worker that runs every 4 hours, fetching brokerage transactions and replaying them through `RecordTransactionUseCase`.
 **Depends on**: Wave C-1 (use cases), Wave B-1 (SnapTradeClient), Wave B-2 (repos via UoW)
 **Estimated effort**: 75–120 minutes
+**Status**: **DONE** — 2026-04-11 · 11 new tests pass (444 total) · ruff + mypy clean
 **Architecture layer**: infrastructure/workers
 
 #### Pre-read (agent must read before starting)
@@ -1429,10 +1430,10 @@ BROKERAGE_PENDING_CONNECTIONS_AGE = Gauge(
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/workers/` passes
-- [ ] `mypy services/portfolio/src/portfolio/workers/` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -k "worker" -v` — minimum 5 new tests pass
-- [ ] Worker module runs without error on startup (no SnapTrade calls needed if `snaptrade_client_id` empty)
+- [x] `ruff check services/portfolio/src/portfolio/workers/` passes
+- [x] `mypy services/portfolio/src/portfolio/workers/` passes
+- [x] `python -m pytest services/portfolio/tests/ -m unit -k "worker" -v` — 11 new tests pass
+- [x] Worker module runs without error on startup (no SnapTrade calls needed if `snaptrade_client_id` empty)
 
 #### Regression Guardrails
 - **BP-057**: DB session must NOT be held open while calling SnapTrade API. Pattern: open UoW → load connection → close UoW → call API → open new UoW → save results

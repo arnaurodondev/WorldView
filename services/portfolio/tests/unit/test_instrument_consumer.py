@@ -32,6 +32,9 @@ class FakeInstrumentRepository(InstrumentRepository):
     async def get_by_symbol_exchange(self, symbol, exchange):
         return None
 
+    async def get_by_symbol(self, symbol):
+        return None
+
     async def list_all(self):
         return []
 
