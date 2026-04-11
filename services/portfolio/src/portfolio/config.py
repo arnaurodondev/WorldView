@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     )
     brokerage_sync_cycle_seconds: int = 14400  # 4 hours
     brokerage_sync_history_days: int = 730  # 2 years initial import
+    # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
+    market_data_service_url: str = "http://market-data:8003"
 
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"

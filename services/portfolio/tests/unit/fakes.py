@@ -114,6 +114,12 @@ class FakeInstrumentRepository(InstrumentRepository):
                 return inst
         return None
 
+    async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
+        for inst in self._store.values():
+            if inst.symbol.upper() == symbol.upper():
+                return inst
+        return None
+
     async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]:
         items = list(self._store.values())
         total = len(items)

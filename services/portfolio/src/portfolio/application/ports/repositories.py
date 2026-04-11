@@ -101,6 +101,16 @@ class InstrumentRepository(ABC):
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None: ...
 
     @abstractmethod
+    async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
+        """Return first instrument matching symbol (case-insensitive, LIMIT 1).
+
+        Used by BrokerageTransactionSyncWorker — SnapTrade provides a ticker
+        but no exchange, so symbol-only lookup is needed (PRD-0022 §6.5).
+        Returns None if no match.
+        """
+        ...
+
+    @abstractmethod
     async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]: ...
 
     @abstractmethod

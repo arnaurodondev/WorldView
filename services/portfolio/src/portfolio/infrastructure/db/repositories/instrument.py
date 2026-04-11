@@ -49,6 +49,13 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
+    async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
+        result = await self._session.execute(
+            select(InstrumentModel).where(func.upper(InstrumentModel.symbol) == symbol.upper()).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
     async def list_all(self, limit: int = 100, offset: int = 0) -> tuple[list[InstrumentRef], int]:
         count_result = await self._session.execute(select(func.count()).select_from(InstrumentModel))
         total: int = count_result.scalar_one()
