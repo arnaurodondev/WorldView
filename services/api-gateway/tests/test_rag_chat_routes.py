@@ -94,7 +94,7 @@ async def test_s9_chat_stream_not_buffered(app, mock_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_s9_injects_tenant_user_headers(app, mock_clients) -> None:
+async def test_s9_injects_tenant_user_headers(authed_app, authed_mock_clients) -> None:
     """Auth JWT is decoded and X-Tenant-Id / X-User-Id injected before forwarding."""
     captured_headers: dict[str, str] = {}
 
@@ -102,9 +102,9 @@ async def test_s9_injects_tenant_user_headers(app, mock_clients) -> None:
         captured_headers.update(kwargs.get("headers", {}))  # type: ignore[arg-type]
         return _mock_response(200, {"answer": "ok", "citations": []})
 
-    mock_clients.rag_chat.post = _capture_post
+    authed_mock_clients.rag_chat.post = _capture_post
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         await client.post(
             "/v1/chat",

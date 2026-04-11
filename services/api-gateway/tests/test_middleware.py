@@ -44,7 +44,8 @@ async def test_rate_limit_allows_under_threshold() -> None:
 @pytest.mark.asyncio
 async def test_rate_limit_blocks_over_threshold() -> None:
     valkey = AsyncMock()
-    valkey.incr = AsyncMock(return_value=6)  # over the limit
+    # Unauthenticated limit is hardcoded to 20; return value must exceed that
+    valkey.incr = AsyncMock(return_value=21)
 
     app = _make_app(valkey, max_requests=5)
     transport = ASGITransport(app=app)

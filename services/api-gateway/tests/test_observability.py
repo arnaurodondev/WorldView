@@ -11,8 +11,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def obs_app():
-    return create_app()
+def obs_app(settings):
+    return create_app(settings)
 
 
 @pytest.fixture
