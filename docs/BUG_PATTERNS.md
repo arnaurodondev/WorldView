@@ -5008,3 +5008,27 @@ SeverityThresholds(
 **Prevention**: Repository `save()` methods must NEVER call `session.rollback()` directly. Only the use-case-level `async with session_factory()` context manager owns the rollback.
 
 **First seen**: PLAN-0021 QA pass, 2026-04-10 (F-150 Distributed Systems finding).
+
+---
+
+## BP-142 — E2E Test Assumes Endpoint Convention Without Verifying Actual Path
+
+**Category**: Test Correctness
+**Severity**: CRITICAL (silent test failure in deployment validation)
+
+**Pattern**: An E2E or smoke test hardcodes an endpoint path based on common convention (e.g., `/health`, `/status`, `/ping`) without checking what paths the service actually exposes. The test fails with HTTP 404 whenever the service uses a different convention (e.g., `/healthz`, `/api/v1/health`), producing false negatives that look identical to a real outage.
+
+**Symptom**: Deployment readiness tests report service failure with `HTTP 404` even though the service is perfectly healthy and running on the expected port.
+
+**Root cause**: The worldview scaffold generates `/healthz` (Kubernetes liveness probe convention) but the test was written using the generic HTTP health endpoint convention `/health`. No cross-reference with OpenAPI or `.claude-context.md` was done when writing the test.
+
+**Fix**: Always derive test endpoint paths from the canonical source:
+1. Check `services/<service>/.claude-context.md` for documented endpoints.
+2. Or verify against the service's OpenAPI spec: `GET /openapi.json → .paths | keys[]`.
+3. For worldview specifically: all services expose `/healthz` (not `/health`) and `/metrics` for Prometheus.
+
+**Prevention**:
+- When writing E2E/smoke tests against services, validate the endpoint path against the service's OpenAPI spec or `.claude-context.md` first.
+- Add a comment in the test citing where the path convention is documented: `# /healthz per PRD-0024 §6.4 and scaffold convention`.
+
+**First seen**: `tests/e2e/test_deployment_readiness.py`, commit `964f06a`, found and fixed 2026-04-11.
