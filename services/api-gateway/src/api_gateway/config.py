@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import SecretStr
+from pydantic import SecretStr  # noqa: TCH002
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,10 +24,19 @@ class Settings(BaseSettings):
     # Valkey (caching + rate limiting)
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Auth — F-103: SecretStr prevents accidental logging; no insecure default.
-    # Set API_GATEWAY_JWT_SECRET env var to a strong random secret in production.
-    jwt_secret: SecretStr = SecretStr("dev-secret-change-me")
-    jwt_algorithm: str = "HS256"
+    # OIDC (Zitadel Cloud) — all required; service refuses to start without them (R13)
+    oidc_issuer_url: str  # e.g. https://<instance>.zitadel.cloud
+    oidc_client_id: str
+    oidc_client_secret: SecretStr
+    oidc_audience: str  # usually same as client_id
+
+    # Internal JWT (RS256) — PEM-encoded RSA-2048 key pair
+    internal_jwt_private_key: SecretStr  # never logged — SecretStr
+    internal_jwt_public_key: str
+
+    # Frontend
+    frontend_url: str = "http://localhost:5173"
+    cookie_secure: bool = False  # True in production (Secure cookie flag)
 
     # Downstream service URLs
     portfolio_url: str = "http://localhost:8001"

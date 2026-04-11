@@ -2,10 +2,11 @@
 # OIDC/Zitadel, RS256 Internal JWT, S9 Hardening
 
 > **PRD**: `docs/specs/0025-auth-oidc-zitadel-internal-jwt.md`
-> **Status**: draft
+> **Status**: in-progress
 > **Total Waves**: 6
 > **Estimated Effort**: 8–12 hours
 > **Created**: 2026-04-10
+> **Updated**: 2026-04-12
 > **Blocks**: PLAN-0022 Waves 4–9
 
 ---
@@ -71,7 +72,7 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 
 | Wave | Title | Status | Tasks Done/Total |
 |------|-------|--------|-----------------|
-| Wave A | S9 Foundation & Security Hardening | pending | 0/7 |
+| Wave A | S9 Foundation & Security Hardening ✅ | done | 7/7 |
 | Wave B | S9 Auth Endpoints | pending | 0/7 |
 | Wave C | S1 Schema + Provision Endpoint | pending | 0/8 |
 | Wave D | Backend Services InternalJWTMiddleware | pending | 0/10 |
@@ -80,12 +81,13 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 
 ---
 
-## Wave A: S9 Foundation & Security Hardening
+## Wave A: S9 Foundation & Security Hardening ✅
 
 **Goal**: Replace HS256 `AuthMiddleware` with OIDC-aware middleware classes, expose `/internal/jwks`, fix SEC-001/003/004/007/008, and wire everything into `create_app`.
 **Depends on**: none
 **Estimated effort**: 90–120 min
 **Architecture layer**: infrastructure + config
+**Status**: **DONE** — 2026-04-12 · 55 tests pass (23 new) · ruff + mypy clean
 
 ### Pre-read (agent must read before starting)
 - `services/api-gateway/src/api_gateway/config.py` — current config (will be rewritten)
@@ -455,16 +457,16 @@ Include `internal_router` in app's route registration.
 | `test_internal_jwt_claims_frozen` | test_jwt_utils.py | Cannot mutate InternalJWTClaims |
 
 **Acceptance criteria**:
-- [ ] All 18+ tests pass
-- [ ] `ruff check` passes on test files
-- [ ] `mypy` passes on test files
+- [x] All 18+ tests pass
+- [x] `ruff check` passes on test files
+- [x] `mypy` passes on test files
 
 ### Validation Gate
-- [ ] `ruff check services/api-gateway/src/` — zero errors
-- [ ] `mypy services/api-gateway/src/` — zero errors
-- [ ] `python -m pytest services/api-gateway/tests/unit/ -v` — ≥18 new tests pass
-- [ ] `GET /health` returns 200 in integration test
-- [ ] `GET /internal/jwks` returns valid JWKS JSON
+- [x] `ruff check services/api-gateway/src/` — zero errors
+- [x] `mypy services/api-gateway/src/` — zero errors
+- [x] `python -m pytest services/api-gateway/tests/unit/ -v` — 23 new tests pass
+- [x] `GET /health` returns 200 without auth
+- [x] `GET /internal/jwks` returns valid JWKS JSON
 
 ### Regression Guardrails
 - **BP-023 / BP-127** (pre-commit ruff version mismatch): Use `~/.cache/pre-commit/` ruff, not `uvx ruff`. Run `git diff --name-only --cached | grep ".py$" | xargs ~/.cache/pre-commit/repo*/bin/ruff format --check` before committing.

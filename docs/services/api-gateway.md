@@ -65,17 +65,36 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
 
 ## Cross-Cutting Concerns
 
-### Authentication
-- API key required for all `/api/v1/*` endpoints
-- Keys stored hashed (bcrypt) in Valkey or config
-- Timing-safe comparison to prevent timing attacks
-- `X-API-Key` header or `?api_key=` query parameter
+### Authentication (PRD-0025 — OIDC/Zitadel + RS256 Internal JWT)
+
+Auth is handled entirely by S9. Backends never validate user tokens directly.
+
+| Middleware | Role |
+|-----------|------|
+| `OIDCAuthMiddleware` | Validates Zitadel RS256 access tokens via JWKS cache. Sets `request.state.user`. |
+| `InternalJWTIssuerMiddleware` | Issues RS256 `X-Internal-JWT` header for every proxied backend request. |
+| `SecurityHeadersMiddleware` | Injects security headers (X-Frame-Options, CSP, etc.) on all responses. |
+
+**Auth flow endpoints** (skip OIDC validation):
+- `GET /v1/auth/login` — PKCE login redirect to Zitadel
+- `GET /v1/auth/callback` — PKCE callback, provisions S1 user, sets session cookies
+- `POST /v1/auth/refresh` — Refresh tokens via Zitadel token endpoint
+- `POST /v1/auth/logout` — Revoke tokens, clear cookies
+- `GET /v1/auth/me` — Return current user profile
+
+**JWKS endpoint**: `GET /internal/jwks` — returns S9's RS256 public key for backend JWT verification.
+
+**Config vars**:
+```
+OIDC_ISSUER_URL, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_AUDIENCE
+INTERNAL_JWT_PRIVATE_KEY (PEM RSA-2048), INTERNAL_JWT_PUBLIC_KEY
+FRONTEND_URL, COOKIE_SECURE
+```
 
 ### Rate Limiting
 - Valkey sliding window counter
-- Authenticated: 100 req/min per tenant
-- Unauthenticated: 20 req/min per IP
-- Key pattern: `rl:v1:tenant:{tenant_id}` / `rl:v1:ip:{ip_hash}`
+- Authenticated: 100 req/min per user (`rl:v1:user:{user_id}`)
+- Unauthenticated: 20 req/min per IP (`rl:v1:ip:{sha256(ip)[:16]}`)
 - **Fail-open**: if Valkey is unavailable, allow requests (don't block on cache failure)
 
 ### CORS

@@ -14,9 +14,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from api_gateway.clients import ServiceClients
 from api_gateway.config import Settings
-from api_gateway.middleware import AuthMiddleware, add_cors
+from api_gateway.middleware import (
+    InternalJWTIssuerMiddleware,
+    OIDCAuthMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    add_cors,
+)
 from api_gateway.routes import router as main_router
 from api_gateway.routes.health import router as health_router
+from api_gateway.routes.internal import router as internal_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -54,7 +61,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Manage application lifecycle: observability → clients → Valkey."""
+    """Manage application lifecycle: observability → OIDC discovery → RSA keys → clients → Valkey."""
     settings: Settings = app.state.settings
 
     # 1. Logging — always first
@@ -65,14 +72,44 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger = get_logger("api_gateway.app")
 
-    # 2. Tracing config (optional — middleware already registered in create_app)
+    # 2. Tracing config (optional)
     if settings.otlp_endpoint:
         configure_tracing(
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Downstream service clients
+    # 3. Shared httpx client for OIDC discovery (and S1 provisioning calls)
+    httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
+    app.state.httpx_client = httpx_client
+
+    # 4. OIDC discovery — fail-fast if unavailable (service cannot function without it)
+    from api_gateway.oidc import (
+        build_jwks_response,
+        fetch_oidc_discovery,
+        load_rsa_private_key,
+        rsa_key_id,
+    )
+
+    try:
+        oidc_config = await fetch_oidc_discovery(settings.oidc_issuer_url, httpx_client)
+        app.state.oidc_config = oidc_config
+        logger.info("oidc_discovery_complete", issuer=oidc_config.issuer)
+    except Exception as exc:
+        logger.error("oidc_discovery_failed", error=str(exc))
+        raise RuntimeError(f"OIDC discovery failed at startup: {exc}") from exc
+
+    # 5. RSA keypair for internal JWT signing
+    private_key = load_rsa_private_key(settings.internal_jwt_private_key.get_secret_value())
+    public_key = private_key.public_key()
+    kid = rsa_key_id(public_key)
+    app.state.rsa_private_key = private_key
+    app.state.rsa_public_key = public_key
+    app.state.rsa_kid = kid
+    app.state.internal_jwks = build_jwks_response(public_key, kid)
+    logger.info("rsa_keypair_loaded", kid=kid)
+
+    # 6. Downstream service clients
     timeout = httpx.Timeout(30.0, connect=5.0)
     clients = ServiceClients(
         portfolio=httpx.AsyncClient(base_url=settings.portfolio_url, timeout=timeout),
@@ -87,7 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.clients = clients
 
-    # 5. Valkey (fail-open: rate limiting degrades gracefully if unavailable)
+    # 7. Valkey (fail-open: rate limiting degrades gracefully if unavailable)
     valkey: ValkeyClient | None = None
     try:
         valkey = create_valkey_client_from_url(settings.valkey_url)
@@ -105,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for field_name in ServiceClients.__dataclass_fields__:
         client = getattr(clients, field_name)
         await client.aclose()
+    await httpx_client.aclose()
     if valkey is not None:
         await valkey.close()
     logger.info("service_stopped", service=settings.service_name)
@@ -112,7 +150,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
-    settings = settings or Settings()
+    settings = settings or Settings()  # type: ignore[call-arg]  # pydantic-settings reads required fields from env
 
     app = FastAPI(
         title="worldview-gateway",
@@ -121,19 +159,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware — must be registered before app starts (Starlette requirement)
-    # Order: last added = outermost
+    # Middleware registration order (Starlette: last added = outermost)
+    # Outermost → innermost: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics
     add_cors(app, settings.cors_origins)
+    # RateLimitMiddleware and OIDCAuthMiddleware access app.state in dispatch() — safe to register
+    # with None/placeholder here; they read from app.state at request time after lifespan completes.
     app.add_middleware(
-        AuthMiddleware,
-        secret=settings.jwt_secret.get_secret_value(),
-        algorithm=settings.jwt_algorithm,
+        RateLimitMiddleware,
+        valkey_client=None,  # replaced by app.state.valkey at lifespan
+        max_requests=settings.rate_limit_requests,
+        window_seconds=settings.rate_limit_window_seconds,
     )
+    app.add_middleware(OIDCAuthMiddleware)
+    app.add_middleware(InternalJWTIssuerMiddleware)
 
     # Metrics endpoint
     @app.get("/metrics")
@@ -143,6 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Routes
     app.include_router(health_router, tags=["health"])
+    app.include_router(internal_router)
     app.include_router(main_router)
 
     return app

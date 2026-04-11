@@ -27,11 +27,11 @@ def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_list_proxy_forwards_query_params(app, mock_clients) -> None:
+async def test_list_proxy_forwards_query_params(authed_app, authed_mock_clients) -> None:
     """GET /v1/signals/prediction-markets forwards ?status=open to S3."""
-    mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"markets": [], "total": 0}'))
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"markets": [], "total": 0}'))
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
             "/v1/signals/prediction-markets",
@@ -40,17 +40,17 @@ async def test_list_proxy_forwards_query_params(app, mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    mock_clients.market_data.get.assert_called_once()
-    call_kwargs = mock_clients.market_data.get.call_args[1]
+    authed_mock_clients.market_data.get.assert_called_once()
+    call_kwargs = authed_mock_clients.market_data.get.call_args[1]
     assert call_kwargs["params"].get("status") == "open"
 
 
 @pytest.mark.asyncio
-async def test_detail_proxy_404_passthrough(app, mock_clients) -> None:
+async def test_detail_proxy_404_passthrough(authed_app, authed_mock_clients) -> None:
     """S3 404 (unknown market) is propagated unchanged to the frontend."""
-    mock_clients.market_data.get = AsyncMock(return_value=_mock_response(404, b'{"detail": "Market not found"}'))
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(404, b'{"detail": "Market not found"}'))
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
             "/v1/signals/prediction-markets/unknown-market",
@@ -61,11 +61,11 @@ async def test_detail_proxy_404_passthrough(app, mock_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_history_proxy_forwards_date_params(app, mock_clients) -> None:
+async def test_history_proxy_forwards_date_params(authed_app, authed_mock_clients) -> None:
     """GET /v1/signals/prediction-markets/{id}/history forwards from/to/limit params."""
-    mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"snapshots": []}'))
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"snapshots": []}'))
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
             "/v1/signals/prediction-markets/market-1/history",
@@ -74,7 +74,7 @@ async def test_history_proxy_forwards_date_params(app, mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    call_kwargs = mock_clients.market_data.get.call_args[1]
+    call_kwargs = authed_mock_clients.market_data.get.call_args[1]
     params = call_kwargs["params"]
     assert "from" in params
     assert "to" in params
