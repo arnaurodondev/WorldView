@@ -35,6 +35,7 @@ class AlertRepository:
             payload=alert.payload,
             dedup_key=alert.dedup_key,
             severity=str(alert.severity),
+            tenant_id=alert.tenant_id,
             created_at=alert.created_at,
         )
         self._session.add(row)
@@ -76,4 +77,5 @@ class AlertRepository:
             dedup_key=row.dedup_key,
             severity=sev,
             created_at=row.created_at,
+            tenant_id=row.tenant_id,
         )

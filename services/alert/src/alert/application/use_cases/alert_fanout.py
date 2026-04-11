@@ -48,7 +48,7 @@ if TYPE_CHECKING:
         OutboxRepositoryPort,
         PendingAlertRepositoryPort,
     )
-    from alert.infrastructure.cache.watchlist_cache import WatchlistCache
+    from alert.application.ports.watchlist import IWatchlistCache
 
     class RepoFactory:
         """Protocol for constructing repos from a session."""
@@ -194,7 +194,7 @@ class AlertFanoutUseCase:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        watchlist_cache: WatchlistCache,
+        watchlist_cache: IWatchlistCache,
         notification_publisher: INotificationPublisher,
         repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
