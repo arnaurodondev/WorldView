@@ -61,3 +61,6 @@ pgdata/
 *.pem
 *.key
 secrets/
+terraform.tfvars
+*.tfbackend
+*.tfstate*
