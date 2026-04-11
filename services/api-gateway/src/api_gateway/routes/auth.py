@@ -1,0 +1,485 @@
+"""OIDC auth endpoints for the API Gateway.
+
+Implements the PKCE auth flow (F-01..F-07) from PRD-0025:
+  GET  /v1/auth/login    — generate PKCE state, redirect to Zitadel
+  GET  /v1/auth/callback — exchange code for tokens, provision user, set cookie
+  POST /v1/auth/refresh  — rotate refresh_token cookie → new access_token
+  POST /v1/auth/logout   — revoke token, clear cookie
+  GET  /v1/auth/me       — return user profile from validated access_token
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import jwt
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+
+from api_gateway.pkce import (
+    generate_code_challenge,
+    generate_code_verifier,
+    generate_state,
+    retrieve_and_delete_pkce_state,
+    store_pkce_state,
+)
+
+router = APIRouter(prefix="/v1/auth", tags=["auth"])
+
+_COOKIE_NAME = "refresh_token"
+_COOKIE_PATH = "/v1/auth/refresh"
+_COOKIE_MAX_AGE = 2592000  # 30 days
+
+
+def _set_refresh_cookie(response: Response, token: str, secure: bool) -> None:
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="strict",
+        path=_COOKIE_PATH,
+        max_age=_COOKIE_MAX_AGE,
+        secure=secure,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value="",
+        httponly=True,
+        samesite="strict",
+        path=_COOKIE_PATH,
+        max_age=0,
+        secure=False,
+    )
+
+
+@router.get("/login")
+async def login(request: Request) -> Response:
+    """Initiate PKCE OIDC flow — redirect browser to Zitadel (F-02)."""
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+
+    if oidc_config is None:
+        return JSONResponse(
+            status_code=502,
+            content={"error": "oidc_discovery_failed", "detail": "OIDC configuration unavailable"},
+        )
+
+    state = generate_state()
+    code_verifier = generate_code_verifier()
+    code_challenge = generate_code_challenge(code_verifier)
+
+    try:
+        await store_pkce_state(valkey, state, code_verifier)
+    except RuntimeError:
+        logger.warning("pkce_state_store_failed", action="login", result="error")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "valkey_unavailable", "detail": "Auth state storage unavailable"},
+        )
+
+    redirect_uri = f"{settings.frontend_url}/callback"
+    params = (
+        f"client_id={settings.oidc_client_id}"
+        f"&response_type=code"
+        f"&redirect_uri={redirect_uri}"
+        f"&scope=openid+profile+email+offline_access"
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+    )
+    auth_url = f"{oidc_config.authorization_endpoint}?{params}"
+    logger.info("login_redirect", action="login", state=state[:8])
+    return RedirectResponse(url=auth_url, status_code=302)
+
+
+@router.get("/callback")
+async def callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> Response:
+    """Handle Zitadel redirect; exchange code for tokens; provision user (F-03)."""
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+    httpx_client = getattr(request.app.state, "httpx_client", None)
+
+    # 1. Zitadel error forwarded in query params
+    if error:
+        logger.warning("callback_oidc_error", action="login", error=error, result="error")
+        return JSONResponse(
+            status_code=400,
+            content={"error": error, "error_description": error_description},
+        )
+
+    # 2. Required params
+    if not code or not state:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "missing_params", "detail": "code and state are required"},
+        )
+
+    # 3. Retrieve (and delete) PKCE state from Valkey
+    if valkey is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "valkey_unavailable", "detail": "Auth state storage unavailable"},
+        )
+    code_verifier = await retrieve_and_delete_pkce_state(valkey, state)
+    if code_verifier is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_state", "detail": "State expired or invalid"},
+        )
+
+    # Guard against missing OIDC config / httpx client (fail-fast after PKCE)
+    if oidc_config is None:
+        return JSONResponse(status_code=502, content={"error": "oidc_discovery_failed"})
+    if httpx_client is None:
+        return JSONResponse(status_code=503, content={"error": "service_unavailable"})
+
+    # 4. Exchange code for tokens at Zitadel
+    redirect_uri = f"{settings.frontend_url}/callback"
+    token_payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": settings.oidc_client_id,
+        "client_secret": settings.oidc_client_secret.get_secret_value(),
+        "code_verifier": code_verifier,
+    }
+    try:
+        token_resp = await httpx_client.post(
+            oidc_config.token_endpoint,
+            data=token_payload,
+            timeout=15.0,
+        )
+        if token_resp.status_code != 200:
+            logger.warning(
+                "token_exchange_failed",
+                action="login",
+                status=token_resp.status_code,
+                result="error",
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"error": "token_exchange_failed", "detail": "Zitadel token exchange rejected"},
+            )
+        token_data: dict[str, Any] = token_resp.json()
+    except Exception as exc:
+        logger.error("token_exchange_error", action="login", error=str(exc), result="error")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "zitadel_unreachable", "detail": "Token endpoint unreachable"},
+        )
+
+    access_token: str = token_data.get("access_token", "")
+    refresh_token_value: str = token_data.get("refresh_token", "")
+    expires_in: int = int(token_data.get("expires_in", 900))
+
+    # 5. Validate access_token signature using Zitadel JWKS
+    try:
+        unverified_header = jwt.get_unverified_header(access_token)
+        kid = unverified_header.get("kid", "default")
+        public_key = oidc_config.public_keys.get(kid) or next(iter(oidc_config.public_keys.values()), None)
+        if public_key is None:
+            raise jwt.InvalidTokenError("No matching public key found in JWKS")
+        claims: dict[str, Any] = jwt.decode(  # type: ignore[no-any-return]
+            access_token,
+            public_key,
+            algorithms=["RS256"],
+            options={"require": ["sub", "exp", "iss"]},
+            audience=settings.oidc_audience,
+            issuer=oidc_config.issuer,
+        )
+    except jwt.InvalidTokenError as exc:
+        logger.warning("access_token_invalid", action="login", result="error", reason=str(exc))
+        return JSONResponse(
+            status_code=401,
+            content={"error": "invalid_token", "detail": "Access token validation failed"},
+        )
+
+    # 6. Extract user claims
+    sub: str = claims["sub"]
+    email: str = claims.get("email", "")
+    email_verified: bool = bool(claims.get("email_verified", False))
+    preferred_username: str = claims.get("preferred_username", "")
+
+    # 7. Issue system JWT and call S1 provision endpoint
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid_internal: str = getattr(request.app.state, "rsa_kid", "default")
+
+    if private_key is None or httpx_client is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "service_unavailable", "detail": "Internal JWT signing unavailable"},
+        )
+
+    from api_gateway.jwt_utils import issue_system_jwt
+
+    system_jwt = issue_system_jwt(sub, private_key, kid_internal)
+
+    try:
+        provision_resp = await httpx_client.post(
+            f"{settings.portfolio_url}/internal/v1/users/provision",
+            json={"sub": sub, "email": email, "username": preferred_username},
+            headers={"X-Internal-JWT": system_jwt},
+            timeout=10.0,
+        )
+        if provision_resp.status_code not in (200, 201):
+            logger.error(
+                "provision_failed",
+                action="login",
+                sub=sub,
+                status=provision_resp.status_code,
+                result="error",
+            )
+            return JSONResponse(
+                status_code=503,
+                content={"error": "provision_failed", "detail": "User provisioning failed"},
+            )
+        provision_data: dict[str, Any] = provision_resp.json()
+    except Exception as exc:
+        logger.error("provision_unreachable", action="login", sub=sub, error=str(exc), result="error")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "provision_unreachable", "detail": "S1 service unreachable"},
+        )
+
+    user_id: str = provision_data["user_id"]
+    tenant_id: str = provision_data["tenant_id"]
+
+    # 8. Cache user identity in Valkey (TTL=3600)
+    try:
+        import json
+
+        await valkey.set(
+            f"auth:user:{sub}",
+            json.dumps({"user_id": user_id, "tenant_id": tenant_id}),
+            ttl=3600,
+        )
+    except Exception:  # noqa: S110 — fail-open: cache miss handled on next request
+        pass
+
+    logger.info("login_success", action="login", sub=sub, email=email, result="success")
+
+    # 9. Build response with httpOnly cookie
+    body = {
+        "access_token": access_token,
+        "expires_in": expires_in,
+        "token_type": "Bearer",
+        "user": {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "email": email,
+            "sub": sub,
+            "email_verified": email_verified,
+        },
+    }
+    response = JSONResponse(status_code=200, content=body)
+    if refresh_token_value:
+        _set_refresh_cookie(response, refresh_token_value, settings.cookie_secure)
+    return response
+
+
+@router.post("/refresh")
+async def refresh(request: Request) -> Response:
+    """Exchange httpOnly refresh_token cookie for a new access_token (F-04)."""
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    httpx_client = getattr(request.app.state, "httpx_client", None)
+
+    refresh_token_value = request.cookies.get(_COOKIE_NAME)
+    if not refresh_token_value:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "missing_refresh_token", "detail": "refresh_token cookie required"},
+        )
+
+    if oidc_config is None:
+        return JSONResponse(status_code=502, content={"error": "oidc_discovery_failed"})
+    if httpx_client is None:
+        return JSONResponse(status_code=503, content={"error": "service_unavailable"})
+
+    token_payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token_value,
+        "client_id": settings.oidc_client_id,
+        "client_secret": settings.oidc_client_secret.get_secret_value(),
+    }
+    try:
+        token_resp = await httpx_client.post(
+            oidc_config.token_endpoint,
+            data=token_payload,
+            timeout=15.0,
+        )
+        if token_resp.status_code != 200:
+            logger.warning("refresh_rejected", action="refresh", status=token_resp.status_code, result="error")
+            return JSONResponse(
+                status_code=401,
+                content={"error": "refresh_rejected", "detail": "Zitadel rejected the refresh token"},
+            )
+        token_data: dict[str, Any] = token_resp.json()
+    except Exception as exc:
+        logger.error("refresh_error", action="refresh", error=str(exc), result="error")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "zitadel_unreachable", "detail": "Token endpoint unreachable"},
+        )
+
+    new_access_token: str = token_data.get("access_token", "")
+    new_refresh_token: str = token_data.get("refresh_token", "")
+    expires_in: int = int(token_data.get("expires_in", 900))
+
+    logger.info("refresh_success", action="refresh", result="success")
+
+    response = JSONResponse(
+        status_code=200,
+        content={"access_token": new_access_token, "expires_in": expires_in, "token_type": "Bearer"},
+    )
+    if new_refresh_token:
+        _set_refresh_cookie(response, new_refresh_token, settings.cookie_secure)
+    return response
+
+
+@router.post("/logout")
+async def logout(request: Request) -> Response:
+    """Revoke refresh_token at Zitadel; clear cookie; invalidate Valkey cache (F-05)."""
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+    httpx_client = getattr(request.app.state, "httpx_client", None)
+
+    refresh_token_value = request.cookies.get(_COOKIE_NAME)
+
+    # Best-effort: revoke refresh_token at Zitadel end_session_endpoint
+    if refresh_token_value and oidc_config and httpx_client:
+        try:
+            await httpx_client.post(
+                oidc_config.end_session_endpoint,
+                data={
+                    "token": refresh_token_value,
+                    "client_id": settings.oidc_client_id,
+                    "client_secret": settings.oidc_client_secret.get_secret_value(),
+                },
+                timeout=5.0,
+            )
+        except Exception as exc:  # — best-effort; log and continue
+            logger.warning("logout_revoke_failed", action="logout", error=str(exc))
+
+    # Extract sub from Authorization header to invalidate Valkey cache
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer ") and oidc_config:
+        access_token = auth_header[7:]
+        try:
+            # Decode without verification for sub extraction only
+            unverified: dict[str, Any] = jwt.decode(  # type: ignore[no-any-return]
+                access_token,
+                options={"verify_signature": False},
+                algorithms=["RS256"],
+            )
+            sub = unverified.get("sub")
+            if sub and valkey:
+                await valkey.delete(f"auth:user:{sub}")
+        except Exception:  # noqa: S110 — best-effort; token may be expired/malformed
+            pass
+
+    logger.info("logout_success", action="logout", result="success")
+
+    response = JSONResponse(status_code=200, content={"message": "Logged out successfully"})
+    _clear_refresh_cookie(response)
+    return response
+
+
+@router.get("/me")
+async def me(request: Request) -> Response:
+    """Return current user identity from validated access_token (F-06)."""
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+    settings = request.app.state.settings
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    valkey = getattr(request.app.state, "valkey", None)
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "missing_token", "detail": "Authorization: Bearer <token> required"},
+        )
+
+    access_token = auth_header[7:]
+
+    if oidc_config is None:
+        return JSONResponse(status_code=503, content={"error": "oidc_unavailable"})
+
+    try:
+        unverified_header = jwt.get_unverified_header(access_token)
+        kid = unverified_header.get("kid", "default")
+        public_key = oidc_config.public_keys.get(kid) or next(iter(oidc_config.public_keys.values()), None)
+        if public_key is None:
+            raise jwt.InvalidTokenError("No matching public key in JWKS")
+        claims: dict[str, Any] = jwt.decode(  # type: ignore[no-any-return]
+            access_token,
+            public_key,
+            algorithms=["RS256"],
+            options={"require": ["sub", "exp", "iss"]},
+            audience=settings.oidc_audience,
+            issuer=oidc_config.issuer,
+        )
+    except jwt.InvalidTokenError as exc:
+        logger.warning("me_invalid_token", action="me", result="error", reason=str(exc))
+        return JSONResponse(
+            status_code=401,
+            content={"error": "invalid_token", "detail": "Access token validation failed"},
+        )
+
+    sub: str = claims["sub"]
+    email: str = claims.get("email", "")
+    email_verified: bool = bool(claims.get("email_verified", False))
+
+    # Look up internal identity from Valkey cache
+    user_id: str = ""
+    tenant_id: str = ""
+    if valkey:
+        try:
+            import json
+
+            cached = await valkey.get(f"auth:user:{sub}")
+            if cached:
+                user_data: dict[str, str] = json.loads(cached)
+                user_id = user_data.get("user_id", "")
+                tenant_id = user_data.get("tenant_id", "")
+        except Exception:  # noqa: S110 — fail-open on Valkey error
+            pass
+
+    logger.info("me_success", action="me", sub=sub, result="success")
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "email": email,
+            "sub": sub,
+            "email_verified": email_verified,
+        },
+    )

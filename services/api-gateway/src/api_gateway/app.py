@@ -21,6 +21,7 @@ from api_gateway.middleware import (
     SecurityHeadersMiddleware,
     add_cors,
 )
+from api_gateway.routes import auth_router
 from api_gateway.routes import router as main_router
 from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
@@ -159,8 +160,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware registration order (Starlette: last added = outermost)
-    # Outermost → innermost: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT
+    # Middleware registration order (Starlette: last added = outermost for requests)
+    # Request order: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT
+    # InternalJWT innermost (after OIDCAuth) so request.state.user is set before JWT issuance.
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
@@ -176,8 +178,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_requests=settings.rate_limit_requests,
         window_seconds=settings.rate_limit_window_seconds,
     )
-    app.add_middleware(OIDCAuthMiddleware)
-    app.add_middleware(InternalJWTIssuerMiddleware)
+    # OIDCAuth must run before InternalJWT: OIDCAuth validates token + sets request.state.user;
+    # InternalJWT then signs and attaches X-Internal-JWT using that user state.
+    # Starlette: last-added = outermost (first to receive request).
+    # So OIDCAuth is added last → outermost → runs first; InternalJWT added earlier → innermost → runs after.
+    app.add_middleware(InternalJWTIssuerMiddleware)  # innermost of this pair — runs after OIDCAuth
+    app.add_middleware(OIDCAuthMiddleware)  # outermost of this pair — runs first (last added)
 
     # Metrics endpoint
     @app.get("/metrics")
@@ -188,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Routes
     app.include_router(health_router, tags=["health"])
     app.include_router(internal_router)
+    app.include_router(auth_router)
     app.include_router(main_router)
 
     return app
