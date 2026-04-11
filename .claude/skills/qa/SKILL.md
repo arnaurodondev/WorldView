@@ -512,17 +512,129 @@ fi
 
 ---
 
-## QA Report — Final Output
+## QA Report — File Output (MANDATORY)
 
-Produce the final consolidated report combining review findings and test results:
+**Every `/qa` invocation MUST write its full report to a file.** Do NOT rely on terminal output as the sole record.
+
+### Report File Path
+
+```
+docs/audits/YYYY-MM-DD-qa-<scope-slug>-report.md
+```
+
+Where `<scope-slug>` is derived from the scope argument:
+- `--plan PLAN-0013` → `plan-0013`
+- `content-ingestion` → `content-ingestion`
+- `full` → `full`
+- (empty/changed-only) → `branch-<branch-name>`
+
+Create the directory if needed: `docs/audits/`
+
+### Per-Issue Deep Investigation (MANDATORY for all CRITICAL/BLOCKING findings)
+
+For every BLOCKING or CRITICAL finding (and optionally MAJOR), write a full investigation block. Do NOT summarise — investigate fully.
+
+Each issue block:
 
 ```markdown
-# QA Report
+## Issue F-NNN: <title>
 
-**Date**: YYYY-MM-DD
+### Summary
+<2-3 sentence description of what is wrong and where>
+
+### Severity / Confidence
+**Severity**: BLOCKING | CRITICAL | MAJOR | MINOR | NIT
+**Confidence**: HIGH | MEDIUM | LOW
+**Flagged by**: <agent names>
+
+### Root Cause Analysis
+<Deep investigation — answer ALL of the following:>
+- **What**: The exact code/config/data that is wrong (with file:line references)
+- **Why**: The chain of events that causes this — what decisions or omissions led here
+- **When**: Under what conditions the issue manifests (always? intermittently? under load?)
+- **Where**: Exact location in the architecture (domain? application? infrastructure? config?)
+- **History**: Was this recently introduced? Is it a known class of bug (BP-XXX)?
+
+### Evidence
+```
+<actual failing test output, error message, or code excerpt>
+```
+- **File**: `path/to/file.py:line_number`
+- **Related BP**: BP-XXX (if applicable)
+
+### Impact
+- **Immediate**: <what breaks or is incorrect right now>
+- **Blast radius**: <other services, tests, or systems affected>
+- **Data risk**: <data corruption, loss, or incorrectness risk>
+- **User impact**: <visible to end users? how?>
+
+### Solution Options
+
+#### Option A: <short descriptive title>
+**Description**: <clear explanation of what this solution does and how it addresses the root cause>
+**Changes required**:
+- [ ] `path/to/file.py` — <what changes and why>
+- [ ] `path/to/test.py` — <what test changes are needed>
+- [ ] `docs/...` — <what documentation must be updated>
+- [ ] `infra/...` — <any infrastructure changes>
+**Benefits (long-term)**:
+- <architectural benefit>
+- <maintainability or correctness benefit>
+**Drawbacks (long-term)**:
+- <technical debt or complexity introduced>
+- <migration cost or breaking change risk>
+**Effort**: Low | Medium | High
+**Risk**: Low | Medium | High
+
+#### Option B: <short descriptive title>
+*(same structure)*
+
+#### Option C: <short descriptive title (if applicable)>
+*(same structure)*
+
+### Recommended Option
+**Option X** — <1 sentence rationale citing the most important trade-off>
+
+### Verification Steps
+After applying the fix:
+- [ ] <specific test or command to confirm the issue is resolved>
+- [ ] <regression check — ensure nothing else broke>
+
+---
+```
+
+For MINOR and NIT findings, a shorter block is acceptable:
+
+```markdown
+## Issue F-NNN: <title> (MINOR/NIT)
+
+**Severity**: MINOR | NIT
+**File**: `path/to/file.py:line_number`
+**Issue**: <one sentence description>
+**Fix**: <one sentence or code change>
+**Auto-fixable**: YES | NO
+
+---
+```
+
+### Report File Structure
+
+Write the complete report with this structure:
+
+```markdown
+# QA Report: <scope>
+
+**Date**: YYYY-MM-DD HH:MM UTC
+**Skill**: qa
 **Scope**: <plan-scoped | service | full | changed-only>
-**Branch**: <current branch>
+**Branch**: <git branch>
 **Verdict**: PASS | PASS_WITH_WARNINGS | FAIL
+**Report file**: docs/audits/YYYY-MM-DD-qa-<scope-slug>-report.md
+
+---
+
+## Executive Summary
+<5-8 sentences: what was reviewed, what the 5 agents found, most critical issues, overall health assessment, deployment readiness>
 
 ---
 
@@ -538,26 +650,20 @@ Produce the final consolidated report combining review findings and test results
 | **Total** | — | **N** | **N** | **N** | **N** | **N** | **N** |
 
 ### Cross-Agent Signals (HIGH Confidence)
-<Issues flagged by 2+ agents independently — these are the highest-confidence findings and should be prioritized>
+<Issues flagged by 2+ agents independently>
 
 ### Fixes Applied
 | Finding | Fix | Status |
 |---------|-----|--------|
 | F-001 | Auto-fixed: ruff format | APPLIED |
-| F-005 | Added missing test | APPLIED (confirmed) |
-| ... | ... | ... |
 
 ### Decisions Made
 | Finding | Decision | Rationale |
 |---------|----------|-----------|
-| F-012 | Deferred to next wave | User decision: not blocking |
-| ... | ... | ... |
 
 ### Open Items
 | Finding | Status | Owner |
 |---------|--------|-------|
-| F-017 | Needs follow-up | User |
-| ... | ... | ... |
 
 ---
 
@@ -583,12 +689,11 @@ Produce the final consolidated report combining review findings and test results
 | market-ingestion | P/F | P/F | P/F | P/F | PASS/FAIL |
 | market-data | P/F | P/F | P/F | P/F | PASS/FAIL |
 | content-ingestion | P/F | P/F | P/F | P/F | PASS/FAIL |
-| market-analytics | P/F | P/F | P/F | P/F | PASS/FAIL |
-| nlp-enrichment | P/F | P/F | P/F | P/F | PASS/FAIL |
+| nlp-pipeline | P/F | P/F | P/F | P/F | PASS/FAIL |
 | knowledge-graph | P/F | P/F | P/F | P/F | PASS/FAIL |
-| rag-query | P/F | P/F | P/F | P/F | PASS/FAIL |
+| rag-chat | P/F | P/F | P/F | P/F | PASS/FAIL |
 | api-gateway | P/F | P/F | P/F | P/F | PASS/FAIL |
-| alert-delivery | P/F | P/F | P/F | P/F | PASS/FAIL |
+| alert | P/F | P/F | P/F | P/F | PASS/FAIL |
 | intelligence-migrations | P/F | P/F | P/F | P/F | PASS/FAIL |
 
 ### Per-Library Breakdown
@@ -615,17 +720,18 @@ Produce the final consolidated report combining review findings and test results
 
 ---
 
-## Failures Detail
-<For each failure: test name, error message, likely cause, suggested fix>
+## Issues — Full Investigation
 
-## Warnings
-<Documentation staleness, skipped layers, non-critical issues>
+*(One full investigation block per BLOCKING/CRITICAL issue using the format above.
+ Shorter block for MAJOR/MINOR/NIT.)*
+
+---
 
 ## Recommendations
-- <Specific fixes needed before merge/release>
-- <Test gaps identified — consider invoking `/test-feature`>
-- <Documentation updates needed>
+- <Priority-ordered, actionable list of next steps>
 ```
+
+After writing the file, output to terminal: `Report written to: docs/audits/YYYY-MM-DD-qa-<scope-slug>-report.md`
 
 ---
 

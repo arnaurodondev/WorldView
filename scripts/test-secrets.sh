@@ -39,8 +39,8 @@ if [[ ! -d "$SECRET_DIR" ]]; then
     exit 0
 fi
 
-FILES=("$SECRET_DIR"/*.yaml 2>/dev/null || true)
-if [[ ${#FILES[@]} -eq 0 ]] || [[ ! -f "${FILES[0]}" ]]; then
+mapfile -t FILES < <(find "$SECRET_DIR" -maxdepth 1 -name "*.yaml" 2>/dev/null)
+if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "No secret files found in $SECRET_DIR — nothing to test."
     exit 0
 fi

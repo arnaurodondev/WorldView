@@ -74,16 +74,20 @@ def service_url(host: str, port: int) -> str:
 @pytest.mark.e2e
 @pytest.mark.parametrize("name,host,port", SERVICES, ids=[s[0] for s in SERVICES])
 async def test_service_health_endpoint(name: str, host: str, port: int) -> None:
-    """Every service must return HTTP 200 from GET /health with a 'status' field."""
+    """Every service must return HTTP 200 from GET /healthz with a 'status' field.
+
+    All worldview services expose /healthz (not /health) as the canonical liveness probe.
+    This matches the Kubernetes liveness probe path in the Helm chart (PRD-0024 §6.4).
+    """
     if not is_port_open(host, port):
         pytest.skip(f"{name} not reachable at {host}:{port}")
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-        resp = await client.get(f"{service_url(host, port)}/health")
+        resp = await client.get(f"{service_url(host, port)}/healthz")
 
-    assert resp.status_code == 200, f"{name} /health returned {resp.status_code}: {resp.text[:200]}"
+    assert resp.status_code == 200, f"{name} /healthz returned {resp.status_code}: {resp.text[:200]}"
     body = resp.json()
-    assert "status" in body, f"{name} /health response missing 'status' field: {body}"
+    assert "status" in body, f"{name} /healthz response missing 'status' field: {body}"
 
 
 @pytest.mark.e2e
@@ -146,7 +150,7 @@ async def test_api_gateway_health() -> None:
         pytest.skip("API Gateway not reachable at localhost:8000")
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-        resp = await client.get("http://localhost:8000/health")
+        resp = await client.get("http://localhost:8000/healthz")
 
     assert resp.status_code == 200
     body = resp.json()
