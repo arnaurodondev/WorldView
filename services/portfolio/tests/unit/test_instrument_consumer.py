@@ -111,6 +111,14 @@ class FakeUoW(UnitOfWork):
     def entity_suppressions(self):
         return MagicMock()
 
+    @property
+    def brokerage_connections(self):
+        return MagicMock()
+
+    @property
+    def brokerage_sync_errors(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 

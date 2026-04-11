@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
+    from portfolio.domain.entities.brokerage_connection import BrokerageConnection
+    from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
 
@@ -239,3 +241,39 @@ class EntitySuppressionRepository(ABC):
 
     @abstractmethod
     async def delete(self, user_id: UUID, entity_id: UUID) -> None: ...
+
+
+class BrokerageConnectionRepository(ABC):
+    @abstractmethod
+    async def get(self, connection_id: UUID, tenant_id: UUID) -> BrokerageConnection | None: ...
+
+    @abstractmethod
+    async def get_by_user(self, connection_id: UUID, user_id: UUID, tenant_id: UUID) -> BrokerageConnection | None:
+        """Ownership-checked lookup: returns None if connection exists but belongs to a different user."""
+        ...
+
+    @abstractmethod
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        tenant_id: UUID,
+        portfolio_id: UUID | None = None,
+    ) -> list[BrokerageConnection]: ...
+
+    @abstractmethod
+    async def list_active_or_error(self) -> list[BrokerageConnection]:
+        """Return all connections with status 'active' or 'error' (worker-scoped, no tenant filter)."""
+        ...
+
+    @abstractmethod
+    async def save(self, connection: BrokerageConnection) -> None:
+        """INSERT or UPDATE (upsert on id)."""
+        ...
+
+
+class BrokerageTransactionSyncErrorRepository(ABC):
+    @abstractmethod
+    async def save(self, error: BrokerageTransactionSyncError) -> None: ...
+
+    @abstractmethod
+    async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]: ...

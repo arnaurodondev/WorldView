@@ -78,6 +78,13 @@ class Settings(BaseSettings):
         default="http://localhost:5173/portfolio/brokerage/callback",
         validation_alias=AliasChoices("SNAPTRADE_REDIRECT_URI", "PORTFOLIO_SNAPTRADE_REDIRECT_URI"),
     )
+    snaptrade_secret_encryption_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SNAPTRADE_SECRET_ENCRYPTION_KEY",
+            "PORTFOLIO_SNAPTRADE_SECRET_ENCRYPTION_KEY",
+        ),
+    )
     brokerage_sync_cycle_seconds: int = 14400  # 4 hours
     brokerage_sync_history_days: int = 730  # 2 years initial import
 
@@ -126,6 +133,15 @@ class Settings(BaseSettings):
                 message=(
                     "SNAPTRADE_CLIENT_ID is not set — brokerage connection endpoints will fail. "
                     "Set this env var to enable SnapTrade brokerage sync."
+                ),
+            )
+        if not self.snaptrade_secret_encryption_key:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_snaptrade_encryption_key",
+                message=(
+                    "SNAPTRADE_SECRET_ENCRYPTION_KEY is not set — snaptrade_user_secret will be "
+                    "stored in plaintext (dev mode only). Generate a key with: "
+                    'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
                 ),
             )
         return self

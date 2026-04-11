@@ -244,6 +244,14 @@ class FakeUoW(UnitOfWork):
     def entity_suppressions(self):
         return None
 
+    @property
+    def brokerage_connections(self):
+        return None
+
+    @property
+    def brokerage_sync_errors(self):
+        return None
+
     commit_count: int = 0
 
     async def commit(self) -> None:

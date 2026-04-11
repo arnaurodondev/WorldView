@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradeUser
 from portfolio.application.ports.repositories import (
     AlertPreferenceRepository,
+    BrokerageConnectionRepository,
+    BrokerageTransactionSyncErrorRepository,
     EntitySuppressionRepository,
     HoldingRepository,
     IdempotencyRepository,
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
+    from portfolio.domain.entities.brokerage_connection import BrokerageConnection
+    from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
 
@@ -319,6 +323,58 @@ class FakeEntitySuppressionRepository(EntitySuppressionRepository):
         self._store.pop((user_id, entity_id), None)
 
 
+class FakeBrokerageConnectionRepository(BrokerageConnectionRepository):
+    """In-memory brokerage connection store."""
+
+    def __init__(self) -> None:
+        self._store: dict[UUID, BrokerageConnection] = {}
+
+    async def get(self, connection_id: UUID, tenant_id: UUID) -> BrokerageConnection | None:
+        c = self._store.get(connection_id)
+        if c is None or c.tenant_id != tenant_id:
+            return None
+        return c
+
+    async def get_by_user(self, connection_id: UUID, user_id: UUID, tenant_id: UUID) -> BrokerageConnection | None:
+        c = self._store.get(connection_id)
+        if c is None or c.user_id != user_id or c.tenant_id != tenant_id:
+            return None
+        return c
+
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        tenant_id: UUID,
+        portfolio_id: UUID | None = None,
+    ) -> list[BrokerageConnection]:
+        results = [c for c in self._store.values() if c.user_id == user_id and c.tenant_id == tenant_id]
+        if portfolio_id is not None:
+            results = [c for c in results if c.portfolio_id == portfolio_id]
+        return sorted(results, key=lambda c: c.created_at, reverse=True)
+
+    async def list_active_or_error(self) -> list[BrokerageConnection]:
+        from portfolio.domain.enums import ConnectionStatus
+
+        return [c for c in self._store.values() if c.status in (ConnectionStatus.ACTIVE, ConnectionStatus.ERROR)]
+
+    async def save(self, connection: BrokerageConnection) -> None:
+        self._store[connection.id] = connection
+
+
+class FakeBrokerageTransactionSyncErrorRepository(BrokerageTransactionSyncErrorRepository):
+    """In-memory sync error store (append-only)."""
+
+    def __init__(self) -> None:
+        self._store: list[BrokerageTransactionSyncError] = []
+
+    async def save(self, error: BrokerageTransactionSyncError) -> None:
+        self._store.append(error)
+
+    async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]:
+        results = [e for e in self._store if e.connection_id == connection_id]
+        return sorted(results, key=lambda e: e.created_at, reverse=True)[:limit]
+
+
 class FakeBrokerageClient:
     """In-memory brokerage client for unit and integration tests.
 
@@ -398,6 +454,8 @@ class FakeUnitOfWork(UnitOfWork):
         self._watchlist_members = FakeWatchlistMemberRepository(watchlist_store=self._watchlists._store)
         self._alert_preferences = FakeAlertPreferenceRepository()
         self._entity_suppressions = FakeEntitySuppressionRepository()
+        self._brokerage_connections = FakeBrokerageConnectionRepository()
+        self._brokerage_sync_errors = FakeBrokerageTransactionSyncErrorRepository()
         self.committed = False
         self.rolled_back = False
         self.commit_count = 0
@@ -449,6 +507,14 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def entity_suppressions(self) -> FakeEntitySuppressionRepository:
         return self._entity_suppressions
+
+    @property
+    def brokerage_connections(self) -> FakeBrokerageConnectionRepository:
+        return self._brokerage_connections
+
+    @property
+    def brokerage_sync_errors(self) -> FakeBrokerageTransactionSyncErrorRepository:
+        return self._brokerage_sync_errors
 
     async def commit(self) -> None:
         self.committed = True

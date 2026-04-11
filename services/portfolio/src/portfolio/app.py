@@ -87,13 +87,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.read_engine = read_engine
 
-    # 5. Create Valkey client for watchlist reverse-index cache
+    # 5. Build SnapTrade Fernet cipher (AD-3 — encrypt snaptrade_user_secret at rest).
+    # If the key is empty (dev mode), cipher is None and secrets are stored as plaintext.
+    if settings.snaptrade_secret_encryption_key:
+        from cryptography.fernet import Fernet  # type: ignore[import-untyped]
+
+        app.state.snaptrade_cipher = Fernet(settings.snaptrade_secret_encryption_key.encode())
+    else:
+        app.state.snaptrade_cipher = None
+
+    # 6. Create Valkey client for watchlist reverse-index cache
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
     valkey_client = ValkeyClient(url=settings.valkey_url)
     app.state.valkey_client = valkey_client
 
-    # 6. Create outbox dispatcher
+    # 7. Create outbox dispatcher
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     dispatcher = create_dispatcher(settings, write_factory)

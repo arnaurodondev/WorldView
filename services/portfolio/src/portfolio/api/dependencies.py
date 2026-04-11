@@ -20,7 +20,8 @@ async def get_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
     from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
     session_factory = request.app.state.session_factory
-    async with SqlAlchemyUnitOfWork(session_factory) as uow:
+    cipher = getattr(request.app.state, "snaptrade_cipher", None)
+    async with SqlAlchemyUnitOfWork(session_factory, snaptrade_cipher=cipher) as uow:
         yield uow
 
 
