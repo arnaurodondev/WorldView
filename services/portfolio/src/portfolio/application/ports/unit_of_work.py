@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
+        BrokerageConnectionRepository,
+        BrokerageTransactionSyncErrorRepository,
         EntitySuppressionRepository,
         HoldingRepository,
         IdempotencyRepository,
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
 
 
 class UnitOfWork(ABC):
-    """Abstract unit of work providing access to all 8 repositories."""
+    """Abstract unit of work providing access to all repositories."""
 
     @property
     @abstractmethod
@@ -72,6 +74,14 @@ class UnitOfWork(ABC):
     @property
     @abstractmethod
     def entity_suppressions(self) -> EntitySuppressionRepository: ...
+
+    @property
+    @abstractmethod
+    def brokerage_connections(self) -> BrokerageConnectionRepository: ...
+
+    @property
+    @abstractmethod
+    def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository: ...
 
     @abstractmethod
     async def commit(self) -> None: ...

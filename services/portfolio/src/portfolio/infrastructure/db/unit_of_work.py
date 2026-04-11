@@ -10,6 +10,10 @@ from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
     SqlAlchemyEntitySuppressionRepository,
 )
+from portfolio.infrastructure.db.repositories.brokerage_connection import SqlAlchemyBrokerageConnectionRepository
+from portfolio.infrastructure.db.repositories.brokerage_sync_error import (
+    SqlAlchemyBrokerageTransactionSyncErrorRepository,
+)
 from portfolio.infrastructure.db.repositories.holding import SqlAlchemyHoldingRepository
 from portfolio.infrastructure.db.repositories.idempotency import SqlAlchemyIdempotencyRepository
 from portfolio.infrastructure.db.repositories.instrument import SqlAlchemyInstrumentRepository
@@ -26,10 +30,13 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from cryptography.fernet import Fernet
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
+        BrokerageConnectionRepository,
+        BrokerageTransactionSyncErrorRepository,
         EntitySuppressionRepository,
         HoldingRepository,
         IdempotencyRepository,
@@ -58,9 +65,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self,
         session_factory: async_sessionmaker[AsyncSession],
         on_commit: Callable[[], None] | None = None,
+        snaptrade_cipher: Fernet | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._on_commit = on_commit
+        self._snaptrade_cipher = snaptrade_cipher
         self._session: AsyncSession | None = None
         self._tenants: SqlAlchemyTenantRepository | None = None
         self._users: SqlAlchemyUserRepository | None = None
@@ -74,6 +83,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._watchlist_members: SqlAlchemyWatchlistMemberRepository | None = None
         self._alert_preferences: SqlAlchemyAlertPreferenceRepository | None = None
         self._entity_suppressions: SqlAlchemyEntitySuppressionRepository | None = None
+        self._brokerage_connections: SqlAlchemyBrokerageConnectionRepository | None = None
+        self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -89,6 +100,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._watchlist_members = SqlAlchemyWatchlistMemberRepository(self._session)
         self._alert_preferences = SqlAlchemyAlertPreferenceRepository(self._session)
         self._entity_suppressions = SqlAlchemyEntitySuppressionRepository(self._session)
+        self._brokerage_connections = SqlAlchemyBrokerageConnectionRepository(
+            self._session, cipher=self._snaptrade_cipher
+        )
+        self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -172,6 +187,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entity_suppressions(self) -> EntitySuppressionRepository:
         assert self._entity_suppressions is not None, "UnitOfWork not entered"
         return self._entity_suppressions
+
+    @property
+    def brokerage_connections(self) -> BrokerageConnectionRepository:
+        assert self._brokerage_connections is not None, "UnitOfWork not entered"
+        return self._brokerage_connections
+
+    @property
+    def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository:
+        assert self._brokerage_sync_errors is not None, "UnitOfWork not entered"
+        return self._brokerage_sync_errors
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"

@@ -3,7 +3,7 @@
 > **PRD**: [PRD-0022](../specs/0022-snaptrade-brokerage-sync.md)
 > **Status**: in-progress
 > **Created**: 2026-04-09
-> **Updated**: 2026-04-10
+> **Updated**: 2026-04-11
 > **Services affected**: S1 (Portfolio), S9 (API Gateway), Frontend
 
 ---
@@ -586,11 +586,12 @@ Wraps `snaptrade-python-sdk` to implement `IBrokerageClient`. All SnapTrade SDK 
 
 ---
 
-### Wave B-2: Brokerage Repositories + UoW Extension
+### Wave B-2: Brokerage Repositories + UoW Extension ✅
 
 **Goal**: Implement repository ports and SQLAlchemy implementations for both new tables, and extend the UnitOfWork.
 **Depends on**: Wave A-2 (ORM models + migration exist)
 **Estimated effort**: 45–60 minutes
+**Status**: **DONE** — 2026-04-11 · 401 unit tests pass · ruff + mypy clean
 **Architecture layer**: application/ports + infrastructure/db/repositories
 
 #### Pre-read (agent must read before starting)
@@ -741,9 +742,9 @@ def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository: ...
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/application/ports/ services/portfolio/src/portfolio/infrastructure/db/repositories/brokerage*.py services/portfolio/src/portfolio/infrastructure/db/unit_of_work.py` passes
-- [ ] `mypy services/portfolio/src/portfolio/` passes (UoW abstract methods fully satisfied)
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass (no regressions from UoW extension)
+- [x] `ruff check services/portfolio/src/portfolio/application/ports/ services/portfolio/src/portfolio/infrastructure/db/repositories/brokerage*.py services/portfolio/src/portfolio/infrastructure/db/unit_of_work.py` passes
+- [x] `mypy services/portfolio/src/portfolio/` passes (UoW abstract methods fully satisfied)
+- [x] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass (401 pass, no regressions from UoW extension)
 
 #### Regression Guardrails
 - **BP-032**: `save()` in `BrokerageConnectionRepository` uses `ON CONFLICT (id) DO UPDATE ... RETURNING` — verify the upsert returns the persisted entity
