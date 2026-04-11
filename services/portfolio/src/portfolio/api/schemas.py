@@ -304,3 +304,60 @@ class PortfolioContextResponse(BaseModel):
     holdings: list[HoldingContextItem]
     watchlist: list[WatchlistContextItem]
     total_positions: int
+
+
+# ── Brokerage connection schemas (PRD-0022 §6.2) ─────────────────────────────
+
+
+class InitiateBrokerageConnectionRequest(BaseModel):
+    portfolio_id: UUID
+    snaptrade_tos_accepted: bool
+
+    @field_validator("snaptrade_tos_accepted")
+    @classmethod
+    def validate_tos_accepted(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("You must accept SnapTrade's End User Terms of Service")
+        return v
+
+
+class InitiateBrokerageConnectionResponse(BaseModel):
+    connection_id: UUID
+    redirect_uri: str
+
+
+class BrokerageConnectionResponse(BaseModel):
+    connection_id: UUID
+    portfolio_id: UUID
+    brokerage_name: str | None
+    status: str  # pending/active/error/disconnected
+    last_synced_at: datetime | None
+    created_at: datetime
+
+
+class ListBrokerageConnectionsResponse(BaseModel):
+    items: list[BrokerageConnectionResponse]
+
+
+class ActivateBrokerageConnectionResponse(BaseModel):
+    status: str
+    connection_id: UUID
+
+
+class DisconnectBrokerageConnectionResponse(BaseModel):
+    status: str  # "disconnected"
+
+
+class SyncErrorResponse(BaseModel):
+    # raw_transaction intentionally excluded — contains sensitive brokerage data (see PRD §6.4 privacy note)
+    # resolved_at excluded: no code path in this plan sets it (reserved for future AcknowledgeSyncError use case)
+    id: UUID
+    connection_id: UUID
+    snaptrade_transaction_id: str
+    error_type: str
+    error_detail: str | None
+    created_at: datetime
+
+
+class GetSyncErrorsResponse(BaseModel):
+    items: list[SyncErrorResponse]
