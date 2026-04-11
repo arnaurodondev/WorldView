@@ -1,0 +1,22 @@
+#cloud-config
+# cloud-init for k3s worker nodes
+# Templated by OpenTofu — k3s_token and cp_private_ip are substituted at apply time
+
+package_update: true
+packages:
+  - curl
+  - socat
+  - conntrack
+  - netcat-openbsd
+
+runcmd:
+  # Wait until the control-plane API is reachable on the private network
+  - until nc -z ${cp_private_ip} 6443; do sleep 5; done
+
+  # Join the cluster as an agent (worker)
+  - |
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="v1.31.4+k3s1" \
+      K3S_URL="https://${cp_private_ip}:6443" \
+      K3S_TOKEN="${k3s_token}" \
+      sh -s - agent

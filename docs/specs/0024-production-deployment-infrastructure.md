@@ -3,7 +3,7 @@ id: PRD-0024
 title: Production Deployment Infrastructure — Complete Runbook
 status: draft
 created: 2026-04-09
-updated: 2026-04-09
+updated: 2026-04-11
 authors: [arnau]
 ---
 
@@ -46,8 +46,12 @@ Before the thesis evaluation deadline the platform must:
 - Provider: `hcloud` v≥1.49 (`registry.opentofu.org/providers/hetznercloud/hcloud`)
 - Resources: servers, private network, firewall, floating IP, SSH key, volumes
 - Reproducible: `tofu apply` on fresh checkout → identical cluster
-- State file: local `.tfstate` committed to `infra/tofu/` (acceptable for single developer)
-  - Alternative: Hetzner Object Storage backend (deferred, OQ-003)
+- **State backend: Hetzner Object Storage S3-compatible** (`OQ-003 resolved`)
+  - Bucket: `worldview-tfstate` in `nbg1` (create manually before `tofu init`)
+  - Endpoint: `https://nbg1.your-objectstorage.com`
+  - Credentials: local `~/.config/tofu/hetzner-s3.tfbackend` (gitignored)
+  - Init: `tofu init -backend-config=~/.config/tofu/hetzner-s3.tfbackend`
+  - Cost: ~€2/month for <1 GB state file
 
 ### F-02 Kubernetes Cluster (k3s)
 - k3s v1.31.x, 3 nodes, installed via cloud-init (Terraform provisioner)
@@ -88,10 +92,38 @@ Before the thesis evaluation deadline the platform must:
 - Age private key stored as GitHub Actions secret `SOPS_AGE_KEY` only
 - ArgoCD `helm-secrets` plugin decrypts at sync time
 
-### F-09 CI/CD (GitHub Actions → ghcr.io → ArgoCD)
-- On push to `main`: build changed service images → push to `ghcr.io` → commit updated image tags
-- ArgoCD detects changed tags → rolling update
+### F-09 CI/CD (GitHub Actions → ghcr.io → worldview-gitops PR → ArgoCD)
+- Tests run on every push and PR via `.github/workflows/ci.yml` (existing)
+- On push to `main`: `.github/workflows/deploy.yml` builds changed service images → pushes to `ghcr.io/<user>/worldview-<svc>:<sha>` → opens 1 PR per changed service to `worldview-gitops`
+- Developer reviews PR (diff is always just `image.tag: <sha>`) → merge → ArgoCD applies rolling update
+- Additionally, **ArgoCD Image Updater** watches `ghcr.io` and can automatically commit image tag updates to `worldview-gitops` when new images are pushed
 - Frontend: Vercel GitHub integration (auto-deploys on `apps/frontend/**` change)
+
+### F-13 GitOps PR Review Gate
+- Every deployment to the cluster is gated behind a human-reviewed PR to `worldview-gitops`
+- **1 PR per changed service**: if 3 services change in one push, 3 separate PRs are opened
+- PRs are idempotent: opening the same PR twice is a no-op (guarded by branch check)
+- CI in `worldview-gitops` validates every PR: Helm lint, kubeconform, SOPS encryption check
+- Branch protection on `worldview-gitops/main`: 1 approving review required (manual setup — GitHub Free does not support branch protection on private repos; consider making the repo public for this feature)
+
+### F-14 Two-Repo GitOps Architecture
+- **`worldview` repo** (this repo): service code, libs, Dockerfiles, OpenTofu HCL, CI workflows
+- **`worldview-gitops` repo** (private): Helm charts, ArgoCD Application specs, per-service values, SOPS-encrypted secrets, cluster manifests
+- ArgoCD's `repoURL` points exclusively at `worldview-gitops`
+- Separation enforces: no app developer can deploy without a GitOps PR; audit trail for every cluster change
+
+### F-15 ArgoCD Image Updater
+- ArgoCD Image Updater (chart version `0.11.2`) deployed in the `argocd` namespace
+- Watches `ghcr.io/arnaurodondev/worldview-*` for new tags
+- Write-back mode: `git` — commits image tag updates directly to `worldview-gitops/values/<svc>.yaml`
+- Can be reconfigured to PR mode instead of direct commit (set `argocd-image-updater.argoproj.io/git-branch` annotation)
+- Requires: ghcr.io credentials Secret in `argocd` namespace
+
+### F-16 Renovate Bot (Dependency Updates)
+- Renovate configured via `worldview-gitops/renovate.json`
+- Automatically opens PRs when new Helm chart versions are available (Bitnami, Traefik, cert-manager, etc.)
+- 1 PR per chart (matching production-grade single-service PR convention)
+- Requires: Renovate GitHub App installed on `worldview-gitops` repo
 
 ### F-10 Frontend (Vercel)
 - `apps/frontend/` deployed to Vercel
@@ -1159,21 +1191,85 @@ kubectl -n argocd create secret generic sops-age-key \
 
 ---
 
-### §6.7 ArgoCD App-of-Apps
+### §6.7 Two-Repo GitOps Architecture
 
-**Root Application** (`infra/argocd/root-app.yaml`):
+**This section defines the authoritative repository split** (revision 2026-04-11).
+
+#### §6.7.1 Repository Split
+
+| Repository | URL | Visibility | Contents |
+|------------|-----|------------|---------|
+| `worldview` | `github.com/arnaurodondev/WorldView` | Private | Service code, libs, Dockerfiles, OpenTofu HCL, CI workflows |
+| `worldview-gitops` | `github.com/arnaurodondev/worldview-gitops` | **Private** | Helm charts, ArgoCD Application specs, per-service values, SOPS secrets, cluster manifests |
+
+**Why separate?**
+- Clear separation: app code changes (CI tests) vs. deployment changes (GitOps review)
+- Different access control: `worldview-gitops` can have stricter write restrictions
+- Audit trail: every cluster state change has a PR with explicit approval
+- GitOps invariant: cluster state always matches the last merged commit to `worldview-gitops`
+
+#### §6.7.2 worldview-gitops Structure
+
+```
+worldview-gitops/
+├── apps/                    # ArgoCD Application specs (App-of-Apps)
+│   ├── root-app.yaml        # ← apply once to bootstrap (points to this repo)
+│   ├── argocd-image-updater.yaml
+│   ├── infra-kafka.yaml
+│   ├── infra-postgres.yaml  # prune=false — never auto-delete Postgres
+│   ├── infra-schema-registry.yaml
+│   ├── infra-minio.yaml
+│   ├── infra-valkey.yaml
+│   ├── infra-ollama.yaml    # raw manifests from manifests/
+│   ├── monitoring.yaml      # kube-prometheus-stack + Loki + Tempo
+│   ├── traefik.yaml
+│   ├── cert-manager.yaml
+│   ├── worldview-portfolio.yaml
+│   ├── worldview-market-ingestion.yaml
+│   ├── worldview-market-data.yaml
+│   ├── worldview-content-ingestion.yaml
+│   ├── worldview-content-store.yaml
+│   ├── worldview-nlp-pipeline.yaml
+│   ├── worldview-knowledge-graph.yaml
+│   ├── worldview-rag-chat.yaml
+│   ├── worldview-api-gateway.yaml
+│   └── worldview-alert.yaml
+├── charts/
+│   └── worldview-service/   # Generic Helm chart (all 10 services)
+├── values/                  # Per-service values (image.tag bumped by CI)
+│   ├── portfolio.yaml
+│   └── ... (10 files)
+├── secrets/                 # SOPS+Age encrypted Kubernetes Secrets
+│   └── README.md
+├── k8s/
+│   ├── argocd/argocd-values.yaml   # ArgoCD Helm values (helm-secrets plugin)
+│   ├── cert-manager/cluster-issuers.yaml
+│   └── ingress/                    # Traefik Ingress + middleware
+├── manifests/               # Raw Kubernetes YAMLs (Ollama, GLiNER)
+├── bootstrap/
+│   ├── setup.sh             # Full cluster bootstrap script
+│   └── generate-secrets.sh  # Generate + encrypt all secrets
+└── renovate.json
+```
+
+#### §6.7.3 ArgoCD Root Application (apply once to bootstrap)
+
 ```yaml
+# worldview-gitops/apps/root-app.yaml
+# This is the ONLY manifest applied manually. Everything else is managed by ArgoCD.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: worldview-root
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: https://github.com/<GITHUB_USER>/worldview
+    repoURL: https://github.com/arnaurodondev/worldview-gitops
     targetRevision: main
-    path: infra/argocd/apps
+    path: apps
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -1181,49 +1277,39 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
 ```
 
-**App directory structure** (`infra/argocd/apps/`):
-```
-infra/argocd/apps/
-├── infra-kafka.yaml
-├── infra-schema-registry.yaml
-├── infra-postgres.yaml
-├── infra-minio.yaml
-├── infra-valkey.yaml
-├── infra-ollama.yaml          # raw manifest
-├── monitoring.yaml
-├── traefik.yaml
-├── cert-manager.yaml
-├── worldview-portfolio.yaml
-├── worldview-market-ingestion.yaml
-├── worldview-market-data.yaml
-├── worldview-content-ingestion.yaml
-├── worldview-content-store.yaml
-├── worldview-nlp-pipeline.yaml
-├── worldview-knowledge-graph.yaml
-├── worldview-rag-chat.yaml
-├── worldview-api-gateway.yaml
-└── worldview-alert.yaml
-```
+#### §6.7.4 Service Application Example
 
-**Example — `worldview-portfolio.yaml`:**
+Each worldview Application in `apps/worldview-*.yaml` follows this pattern:
+
 ```yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: worldview-portfolio
   namespace: argocd
+  annotations:
+    # ArgoCD Image Updater watches ghcr.io and commits tag bumps to values/portfolio.yaml
+    argocd-image-updater.argoproj.io/image-list: "img=ghcr.io/arnaurodondev/worldview-portfolio"
+    argocd-image-updater.argoproj.io/img.update-strategy: latest
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/write-back-target: "helmvalues:values/portfolio.yaml"
+    argocd-image-updater.argoproj.io/img.helm.image-tag: image.tag
+    argocd-image-updater.argoproj.io/git-branch: "image-update/portfolio"
 spec:
   project: default
   source:
-    repoURL: https://github.com/<GITHUB_USER>/worldview
+    repoURL: https://github.com/arnaurodondev/worldview-gitops
     targetRevision: main
-    path: infra/helm/worldview-service
+    path: charts/worldview-service
     helm:
+      releaseName: portfolio
       valueFiles:
-        - secrets+age-import:///sops-age/key.txt?../values/portfolio.yaml
-        - secrets+age-import:///sops-age/key.txt?../../k8s/secrets/portfolio-secrets.yaml
+        - ../../values/portfolio.yaml
+        - secrets+age-import:///sops-age/key.txt?../../secrets/portfolio-secrets.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: worldview
@@ -1234,6 +1320,102 @@ spec:
     syncOptions:
       - CreateNamespace=true
 ```
+
+#### §6.7.5 ArgoCD Repository Credentials (worldview-gitops is private)
+
+ArgoCD must authenticate to pull from `worldview-gitops`. Configure during bootstrap:
+
+**Option A — GitHub PAT (simpler):**
+```bash
+argocd repo add https://github.com/arnaurodondev/worldview-gitops \
+  --username git \
+  --password <GITHUB_PAT_WITH_REPO_READ>
+```
+
+**Option B — Deploy Key (SSH, more secure):**
+```bash
+# Generate a deploy key for worldview-gitops
+ssh-keygen -t ed25519 -C "argocd@worldview" -f ~/.ssh/argocd-gitops -N ""
+
+# Add the PUBLIC key to worldview-gitops → Settings → Deploy keys (read-only)
+cat ~/.ssh/argocd-gitops.pub
+
+# Register the PRIVATE key with ArgoCD
+argocd repo add git@github.com:arnaurodondev/worldview-gitops.git \
+  --ssh-private-key-path ~/.ssh/argocd-gitops \
+  --insecure-skip-server-verification
+```
+
+**Recommended**: Option B (Deploy Key) — the PAT can access all repos; the deploy key is scoped to `worldview-gitops` only.
+
+#### §6.7.6 ArgoCD Image Updater Setup
+
+ArgoCD Image Updater is deployed as a Helm chart (see `apps/argocd-image-updater.yaml`). It requires:
+
+**1. ghcr.io credentials secret in `argocd` namespace:**
+```bash
+# Create a GitHub PAT with read:packages scope
+kubectl -n argocd create secret generic argocd-image-updater-secret \
+  --from-literal=.dockerconfigjson="$(echo -n '{"auths":{"ghcr.io":{"auth":"'"$(echo -n 'arnaurodondev:<GITHUB_PAT>' | base64)"'"}}}' )"
+
+# Label it for Image Updater to find
+kubectl -n argocd label secret argocd-image-updater-secret \
+  app.kubernetes.io/part-of=argocd-image-updater
+```
+
+**2. Write-back credentials** (for Image Updater to commit to worldview-gitops):
+
+The Image Updater reuses ArgoCD's repository credentials automatically. If the gitops repo is already registered with ArgoCD (§6.7.5), no extra setup is needed.
+
+**Behavior**: When a new image is pushed to ghcr.io, Image Updater detects it (within 2 minutes), updates `values/<svc>.yaml` with the new tag, and commits directly to `worldview-gitops/main` (or a branch — configured via annotation). ArgoCD then syncs the cluster.
+
+**Note**: Image Updater and the GitHub Actions bump-image-tag workflow do the same thing. Use **one or the other**, not both, to avoid conflicts:
+- **Image Updater only** (fully automated, no PR review)
+- **GitHub Actions bump-image-tag** (PR review gate — recommended for thesis)
+
+To disable Image Updater write-back and use GitHub Actions only:
+remove the `argocd-image-updater.argoproj.io/write-back-method` annotations from `apps/worldview-*.yaml`.
+
+#### §6.7.7 GitHub Actions CI Workflow — GitHub App Setup (bump-image-tag)
+
+The `deploy.yml` workflow uses a **GitHub App** to open PRs on `worldview-gitops`. This is preferred over a PAT because:
+- Token is short-lived (1 hour)
+- Scoped to `worldview-gitops` only
+- PRs show as opened by "worldview-deploy-bot[bot]" (traceable)
+
+**One-time GitHub App creation:**
+
+1. Go to `GitHub.com → Settings → Developer settings → GitHub Apps → New GitHub App`
+2. Set:
+   - Name: `worldview-deploy-bot`
+   - Homepage URL: `https://github.com/arnaurodondev/WorldView`
+   - Webhook: disabled
+   - Permissions:
+     - `Repository: Contents` → **Read & write**
+     - `Repository: Pull requests` → **Read & write**
+     - `Repository: Metadata` → Read-only
+3. Click **Create GitHub App** → note the App ID (numeric)
+4. Scroll to **Private keys** → Generate a private key → download `worldview-deploy-bot.YYYY-MM-DD.private-key.pem`
+5. Install the App on `worldview-gitops` only:
+   - App page → Install App → Only select repositories → `worldview-gitops`
+
+**Store secrets in the `WorldView` repo:**
+```bash
+# Add App ID
+gh secret set GITOPS_APP_ID --repo arnaurodondev/WorldView --body "<APP_ID>"
+
+# Add base64-encoded private key
+cat worldview-deploy-bot.*.pem | base64 | tr -d '\n' | \
+  gh secret set GITOPS_APP_PRIVATE_KEY --repo arnaurodondev/WorldView
+```
+
+**Required secrets in `WorldView` repo:**
+
+| Secret | Value | Purpose |
+|--------|-------|---------|
+| `GITOPS_APP_ID` | Numeric App ID | GitHub App token generation |
+| `GITOPS_APP_PRIVATE_KEY` | base64(PEM file) | GitHub App token generation |
+| `GITHUB_TOKEN` | Auto-provided | ghcr.io image push |
 
 **Example — `infra-kafka.yaml`:**
 ```yaml
@@ -1343,117 +1525,113 @@ spec:
 
 ### §6.8 CI/CD — GitHub Actions
 
-**File**: `.github/workflows/ci.yaml`
+The CI/CD pipeline is split across two workflow files:
 
-```yaml
-name: CI/CD
+| File | Trigger | Purpose |
+|------|---------|---------|
+| `.github/workflows/ci.yml` | Every push + PR | Lint + unit tests — gate before merge |
+| `.github/workflows/deploy.yml` | Push to `main` only | Build images → push to ghcr.io → open PR to `worldview-gitops` |
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+#### §6.8.1 Docker Image Tagging (no manual step required)
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+**You never need to create a tag manually.** The deploy workflow auto-generates image tags using the first 7 characters of the commit SHA:
 
-jobs:
-  detect-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      services: ${{ steps.filter.outputs.changes }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            portfolio:       ['services/portfolio/**', 'libs/**']
-            market-ingestion: ['services/market-ingestion/**', 'libs/**']
-            market-data:     ['services/market-data/**', 'libs/**']
-            content-ingestion: ['services/content-ingestion/**', 'libs/**']
-            content-store:   ['services/content-store/**', 'libs/**']
-            nlp-pipeline:    ['services/nlp-pipeline/**', 'libs/**']
-            knowledge-graph: ['services/knowledge-graph/**', 'libs/**']
-            rag-chat:        ['services/rag-chat/**', 'libs/**']
-            api-gateway:     ['services/api-gateway/**', 'libs/**']
-            alert:           ['services/alert/**', 'libs/**']
-            postgres:        ['infra/postgres/**']
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
-      - name: Install dependencies
-        run: |
-          pip install uv
-          uv sync --all-groups
-      - name: Run unit tests
-        run: |
-          for svc in services/*/; do
-            (cd "$svc" && python -m pytest tests/ -m "unit" -q --tb=short) || exit 1
-          done
-
-  build-and-push:
-    needs: [detect-changes, test]
-    if: github.ref == 'refs/heads/main' && needs.detect-changes.outputs.services != '[]'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to ghcr.io
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: services/${{ matrix.service }}/Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}/worldview-${{ matrix.service }}:latest
-            ${{ env.IMAGE_PREFIX }}/worldview-${{ matrix.service }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-postgres:
-    needs: [detect-changes, test]
-    if: github.ref == 'refs/heads/main' && contains(needs.detect-changes.outputs.services, 'postgres')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          context: infra/postgres/
-          push: true
-          tags: ${{ env.IMAGE_PREFIX }}/worldview-postgres:latest
+```bash
+# Example: commit abc1234def → image tag abc1234
+ghcr.io/arnaurodondev/worldview-portfolio:abc1234
+ghcr.io/arnaurodondev/worldview-portfolio:latest
 ```
 
-**Required GitHub Actions secrets** (`Settings → Secrets and Variables → Actions`):
+Images are pushed to **GitHub Container Registry (ghcr.io)** using the automatic `GITHUB_TOKEN` — no external registry credentials required.
 
-| Secret | Value | Notes |
-|--------|-------|-------|
-| `GITHUB_TOKEN` | automatic | ghcr.io push |
-| `SOPS_AGE_KEY` | content of `~/.config/sops/age/keys.txt` | For local decrypt if needed |
+#### §6.8.2 Deploy Workflow — `deploy.yml`
+
+**File**: `.github/workflows/deploy.yml`
+
+The workflow has 4 jobs that execute in order:
+
+```
+detect-changes → build-and-push (matrix) → build-postgres (conditional)
+                                         ↓
+                               bump-image-tag (matrix)
+```
+
+**Job 1 — `detect-changes`**: Uses `dorny/paths-filter@v3` to detect which services changed in this push. Outputs a JSON array (e.g., `["portfolio","alert"]`).
+
+- Changes to `libs/**` trigger **all 10 services** to rebuild (every service depends on shared libs)
+- `postgres` and `gliner` are detected separately (infra images, not app services)
+
+**Job 2 — `build-and-push` (matrix)**:
+
+- Runs in parallel: one job per changed service
+- Tags: `ghcr.io/<user>/worldview-<svc>:<sha7>` and `:latest`
+- Build cache per-service scope (significantly faster after first run)
+- OCI image labels attached (source, revision, created timestamp)
+- `intelligence-migrations` is built here but has no corresponding values file
+
+**Job 3 — `build-postgres` (conditional)**:
+
+- Only runs when `infra/postgres/**` changes
+- Builds the custom Postgres image (TimescaleDB + pgvector + Apache AGE)
+- Tags: `ghcr.io/<user>/worldview-postgres:<sha7>` and `:latest`
+
+**Job 4 — `bump-image-tag` (matrix)**:
+
+- Runs after `build-and-push` completes (with `fail-fast: false`)
+- Excludes `intelligence-migrations` (no Deployment in `worldview-gitops`)
+- For each changed service:
+  1. Generates a short-lived GitHub App token scoped to `worldview-gitops` (see §6.7.7)
+  2. Installs `yq v4.44.3` (YAML editor)
+  3. Clones `worldview-gitops`
+  4. Updates `values/<service>.yaml`: `image.tag: <sha7>`
+  5. Checks for existing open PR (idempotent — won't create duplicate PRs)
+  6. Creates branch `deploy/<service>/<sha7>` and opens PR
+
+**PR title format**: `chore(deploy): bump <service> to <sha7>`
+
+**PR body** includes: service name, image tag, triggering commit, actor, and a link to the workflow run.
+
+#### §6.8.3 GitHub App Setup (one-time manual step)
+
+The `bump-image-tag` job uses a GitHub App token instead of a PAT. This is required because:
+- `GITHUB_TOKEN` cannot push to other repositories
+- PATs are user-tied and expire; GitHub Apps are installation-tied and auto-rotate
+
+See **§6.7.7** for complete step-by-step instructions to create the `worldview-deploy-bot` GitHub App.
+
+After creating the App, add two secrets to the **worldview** repository:
+
+| Secret name | Value |
+|-------------|-------|
+| `GITOPS_APP_ID` | The App's numeric ID (shown on App settings page) |
+| `GITOPS_APP_PRIVATE_KEY` | Base64-encoded PEM: `cat <file>.pem \| base64 \| tr -d '\n'` |
+
+#### §6.8.4 Required GitHub Actions Secrets
+
+All secrets are set in: `worldview` repo → **Settings → Secrets and Variables → Actions**
+
+| Secret | Value | Set by |
+|--------|-------|--------|
+| `GITHUB_TOKEN` | Automatic (provided by GitHub Actions) | GitHub |
+| `GITOPS_APP_ID` | GitHub App numeric ID | Manual (§6.7.7) |
+| `GITOPS_APP_PRIVATE_KEY` | base64-encoded `.pem` private key | Manual (§6.7.7) |
+
+No external registry credentials are needed — `ghcr.io` push is authenticated via `GITHUB_TOKEN`.
+
+#### §6.8.5 worldview-gitops CI — `validate.yml`
+
+The `worldview-gitops` repo has its own CI to validate every PR before merge:
+
+```yaml
+# .github/workflows/validate.yml in worldview-gitops
+jobs:
+  helm-lint:    # helm lint charts/worldview-service
+  helm-template: # helm template for each service values file
+  kubeconform:  # validates k8s/ and manifests/ YAML against k8s schema
+  sops-check:   # ensures no unencrypted secrets were accidentally committed
+```
+
+This ensures a broken Helm chart or invalid YAML never reaches `main` and triggers an ArgoCD sync failure.
 
 ---
 
@@ -2405,12 +2583,22 @@ Within the €50-100/month budget. EODHD cost can be reduced by using demo key d
 
 This PRD maps to the following implementation plan:
 
-| Wave | Scope | Dependencies |
-|------|-------|-------------|
-| A-1 | OpenTofu HCL files + cloud-init templates | none |
-| A-2 | Generic Helm chart + per-service values | A-1 complete |
-| A-3 | ArgoCD App-of-Apps manifests + SOPS encrypted secrets | A-2 complete |
-| A-4 | GitHub Actions CI/CD workflow + Dockerfiles (if missing) | A-3 complete |
-| A-5 | DNS + TLS + Ingress manifests + Vercel setup | A-4 complete |
+| Wave | Scope | Status | Dependencies |
+|------|-------|--------|-------------|
+| **A-0** | Create `worldview-gitops` GitHub repo; scaffold all Helm charts, ArgoCD Application specs, ArgoCD Image Updater app, per-service values files, Renovate config, bootstrap scripts, `validate.yml` CI | ✅ DONE | none |
+| **A-1** | OpenTofu HCL files with Hetzner S3 backend + cloud-init templates for k3s CP and workers | ✅ DONE | none |
+| **A-2** | GitHub Actions `deploy.yml`: detect-changes → build-and-push (matrix) → bump-image-tag (matrix, GitHub App token) | ✅ DONE | A-0 complete |
+| **A-3** | GitHub App creation (`worldview-deploy-bot`): create App, install on `worldview-gitops`, add `GITOPS_APP_ID` + `GITOPS_APP_PRIVATE_KEY` secrets — **manual step, requires GitHub account access** | pending | A-2 complete |
+| **A-4** | Cluster bootstrap: provision Hetzner servers via `tofu apply`, run `bootstrap/setup.sh` (namespaces, hcloud-ccm, hcloud-csi, ArgoCD, repo credentials, SOPS secrets, root-app) — **requires Hetzner account + domain** | pending | A-3 complete |
+| **A-5** | DNS + TLS: set A record (floating IP), apply cert-manager ClusterIssuers, verify Let's Encrypt certificates; Vercel frontend deploy | pending | A-4 complete, domain purchased |
 
-Each wave produces working, testable artifacts. Waves A-1 through A-5 can be implemented before the domain is purchased (except for DNS records in A-5).
+**Completed waves**: A-0, A-1, A-2 (2026-04-11)
+
+**Remaining manual prerequisites** (cannot be automated):
+1. Purchase a domain (any registrar; Cloudflare DNS recommended for free)
+2. Create Hetzner Cloud account + generate API token
+3. Create `worldview-tfstate` S3 bucket in Hetzner Object Storage (NBG1) — required before `tofu init`
+4. Create GitHub App (wave A-3 above)
+5. Install Renovate GitHub App on `worldview-gitops` repo
+
+Each completed wave produces working, testable artifacts independently of cluster access.

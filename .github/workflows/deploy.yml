@@ -1,0 +1,332 @@
+name: Deploy
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger: only on push to main (not on PRs — tests run via ci.yml)
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+  GITOPS_REPO: arnaurodondev/worldview-gitops
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Required GitHub Actions secrets (set in worldview repo Settings → Secrets):
+#
+#   GITOPS_APP_ID          — GitHub App numeric ID (see §6.8.3 in PRD-0024)
+#   GITOPS_APP_PRIVATE_KEY — GitHub App private key PEM (base64-encoded)
+#   GITHUB_TOKEN           — automatically provided; used for ghcr.io push
+#
+# How to create the GitHub App (one-time manual step):
+#   1. Go to GitHub → Settings → Developer settings → GitHub Apps → New GitHub App
+#   2. Name: worldview-deploy-bot
+#   3. Homepage URL: https://github.com/arnaurodondev/WorldView
+#   4. Permissions:
+#        Repository permissions:
+#          Contents: Read & write   (to push branches and bump image tags)
+#          Pull requests: Read & write (to open PRs)
+#          Metadata: Read-only
+#   5. Install the App on the worldview-gitops repository only
+#   6. Generate a private key → download the .pem file
+#   7. Add to worldview repo secrets:
+#        GITOPS_APP_ID = the App ID (number shown on the App page)
+#        GITOPS_APP_PRIVATE_KEY = base64 of the .pem file:
+#          cat <file>.pem | base64 | tr -d '\n'
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 1: Detect which services changed in this push
+  # ═══════════════════════════════════════════════════════════════════════════
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      # JSON array of service names that changed, e.g.: ["portfolio","alert"]
+      services: ${{ steps.filter.outputs.changes }}
+      any_changed: ${{ steps.filter.outputs.any_changed }}
+      postgres_changed: ${{ steps.filter.outputs.postgres }}
+      gliner_changed: ${{ steps.filter.outputs.gliner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # needed for paths-filter to compare with parent commit
+
+      - name: Detect changed services
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Each key maps to the service name used in image tags and values/ files.
+          # Changes to shared libs (libs/**) trigger ALL services to rebuild,
+          # since every service depends on them.
+          filters: |
+            portfolio:
+              - 'services/portfolio/**'
+              - 'libs/**'
+            market-ingestion:
+              - 'services/market-ingestion/**'
+              - 'libs/**'
+            market-data:
+              - 'services/market-data/**'
+              - 'libs/**'
+            content-ingestion:
+              - 'services/content-ingestion/**'
+              - 'libs/**'
+            content-store:
+              - 'services/content-store/**'
+              - 'libs/**'
+            nlp-pipeline:
+              - 'services/nlp-pipeline/**'
+              - 'libs/**'
+            knowledge-graph:
+              - 'services/knowledge-graph/**'
+              - 'libs/**'
+            rag-chat:
+              - 'services/rag-chat/**'
+              - 'libs/**'
+            api-gateway:
+              - 'services/api-gateway/**'
+              - 'libs/**'
+            alert:
+              - 'services/alert/**'
+              - 'libs/**'
+            intelligence-migrations:
+              - 'services/intelligence-migrations/**'
+              - 'libs/**'
+            postgres:
+              - 'infra/postgres/**'
+            gliner:
+              - 'infra/gliner/**'
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 2: Build + push service images to ghcr.io
+  # Runs in a matrix: one parallel job per changed service
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-and-push:
+    name: Build & Push — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    # Only run if at least one service changed
+    if: needs.detect-changes.outputs.services != '[]' && needs.detect-changes.outputs.services != ''
+    strategy:
+      fail-fast: false  # don't cancel other services if one fails
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      packages: write  # required for ghcr.io push
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Short SHA: first 7 chars of the commit SHA, used as the image tag
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # intelligence-migrations has its own Dockerfile but no values/ file
+      # (it runs as a one-off Job, not a Deployment). Build it but skip the
+      # bump-image-tag step below for this service.
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Each service Dockerfile expects the build context at repo root
+          # (it COPYs libs/ and services/<name>/ directly)
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/worldview-${{ matrix.service }}:latest
+            ${{ env.IMAGE_PREFIX }}/worldview-${{ matrix.service }}:${{ steps.tag.outputs.sha }}
+          # GitHub Actions cache: speeds up subsequent builds significantly
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 3 (optional): Build + push custom Postgres image
+  # Only runs when infra/postgres/ changes
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-postgres:
+    name: Build & Push — postgres (custom)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.postgres_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set image tag
+        id: tag
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: infra/postgres/
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/worldview-postgres:latest
+            ${{ env.IMAGE_PREFIX }}/worldview-postgres:${{ steps.tag.outputs.sha }}
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Job 4: Bump image tags in worldview-gitops — 1 PR per changed service
+  #
+  # This job runs AFTER all builds complete. For each changed service
+  # (excluding intelligence-migrations which has no Deployment), it:
+  #   1. Generates a short-lived GitHub App token for worldview-gitops
+  #   2. Checks out worldview-gitops
+  #   3. Updates values/<service>.yaml image.tag = <sha>
+  #   4. Opens a PR titled: "chore(deploy): bump <service> to <sha>"
+  #
+  # One PR per service gives granular rollback ability.
+  # ═══════════════════════════════════════════════════════════════════════════
+  bump-image-tag:
+    name: Bump image tag — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-and-push]
+    # Run even if build-and-push had individual failures (fail-fast: false)
+    if: >-
+      always() &&
+      needs.build-and-push.result != 'skipped' &&
+      needs.detect-changes.outputs.services != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same service list, but exclude intelligence-migrations (no Deployment)
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+        exclude:
+          - service: intelligence-migrations
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.GITOPS_APP_ID }}
+          private_key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          # Scope the token to the gitops repo only
+          repositories: worldview-gitops
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Checkout worldview-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: gitops
+
+      - name: Set image tag and branch name
+        id: meta
+        run: |
+          SHA="${GITHUB_SHA::7}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=deploy/${{ matrix.service }}/${SHA}" >> "$GITHUB_OUTPUT"
+          echo "pr_title=chore(deploy): bump ${{ matrix.service }} to $SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check if values file exists
+        id: check
+        run: |
+          if [[ -f "gitops/values/${{ matrix.service }}.yaml" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::values/${{ matrix.service }}.yaml not found in worldview-gitops — skipping"
+          fi
+
+      - name: Bump image.tag in values/${{ matrix.service }}.yaml
+        if: steps.check.outputs.exists == 'true'
+        working-directory: gitops
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          yq -i ".image.tag = \"${SHA}\"" "values/${{ matrix.service }}.yaml"
+          echo "Updated values/${{ matrix.service }}.yaml image.tag → $SHA"
+
+      - name: Create branch and open PR
+        if: steps.check.outputs.exists == 'true'
+        working-directory: gitops
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SERVICE: ${{ matrix.service }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
+          PR_TITLE: ${{ steps.meta.outputs.pr_title }}
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GITOPS_REPO: ${{ env.GITOPS_REPO }}
+        run: |
+          git config user.name "worldview-deploy-bot[bot]"
+          git config user.email "worldview-deploy-bot[bot]@users.noreply.github.com"
+
+          # Check if a PR for this service+sha already exists (idempotent)
+          EXISTING=$(gh pr list \
+            --repo "$GITOPS_REPO" \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number' 2>/dev/null || echo "")
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "PR #$EXISTING already exists for $BRANCH — skipping"
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          git add "values/${SERVICE}.yaml"
+          git commit -m "${PR_TITLE}"
+          git push origin "$BRANCH"
+
+          # Write PR body to a temp file to avoid YAML heredoc issues
+          PR_BODY_FILE=$(mktemp)
+          printf '## Automated deploy: %s\n\n' "$SERVICE" > "$PR_BODY_FILE"
+          printf 'Service: `%s`  \n' "$SERVICE" >> "$PR_BODY_FILE"
+          printf 'Image tag: `%s`  \n' "$SHA" >> "$PR_BODY_FILE"
+          printf 'Commit: %s  \n' "$COMMIT_SHA" >> "$PR_BODY_FILE"
+          printf 'Triggered by: %s  \n' "$ACTOR" >> "$PR_BODY_FILE"
+          printf 'Workflow run: %s  \n\n' "$RUN_URL" >> "$PR_BODY_FILE"
+          printf '### Changes\n```\nimage.tag: %s\n```\n\n' "$SHA" >> "$PR_BODY_FILE"
+          printf '### Review checklist\n' >> "$PR_BODY_FILE"
+          printf -- '- [ ] Image built successfully (see workflow run above)\n' >> "$PR_BODY_FILE"
+          printf -- '- [ ] No unexpected side effects in this diff\n' >> "$PR_BODY_FILE"
+          printf -- '- [ ] Merge when ready to deploy to cluster\n\n' >> "$PR_BODY_FILE"
+          printf -- '---\n*This PR was opened automatically by the worldview deploy workflow.*\n' >> "$PR_BODY_FILE"
+          printf '*ArgoCD will apply the change automatically once merged to `main`.*\n' >> "$PR_BODY_FILE"
+
+          # Open the PR against main
+          gh pr create \
+            --repo "$GITOPS_REPO" \
+            --title "$PR_TITLE" \
+            --base main \
+            --head "$BRANCH" \
+            --body-file "$PR_BODY_FILE"
+
+          rm -f "$PR_BODY_FILE"
+          echo "Opened PR: ${PR_TITLE}"
