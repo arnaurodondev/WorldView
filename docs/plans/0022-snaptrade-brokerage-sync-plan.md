@@ -756,11 +756,12 @@ def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository: ...
 
 ## Sub-plan C: S1 Application + API
 
-### Wave C-1: Use Cases (5)
+### Wave C-1: Use Cases (5) ✅
 
 **Goal**: Implement all 5 brokerage connection use cases following the hexagonal pattern.
 **Depends on**: Wave B-1 + Wave B-2 (ports and adapters available)
 **Estimated effort**: 60–90 minutes
+**Status**: **DONE** — 2026-04-11 · 23 new tests pass (424 unit total) · ruff + mypy clean
 **Architecture layer**: application/use_cases
 
 #### Pre-read (agent must read before starting)
@@ -945,10 +946,10 @@ class GetSyncErrorsResult:
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/portfolio/src/portfolio/application/use_cases/brokerage_connection.py` passes
-- [ ] `mypy services/portfolio/src/portfolio/application/use_cases/brokerage_connection.py` passes
-- [ ] No infrastructure imports in use case file (R12, R16)
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass
+- [x] `ruff check services/portfolio/src/portfolio/application/use_cases/brokerage_connection.py` passes
+- [x] `mypy services/portfolio/src/portfolio/application/use_cases/brokerage_connection.py` passes
+- [x] No infrastructure imports in use case file (R12, R16)
+- [x] `python -m pytest services/portfolio/tests/ -m unit -v` — all existing tests pass (424 pass)
 
 #### Regression Guardrails
 - **BP-038**: Use `if not cmd.snaptrade_tos_accepted:` not `assert cmd.snaptrade_tos_accepted` — assertions are stripped with `-O`
