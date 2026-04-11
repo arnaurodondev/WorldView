@@ -157,23 +157,22 @@ the appropriate `Cache-Control` header and Valkey TTL.
 ## Internal Modules
 
 ```
-services/api-gateway/src/gateway/
-├── main.py                  # FastAPI app, middleware chain
-├── config.py                # Settings (service URLs, rate limits, CORS origins)
-├── router.py                # O(1) route table + proxy logic
-├── middleware/
-│   ├── auth.py              # API key validation
-│   ├── rate_limit.py        # Valkey sliding window
-│   ├── cors.py              # CORS enforcement
-│   ├── cache.py             # Response caching + Cache-Control headers
-│   ├── error_handler.py     # Standardized error responses
-│   └── request_id.py        # X-Request-ID propagation
-├── composition/
-│   ├── company_overview.py  # Compose from multiple services
-│   ├── portfolio_holdings.py
-│   └── bootstrap.py
-└── proxy/
-    └── http_proxy.py        # httpx-based reverse proxy
+services/api-gateway/src/api_gateway/
+├── app.py                   # FastAPI app factory, lifespan (OIDC discovery, RSA keypair)
+├── config.py                # Settings (OIDC vars, RSA keys, service URLs, rate limits)
+├── domain.py                # OIDCProviderConfig, InternalJWTClaims dataclasses
+├── middleware.py            # OIDCAuthMiddleware, InternalJWTIssuerMiddleware,
+│                            #   RateLimitMiddleware, SecurityHeadersMiddleware
+├── oidc.py                  # OIDC discovery, JWKS parse, RSA key utilities
+├── jwt_utils.py             # RS256 internal JWT issuance (issue_user_jwt, issue_system_jwt)
+├── pkce.py                  # PKCE utilities (verifier, challenge, state) + Valkey state mgmt
+├── clients.py               # Typed httpx clients for downstream services
+└── routes/
+    ├── __init__.py          # Re-exports main_router, auth_router
+    ├── auth.py              # OIDC auth endpoints (/v1/auth/login|callback|refresh|logout|me)
+    ├── health.py            # /health, /ready
+    ├── internal.py          # GET /internal/jwks
+    └── proxy.py             # Proxy/composition routes (/v1/chat, /v1/companies, etc.)
 ```
 
 ---

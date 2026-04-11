@@ -5032,3 +5032,28 @@ SeverityThresholds(
 - Add a comment in the test citing where the path convention is documented: `# /healthz per PRD-0024 §6.4 and scaffold convention`.
 
 **First seen**: `tests/e2e/test_deployment_readiness.py`, commit `964f06a`, found and fixed 2026-04-11.
+
+
+## BP-143 — Starlette Middleware Order: InternalJWT Outermost Sees user=None
+
+**Category**: Architecture / Middleware
+**Severity**: HIGH (silent security failure — internal JWT never issued)
+
+**Pattern**: When registering `InternalJWTIssuerMiddleware` via `add_middleware()` AFTER `OIDCAuthMiddleware`, Starlette makes it the OUTERMOST middleware (runs first for requests). At that point `request.state.user` is not yet set by OIDCAuth, so the JWT issuance is silently skipped. All downstream service calls arrive without `X-Internal-JWT`.
+
+**Symptom**: Backend services log `X-Internal-JWT header missing` 401 errors. No error in S9 — the middleware silently no-ops because `user is None`.
+
+**Root cause**: Starlette's `add_middleware()` prepends middleware to the chain. Last added = outermost = first to receive requests. `InternalJWTIssuerMiddleware.dispatch()` reads `request.state.user` which is set by `OIDCAuthMiddleware` — but if InternalJWT runs before OIDCAuth, user is always None.
+
+**Fix**: Register `InternalJWTIssuerMiddleware` BEFORE `OIDCAuthMiddleware` in `create_app()`:
+```python
+app.add_middleware(InternalJWTIssuerMiddleware)  # innermost of this pair — runs after OIDCAuth
+app.add_middleware(OIDCAuthMiddleware)           # outermost of this pair — runs first
+```
+
+**Prevention**:
+- Comment the intended request-processing order next to `add_middleware()` calls.
+- Write integration test `test_proxy_request_includes_internal_jwt` that asserts `X-Internal-JWT` in downstream headers — this test fails immediately if order is wrong.
+- Remember: in Starlette, "last `add_middleware()` call = outermost = first to receive requests".
+
+**First seen**: `services/api-gateway/src/api_gateway/app.py`, PLAN-0025 Wave B, fixed 2026-04-12.

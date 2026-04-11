@@ -73,7 +73,7 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 | Wave | Title | Status | Tasks Done/Total |
 |------|-------|--------|-----------------|
 | Wave A | S9 Foundation & Security Hardening ✅ | done | 7/7 |
-| Wave B | S9 Auth Endpoints | pending | 0/7 |
+| Wave B | S9 Auth Endpoints ✅ | done | 3/3 |
 | Wave C | S1 Schema + Provision Endpoint | pending | 0/8 |
 | Wave D | Backend Services InternalJWTMiddleware | pending | 0/10 |
 | Wave E | Frontend Auth | pending | 0/7 |
@@ -476,12 +476,13 @@ Include `internal_router` in app's route registration.
 
 ---
 
-## Wave B: S9 Auth Endpoints
+## Wave B: S9 Auth Endpoints ✅
 
 **Goal**: Implement the 5 OIDC auth endpoints (`/v1/auth/login`, `/v1/auth/callback`, `/v1/auth/refresh`, `/v1/auth/logout`, `/v1/auth/me`) with PKCE, Valkey state management, and user provisioning call to S1.
 **Depends on**: Wave A (JWKS, OIDCAuthMiddleware, InternalJWTIssuerMiddleware, jwt_utils)
 **Estimated effort**: 90–120 min
 **Architecture layer**: application + API
+**Status**: **DONE** — 2026-04-12 · 80 tests pass (25 new) · ruff + mypy clean
 
 ### Pre-read (agent must read before starting)
 - `services/api-gateway/src/api_gateway/app.py` — current lifespan, `create_app`
@@ -633,12 +634,12 @@ Integration tests using `httpx.AsyncClient` with the FastAPI test client, mockin
 - [ ] Tests use `AsyncClient` with `ASGITransport`
 
 ### Validation Gate
-- [ ] `ruff check services/api-gateway/src/` — zero errors
-- [ ] `mypy services/api-gateway/src/` — zero errors
-- [ ] Unit tests: ≥10 new tests pass
-- [ ] Integration tests: 4 pass
-- [ ] No token strings appear in structured logs (verify in test)
-- [ ] Cookie attributes verified in `test_login_callback_full_flow`
+- [x] `ruff check services/api-gateway/src/` — zero errors
+- [x] `mypy services/api-gateway/src/` — zero errors
+- [x] Unit tests: ≥10 new tests pass (21 new: 9 pkce + 12 auth_routes)
+- [x] Integration tests: 4 pass
+- [x] No token strings appear in structured logs (verified — only `sub`, `email` in log fields)
+- [x] Cookie attributes verified in `test_login_callback_full_flow`
 
 ### Regression Guardrails
 - **BP-023/BP-127** (ruff version mismatch): See Wave A guardrail.
@@ -646,6 +647,7 @@ Integration tests using `httpx.AsyncClient` with the FastAPI test client, mockin
 - **PKCE RFC 7636**: `code_challenge` must use S256 method — add RFC test vector assertion.
 - **State single-use**: Ensure `retrieve_and_delete_pkce_state` is called (not just `GET`) — test that second callback attempt returns 400.
 - **Fail-closed on Valkey down during login**: Do NOT redirect if state cannot be stored (§9 failure modes).
+- **BP-NEW — Starlette middleware order**: In Starlette/FastAPI, last `add_middleware()` = outermost (runs FIRST for requests). `InternalJWTIssuerMiddleware` must be registered BEFORE `OIDCAuthMiddleware` so it runs AFTER (is innermost). If registered after OIDCAuth, it runs first with `user=None` and never issues the JWT. Fixed by swapping registration order in `create_app()`.
 
 ---
 

@@ -27,11 +27,19 @@ def _clients(request: Request) -> ServiceClients:
 
 
 def _auth_headers(request: Request) -> dict[str, str]:
-    """Extract tenant/user IDs from JWT payload and return as S8 headers."""
+    """Extract auth headers (internal JWT + tenant/user IDs) for downstream services.
+
+    Forwards ``X-Internal-JWT`` set by ``InternalJWTIssuerMiddleware`` and the
+    legacy ``X-Tenant-Id``/``X-User-Id`` headers derived from ``request.state.user``.
+    """
     user: dict[str, Any] | None = getattr(request.state, "user", None)
-    if not user:
-        return {}
     headers: dict[str, str] = {}
+    # Forward RS256 internal JWT issued by InternalJWTIssuerMiddleware
+    internal_jwt = request.headers.get("X-Internal-JWT") or request.headers.get("x-internal-jwt")
+    if internal_jwt:
+        headers["X-Internal-JWT"] = internal_jwt
+    if not user:
+        return headers
     if tenant_id := user.get("tenant_id"):
         headers["X-Tenant-Id"] = str(tenant_id)
     if user_id := user.get("sub") or user.get("user_id"):
