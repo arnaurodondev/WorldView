@@ -74,7 +74,7 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 |------|-------|--------|-----------------|
 | Wave A | S9 Foundation & Security Hardening ✅ | done | 7/7 |
 | Wave B | S9 Auth Endpoints ✅ | done | 3/3 |
-| Wave C | S1 Schema + Provision Endpoint | pending | 0/8 |
+| Wave C | S1 Schema + Provision Endpoint ✅ | done | 8/8 |
 | Wave D | Backend Services InternalJWTMiddleware | pending | 0/10 |
 | Wave E | Frontend Auth | pending | 0/7 |
 | Wave F | Infrastructure + Integration Tests | pending | 0/6 |
@@ -651,7 +651,9 @@ Integration tests using `httpx.AsyncClient` with the FastAPI test client, mockin
 
 ---
 
-## Wave C: S1 Schema + Provision Endpoint
+## Wave C: S1 Schema + Provision Endpoint ✅
+
+**Status**: **DONE** — 2026-04-12 · 463 unit tests pass · ruff + mypy clean
 
 **Goal**: Add `external_id`/`role` to users, create `invitations` + `auth_audit_log` tables, implement `ProvisionUserUseCase`, add `POST /internal/v1/users/provision` endpoint, and replace `InternalAuthDep` (hmac) with `InternalJWTMiddleware` (RS256).
 **Depends on**: Wave A (InternalJWTMiddleware class pattern from PRD spec; JWKS endpoint running)
@@ -1061,12 +1063,12 @@ Add `InternalJWTMiddleware` (RS256 verifier) to S1 to replace the HS256 `Interna
 - [ ] 4 integration tests pass against real Postgres
 
 ### Validation Gate
-- [ ] `ruff check services/portfolio/src/` — zero errors
-- [ ] `mypy services/portfolio/src/` — zero errors
-- [ ] `alembic upgrade head` + `alembic downgrade -1` succeeds for both migrations
-- [ ] Unit tests: ≥20 new tests pass
-- [ ] Integration tests: 4 pass
-- [ ] `InternalAuthDep` has zero references in codebase (grep confirms)
+- [x] `ruff check services/portfolio/src/` — zero errors
+- [x] `mypy services/portfolio/src/` — zero errors
+- [x] `alembic upgrade head` + `alembic downgrade -1` succeeds for both migrations
+- [x] Unit tests: 28 new tests pass (8 provision, 8 middleware, 8 endpoint, 4 tenant-auth)
+- [ ] Integration tests: 4 pass (requires Docker Postgres)
+- [x] `InternalAuthDep` has zero references in codebase (grep confirms)
 
 ### Regression Guardrails
 - **BP-126** (NOT NULL without server_default): `role` column must have `server_default="owner"` in both the migration AND the ORM `mapped_column`. Test with existing rows.

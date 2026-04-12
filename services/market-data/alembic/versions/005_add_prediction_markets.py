@@ -71,12 +71,16 @@ def upgrade() -> None:
     op.execute("CREATE UNIQUE INDEX uq_prediction_markets_market_id ON prediction_markets (market_id)")
     op.execute("CREATE INDEX ix_pm_status_updated ON prediction_markets (resolution_status, updated_at DESC)")
 
+    # Create WITHOUT inline PRIMARY KEY so that create_hypertable can succeed.
+    # TimescaleDB requires every unique constraint to include the partition column
+    # (snapshot_at). We add the composite PK (id, snapshot_at) after the hypertable
+    # is created. On plain Postgres this composite PK is still valid and harmless.
     op.create_table(
         "prediction_market_snapshots",
         sa.Column(
             "id",
             UUID(as_uuid=False),
-            primary_key=True,
+            nullable=False,
             server_default=sa.text("gen_random_uuid()"),
         ),
         sa.Column("market_id", sa.Text, nullable=False),
@@ -91,7 +95,8 @@ def upgrade() -> None:
         sa.Column("liquidity", sa.Numeric(20, 4), nullable=True),
         sa.Column("source_event_id", sa.Text, nullable=False),
     )
-    # Convert to TimescaleDB hypertable only if the extension is available (OQ-003 mitigation)
+    # Convert to TimescaleDB hypertable only if the extension is available (OQ-003 mitigation).
+    # Must be done BEFORE adding any unique constraints so TimescaleDB can validate them.
     op.execute(
         """
         DO $$
@@ -106,6 +111,9 @@ def upgrade() -> None:
         END $$;
         """
     )
+    # Composite PK: (id, snapshot_at) satisfies TimescaleDB's partition-column rule.
+    # On plain Postgres this is equivalent to PK (id) since id is still unique.
+    op.execute("ALTER TABLE prediction_market_snapshots ADD PRIMARY KEY (id, snapshot_at)")
     op.execute("CREATE UNIQUE INDEX uq_pms_market_snapshot ON prediction_market_snapshots (market_id, snapshot_at)")
     op.execute("CREATE INDEX ix_pms_market_time ON prediction_market_snapshots (market_id, snapshot_at DESC)")
 

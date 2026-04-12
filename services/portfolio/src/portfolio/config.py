@@ -61,8 +61,9 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
     watchlist_cache_ttl_seconds: int = 300
 
-    # Internal service-to-service auth (S10 → S1)
-    internal_service_token: str = ""
+    # Internal JWT (RS256) — PRD-0025
+    # S1 fetches the public key from S9's JWKS endpoint at startup.
+    api_gateway_url: str = "http://api-gateway:8000"
 
     # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
     # AliasChoices supports both bare SNAPTRADE_* and PORTFOLIO_SNAPTRADE_* env vars.
@@ -105,23 +106,6 @@ class Settings(BaseSettings):
                 message=(
                     "PORTFOLIO_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
                     "Set this env var to a secure database URL before deploying to production."
-                ),
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _warn_missing_internal_token(self) -> Settings:
-        """Warn at startup if internal_service_token is unset (F-SEC-001).
-
-        Uses structlog so the warning is captured by the structured log pipeline
-        in production log aggregators.
-        """
-        if not self.internal_service_token:
-            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "missing_internal_service_token",
-                message=(
-                    "PORTFOLIO_INTERNAL_SERVICE_TOKEN is not set — all internal API endpoints "
-                    "will return 401. Set this env var before deploying to production."
                 ),
             )
         return self

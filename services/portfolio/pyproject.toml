@@ -22,6 +22,7 @@ dependencies = [
     "observability",
     "storage",
     "snaptrade-python-sdk>=1.0,<2",  # pinned: update only after reviewing migration guide
+    "PyJWT[cryptography]>=2.8,<3",  # RS256 JWT verification (PRD-0025 InternalJWTMiddleware)
 ]
 
 [project.optional-dependencies]

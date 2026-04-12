@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradeUser
 from portfolio.application.ports.repositories import (
     AlertPreferenceRepository,
+    AuthAuditLogRepository,
     BrokerageConnectionRepository,
     BrokerageTransactionSyncErrorRepository,
     EntitySuppressionRepository,
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
+    from portfolio.domain.value_objects import AuthAuditEvent
 
 
 class FakeTenantRepository(TenantRepository):
@@ -70,6 +72,44 @@ class FakeUserRepository(UserRepository):
 
     async def save(self, user: User) -> None:
         self._store[user.id] = user
+
+    async def find_by_external_id(self, external_id: str) -> User | None:
+        for user in self._store.values():
+            if user.external_id == external_id:
+                return user
+        return None
+
+    async def find_by_email_without_external_id(self, email: str) -> User | None:
+        for user in self._store.values():
+            if user.email == email and user.external_id is None:
+                return user
+        return None
+
+    async def link_external_id(self, user_id: UUID, external_id: str) -> None:
+        user = self._store.get(user_id)
+        if user is not None:
+            from dataclasses import replace
+
+            self._store[user_id] = replace(user, external_id=external_id)
+
+    async def find_by_email_with_conflicting_external_id(self, email: str, current_sub: str) -> User | None:
+        for user in self._store.values():
+            if user.email == email and user.external_id is not None and user.external_id != current_sub:
+                return user
+        return None
+
+
+class FakeAuthAuditLogRepository(AuthAuditLogRepository):
+    """In-memory audit log store (append-only)."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[AuthAuditEvent, UUID | None]] = []
+
+    async def create(self, event: AuthAuditEvent, user_id: UUID | None) -> None:
+        self.events.append((event, user_id))
+
+    def events_by_type(self, event_type: object) -> list[tuple[AuthAuditEvent, UUID | None]]:
+        return [(e, uid) for e, uid in self.events if e.event_type == event_type]
 
 
 class FakePortfolioRepository(PortfolioRepository):
@@ -462,6 +502,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._entity_suppressions = FakeEntitySuppressionRepository()
         self._brokerage_connections = FakeBrokerageConnectionRepository()
         self._brokerage_sync_errors = FakeBrokerageTransactionSyncErrorRepository()
+        self._auth_audit_log = FakeAuthAuditLogRepository()
         self.committed = False
         self.rolled_back = False
         self.commit_count = 0
@@ -521,6 +562,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def brokerage_sync_errors(self) -> FakeBrokerageTransactionSyncErrorRepository:
         return self._brokerage_sync_errors
+
+    @property
+    def auth_audit_log(self) -> FakeAuthAuditLogRepository:
+        return self._auth_audit_log
 
     async def commit(self) -> None:
         self.committed = True

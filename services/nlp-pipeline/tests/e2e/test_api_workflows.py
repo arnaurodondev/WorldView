@@ -298,16 +298,16 @@ async def test_get_entity_articles_invalid_uuid_returns_422(e2e_client: AsyncCli
 # ── POST /api/v1/reprocess/{article_id} ──────────────────────────────────────
 
 
-async def test_reprocess_unknown_article_returns_404(e2e_client: AsyncClient) -> None:
+async def test_reprocess_unknown_article_returns_404(e2e_client: AsyncClient, admin_headers: dict[str, str]) -> None:
     """POST /api/v1/reprocess/{article_id} with unknown doc returns 404."""
     unknown_doc = uuid.uuid4()
-    resp = await e2e_client.post(f"/api/v1/reprocess/{unknown_doc}")
+    resp = await e2e_client.post(f"/api/v1/reprocess/{unknown_doc}", headers=admin_headers)
     assert resp.status_code == 404
 
 
-async def test_reprocess_invalid_uuid_returns_422(e2e_client: AsyncClient) -> None:
+async def test_reprocess_invalid_uuid_returns_422(e2e_client: AsyncClient, admin_headers: dict[str, str]) -> None:
     """POST /api/v1/reprocess/{article_id} with malformed UUID returns 422."""
-    resp = await e2e_client.post("/api/v1/reprocess/not-a-uuid")
+    resp = await e2e_client.post("/api/v1/reprocess/not-a-uuid", headers=admin_headers)
     assert resp.status_code == 422
 
 

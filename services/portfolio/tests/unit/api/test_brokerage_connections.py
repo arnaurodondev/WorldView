@@ -38,7 +38,7 @@ AUTH_HEADERS = {
 def _make_app(uow: FakeUnitOfWork, brokerage_client: FakeBrokerageClient | None = None) -> FastAPI:
     """Create a minimal FastAPI app with the brokerage connections router."""
     app = FastAPI()
-    settings = Settings(internal_service_token="test-token")
+    settings = Settings()  # type: ignore[call-arg]
     app.state.settings = settings
     app.state.brokerage_client = brokerage_client or FakeBrokerageClient()
 

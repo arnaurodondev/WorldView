@@ -122,6 +122,10 @@ class FakeUoW(UnitOfWork):
     def brokerage_sync_errors(self):
         return MagicMock()
 
+    @property
+    def auth_audit_log(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 

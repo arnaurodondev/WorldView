@@ -6,7 +6,6 @@ requests proxied through S9.
 
 from __future__ import annotations
 
-from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
 import jwt
@@ -14,19 +13,8 @@ import jwt
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
-try:
-    from common.ids import new_uuid7  # type: ignore[import-untyped]
-    from common.time import utc_now  # type: ignore[import-untyped]
-except ImportError:
-    import uuid
-    from datetime import datetime
-
-    def new_uuid7() -> Any:  # type: ignore[misc]
-        return uuid.uuid4()
-
-    def utc_now() -> datetime:  # type: ignore[misc]
-        return datetime.now(tz=UTC)
-
+from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.time import utc_now  # type: ignore[import-untyped]
 
 _ISSUER = "worldview-gateway"
 _USER_TTL = 300  # 5 minutes

@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from portfolio.api.dependencies import get_read_uow
 from portfolio.api.internal import internal_router
-from portfolio.config import Settings
 from portfolio.domain.entities.holding import Holding
 from portfolio.domain.entities.instrument import InstrumentRef
 from portfolio.domain.entities.portfolio import Portfolio
@@ -24,13 +23,9 @@ from tests.unit.fakes import FakeUnitOfWork
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
-TOKEN = "test-internal-secret"  # noqa: S105
-
 
 def _make_app(uow: FakeUnitOfWork) -> FastAPI:
     app = FastAPI()
-    settings = Settings(internal_service_token=TOKEN)
-    app.state.settings = settings
 
     async def override_uow():
         yield uow
@@ -107,7 +102,7 @@ async def test_portfolio_context_endpoint_success() -> None:
         resp = await client.get(
             f"/internal/v1/users/{user_id}/portfolio/context",
             params={"tenant_id": str(tenant_id)},
-            headers={"X-Internal-Token": TOKEN, "X-User-Id": str(user_id)},
+            headers={"X-User-Id": str(user_id)},
         )
 
     assert resp.status_code == 200
@@ -122,22 +117,6 @@ async def test_portfolio_context_endpoint_success() -> None:
     assert data["total_positions"] == 1
 
 
-async def test_portfolio_context_missing_token() -> None:
-    """Missing X-Internal-Token → 401."""
-    uow = FakeUnitOfWork()
-    tenant_id, user_id, *_ = _seed_full_context(uow)
-    app = _make_app(uow)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-            headers={"X-User-Id": str(user_id)},
-        )
-
-    assert resp.status_code == 401
-
-
 async def test_portfolio_context_wrong_user() -> None:
     """X-User-Id != path user_id → 403."""
     uow = FakeUnitOfWork()
@@ -149,7 +128,7 @@ async def test_portfolio_context_wrong_user() -> None:
         resp = await client.get(
             f"/internal/v1/users/{user_id}/portfolio/context",
             params={"tenant_id": str(tenant_id)},
-            headers={"X-Internal-Token": TOKEN, "X-User-Id": str(other_user_id)},
+            headers={"X-User-Id": str(other_user_id)},
         )
 
     assert resp.status_code == 403
@@ -165,7 +144,6 @@ async def test_portfolio_context_missing_user_id_header() -> None:
         resp = await client.get(
             f"/internal/v1/users/{user_id}/portfolio/context",
             params={"tenant_id": str(tenant_id)},
-            headers={"X-Internal-Token": TOKEN},
         )
 
     assert resp.status_code == 403
@@ -182,7 +160,7 @@ async def test_portfolio_context_user_not_found() -> None:
         resp = await client.get(
             f"/internal/v1/users/{user_id}/portfolio/context",
             params={"tenant_id": str(tenant_id)},
-            headers={"X-Internal-Token": TOKEN, "X-User-Id": str(user_id)},
+            headers={"X-User-Id": str(user_id)},
         )
 
     assert resp.status_code == 404
@@ -200,7 +178,7 @@ async def test_portfolio_context_empty_portfolio() -> None:
         resp = await client.get(
             f"/internal/v1/users/{user.id}/portfolio/context",
             params={"tenant_id": str(tenant_id)},
-            headers={"X-Internal-Token": TOKEN, "X-User-Id": str(user.id)},
+            headers={"X-User-Id": str(user.id)},
         )
 
     assert resp.status_code == 200

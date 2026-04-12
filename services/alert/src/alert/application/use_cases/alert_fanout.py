@@ -31,6 +31,7 @@ from uuid import UUID
 import fastavro  # type: ignore[import-untyped]
 import fastavro.schema  # type: ignore[import-untyped]
 
+from alert.application.ports.metrics import IAlertMetrics, NoOpAlertMetrics
 from alert.domain.entities import Alert, OutboxEvent, PendingAlert, SeverityThresholds
 from alert.domain.enums import AlertSeverity, AlertType
 from alert.domain.errors import DuplicateAlertError
@@ -200,6 +201,7 @@ class AlertFanoutUseCase:
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
         severity_thresholds: SeverityThresholds | None = None,
+        metrics: IAlertMetrics | None = None,
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
@@ -208,6 +210,7 @@ class AlertFanoutUseCase:
         self._dedup_window = dedup_window_seconds
         self._alert_delivered_topic = alert_delivered_topic
         self._thresholds = severity_thresholds if severity_thresholds is not None else SeverityThresholds()
+        self._metrics: IAlertMetrics = metrics if metrics is not None else NoOpAlertMetrics()
 
     async def execute(
         self,
@@ -374,16 +377,9 @@ class AlertFanoutUseCase:
         # ── 10. Metrics ──────────────────────────────────────────────────────
         # Metrics are fire-and-forget: must never affect the correctness path.
         try:
-            from alert.infrastructure.metrics.prometheus import (
-                s10_alerts_by_severity_total,
-                s10_flash_overlays_triggered_total,
-            )
-
-            s10_alerts_by_severity_total.labels(severity=str(severity), alert_type=str(alert_type)).inc(
-                len(watcher_user_ids)
-            )
+            self._metrics.record_alert_fanned_out(severity, alert_type, len(watcher_user_ids))
             if severity == AlertSeverity.CRITICAL and watcher_user_ids:
-                s10_flash_overlays_triggered_total.inc()
+                self._metrics.record_flash_overlay()
         except Exception:
             logger.warning("alert_fanout.metrics_error", exc_info=True)  # type: ignore[no-any-return]
 

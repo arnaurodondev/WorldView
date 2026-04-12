@@ -1,8 +1,8 @@
 """Internal API endpoints for service-to-service communication (S10 -> S1).
 
 These endpoints are NOT exposed through S9 API Gateway.
-Auth: X-Internal-Token header validated against INTERNAL_SERVICE_TOKEN env var.
-PRD reference: §6.2.7.
+Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) on every request.
+PRD reference: §6.2.7; auth updated by PRD-0025 Wave C.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException
 
-from portfolio.api.dependencies import InternalAuthDep, ReadUoWDep, UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     BatchEntityLookupRequest,
     BatchEntityLookupResponse,
@@ -39,7 +39,6 @@ async def internal_health() -> dict[str, str]:
 @internal_router.get("/watchlists/by-entity/{entity_id}")
 async def get_watchers_by_entity(
     entity_id: UUID,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> WatchersByEntityResponse:
     """Return all users watching a specific entity."""
@@ -51,7 +50,6 @@ async def get_watchers_by_entity(
 @internal_router.post("/watchlists/by-entities")
 async def get_watchers_by_entities(
     body: BatchEntityLookupRequest,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> BatchEntityLookupResponse:
     """Batch lookup: given entity_ids, return watcher map."""
@@ -71,7 +69,6 @@ async def get_watchers_by_entities(
 @internal_router.get("/watchlists/{watchlist_id}/entities")
 async def get_watchlist_entities(
     watchlist_id: UUID,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> WatchlistEntitiesResponse:
     """List all entity_ids in a specific watchlist."""
@@ -83,14 +80,13 @@ async def get_watchlist_entities(
 @internal_router.get("/users/{user_id}/portfolio/context", response_model=PortfolioContextResponse)
 async def get_portfolio_context(
     user_id: UUID,
-    _auth: InternalAuthDep,
     uow: ReadUoWDep,
     tenant_id: UUID,
     x_user_id: UUID | None = Header(None),
 ) -> PortfolioContextResponse:
     """Return portfolio context (holdings + watchlist) for S8 PORTFOLIO-intent queries.
 
-    Auth: X-Internal-Token (service-to-service).
+    Auth: InternalJWTMiddleware (RS256).
     Ownership: X-User-Id header must match the path user_id.
     """
     if x_user_id is None or x_user_id != user_id:
@@ -130,14 +126,13 @@ async def get_portfolio_context(
 @internal_router.get("/users/{user_id}", response_model=UserInternalResponse)
 async def get_user_for_digest(
     user_id: UUID,
-    _auth: InternalAuthDep,
     uow: ReadUoWDep,
     x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
 ) -> UserInternalResponse:
     """Return user email for S10 email digest delivery (PRD-0016 §6.2).
 
     Used by S10 EmailScheduler when ``email_preferences.email_address`` is null.
-    Auth: X-Internal-Token (service-to-service, hmac.compare_digest).
+    Auth: InternalJWTMiddleware (RS256).
     Returns 404 if the user is not found in the tenant.
     """
     uc = GetUserUseCase()

@@ -28,7 +28,7 @@ class TestPostgresContainer:
         assert result == 1
 
     async def test_migrations_run_successfully(self, _migrated_db: str) -> None:
-        """Confirm that Alembic migration 002 is the head after upgrade head."""
+        """Confirm that Alembic migration 006 is the head after upgrade head."""
         import asyncpg
 
         dsn = _migrated_db.replace("postgresql+asyncpg://", "postgresql://")
@@ -37,7 +37,7 @@ class TestPostgresContainer:
         await conn.close()
 
         version_nums = {row["version_num"] for row in rows}
-        assert "004" in version_nums, f"Expected migration '004' to be head, got: {version_nums}"
+        assert "006" in version_nums, f"Expected migration '006' to be head, got: {version_nums}"
 
 
 class TestKafkaContainer:
