@@ -66,26 +66,9 @@ async def test_retrieve_deletes_key() -> None:
     """Second retrieve_and_delete_pkce_state call for same state returns None."""
     from api_gateway.pkce import retrieve_and_delete_pkce_state
 
-    # Simulate Valkey: first get returns value, second returns None
+    # Atomic GETDEL: first call returns the stored value; second call returns None
     valkey = MagicMock()
-
-    # First pipeline execution: GET returns value, DELETE returns 1
-    first_pipe = MagicMock()
-    first_pipe.get = MagicMock()
-    first_pipe.delete = MagicMock()
-    first_pipe.execute = AsyncMock(return_value=["my-verifier", 1])
-    first_pipe.__aenter__ = AsyncMock(return_value=first_pipe)
-    first_pipe.__aexit__ = AsyncMock(return_value=None)
-
-    # Second pipeline execution: GET returns None (already deleted), DELETE returns 0
-    second_pipe = MagicMock()
-    second_pipe.get = MagicMock()
-    second_pipe.delete = MagicMock()
-    second_pipe.execute = AsyncMock(return_value=[None, 0])
-    second_pipe.__aenter__ = AsyncMock(return_value=second_pipe)
-    second_pipe.__aexit__ = AsyncMock(return_value=None)
-
-    valkey.pipeline = MagicMock(side_effect=[first_pipe, second_pipe])
+    valkey.getdel = AsyncMock(side_effect=["my-verifier", None])
 
     result1 = await retrieve_and_delete_pkce_state(valkey, "test-state")
     result2 = await retrieve_and_delete_pkce_state(valkey, "test-state")
@@ -100,13 +83,7 @@ async def test_retrieve_returns_none_on_missing_key() -> None:
     from api_gateway.pkce import retrieve_and_delete_pkce_state
 
     valkey = MagicMock()
-    pipe = MagicMock()
-    pipe.get = MagicMock()
-    pipe.delete = MagicMock()
-    pipe.execute = AsyncMock(return_value=[None, 0])
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=None)
-    valkey.pipeline = MagicMock(return_value=pipe)
+    valkey.getdel = AsyncMock(return_value=None)
 
     result = await retrieve_and_delete_pkce_state(valkey, "unknown-state")
     assert result is None

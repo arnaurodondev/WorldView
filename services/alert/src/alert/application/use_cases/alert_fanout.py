@@ -334,6 +334,11 @@ class AlertFanoutUseCase:
                 await alert_repo.save(alert)
             except DuplicateAlertError:
                 # Race condition: another worker wrote same dedup_key first.
+                # Explicitly rollback before returning — the DB-level unique constraint
+                # violation leaves the asyncpg connection in an aborted state, which
+                # would corrupt subsequent queries if the session is returned to the pool
+                # without a ROLLBACK (BP-137).
+                await session.rollback()
                 logger.info("alert_fanout.dedup_race", dedup_key=dedup_key)  # type: ignore[no-any-return]
                 return FanoutResult(
                     suppressed=True,

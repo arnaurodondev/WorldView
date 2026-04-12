@@ -83,13 +83,21 @@ class ContentIngestionOutboxDispatcher(BaseOutboxDispatcher):
 
     def _get_value_serializer(self) -> OutboxEventValueSerializer:
         if self._value_serializer is None:
-            schema_path = _SCHEMA_DIR / "content.article.raw.v1.avsc"
-            schema_str = json.dumps(json.loads(schema_path.read_text()))
             registry = self._build_schema_registry_client()
-            avro_ser = build_avro_serializer(
-                schema_str=schema_str,
-                registry=registry,
-                config=AvroSerializerConfig(auto_register_schemas=True),
+            ser_config = AvroSerializerConfig(auto_register_schemas=True)
+
+            article_schema_str = json.dumps(json.loads((_SCHEMA_DIR / "content.article.raw.v1.avsc").read_text()))
+            article_ser = build_avro_serializer(schema_str=article_schema_str, registry=registry, config=ser_config)
+
+            prediction_schema_str = json.dumps(json.loads((_SCHEMA_DIR / "market.prediction.v1.avsc").read_text()))
+            prediction_ser = build_avro_serializer(
+                schema_str=prediction_schema_str, registry=registry, config=ser_config
             )
-            self._value_serializer = OutboxEventValueSerializer({"content.article.raw.v1": avro_ser})
+
+            self._value_serializer = OutboxEventValueSerializer(
+                {
+                    "content.article.raw.v1": article_ser,
+                    "market.prediction.snapshot": prediction_ser,
+                }
+            )
         return self._value_serializer

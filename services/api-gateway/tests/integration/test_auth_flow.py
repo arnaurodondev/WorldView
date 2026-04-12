@@ -131,16 +131,8 @@ def _make_mock_valkey_with_pkce(state: str, code_verifier: str) -> MagicMock:
     valkey.set = AsyncMock()
     valkey.get = AsyncMock(return_value=None)
     valkey.delete = AsyncMock(return_value=1)
-
-    # Pipeline: first call returns [code_verifier, 1] (PKCE get+delete)
-    # Subsequent get calls return None (user cache miss initially)
-    pipe = MagicMock()
-    pipe.get = MagicMock()
-    pipe.delete = MagicMock()
-    pipe.execute = AsyncMock(return_value=[code_verifier, 1])
-    pipe.__aenter__ = AsyncMock(return_value=pipe)
-    pipe.__aexit__ = AsyncMock(return_value=None)
-    valkey.pipeline = MagicMock(return_value=pipe)
+    # Atomic GETDEL — returns the stored code_verifier and deletes the key in one command.
+    valkey.getdel = AsyncMock(return_value=code_verifier)
 
     return valkey
 

@@ -92,6 +92,7 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                 public_key,
                 algorithms=["RS256"],
                 audience=settings.oidc_audience,
+                issuer=oidc_config.issuer,
                 options={"require": ["iss", "sub", "exp", "aud"]},
             )
 
@@ -209,7 +210,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = window_seconds
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if self.valkey is None:
+        # Read Valkey from app.state at request time (set during lifespan after startup).
+        # Fall back to self.valkey for test overrides; None means rate limiting is disabled.
+        valkey = getattr(request.app.state, "valkey", None) or self.valkey
+        if valkey is None:
             return cast("Response", await call_next(request))
 
         user = getattr(request.state, "user", None)
@@ -223,9 +227,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             limit = 20  # stricter limit for unauthenticated
 
         try:
-            current = await self.valkey.incr(key)
+            current = await valkey.incr(key)
             if current == 1:
-                await self.valkey.expire(key, self.window_seconds)
+                await valkey.expire(key, self.window_seconds)
             if current > limit:
                 return Response(
                     content='{"detail":"Rate limit exceeded"}',
