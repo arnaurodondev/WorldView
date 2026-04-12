@@ -34,30 +34,14 @@ def _make_oidc_config():
     )
 
 
-def _make_mock_valkey(pipeline_results: list[Any] | None = None) -> MagicMock:
-    """Build a mock ValkeyClient with a configurable pipeline."""
+def _make_mock_valkey(getdel_result: str | None = None) -> MagicMock:
+    """Build a mock ValkeyClient with a configurable atomic getdel result."""
     valkey = MagicMock()
     valkey.set = AsyncMock()
     valkey.get = AsyncMock(return_value=None)
     valkey.delete = AsyncMock(return_value=0)
-
-    if pipeline_results is not None:
-        pipe = MagicMock()
-        pipe.get = MagicMock()
-        pipe.delete = MagicMock()
-        pipe.execute = AsyncMock(return_value=pipeline_results)
-        pipe.__aenter__ = AsyncMock(return_value=pipe)
-        pipe.__aexit__ = AsyncMock(return_value=None)
-        valkey.pipeline = MagicMock(return_value=pipe)
-    else:
-        # Default: no state stored
-        pipe = MagicMock()
-        pipe.get = MagicMock()
-        pipe.delete = MagicMock()
-        pipe.execute = AsyncMock(return_value=[None, 0])
-        pipe.__aenter__ = AsyncMock(return_value=pipe)
-        pipe.__aexit__ = AsyncMock(return_value=None)
-        valkey.pipeline = MagicMock(return_value=pipe)
+    # Atomic GETDEL: returns stored value (or None if key absent) and deletes it.
+    valkey.getdel = AsyncMock(return_value=getdel_result)
 
     return valkey
 
@@ -205,7 +189,7 @@ async def test_callback_missing_state_400() -> None:
 async def test_callback_unknown_state_400() -> None:
     """GET /v1/auth/callback with state not in Valkey returns 400."""
     # Pipeline returns None (key not found)
-    valkey = _make_mock_valkey(pipeline_results=[None, 0])
+    valkey = _make_mock_valkey(getdel_result=None)
     app = _make_auth_app(valkey=valkey)
 
     transport = ASGITransport(app=app)
@@ -219,24 +203,10 @@ async def test_callback_unknown_state_400() -> None:
 @pytest.mark.asyncio
 async def test_callback_single_use_state() -> None:
     """Second callback attempt with already-consumed state returns 400."""
-    # First pipeline call returns verifier (consumed); subsequent calls return None
-    pipe_first = MagicMock()
-    pipe_first.get = MagicMock()
-    pipe_first.delete = MagicMock()
-    pipe_first.execute = AsyncMock(return_value=["code-verifier-123", 1])
-    pipe_first.__aenter__ = AsyncMock(return_value=pipe_first)
-    pipe_first.__aexit__ = AsyncMock(return_value=None)
-
-    pipe_second = MagicMock()
-    pipe_second.get = MagicMock()
-    pipe_second.delete = MagicMock()
-    pipe_second.execute = AsyncMock(return_value=[None, 0])
-    pipe_second.__aenter__ = AsyncMock(return_value=pipe_second)
-    pipe_second.__aexit__ = AsyncMock(return_value=None)
-
+    # First getdel returns verifier (consumed); second getdel returns None (key gone)
     valkey = MagicMock()
     valkey.set = AsyncMock()
-    valkey.pipeline = MagicMock(side_effect=[pipe_first, pipe_second])
+    valkey.getdel = AsyncMock(side_effect=["code-verifier-123", None])
 
     # httpx_client: first token exchange fails (to stop the flow early)
     httpx_client = MagicMock(spec=httpx.AsyncClient)

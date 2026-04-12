@@ -71,20 +71,17 @@ async def retrieve_and_delete_pkce_state(
     valkey: ValkeyClient | None,
     state: str,
 ) -> str | None:
-    """Atomically GET + DEL ``auth:pkce:{state}`` and return the code_verifier.
+    """Atomically GET and DELETE ``auth:pkce:{state}``; return the code_verifier.
 
     Returns ``None`` if the key is missing or Valkey is unavailable.
-    Uses a pipeline to minimise round-trips (GET + DEL in one call).
+    Uses the atomic GETDEL command to prevent PKCE state replay attacks —
+    a non-transactional pipeline GET+DEL could allow a second caller to GET
+    the same state before the DEL completes.
     """
     if valkey is None:
         return None
     key = f"{_PKCE_KEY_PREFIX}{state}"
     try:
-        async with valkey.pipeline() as pipe:
-            pipe.get(key)
-            pipe.delete(key)
-            results = await pipe.execute()
-        code_verifier: str | None = results[0]
-        return code_verifier
+        return await valkey.getdel(key)
     except Exception:  # — fail-open: treat Valkey errors as cache miss
         return None

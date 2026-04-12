@@ -142,6 +142,14 @@ class ValkeyClient:
         """Delete *key* and return the number of keys removed."""
         return await self._redis.delete(key)  # type: ignore[no-any-return]
 
+    async def getdel(self, key: str) -> str | None:
+        """Atomically GET and DELETE *key* (Redis 6.2+ / Valkey).
+
+        Returns the value that was stored, or ``None`` if the key did not exist.
+        Unlike GET + DEL in a pipeline, this is a single atomic command.
+        """
+        return await self._redis.getdel(key)  # type: ignore[no-any-return]
+
     async def exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists."""
         return bool(await self._redis.exists(key))
