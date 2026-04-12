@@ -71,6 +71,6 @@ class PIIDetectedError(RagError):
 
 
 class BriefingAuthError(DomainError):
-    """X-Internal-Token missing or invalid on the /internal/v1/briefings endpoint."""
+    """Auth failed on the /internal/v1/briefings endpoint (PRD-0025: InternalJWTMiddleware)."""
 
     error_code = "BRIEFING_AUTH_FAILED"

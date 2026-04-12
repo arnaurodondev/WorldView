@@ -153,7 +153,7 @@ async def test_briefing_rate_limit_429(settings: RagChatSettings) -> None:
         resp = await client.post(
             "/internal/v1/briefings",
             json=_VALID_BODY,
-            headers=_JWT_HEADERS,
+            headers=_BRIEFING_JWT_HEADERS,
         )
     assert resp.status_code == 429
 
@@ -171,7 +171,7 @@ async def test_briefing_provider_down_503(settings: RagChatSettings) -> None:
         resp = await client.post(
             "/internal/v1/briefings",
             json=_VALID_BODY,
-            headers=_JWT_HEADERS,
+            headers=_BRIEFING_JWT_HEADERS,
         )
     assert resp.status_code == 503
 
@@ -188,7 +188,7 @@ async def test_briefing_empty_market_snapshots_422(settings: RagChatSettings) ->
         resp = await client.post(
             "/internal/v1/briefings",
             json=body,
-            headers=_JWT_HEADERS,
+            headers=_BRIEFING_JWT_HEADERS,
         )
     assert resp.status_code == 422
 
@@ -202,7 +202,7 @@ async def test_briefing_lookback_days_out_of_range_422(settings: RagChatSettings
         resp = await client.post(
             "/internal/v1/briefings",
             json=body,
-            headers=_JWT_HEADERS,
+            headers=_BRIEFING_JWT_HEADERS,
         )
     assert resp.status_code == 422
 
@@ -216,7 +216,7 @@ async def test_briefing_lookback_days_max_boundary_422(settings: RagChatSettings
         resp = await client.post(
             "/internal/v1/briefings",
             json=body,
-            headers=_JWT_HEADERS,
+            headers=_BRIEFING_JWT_HEADERS,
         )
     assert resp.status_code == 422
 

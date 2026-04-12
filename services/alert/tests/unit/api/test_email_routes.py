@@ -99,7 +99,11 @@ class TestGetEmailPreferences:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/v1/email/preferences",
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         app.dependency_overrides.clear()  # type: ignore[attr-defined]
@@ -158,7 +162,11 @@ class TestGetEmailPreferences:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/v1/email/preferences",
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         app.dependency_overrides.clear()  # type: ignore[attr-defined]
@@ -188,7 +196,11 @@ class TestUpdateEmailPreferences:
                     "send_hour_utc": None,
                     "email_address": None,
                 },
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         app.dependency_overrides.clear()  # type: ignore[attr-defined]
@@ -218,7 +230,11 @@ class TestUpdateEmailPreferences:
             resp = await client.put(
                 "/api/v1/email/preferences",
                 json={"send_day_of_week": 7, "email_address": None},
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         assert resp.status_code == 422
@@ -236,7 +252,11 @@ class TestUpdateEmailPreferences:
             resp = await client.put(
                 "/api/v1/email/preferences",
                 json={"send_day_of_week": 1, "email_address": None},
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         app.dependency_overrides.clear()  # type: ignore[attr-defined]
@@ -256,7 +276,11 @@ class TestUpdateEmailPreferences:
             await client.put(
                 "/api/v1/email/preferences",
                 json={"email_address": None},
-                headers={"X-Tenant-ID": str(_TENANT_ID), "X-User-ID": str(_USER_ID)},
+                headers={
+                    "X-Internal-JWT": _INTERNAL_JWT,
+                    "X-Tenant-ID": str(_TENANT_ID),
+                    "X-User-ID": str(_USER_ID),
+                },
             )
 
         app.dependency_overrides.clear()  # type: ignore[attr-defined]
