@@ -72,32 +72,14 @@ class Settings(BaseSettings):
     dispatcher_lease_seconds: int = 60
     dispatcher_max_attempts: int = 5
 
-    # Internal service-to-service auth (QA-018)
-    internal_service_token: str = ""
+    # Auth (PRD-0025 Wave D) — S9 api-gateway base URL for JWKS fetch
+    api_gateway_url: str = "http://api-gateway:8000"
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-ingestion"
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
-
-    @model_validator(mode="after")
-    def _warn_missing_internal_token(self) -> Settings:
-        """Warn at startup if internal_service_token is unset (QA-018).
-
-        Uses structlog so the warning is captured by the structured log pipeline
-        in production log aggregators (F-SEC-001).
-        """
-        if not self.internal_service_token:
-            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "missing_internal_service_token",
-                message=(
-                    "MARKET_INGESTION_INTERNAL_SERVICE_TOKEN is not set — all mutating API "
-                    "endpoints (POST /trigger, POST /backfill) will return 401. "
-                    "Set this env var before deploying to production."
-                ),
-            )
-        return self
 
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:

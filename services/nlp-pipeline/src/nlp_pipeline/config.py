@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
     intelligence_database_url: SecretStr = SecretStr(
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
     )
     intelligence_database_url_read: SecretStr = SecretStr("")
     intelligence_db_pool_size: int = 10
@@ -112,6 +112,9 @@ class Settings(BaseSettings):
     price_impact_cycle_seconds: int = 14400
     price_impact_min_age_hours: int = 25
     market_data_internal_url: str = "http://market-data:8003"
+
+    # Auth
+    api_gateway_url: str = "http://api-gateway:8000"
 
     # Admin API
     admin_token: str = ""

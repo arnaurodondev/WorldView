@@ -11,7 +11,22 @@ from httpx import ASGITransport, AsyncClient
 pytestmark = pytest.mark.unit
 
 ADMIN_TOKEN = "test-admin-token"  # noqa: S105
-INTERNAL_TOKEN = "test-internal-token"  # noqa: S105
+
+# Minimal HS256 token accepted by InternalJWTMiddleware when no RS256 public key
+# is loaded (graceful-degradation path — standard in unit tests).
+import jwt as _jwt
+
+_INTERNAL_JWT = _jwt.encode(
+    {
+        "sub": "test-user",
+        "tenant_id": "test-tenant",
+        "role": "owner",
+        "iss": "worldview-gateway",
+        "exp": 9999999999,
+    },
+    "test-secret",
+    algorithm="HS256",
+)
 
 
 def _make_source(
@@ -105,7 +120,7 @@ def mock_app(mock_uow, mock_bronze):
     # Mock lifespan dependencies on app.state
     app.state.settings = MagicMock(
         admin_token=ADMIN_TOKEN,
-        internal_service_token=INTERNAL_TOKEN,
+        api_gateway_url="http://api-gateway:8000",
     )
     mock_factory = AsyncMock()
     app.state.write_factory = mock_factory
@@ -121,6 +136,18 @@ def mock_app(mock_uow, mock_bronze):
 
 @pytest.fixture
 async def client(mock_app):
+    transport = ASGITransport(app=mock_app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
+        yield ac
+
+
+@pytest.fixture
+async def unauthenticated_client(mock_app):
+    """Client without X-Internal-JWT — used to test InternalJWTMiddleware 401 behaviour."""
     transport = ASGITransport(app=mock_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -154,12 +181,14 @@ class TestDLQAuth:
 
 class TestInternalAuth:
     async def test_internal_health_no_auth_required(self, client: AsyncClient) -> None:
+        """GET /internal/v1/health is in the middleware skip-list — no JWT needed."""
         resp = await client.get("/internal/v1/health")
         assert resp.status_code == 200
         assert resp.json() == {"status": "healthy"}
 
-    async def test_internal_submit_missing_token_returns_401(self, client: AsyncClient) -> None:
-        resp = await client.post(
+    async def test_internal_submit_missing_jwt_returns_401(self, unauthenticated_client: AsyncClient) -> None:
+        """POST /internal/v1/ingest/submit without X-Internal-JWT → 401 from InternalJWTMiddleware."""
+        resp = await unauthenticated_client.post(
             "/internal/v1/ingest/submit",
             json={"source_type": "manual", "raw_content": "test"},
         )
@@ -442,7 +471,7 @@ class TestInternalSubmit:
 
         resp = await client.post(
             "/internal/v1/ingest/submit",
-            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            headers={"X-Internal-JWT": _INTERNAL_JWT},
             json={"source_type": "manual", "raw_content": "some article text"},
         )
         assert resp.status_code == 202
@@ -456,7 +485,7 @@ class TestInternalSubmit:
 
         resp = await client.post(
             "/internal/v1/ingest/submit",
-            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            headers={"X-Internal-JWT": _INTERNAL_JWT},
             json={"source_type": "manual", "raw_content": "duplicate content"},
         )
         assert resp.status_code == 202
@@ -465,7 +494,7 @@ class TestInternalSubmit:
     async def test_submit_both_url_and_content_rejected(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/internal/v1/ingest/submit",
-            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            headers={"X-Internal-JWT": _INTERNAL_JWT},
             json={"source_type": "manual", "url": "https://example.com", "raw_content": "test"},
         )
         assert resp.status_code == 422
@@ -473,7 +502,7 @@ class TestInternalSubmit:
     async def test_submit_neither_url_nor_content_rejected(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/internal/v1/ingest/submit",
-            headers={"X-Internal-Token": INTERNAL_TOKEN},
+            headers={"X-Internal-JWT": _INTERNAL_JWT},
             json={"source_type": "manual"},
         )
         assert resp.status_code == 422

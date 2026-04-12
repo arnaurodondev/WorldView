@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
+import jwt as _jwt
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel
 from sqlalchemy import select
 
@@ -12,6 +14,26 @@ if TYPE_CHECKING:
 
     from httpx import AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _make_system_jwt() -> str:
+    """HS256 JWT with role=system for integration tests.
+
+    InternalJWTMiddleware decodes without signature verification when public_key is None
+    (JWKS server not running in test environment).
+    """
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "integration-system",
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "integration-test-secret", algorithm="HS256")
+
+
+_INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _make_system_jwt()}
 
 
 class OutboxAssertions:

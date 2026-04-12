@@ -6,6 +6,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
+import jwt as _jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from rag_chat.app import create_app
@@ -16,9 +17,18 @@ pytestmark = pytest.mark.unit
 _TENANT_ID = UUID("00000000-0000-0000-0000-000000000010")
 _USER_ID = UUID("00000000-0000-0000-0000-000000000011")
 
+# InternalJWTMiddleware requires X-Internal-JWT; with no public key loaded (unit tests,
+# no lifespan) it decodes without signature verification and passes through.
+_INTERNAL_JWT = _jwt.encode(
+    {"sub": str(_USER_ID), "tenant_id": str(_TENANT_ID), "role": "user"},
+    "secret",
+    algorithm="HS256",
+)
+
 _AUTH_HEADERS = {
     "X-Tenant-Id": str(_TENANT_ID),
     "X-User-Id": str(_USER_ID),
+    "X-Internal-JWT": _INTERNAL_JWT,
 }
 
 
@@ -46,7 +56,7 @@ def _mock_orchestrator_sync() -> MagicMock:
             "intent": "FACTUAL_LOOKUP",
             "provider": "deepinfra",
             "latency_ms": 1234,
-        }
+        },
     )
 
     async def _stream(request, uow):  # type: ignore[no-untyped-def]
@@ -63,7 +73,7 @@ def _mock_orchestrator_sync() -> MagicMock:
                     "intent": "FACTUAL_LOOKUP",
                     "provider": "deepinfra",
                     "latency_ms": 500,
-                }
+                },
             ),
         }
 
@@ -76,7 +86,6 @@ def settings() -> RagChatSettings:
     return RagChatSettings(
         database_url="postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
         s1_internal_token="test-token",
-        internal_service_token="test-internal-token",
         log_json=False,
         log_level="WARNING",
     )

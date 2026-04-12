@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from alert.api import dlq, email_routes, health, routes
 from alert.config import Settings
+from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -60,6 +61,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("alert.app")  # type: ignore[no-any-return]
+
+    # 1a. InternalJWT middleware startup — fetch JWKS from S9 (PRD-0025 T-D-1-08)
+    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    await jwt_mw.startup()
 
     # 2. Tracing (conditional — middleware registered in create_app)
     if settings.otlp_endpoint:
@@ -132,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware (must register before app starts)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
     metrics: Any = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

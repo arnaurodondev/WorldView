@@ -2,14 +2,14 @@
 
 Called by S10 email scheduler to generate a portfolio risk narrative for digest emails.
 
-Auth:       X-Internal-Token validated via hmac.compare_digest (constant-time).
+Auth:       Enforced by InternalJWTMiddleware (PRD-0025) at the API layer — no
+            additional token check is required here.
 Rate limit: 100 requests/day per user_id (Valkey counter with midnight-aligned key).
 LLM:        EMAIL_DEEP_BRIEF_PROMPT via LLMProviderChain (collects full stream).
 """
 
 from __future__ import annotations
 
-import hmac
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from rag_chat.application.pipeline.prompts.intent_prompts import EMAIL_DEEP_BRIEF_PROMPT
-from rag_chat.domain.errors import BriefingAuthError, RateLimitExceededError
+from rag_chat.domain.errors import RateLimitExceededError
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -36,19 +36,20 @@ class GenerateBriefingUseCase:
     """Generate an AI-narrative portfolio risk brief for email delivery.
 
     Args:
-        llm_chain:              LLM provider chain (DeepInfra → OpenRouter → Ollama).
-        internal_service_token: Expected value of the X-Internal-Token header.
-        valkey:                 Valkey client for daily rate-limit counters.
+        llm_chain: LLM provider chain (DeepInfra → OpenRouter → Ollama).
+        valkey:    Valkey client for daily rate-limit counters.
+
+    Note:
+        Authentication is handled by InternalJWTMiddleware (PRD-0025) at the
+        API layer before this use case is invoked.
     """
 
     def __init__(
         self,
         llm_chain: LLMProviderChain,
-        internal_service_token: str,
         valkey: ValkeyClient,  # type: ignore[name-defined]
     ) -> None:
         self._llm_chain = llm_chain
-        self._token = internal_service_token
         self._valkey = valkey
 
     async def execute(
@@ -60,22 +61,16 @@ class GenerateBriefingUseCase:
         market_snapshots: list[dict[str, Any]],
         active_signals: list[dict[str, Any]],
         lookback_days: int,
-        token: str,
     ) -> dict[str, Any]:
         """Run the briefing pipeline.
 
         Returns a dict with keys: narrative, risk_summary, citations, generated_at.
 
         Raises:
-            BriefingAuthError:      Token missing or incorrect.
             RateLimitExceededError: User has exceeded 100 briefings today.
             ProviderUnavailableError: All LLM providers failed.
         """
-        # ── 1. Auth ───────────────────────────────────────────────────────────
-        if not self._token or not hmac.compare_digest(token, self._token):
-            raise BriefingAuthError("Invalid or missing X-Internal-Token")
-
-        # ── 2. Daily rate limit (100/day per user_id) ─────────────────────────
+        # ── 1. Daily rate limit (100/day per user_id) ─────────────────────────
         await self._check_daily_rate_limit(user_id)
 
         # ── 3. Build prompt ───────────────────────────────────────────────────
@@ -136,7 +131,7 @@ class GenerateBriefingUseCase:
 
         if count > _DAILY_RATE_LIMIT:
             raise RateLimitExceededError(
-                f"Briefing rate limit exceeded: {count} requests today (limit: {_DAILY_RATE_LIMIT})"
+                f"Briefing rate limit exceeded: {count} requests today (limit: {_DAILY_RATE_LIMIT})",
             )
 
     def _build_prompt(

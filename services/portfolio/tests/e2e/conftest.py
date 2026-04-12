@@ -76,6 +76,16 @@ async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture
+async def unauthenticated_e2e_client() -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client pointing at the live service with NO X-Internal-JWT header.
+
+    Use this fixture for tests that verify missing-JWT → 401 behaviour.
+    """
+    async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
+        yield ac
+
+
+@pytest.fixture
 def _e2e_engine():
     """SQLAlchemy engine connected directly to the test Postgres on localhost:55433."""
     engine = create_async_engine(_DB_URL, echo=False)

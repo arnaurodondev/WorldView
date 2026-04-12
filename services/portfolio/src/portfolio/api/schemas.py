@@ -98,7 +98,7 @@ class RecordTransactionRequest(BaseModel):
     direction: str
     quantity: Decimal
     price: Decimal
-    fees: Decimal = Decimal("0")
+    fees: Decimal = Decimal(0)
     currency: str
     executed_at: datetime
     external_ref: str | None = None
@@ -111,14 +111,14 @@ class RecordTransactionRequest(BaseModel):
     @field_validator("quantity")
     @classmethod
     def validate_quantity(cls, v: Decimal) -> Decimal:
-        if v <= Decimal("0"):
+        if v <= Decimal(0):
             raise ValueError("quantity must be positive")
         return v
 
     @field_validator("price")
     @classmethod
     def validate_price(cls, v: Decimal) -> Decimal:
-        if v <= Decimal("0"):
+        if v <= Decimal(0):
             raise ValueError("price must be positive")
         return v
 

@@ -47,7 +47,7 @@ class RecordTransactionCommand:
     price: Decimal
     currency: str
     executed_at: datetime
-    fees: Decimal = field(default_factory=lambda: Decimal("0"))
+    fees: Decimal = field(default_factory=lambda: Decimal(0))
     external_ref: str | None = None
     idempotency_key: str | None = None
     correlation_id: str | None = None

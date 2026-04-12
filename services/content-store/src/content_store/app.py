@@ -20,6 +20,7 @@ from content_store.api.documents import router as documents_router
 from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.db.session import _build_factories
+from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -113,6 +114,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey = valkey_client
     app.state.lsh_client = lsh_client
 
+    # 6. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
+
     log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
@@ -134,6 +140,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025)
+    # Store instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)

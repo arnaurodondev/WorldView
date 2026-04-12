@@ -104,7 +104,8 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._alert_preferences = SqlAlchemyAlertPreferenceRepository(self._session)
         self._entity_suppressions = SqlAlchemyEntitySuppressionRepository(self._session)
         self._brokerage_connections = SqlAlchemyBrokerageConnectionRepository(
-            self._session, cipher=self._snaptrade_cipher
+            self._session,
+            cipher=self._snaptrade_cipher,
         )
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
@@ -216,3 +217,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     async def rollback(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"
         await self._session.rollback()
+
+    async def flush(self) -> None:
+        assert self._session is not None, "UnitOfWork not entered"
+        await self._session.flush()

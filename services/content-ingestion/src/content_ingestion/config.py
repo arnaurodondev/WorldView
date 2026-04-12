@@ -100,8 +100,7 @@ class Settings(BaseSettings):
 
     # ── Security ──────────────────────────────────────────────────────────────
     admin_token: str = ""  # CONTENT_INGESTION_ADMIN_TOKEN — admin/DevOps only
-    # Inter-service token shared across all services (no CONTENT_INGESTION_ prefix)
-    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
+    api_gateway_url: str = "http://api-gateway:8000"
 
     # ── Scheduler (process — R22) ────────────────────────────────────────────
     scheduler_interval_seconds: int = 300

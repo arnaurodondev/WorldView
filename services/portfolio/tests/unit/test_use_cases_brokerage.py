@@ -61,7 +61,8 @@ async def seeded(uow: FakeUnitOfWork) -> dict[str, object]:
     tenant = await CreateTenantUseCase().execute(CreateTenantCommand(name="Acme"), uow)
     user = await CreateUserUseCase().execute(CreateUserCommand(tenant_id=tenant.id, email="owner@acme.com"), uow)
     portfolio = await CreatePortfolioUseCase().execute(
-        CreatePortfolioCommand(tenant_id=tenant.id, owner_id=user.id, name="My Portfolio"), uow
+        CreatePortfolioCommand(tenant_id=tenant.id, owner_id=user.id, name="My Portfolio"),
+        uow,
     )
     return {"tenant": tenant, "user": user, "portfolio": portfolio}
 
@@ -90,7 +91,10 @@ def _seed_connection(uow: FakeUnitOfWork, **kwargs: object) -> BrokerageConnecti
 class TestInitiateBrokerageConnection:
     @pytest.mark.asyncio
     async def test_happy_path_creates_pending_connection(
-        self, uow: FakeUnitOfWork, broker: FakeBrokerageClient, seeded: dict[str, object]
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
     ) -> None:
         tenant = seeded["tenant"]
         user = seeded["user"]
@@ -120,7 +124,10 @@ class TestInitiateBrokerageConnection:
 
     @pytest.mark.asyncio
     async def test_tos_not_accepted_raises_before_snaptrade_call(
-        self, uow: FakeUnitOfWork, broker: FakeBrokerageClient, seeded: dict[str, object]
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
     ) -> None:
         tenant = seeded["tenant"]
         user = seeded["user"]
@@ -144,7 +151,10 @@ class TestInitiateBrokerageConnection:
 
     @pytest.mark.asyncio
     async def test_portfolio_not_found_raises(
-        self, uow: FakeUnitOfWork, broker: FakeBrokerageClient, seeded: dict[str, object]
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
     ) -> None:
         tenant = seeded["tenant"]
         user = seeded["user"]
@@ -165,7 +175,10 @@ class TestInitiateBrokerageConnection:
 
     @pytest.mark.asyncio
     async def test_connection_id_embedded_in_redirect_uri(
-        self, uow: FakeUnitOfWork, broker: FakeBrokerageClient, seeded: dict[str, object]
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
     ) -> None:
         """connection_id is embedded in redirect_uri before SnapTrade call (§6.7 R-004)."""
         tenant = seeded["tenant"]
@@ -191,7 +204,10 @@ class TestInitiateBrokerageConnection:
 
     @pytest.mark.asyncio
     async def test_commits_after_api_calls(
-        self, uow: FakeUnitOfWork, broker: FakeBrokerageClient, seeded: dict[str, object]
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
     ) -> None:
         """uow.commit() is called exactly once after SnapTrade calls (BP-057)."""
         tenant = seeded["tenant"]
@@ -542,7 +558,7 @@ class TestGetSyncErrors:
                     connection_id=conn.id,
                     snaptrade_transaction_id=f"txn-{i:03d}",
                     error_type=SyncErrorType.API_ERROR,
-                )
+                ),
             )
 
         uc = GetSyncErrorsUseCase()

@@ -480,7 +480,8 @@ class FakeBrokerageClient:
 
 # Runtime Protocol check — asserts FakeBrokerageClient satisfies IBrokerageClient
 assert isinstance(
-    FakeBrokerageClient(), IBrokerageClient
+    FakeBrokerageClient(),
+    IBrokerageClient,
 ), "FakeBrokerageClient does not satisfy IBrokerageClient Protocol"
 
 
@@ -573,6 +574,9 @@ class FakeUnitOfWork(UnitOfWork):
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+    async def flush(self) -> None:
+        pass  # In-memory — no-op
 
     # ── Helpers for test setup ────────────────────────────────────────────────
 

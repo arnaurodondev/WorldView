@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
-_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
-_AUTH_HEADERS = {"X-Internal-Token": _INTERNAL_TOKEN}
+_INTERNAL_JWT = os.getenv("MARKET_INGESTION_E2E_INTERNAL_JWT", "")
+_AUTH_HEADERS = {"X-Internal-JWT": _INTERNAL_JWT} if _INTERNAL_JWT else {}
 
 
 # ── Health probes ─────────────────────────────────────────────────────────────
@@ -272,7 +272,8 @@ async def test_trigger_then_status_reflects_pending_task(e2e_client: AsyncClient
 
 
 async def test_trigger_full_async_pipeline_reaches_terminal_states(
-    e2e_client: AsyncClient, e2e_db_session: AsyncSession
+    e2e_client: AsyncClient,
+    e2e_db_session: AsyncSession,
 ) -> None:
     """Trigger ingestion and verify background services actively process queued tasks."""
     from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
@@ -300,8 +301,8 @@ async def test_trigger_full_async_pipeline_reaches_terminal_states(
             (
                 await e2e_db_session.execute(
                     select(IngestionTaskModel.id).where(
-                        IngestionTaskModel.status.in_(["running", "retry", "succeeded", "failed"])
-                    )
+                        IngestionTaskModel.status.in_(["running", "retry", "succeeded", "failed"]),
+                    ),
                 )
             )
             .scalars()
@@ -356,7 +357,7 @@ async def test_scheduler_active_guard_prevents_duplicate_active_tasks(
                     IngestionTaskModel.timeframe,
                     IngestionTaskModel.dataset_variant,
                 )
-                .having(func.count() > 1)
+                .having(func.count() > 1),
             )
         ).all()
         await e2e_db_session.rollback()
@@ -395,7 +396,7 @@ async def test_triggered_task_progresses_out_of_pending(
             await e2e_db_session.execute(
                 select(IngestionTaskModel)
                 .where(IngestionTaskModel.symbol == symbol)
-                .order_by(IngestionTaskModel.created_at.desc())
+                .order_by(IngestionTaskModel.created_at.desc()),
             )
         )
         .scalars()

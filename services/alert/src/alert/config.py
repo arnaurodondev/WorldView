@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import structlog
-from pydantic import Field, SecretStr, model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,9 +52,11 @@ class Settings(BaseSettings):
     # ── Valkey ─────────────────────────────────────────────────────────────
     valkey_url: str = "redis://localhost:6379/0"
 
+    # ── API Gateway ────────────────────────────────────────────────────────
+    api_gateway_url: str = "http://api-gateway:8000"
+
     # ── S1 Portfolio dependency ────────────────────────────────────────────
     s1_portfolio_base_url: str = "http://localhost:8001"
-    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
 
     # ── Domain ─────────────────────────────────────────────────────────────
     alert_dedup_window_seconds: int = 300

@@ -51,7 +51,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
 
     async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
         result = await self._session.execute(
-            select(InstrumentModel).where(func.upper(InstrumentModel.symbol) == symbol.upper()).limit(1)
+            select(InstrumentModel).where(func.upper(InstrumentModel.symbol) == symbol.upper()).limit(1),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None

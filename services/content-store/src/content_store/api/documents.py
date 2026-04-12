@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from content_store.api.dependencies import BatchDocumentsUseCaseDep, InternalAuthDep
+from content_store.api.dependencies import BatchDocumentsUseCaseDep
 from content_store.api.schemas import (
     BatchDocumentsRequest,
     BatchDocumentsResponse,
@@ -19,15 +19,14 @@ router = APIRouter(prefix="/api/v1", tags=["documents"])
 async def batch_documents(
     body: BatchDocumentsRequest,
     use_case: BatchDocumentsUseCaseDep,
-    _auth: InternalAuthDep,
 ) -> BatchDocumentsResponse:
     """Fetch metadata for up to 50 documents by doc_id.
 
-    Internal endpoint — requires ``X-Internal-Token`` header (``INTERNAL_SERVICE_TOKEN``).
+    Internal endpoint — protected by InternalJWTMiddleware (PRD-0025, RS256).
     Missing doc_ids are silently omitted from the response.
 
     Errors:
-    - 401: missing or invalid X-Internal-Token
+    - 401: missing or invalid X-Internal-JWT
     - 400: more than 50 doc_ids requested
     - 422: malformed request (invalid UUID, empty list)
     """
@@ -47,5 +46,5 @@ async def batch_documents(
                 word_count=m.word_count,
             )
             for m in metadata_list
-        ]
+        ],
     )

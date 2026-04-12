@@ -20,6 +20,7 @@ from content_ingestion.api.routes import admin, dlq, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
+from content_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
@@ -80,11 +81,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger("content_ingestion.app")
 
     # 1b. Security: warn on startup if auth tokens are not configured (F-SEC-006).
-    #     Prevents silent lock-out of admin/internal endpoints in misconfigured deployments.
+    #     Prevents silent lock-out of admin endpoints in misconfigured deployments.
     if not settings.admin_token:
         log.warning("security_admin_token_not_configured", detail="admin endpoints will reject all requests")
-    if not settings.internal_service_token:
-        log.warning("security_internal_token_not_configured", detail="internal endpoints will reject all requests")
 
     # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
@@ -129,6 +128,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
     )
     app.state.http_client = http_client
+
+    # 7. JWT middleware key fetch — must run after logging is configured
+    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    await jwt_mw.startup()
 
     log.info("service_started", service=settings.service_name)
     yield
@@ -188,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

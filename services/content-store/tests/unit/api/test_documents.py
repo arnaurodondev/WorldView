@@ -13,8 +13,12 @@ from content_store.application.ports.repositories import DocumentMetadataDTO
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 _NOW = datetime(2024, 6, 1, 10, 0, 0, tzinfo=UTC)
-_VALID_TOKEN = "test-internal-secret"  # noqa: S105 — matches conftest fixture
-_VALID_HEADERS = {"X-Internal-Token": _VALID_TOKEN}
+
+# Any value works for X-Internal-JWT in unit tests: when no JWKS is loaded
+# (public_key is None) the middleware decodes without signature verification
+# and passes the request through.  A syntactically invalid token still passes
+# because DecodeError is caught and empty state is set.
+_JWT_HEADERS = {"X-Internal-JWT": "unit.test.token"}
 
 
 def _make_dto(doc_id=None) -> DocumentMetadataDTO:
@@ -39,34 +43,14 @@ def _override(mock_uc):
 # ── Authentication ────────────────────────────────────────────────────────────
 
 
-async def test_batch_documents_requires_auth_when_token_not_configured(app, client) -> None:
-    """No token configured on settings → 503."""
-    app.state.settings.internal_service_token = ""
-    resp = await client.post("/api/v1/documents/batch", json={"doc_ids": [str(uuid4())]})
-    assert resp.status_code == 503
-    assert "Internal token not configured" in resp.json()["detail"]
-
-
-async def test_batch_documents_returns_401_for_missing_token(app, client) -> None:
-    """No X-Internal-Token header → 401."""
-    resp = await client.post("/api/v1/documents/batch", json={"doc_ids": [str(uuid4())]})
+async def test_batch_documents_requires_x_internal_jwt_header(app, unauthenticated_client) -> None:
+    """No X-Internal-JWT header → 401 from InternalJWTMiddleware (PRD-0025)."""
+    resp = await unauthenticated_client.post("/api/v1/documents/batch", json={"doc_ids": [str(uuid4())]})
     assert resp.status_code == 401
-    assert "Invalid internal token" in resp.json()["detail"]
 
 
-async def test_batch_documents_returns_401_for_wrong_token(app, client) -> None:
-    """Wrong X-Internal-Token value → 401."""
-    resp = await client.post(
-        "/api/v1/documents/batch",
-        json={"doc_ids": [str(uuid4())]},
-        headers={"X-Internal-Token": "wrong-token"},
-    )
-    assert resp.status_code == 401
-    assert "Invalid internal token" in resp.json()["detail"]
-
-
-async def test_batch_documents_with_valid_token(app, client) -> None:
-    """Correct X-Internal-Token → passes auth and returns 200."""
+async def test_batch_documents_passes_with_any_jwt_when_no_public_key(app, client) -> None:
+    """X-Internal-JWT present but public key not loaded → middleware passes through (graceful degradation)."""
     mock_uc = AsyncMock()
     mock_uc.execute.return_value = []
     app.dependency_overrides[get_batch_documents_use_case] = _override(mock_uc)
@@ -75,8 +59,9 @@ async def test_batch_documents_with_valid_token(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(uuid4())]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
+        # Middleware passes (no public key), use case returns [], endpoint returns 200
         assert resp.status_code == 200
     finally:
         app.dependency_overrides.clear()
@@ -98,7 +83,7 @@ async def test_batch_documents_endpoint_found(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(id1), str(id2)]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -123,7 +108,7 @@ async def test_batch_documents_endpoint_partial_match(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(id1), str(id2), str(id3)]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
         assert resp.status_code == 200
         assert len(resp.json()["documents"]) == 1
@@ -141,7 +126,7 @@ async def test_batch_documents_endpoint_no_match(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(uuid4())]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
         assert resp.status_code == 200
         assert resp.json()["documents"] == []
@@ -164,7 +149,7 @@ async def test_batch_documents_endpoint_too_many(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(uuid4()) for _ in range(51)]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
         assert resp.status_code == 400
         assert "Too many doc_ids" in resp.json()["detail"]
@@ -174,7 +159,7 @@ async def test_batch_documents_endpoint_too_many(app, client) -> None:
 
 async def test_batch_documents_endpoint_empty_list_rejected(app, client) -> None:
     """Empty doc_ids list → Pydantic validation error → 422."""
-    resp = await client.post("/api/v1/documents/batch", json={"doc_ids": []}, headers=_VALID_HEADERS)
+    resp = await client.post("/api/v1/documents/batch", json={"doc_ids": []}, headers=_JWT_HEADERS)
     assert resp.status_code == 422
 
 
@@ -183,7 +168,7 @@ async def test_batch_documents_endpoint_invalid_uuid(app, client) -> None:
     resp = await client.post(
         "/api/v1/documents/batch",
         json={"doc_ids": ["not-a-uuid"]},
-        headers=_VALID_HEADERS,
+        headers=_JWT_HEADERS,
     )
     assert resp.status_code == 422
 
@@ -211,7 +196,7 @@ async def test_batch_documents_response_fields(app, client) -> None:
         resp = await client.post(
             "/api/v1/documents/batch",
             json={"doc_ids": [str(doc_id)]},
-            headers=_VALID_HEADERS,
+            headers=_JWT_HEADERS,
         )
         assert resp.status_code == 200
         doc = resp.json()["documents"][0]

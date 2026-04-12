@@ -26,7 +26,7 @@ class Money:
 
     @classmethod
     def zero(cls, currency: str) -> Money:
-        return cls(amount=Decimal("0"), currency=currency)
+        return cls(amount=Decimal(0), currency=currency)
 
     @classmethod
     def from_string(cls, amount_str: str, currency: str) -> Money:
@@ -51,13 +51,13 @@ class Money:
         return Money(amount=-self.amount, currency=self.currency)
 
     def is_zero(self) -> bool:
-        return self.amount == Decimal("0")
+        return self.amount == Decimal(0)
 
     def is_positive(self) -> bool:
-        return self.amount > Decimal("0")
+        return self.amount > Decimal(0)
 
     def is_negative(self) -> bool:
-        return self.amount < Decimal("0")
+        return self.amount < Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class Quantity:
 
     @classmethod
     def zero(cls) -> Quantity:
-        return cls(value=Decimal("0"))
+        return cls(value=Decimal(0))
 
     def __add__(self, other: Quantity) -> Quantity:
         return Quantity(value=self.value + other.value)
@@ -97,13 +97,13 @@ class Quantity:
         return Quantity(value=-self.value)
 
     def is_zero(self) -> bool:
-        return self.value == Decimal("0")
+        return self.value == Decimal(0)
 
     def is_positive(self) -> bool:
-        return self.value > Decimal("0")
+        return self.value > Decimal(0)
 
     def is_negative(self) -> bool:
-        return self.value < Decimal("0")
+        return self.value < Decimal(0)
 
 
 @dataclass(frozen=True)

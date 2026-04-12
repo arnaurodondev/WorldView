@@ -20,7 +20,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import (
-    InternalAuthDep,
     get_list_prediction_markets_uc,
     get_prediction_market_history_uc,
     get_prediction_market_uc,
@@ -72,7 +71,6 @@ async def list_prediction_markets(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     uc: Annotated[ListPredictionMarketsUseCase, Depends(get_list_prediction_markets_uc)] = ...,  # type: ignore[assignment]
-    _auth: InternalAuthDep = None,  # D-02: internal endpoint — requires X-Internal-Token
 ) -> PredictionMarketsListResponse:
     """List prediction markets with optional status/text filters and pagination."""
     if status not in _VALID_STATUS_VALUES:
@@ -110,7 +108,6 @@ async def get_prediction_market_history(
     to_dt: Annotated[datetime | None, Query(alias="to")] = None,
     limit: Annotated[int, Query(ge=1, le=2000)] = 500,
     uc: Annotated[GetPredictionMarketHistoryUseCase, Depends(get_prediction_market_history_uc)] = ...,  # type: ignore[assignment]
-    _auth: InternalAuthDep = None,  # D-02: internal endpoint — requires X-Internal-Token
 ) -> PredictionMarketHistoryResponse:
     """Return time-series probability snapshots for a prediction market."""
     try:
@@ -144,7 +141,6 @@ async def get_prediction_market_history(
 async def get_prediction_market(
     market_id: str,
     uc: Annotated[GetPredictionMarketUseCase, Depends(get_prediction_market_uc)] = ...,  # type: ignore[assignment]
-    _auth: InternalAuthDep = None,  # D-02: internal endpoint — requires X-Internal-Token
 ) -> PredictionMarketDetailResponse:
     """Return full detail for a single prediction market."""
     result = await uc.execute(market_id)

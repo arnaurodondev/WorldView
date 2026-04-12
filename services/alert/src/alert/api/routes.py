@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
-from alert.api.dependencies import AckUseCaseDep, GetPendingAlertsUseCaseDep
+from alert.api.dependencies import AckUseCaseDep, CurrentUserIdDep, GetPendingAlertsUseCaseDep
 from alert.api.schemas import PendingAlertResponse, PendingAlertsResponse
 from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
@@ -29,16 +29,15 @@ router = APIRouter(prefix="/api/v1", tags=["alerts"])
 async def get_pending_alerts(
     request: Request,
     uc: GetPendingAlertsUseCaseDep,
-    user_id: UUID = Query(..., description="Authenticated user UUID"),
+    user_id: CurrentUserIdDep,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     min_severity: str | None = Query(default=None, description="Minimum severity: low|medium|high|critical"),
 ) -> PendingAlertsResponse:
-    """Return paginated unacknowledged alerts for the given user.
+    """Return paginated unacknowledged alerts for the authenticated user.
 
-    In production this user_id should come from a JWT/session; for the
-    current deployment the caller passes it as a query parameter (S9
-    API gateway will inject it from the auth token).
+    ``user_id`` is extracted from the RS256 internal JWT set by InternalJWTMiddleware
+    (PRD-0025 §T-D-1-10). The caller must not pass user_id as a query parameter.
 
     Optional ``min_severity`` filter returns only alerts at or above the
     given tier (e.g. ``?min_severity=high`` returns HIGH and CRITICAL only).
@@ -85,9 +84,12 @@ async def acknowledge_alert(
     alert_id: UUID,
     request: Request,
     uc: AckUseCaseDep,
-    user_id: UUID = Query(..., description="Authenticated user UUID"),
+    user_id: CurrentUserIdDep,
 ) -> dict[str, str]:
-    """Acknowledge (mark delivered) an alert for the given user.
+    """Acknowledge (mark delivered) an alert for the authenticated user.
+
+    ``user_id`` is extracted from the RS256 internal JWT set by InternalJWTMiddleware
+    (PRD-0025 §T-D-1-10).
 
     Returns 200 on success.  Returns 404 — not 403 — when the alert
     does not exist OR belongs to a different user (avoids user enumeration).
@@ -113,11 +115,13 @@ async def acknowledge_alert(
 @router.websocket("/alerts/stream")
 async def alerts_stream(
     websocket: WebSocket,
-    user_id: UUID = Query(..., description="Authenticated user UUID"),
 ) -> None:
     """WebSocket endpoint — pushes real-time alerts to a connected user.
 
-    The client must pass ``user_id`` as a query parameter on connect.
+    ``user_id`` is extracted from ``websocket.state.user_id`` set by
+    InternalJWTMiddleware on the HTTP upgrade request (PRD-0025 §T-D-1-10).
+    The JWT must be passed via the ``X-Internal-JWT`` header on the upgrade
+    request (S9 injects this after validating the client token).
 
     Architecture (cross-process fan-out):
     - The standalone ``intelligence_consumer_main`` process publishes alerts to
@@ -130,6 +134,16 @@ async def alerts_stream(
     Delivery is best-effort: if no client is connected when a message arrives,
     the message is dropped.  On reconnect, clients catch up via GET /alerts/pending.
     """
+    user_id_raw = getattr(websocket.state, "user_id", None)
+    if not user_id_raw:
+        await websocket.close(code=4001)
+        return
+    try:
+        user_id = UUID(str(user_id_raw))
+    except (ValueError, AttributeError):
+        await websocket.close(code=4001)
+        return
+
     manager = websocket.app.state.ws_manager
     valkey = websocket.app.state.valkey
     channel = f"alert:{user_id}"

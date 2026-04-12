@@ -76,23 +76,3 @@ async def verify_admin_token(
 
 
 AdminAuthDep = Annotated[None, Depends(verify_admin_token)]
-
-
-# ── Internal auth ────────────────────────────────────────────────────────────
-
-
-async def verify_internal_token(
-    request: Request,
-    x_internal_token: str | None = Header(None),
-) -> None:
-    """Validate ``X-Internal-Token`` header against the configured internal service token.
-
-    Uses ``hmac.compare_digest`` for timing-safe comparison.
-    The internal token is shared across all services (``INTERNAL_SERVICE_TOKEN``).
-    """
-    expected = request.app.state.settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]
