@@ -22,6 +22,7 @@
 | **Refactoring** | `/refactor` | Safe behavior-preserving restructure |
 | **Documentation audit** | `/docs-audit` | Find gaps, staleness, inconsistencies in docs |
 | **Scaffold new service** | `/scaffold-service` | Full hexagonal service skeleton: domain, API, tests, docker-compose |
+| **Scaffold frontend page/feature** | `/scaffold-frontend` | Design-first (pencil.dev) → Next.js/React: dark theme, S9 gateway, TanStack Query, Vitest |
 | **DB migration** | `/migrate-db` | Generate, validate, and test Alembic migration (forward-compat + rollback) |
 
 **Always use a skill for non-trivial work.** Skills enforce the correct workflow, validation gates, and mandatory compounding updates.

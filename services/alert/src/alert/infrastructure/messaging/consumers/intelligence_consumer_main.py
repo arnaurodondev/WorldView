@@ -36,9 +36,8 @@ async def main() -> None:
     from alert.infrastructure.db.repositories.outbox import OutboxRepository
     from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
     from alert.infrastructure.db.session import _build_factories
-    from alert.infrastructure.messaging.consumers.intelligence_consumer import (
-        IntelligenceConsumer,
-    )
+    from alert.infrastructure.messaging.consumers.intelligence_consumer import IntelligenceConsumer
+    from alert.infrastructure.metrics.prometheus_metrics_impl import PrometheusAlertMetrics
     from alert.infrastructure.notification.valkey_publisher import ValkeyNotificationPublisher
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -99,6 +98,7 @@ async def main() -> None:
             high=settings.alert_severity_high_threshold,
             medium=settings.alert_severity_medium_threshold,
         ),
+        metrics=PrometheusAlertMetrics(),
     )
 
     # Consumer config

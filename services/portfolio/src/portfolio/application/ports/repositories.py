@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
+    from portfolio.domain.value_objects import AuthAuditEvent
 
 
 @dataclass
@@ -74,6 +75,32 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def save(self, user: User) -> None: ...
+
+    @abstractmethod
+    async def find_by_external_id(self, external_id: str) -> User | None:
+        """Return the user whose ``external_id`` matches the Zitadel subject (cross-tenant)."""
+        ...
+
+    @abstractmethod
+    async def find_by_email_without_external_id(self, email: str) -> User | None:
+        """Return the first user with this email whose ``external_id`` is NULL (cross-tenant).
+
+        Used during provisioning to link an existing pre-OIDC account to a new identity.
+        """
+        ...
+
+    @abstractmethod
+    async def link_external_id(self, user_id: UUID, external_id: str) -> None:
+        """Set ``external_id`` on an existing user row (UPDATE users SET external_id=...)."""
+        ...
+
+    @abstractmethod
+    async def find_by_email_with_conflicting_external_id(self, email: str, current_sub: str) -> User | None:
+        """Return any user with this email whose ``external_id`` is not NULL and differs from ``current_sub``.
+
+        Used to detect the 409 conflict case: same email already linked to a different identity.
+        """
+        ...
 
 
 class PortfolioRepository(ABC):
@@ -287,3 +314,10 @@ class BrokerageTransactionSyncErrorRepository(ABC):
 
     @abstractmethod
     async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]: ...
+
+
+class AuthAuditLogRepository(ABC):
+    @abstractmethod
+    async def create(self, event: AuthAuditEvent, user_id: UUID | None) -> None:
+        """Append an auth audit event to ``auth_audit_log``."""
+        ...

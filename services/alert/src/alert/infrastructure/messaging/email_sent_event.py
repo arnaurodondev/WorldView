@@ -36,7 +36,7 @@ _PARSED_SCHEMA: dict[str, Any] | None = None
 def _get_parsed_schema() -> dict[str, Any]:
     global _PARSED_SCHEMA
     if _PARSED_SCHEMA is None:
-        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)  # type: ignore[assignment]
+        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)  # type: ignore[assignment, arg-type]
     return _PARSED_SCHEMA  # type: ignore[return-value]
 
 

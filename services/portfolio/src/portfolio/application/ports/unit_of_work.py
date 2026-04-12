@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
+        AuthAuditLogRepository,
         BrokerageConnectionRepository,
         BrokerageTransactionSyncErrorRepository,
         EntitySuppressionRepository,
@@ -82,6 +83,10 @@ class UnitOfWork(ABC):
     @property
     @abstractmethod
     def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository: ...
+
+    @property
+    @abstractmethod
+    def auth_audit_log(self) -> AuthAuditLogRepository: ...
 
     @abstractmethod
     async def commit(self) -> None: ...

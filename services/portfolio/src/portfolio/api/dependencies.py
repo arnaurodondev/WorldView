@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import hmac
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Request
 
 from portfolio.application.ports.cache import WatchlistCachePort
 from portfolio.application.ports.unit_of_work import UnitOfWork
@@ -44,17 +43,6 @@ async def get_watchlist_cache(request: Request) -> WatchlistCachePort:
     )
 
 
-async def verify_internal_token(
-    request: Request,
-    x_internal_token: str | None = Header(None),
-) -> None:
-    """Validate X-Internal-Token against the configured service token."""
-    expected = request.app.state.settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
 UoWDep = Annotated[UnitOfWork, Depends(get_uow)]
 ReadUoWDep = Annotated[UnitOfWork, Depends(get_read_uow)]
 WatchlistCacheDep = Annotated[WatchlistCachePort, Depends(get_watchlist_cache)]
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]

@@ -69,3 +69,16 @@ class SyncErrorType(StrEnum):
     UNSUPPORTED_TYPE = "unsupported_type"
     API_ERROR = "api_error"
     VALIDATION_ERROR = "validation_error"
+
+
+class TenantUserRole(StrEnum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class AuthAuditEventType(StrEnum):
+    USER_CREATED = "user_created"
+    ACCOUNT_LINKED = "account_linked"
+    LOGIN_PROVISIONED = "login_provisioned"
+    PROVISION_CONFLICT_409 = "provision_conflict_409"

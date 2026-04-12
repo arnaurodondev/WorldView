@@ -220,3 +220,23 @@ class BrokerageConnectionAlreadyDisconnectedError(BrokerageConnectionStateError)
 
 class BrokerageApiError(DomainError):
     error_code = "BROKERAGE_API_ERROR"
+
+
+# ── Auth / Provisioning ────────────────────────────────────────────────────────
+
+
+class ProvisionConflictError(DomainError):
+    """Raised when provisioning detects an email already linked to a different Zitadel sub.
+
+    Maps to HTTP 409 in the provision route handler.
+    """
+
+    error_code = "PROVISION_CONFLICT"
+
+    def __init__(self, email: str, conflict_sub: str | None) -> None:
+        super().__init__(
+            f"Email '{email}' is already linked to a different identity provider subject.",
+            details={"email": email, "conflict_sub": conflict_sub or ""},
+        )
+        self.email = email
+        self.conflict_sub = conflict_sub

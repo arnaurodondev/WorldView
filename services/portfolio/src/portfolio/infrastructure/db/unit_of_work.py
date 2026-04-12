@@ -10,6 +10,7 @@ from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
     SqlAlchemyEntitySuppressionRepository,
 )
+from portfolio.infrastructure.db.repositories.auth_audit_log import SqlAlchemyAuthAuditLogRepository
 from portfolio.infrastructure.db.repositories.brokerage_connection import SqlAlchemyBrokerageConnectionRepository
 from portfolio.infrastructure.db.repositories.brokerage_sync_error import (
     SqlAlchemyBrokerageTransactionSyncErrorRepository,
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
+        AuthAuditLogRepository,
         BrokerageConnectionRepository,
         BrokerageTransactionSyncErrorRepository,
         EntitySuppressionRepository,
@@ -85,6 +87,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._entity_suppressions: SqlAlchemyEntitySuppressionRepository | None = None
         self._brokerage_connections: SqlAlchemyBrokerageConnectionRepository | None = None
         self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
+        self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -104,6 +107,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             self._session, cipher=self._snaptrade_cipher
         )
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
+        self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -197,6 +201,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository:
         assert self._brokerage_sync_errors is not None, "UnitOfWork not entered"
         return self._brokerage_sync_errors
+
+    @property
+    def auth_audit_log(self) -> AuthAuditLogRepository:
+        assert self._auth_audit_log is not None, "UnitOfWork not entered"
+        return self._auth_audit_log
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"

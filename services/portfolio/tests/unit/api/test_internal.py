@@ -1,7 +1,10 @@
 """Unit tests for internal API endpoints (S10 → S1).
 
 Tests use FakeUnitOfWork with in-memory repositories.
-Auth token: X-Internal-Token header validated against app settings.
+Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) — PRD-0025 Wave C.
+In unit tests the middleware passes through (public key not loaded), so route-level
+behavior (data retrieval, 404s) is tested here; middleware auth is tested separately
+in test_provision_endpoint.py.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from portfolio.api.dependencies import get_read_uow, get_uow
 from portfolio.api.internal import internal_router
-from portfolio.config import Settings
 from portfolio.domain.entities.user import User
 from portfolio.domain.entities.watchlist import Watchlist
 from portfolio.domain.entities.watchlist_member import WatchlistMember
@@ -24,14 +26,10 @@ from tests.unit.fakes import FakeUnitOfWork
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
-TOKEN = "test-internal-secret"  # noqa: S105
-
 
 def _make_app(uow: FakeUnitOfWork) -> FastAPI:
     """Create a minimal FastAPI app with only the internal router."""
     app = FastAPI()
-    settings = Settings(internal_service_token=TOKEN)
-    app.state.settings = settings
 
     async def override_uow():
         yield uow
@@ -84,30 +82,6 @@ async def test_internal_health() -> None:
     assert resp.json() == {"status": "healthy"}
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-
-
-async def test_internal_auth_required() -> None:
-    """Missing X-Internal-Token → 401."""
-    uow = FakeUnitOfWork()
-    app = _make_app(uow)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(f"/internal/v1/watchlists/by-entity/{uuid4()}")
-    assert resp.status_code == 401
-
-
-async def test_internal_auth_invalid() -> None:
-    """Wrong X-Internal-Token → 401."""
-    uow = FakeUnitOfWork()
-    app = _make_app(uow)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/watchlists/by-entity/{uuid4()}",
-            headers={"X-Internal-Token": "wrong-token"},
-        )
-    assert resp.status_code == 401
-
-
 # ── Single entity lookup ──────────────────────────────────────────────────────
 
 
@@ -117,10 +91,7 @@ async def test_by_entity_returns_watchers() -> None:
     _, user_id, watchlist_id, entity_id = _seed_watchlist_data(uow)
     app = _make_app(uow)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/watchlists/by-entity/{entity_id}",
-            headers={"X-Internal-Token": TOKEN},
-        )
+        resp = await client.get(f"/internal/v1/watchlists/by-entity/{entity_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["entity_id"] == str(entity_id)
@@ -134,10 +105,7 @@ async def test_by_entity_empty() -> None:
     uow = FakeUnitOfWork()
     app = _make_app(uow)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/watchlists/by-entity/{uuid4()}",
-            headers={"X-Internal-Token": TOKEN},
-        )
+        resp = await client.get(f"/internal/v1/watchlists/by-entity/{uuid4()}")
     assert resp.status_code == 200
     assert resp.json()["watchers"] == []
 
@@ -155,7 +123,6 @@ async def test_by_entities_batch() -> None:
         resp = await client.post(
             "/internal/v1/watchlists/by-entities",
             json={"entity_ids": [str(entity_id), str(unknown_id)]},
-            headers={"X-Internal-Token": TOKEN},
         )
     assert resp.status_code == 200
     results = resp.json()["results"]
@@ -173,7 +140,6 @@ async def test_by_entities_max_100() -> None:
         resp = await client.post(
             "/internal/v1/watchlists/by-entities",
             json={"entity_ids": ids},
-            headers={"X-Internal-Token": TOKEN},
         )
     assert resp.status_code == 400
 
@@ -187,10 +153,7 @@ async def test_watchlist_entities_list() -> None:
     _, _, watchlist_id, entity_id = _seed_watchlist_data(uow)
     app = _make_app(uow)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/watchlists/{watchlist_id}/entities",
-            headers={"X-Internal-Token": TOKEN},
-        )
+        resp = await client.get(f"/internal/v1/watchlists/{watchlist_id}/entities")
     assert resp.status_code == 200
     data = resp.json()
     assert data["watchlist_id"] == str(watchlist_id)
@@ -223,7 +186,7 @@ async def test_get_user_for_digest_returns_email() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(
             f"/internal/v1/users/{user_id}",
-            headers={"X-Internal-Token": TOKEN, "X-Tenant-ID": str(tenant_id)},
+            headers={"X-Tenant-ID": str(tenant_id)},
         )
     assert resp.status_code == 200
     data = resp.json()
@@ -231,32 +194,6 @@ async def test_get_user_for_digest_returns_email() -> None:
     assert data["tenant_id"] == str(tenant_id)
     assert data["email_address"] == email
     assert "created_at" in data
-
-
-async def test_get_user_for_digest_401_missing_token() -> None:
-    """Missing X-Internal-Token → 401."""
-    uow = FakeUnitOfWork()
-    tenant_id, user_id, _ = _seed_user(uow)
-    app = _make_app(uow)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}",
-            headers={"X-Tenant-ID": str(tenant_id)},
-        )
-    assert resp.status_code == 401
-
-
-async def test_get_user_for_digest_401_wrong_token() -> None:
-    """Wrong X-Internal-Token → 401."""
-    uow = FakeUnitOfWork()
-    tenant_id, user_id, _ = _seed_user(uow)
-    app = _make_app(uow)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}",
-            headers={"X-Internal-Token": "wrong", "X-Tenant-ID": str(tenant_id)},
-        )
-    assert resp.status_code == 401
 
 
 async def test_get_user_for_digest_404_unknown_user() -> None:
@@ -268,7 +205,7 @@ async def test_get_user_for_digest_404_unknown_user() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(
             f"/internal/v1/users/{unknown_id}",
-            headers={"X-Internal-Token": TOKEN, "X-Tenant-ID": str(tenant_id)},
+            headers={"X-Tenant-ID": str(tenant_id)},
         )
     assert resp.status_code == 404
 
@@ -282,7 +219,7 @@ async def test_get_user_for_digest_404_wrong_tenant() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(
             f"/internal/v1/users/{user_id}",
-            headers={"X-Internal-Token": TOKEN, "X-Tenant-ID": str(other_tenant)},
+            headers={"X-Tenant-ID": str(other_tenant)},
         )
     assert resp.status_code == 404
 
@@ -295,7 +232,7 @@ async def test_get_user_for_digest_response_shape() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(
             f"/internal/v1/users/{user_id}",
-            headers={"X-Internal-Token": TOKEN, "X-Tenant-ID": str(tenant_id)},
+            headers={"X-Tenant-ID": str(tenant_id)},
         )
     assert resp.status_code == 200
     data = resp.json()

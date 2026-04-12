@@ -48,6 +48,35 @@ _S1_INTERNAL_TOKEN = os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal
 _S2_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 _S4_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 
+
+# PRD-0025: InternalJWTMiddleware requires X-Internal-JWT on all authenticated paths.
+# When the api-gateway is not running (no JWKS available), the middleware decodes the
+# JWT WITHOUT signature verification, so any structurally-valid JWT works.
+# Override via PORTFOLIO_E2E_INTERNAL_JWT when the gateway is running.
+def _make_e2e_system_jwt() -> str:
+    """Generate a structurally-valid JWT with role=system for E2E tests.
+
+    Only used when PORTFOLIO_E2E_INTERNAL_JWT is not provided.  Signature is
+    not verified by the portfolio service when the api-gateway JWKS is unavailable.
+    """
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "e2e-system-user",
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    # HS256 with a throwaway secret — not verified when public_key is None
+    return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
+
+
+_INTERNAL_JWT = os.getenv("PORTFOLIO_E2E_INTERNAL_JWT", "") or _make_e2e_system_jwt()
+
 # ── Service base URLs ──────────────────────────────────────────────────────────
 
 _S1_BASE_URL = os.getenv("PORTFOLIO_E2E_BASE_URL", "http://localhost:8001")
@@ -115,8 +144,15 @@ def skip_if_not_running() -> None:
 
 @pytest.fixture
 async def s1_client() -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client for S1 (portfolio service) at localhost:8001."""
-    async with AsyncClient(base_url=_S1_BASE_URL, timeout=30.0) as ac:
+    """HTTP client for S1 (portfolio service) at localhost:8001.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025).
+    """
+    async with AsyncClient(
+        base_url=_S1_BASE_URL,
+        timeout=30.0,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 

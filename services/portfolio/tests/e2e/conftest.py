@@ -34,10 +34,44 @@ _DB_URL = os.getenv(
 )
 
 
+# PRD-0025: InternalJWTMiddleware requires this header.  When the api-gateway is
+# not running (no JWKS available), the middleware decodes the JWT WITHOUT signature
+# verification, so any structurally-valid JWT works.
+# Override via PORTFOLIO_E2E_INTERNAL_JWT when the gateway is running.
+def _make_e2e_system_jwt() -> str:
+    """Generate a structurally-valid JWT with role=system for E2E tests."""
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "e2e-system-user",
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
+
+
+_INTERNAL_JWT = os.getenv("PORTFOLIO_E2E_INTERNAL_JWT", "") or _make_e2e_system_jwt()
+
+
 @pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client pointing at the live portfolio service on localhost:8001."""
-    async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
+    """HTTP client pointing at the live portfolio service on localhost:8001.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025).
+    When the api-gateway JWKS is unavailable the middleware passes through any
+    non-empty token; override via PORTFOLIO_E2E_INTERNAL_JWT env var when the
+    gateway is running.
+    """
+    async with AsyncClient(
+        base_url=_BASE_URL,
+        timeout=30.0,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 

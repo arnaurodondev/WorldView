@@ -16,13 +16,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from observability import configure_logging, configure_tracing, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
-from portfolio.api.dependencies import InternalAuthDep
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
 from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
+from portfolio.api.routes.provision import provision_router
 from portfolio.config import Settings
 from portfolio.domain.errors import DomainError
 from portfolio.infrastructure.db.session import _build_factories
+from portfolio.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -71,13 +72,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
 
-    if not settings.internal_service_token:
-        logger.warning(  # type: ignore[no-any-return]
-            "portfolio_internal_token_not_configured",
-            detail="PORTFOLIO_INTERNAL_SERVICE_TOKEN is empty; all internal endpoints will return 401",
-        )
-
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
+
+    # 3. Start InternalJWTMiddleware — fetch JWKS from S9 at startup
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
 
     # 4. Create DB session factories (R23 — write + read split)
     engine, read_engine, write_factory, read_factory = _build_factories(settings)
@@ -149,6 +149,13 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
 
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave C)
+    # We store the instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
+
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
@@ -163,6 +170,7 @@ def create_app() -> FastAPI:
     # API routes
     app.include_router(api_router)
     app.include_router(internal_router)
+    app.include_router(provision_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -200,10 +208,8 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/metrics")
-    async def metrics_endpoint(
-        _auth: InternalAuthDep,
-    ) -> FastAPIResponse:
-        """Prometheus metrics — requires X-Internal-Token (M-004)."""
+    async def metrics_endpoint() -> FastAPIResponse:
+        """Prometheus metrics — protected by InternalJWTMiddleware (M-004)."""
         data = prometheus_client.generate_latest()
         return FastAPIResponse(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 

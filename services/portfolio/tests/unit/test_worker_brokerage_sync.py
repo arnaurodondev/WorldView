@@ -74,7 +74,7 @@ def _make_worker(uow: FakeUnitOfWork, broker: FakeBrokerageClient | None = None)
     from portfolio.config import Settings
     from portfolio.workers.brokerage_sync_worker import BrokerageTransactionSyncWorker
 
-    settings = Settings(internal_service_token="t")
+    settings = Settings()  # type: ignore[call-arg]
     broker = broker or FakeBrokerageClient()
 
     # We pass a sentinel for the session_factory — the worker's sync_cycle and

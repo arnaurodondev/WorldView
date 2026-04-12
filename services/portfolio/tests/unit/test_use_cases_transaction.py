@@ -76,6 +76,18 @@ class FakeUserRepo(UserRepository):
 
     async def save(self, user): ...
 
+    async def find_by_external_id(self, external_id):
+        return None
+
+    async def find_by_email_without_external_id(self, email):
+        return None
+
+    async def link_external_id(self, user_id, external_id):
+        pass
+
+    async def find_by_email_with_conflicting_external_id(self, email, current_sub):
+        return None
+
 
 class FakePortfolioRepo(PortfolioRepository):
     def __init__(self, portfolio: Portfolio) -> None:
@@ -253,6 +265,10 @@ class FakeUoW(UnitOfWork):
 
     @property
     def brokerage_sync_errors(self):
+        return None
+
+    @property
+    def auth_audit_log(self):
         return None
 
     commit_count: int = 0

@@ -153,11 +153,11 @@ class InternalJWTIssuerMiddleware(BaseHTTPMiddleware):
                         private_key=private_key,
                         kid=kid,
                     )
-                    # Mutate the request scope headers for the downstream call
-                    scope = request.scope
-                    headers = dict(scope.get("headers", []))
-                    headers[b"x-internal-jwt"] = token.encode()
-                    scope["headers"] = list(headers.items())
+                    # Mutate the existing headers list IN PLACE so that the
+                    # cached request._headers (Headers._list) sees the change.
+                    headers_list: list = request.scope["headers"]
+                    headers_list[:] = [(k, v) for k, v in headers_list if k.lower() != b"x-internal-jwt"]
+                    headers_list.append((b"x-internal-jwt", token.encode()))
                 except Exception:  # noqa: S110 — fail-open: JWT issuance failure must not block proxy
                     pass
 
