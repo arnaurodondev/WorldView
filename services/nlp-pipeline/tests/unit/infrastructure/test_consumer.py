@@ -319,7 +319,11 @@ class TestEnqueueEnriched:
 def _make_failing_nlp_session_factory() -> tuple[AsyncMock, MagicMock]:
     """Build (session, session_factory) where session.commit raises RuntimeError."""
     session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock())
+    # scalar_one_or_none must return None so the idempotency guard in _run_pipeline
+    # does not short-circuit before the pipeline runs (and commit fails as intended).
+    _exec_result = MagicMock()
+    _exec_result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=_exec_result)
     session.add = MagicMock()
     session.commit = AsyncMock(side_effect=RuntimeError("nlp db down"))
 
@@ -520,7 +524,11 @@ class TestSourceMetadataWrite:
 def _make_ok_nlp_session_factory() -> MagicMock:
     """Build a mock session factory whose session always commits successfully."""
     session = AsyncMock()
-    session.execute = AsyncMock(return_value=MagicMock())
+    # scalar_one_or_none must return None so the idempotency guard in _run_pipeline
+    # does not short-circuit before the pipeline runs.
+    _exec_result = MagicMock()
+    _exec_result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=_exec_result)
     session.add = MagicMock()
     session.commit = AsyncMock()
 
