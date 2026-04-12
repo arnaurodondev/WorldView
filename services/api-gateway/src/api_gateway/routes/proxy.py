@@ -385,3 +385,102 @@ async def get_prediction_market_history(market_id: str, request: Request) -> Any
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Brokerage Connections (PRD-0022 Wave D-2) ─────────────────────────────────
+
+
+@router.post("/brokerage-connections")
+async def initiate_brokerage_connection(request: Request) -> Any:
+    """Proxy POST /api/v1/brokerage-connections → S1 Portfolio service.
+
+    Requires authentication. Registers a SnapTrade user and creates a PENDING
+    brokerage connection. Rate-limited at 30/min (involves external API calls).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/brokerage-connections",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/brokerage-connections")
+async def list_brokerage_connections(request: Request) -> Any:
+    """Proxy GET /api/v1/brokerage-connections → S1 Portfolio service.
+
+    Requires authentication. Lists brokerage connections for the authenticated user.
+    Forwards optional `portfolio_id` query parameter.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/brokerage-connections",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/brokerage-connections/{connection_id}", status_code=200)
+async def disconnect_brokerage_connection(connection_id: str, request: Request) -> Any:
+    """Proxy DELETE /api/v1/brokerage-connections/{id} → S1 Portfolio service.
+
+    Requires authentication. Revokes the SnapTrade authorization and marks the
+    connection as DISCONNECTED. Rate-limited at 30/min (involves external API calls).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.delete(
+        f"/api/v1/brokerage-connections/{connection_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/brokerage-connections/{connection_id}/callback")
+async def brokerage_connection_callback(connection_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/brokerage-connections/{id}/callback → S1 Portfolio service.
+
+    Requires authentication. Handles the OAuth callback from SnapTrade after the
+    user completes the authorization flow. Forwards authorizationId query param.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/brokerage-connections/{connection_id}/callback",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/brokerage-connections/{connection_id}/sync-errors")
+async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/brokerage-connections/{id}/sync-errors → S1 Portfolio service.
+
+    Requires authentication. Returns transaction sync errors for a connection.
+    Forwards `limit` query parameter. raw_transaction is excluded from S1 response
+    (PRD-0022 §6.4 privacy invariant).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/brokerage-connections/{connection_id}/sync-errors",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

@@ -284,6 +284,69 @@ async def test_process_activity_idempotency_conflict_silently_skipped() -> None:
     assert len(txns) == 1
 
 
+# ── _process_activity: OPTION_EXERCISE unsupported ───────────────────────────
+
+
+async def test_worker_skips_option_transactions() -> None:
+    """OPTION_EXERCISE activity type → UNSUPPORTED_TYPE sync error, worker continues."""
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="OPTION_EXERCISE", txn_id="txn-opt-001")
+    worker._http_client = None
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.UNSUPPORTED_TYPE
+    assert errors[0].snaptrade_transaction_id == "txn-opt-001"
+
+
+# ── _sync_connection: initial cursor uses history_days ───────────────────────
+
+
+async def test_sync_worker_uses_history_days_for_initial_cursor() -> None:
+    """When last_sync_cursor is None, start_date = today - brokerage_sync_history_days (PRD F-16)."""
+    from datetime import date, timedelta
+    from unittest.mock import AsyncMock, patch
+
+    from portfolio.config import Settings
+
+    uow = FakeUnitOfWork()
+    conn = _make_connection(status=ConnectionStatus.ACTIVE, last_sync_cursor=None)
+    await uow.brokerage_connections.save(conn)
+
+    settings = Settings()  # type: ignore[call-arg]
+    history_days = settings.brokerage_sync_history_days
+    broker = FakeBrokerageClient(activities=[])  # no activities to process
+    worker, _ = _make_worker(uow, broker=broker)
+
+    captured_start: list[date] = []
+    original_get_activities = broker.get_activities
+
+    async def _capture_start(user: object, start: object, end: object) -> list:
+        captured_start.append(start)  # type: ignore[arg-type]
+        return await original_get_activities(user, start, end)
+
+    broker.get_activities = _capture_start  # type: ignore[method-assign]
+
+    with patch(
+        "portfolio.workers.brokerage_sync_worker.SqlAlchemyUnitOfWork",
+    ) as mock_uow_cls:
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=uow)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_uow_cls.return_value = mock_ctx
+
+        await worker._sync_connection(conn)
+
+    assert len(captured_start) == 1
+    expected_start = datetime.now(tz=UTC).date() - timedelta(days=history_days)
+    assert captured_start[0] == expected_start
+
+
 # ── Helpers (full UoW with tenant/user/portfolio/instrument) ──────────────────
 
 

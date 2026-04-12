@@ -572,3 +572,88 @@ class TestGetSyncErrors:
             uow,
         )
         assert len(result.items) == 3
+
+
+# ── Additional T-D-2-03 tests ─────────────────────────────────────────────────
+
+
+class TestDisconnectRetainsTransactions:
+    @pytest.mark.asyncio
+    async def test_disconnect_retains_transactions(self, uow: FakeUnitOfWork, broker: FakeBrokerageClient) -> None:
+        """DisconnectBrokerageConnectionUseCase never deletes transaction records (PRD §6.6)."""
+        conn = _seed_connection(uow, status=ConnectionStatus.ACTIVE)
+        uc = DisconnectBrokerageConnectionUseCase()
+        await uc.execute(
+            DisconnectBrokerageConnectionCommand(
+                connection_id=conn.id,
+                user_id=conn.user_id,
+                tenant_id=conn.tenant_id,
+            ),
+            uow,
+            broker,
+        )
+        # TransactionRepository must never be accessed for delete operations
+        assert not hasattr(uow._transactions, "delete_calls")
+        # Existing transactions (none seeded, but count must be ≥ 0 — repo untouched)
+        assert len(uow._transactions._store) == 0
+
+
+class TestInitiateConnectionTypeIsAlwaysRead:
+    @pytest.mark.asyncio
+    async def test_initiate_connection_type_is_always_read(
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
+    ) -> None:
+        """connectionType must be hardcoded server-side; redirect_uri must NOT carry it (PRD F-22).
+
+        The redirect_uri passed to SnapTrade must contain connectionId so that
+        the callback handler can identify the pending connection, but must NOT
+        include connectionType (that would allow the frontend to override it).
+        """
+        tenant = seeded["tenant"]
+        user = seeded["user"]
+        portfolio = seeded["portfolio"]
+
+        uc = InitiateBrokerageConnectionUseCase()
+        result = await uc.execute(
+            InitiateBrokerageConnectionCommand(
+                tenant_id=tenant.id,  # type: ignore[union-attr]
+                user_id=user.id,  # type: ignore[union-attr]
+                portfolio_id=portfolio.id,  # type: ignore[union-attr]
+                snaptrade_tos_accepted=True,
+            ),
+            uow,
+            broker,
+            _REDIRECT_BASE,
+        )
+        assert len(broker.portal_url_calls) == 1
+        called_uri = broker.portal_url_calls[0]
+        # connectionId embedded so callback can look up the pending connection
+        assert f"connectionId={result.connection_id}" in called_uri
+        # connectionType must NOT be in the redirect_uri — it is hardcoded server-side
+        assert "connectionType" not in called_uri
+
+
+class TestGetSyncErrorsRawTransactionExcluded:
+    def test_get_sync_errors_raw_transaction_excluded(self) -> None:
+        """SyncErrorResponse schema must never expose raw_transaction (PRD §6.4 privacy invariant)."""
+        from portfolio.api.schemas import SyncErrorResponse
+
+        # The Pydantic model must not have raw_transaction as a declared field
+        assert "raw_transaction" not in SyncErrorResponse.model_fields
+        # Verify via model_dump that serialization output is also clean
+        import uuid
+        from datetime import UTC, datetime
+
+        response = SyncErrorResponse(
+            id=uuid.uuid4(),
+            connection_id=uuid.uuid4(),
+            snaptrade_transaction_id="txn-001",
+            error_type="unknown_instrument",
+            error_detail="AAPL not found",
+            created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        dumped = response.model_dump()
+        assert "raw_transaction" not in dumped

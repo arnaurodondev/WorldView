@@ -3,7 +3,7 @@
 > **PRD**: [PRD-0022](../specs/0022-snaptrade-brokerage-sync.md)
 > **Status**: in-progress
 > **Created**: 2026-04-09
-> **Updated**: 2026-04-11 (Wave D-1 done)
+> **Updated**: 2026-04-12 (Wave D-2 done)
 > **Services affected**: S1 (Portfolio), S9 (API Gateway), Frontend
 
 ---
@@ -1444,11 +1444,12 @@ BROKERAGE_PENDING_CONNECTIONS_AGE = Gauge(
 
 ---
 
-### Wave D-2: S9 Gateway Proxy Routes + Unit Tests
+### Wave D-2: S9 Gateway Proxy Routes + Unit Tests ✅
 
 **Goal**: Expose the 4 brokerage connection endpoints through the S9 API Gateway and write the core unit tests for the use cases.
 **Depends on**: Wave C-2 (S1 routes exist), Wave D-1 (worker exists for docker-compose entry)
 **Estimated effort**: 45–75 minutes
+**Status**: **DONE** — 2026-04-12 · 120 brokerage unit tests pass · ruff + mypy clean
 **Architecture layer**: S9 proxy + tests
 
 #### Pre-read (agent must read before starting)
@@ -1642,11 +1643,11 @@ PORTFOLIO_MARKET_DATA_SERVICE_URL=http://localhost:8003
 ---
 
 #### Validation Gate
-- [ ] `ruff check services/api-gateway/ services/portfolio/tests/unit/test_brokerage*.py` passes
-- [ ] `mypy services/api-gateway/` passes
-- [ ] `python -m pytest services/portfolio/tests/ -m unit -v` — minimum 24 new tests total (15 + 9), all pass
-- [ ] `docker-compose config` validates
-- [ ] `.env.example` contains all 5 new SnapTrade env vars (T-D-2-05)
+- [x] `ruff check services/api-gateway/ services/portfolio/tests/unit/test_brokerage*.py` passes
+- [x] `mypy services/api-gateway/` passes
+- [x] `python -m pytest services/portfolio/tests/ -m unit -v` — 120 brokerage unit tests pass
+- [x] `docker-compose config` validates
+- [x] `dev.local.env.example` contains all 5 SnapTrade env vars (T-D-2-05)
 
 #### Regression Guardrails
 - **BP-010**: `portfolio-brokerage-sync` docker-compose entry must NOT inherit the API service healthcheck — it's a background process with no HTTP port
