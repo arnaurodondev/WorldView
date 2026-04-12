@@ -2,7 +2,7 @@
 # OIDC/Zitadel, RS256 Internal JWT, S9 Hardening
 
 > **PRD**: `docs/specs/0025-auth-oidc-zitadel-internal-jwt.md`
-> **Status**: in-progress
+> **Status**: in-progress (Wave E frontend pending)
 > **Total Waves**: 6
 > **Estimated Effort**: 8–12 hours
 > **Created**: 2026-04-10
@@ -77,7 +77,7 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 | Wave C | S1 Schema + Provision Endpoint ✅ | done | 8/8 |
 | Wave D | Backend Services InternalJWTMiddleware ✅ | done | 10/10 |
 | Wave E | Frontend Auth | pending | 0/7 |
-| Wave F | Infrastructure + Integration Tests | pending | 0/6 |
+| Wave F | Infrastructure + Integration Tests ✅ | done | 6/6 |
 
 ---
 
@@ -1454,12 +1454,13 @@ Wrap `App` with `<AuthProvider>`, add `/login` and `/callback` routes, wrap exis
 
 ---
 
-## Wave F: Infrastructure + Integration Tests
+## Wave F: Infrastructure + Integration Tests ✅
 
 **Goal**: Add Zitadel Terraform resources, self-hosted Zitadel docker-compose for local dev, RSA keypair generation script, Traefik `/internal/*` block, update dev env example, run full S9+S1 integration tests.
 **Depends on**: Wave A (for keypair script context), Wave B (for integration tests)
 **Estimated effort**: 60–90 min
 **Architecture layer**: infrastructure + config
+**Status**: **DONE** — 2026-04-12 · 84 tests pass (4 new integration) · ruff + mypy clean
 
 ### Pre-read (agent must read before starting)
 - `infra/compose/docker-compose.yml` — current compose structure

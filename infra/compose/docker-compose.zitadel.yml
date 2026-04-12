@@ -1,0 +1,63 @@
+---
+# docker-compose.zitadel.yml — Self-hosted Zitadel for offline local development
+#
+# PURPOSE: Provides a fully-offline OIDC provider for local dev without needing
+#          Zitadel Cloud. For production, use Zitadel Cloud (see infra/zitadel/README.md).
+#
+# Usage:
+#   docker compose -f infra/compose/docker-compose.zitadel.yml up -d
+#   Zitadel console: http://localhost:8088
+#   Default admin: zitadel-admin@zitadel.localhost / Password1!
+#
+# After startup, create a project and PKCE web app manually in the Zitadel console,
+# then set API_GATEWAY_OIDC_ISSUER_URL=http://localhost:8088 and update your CLIENT_ID.
+
+name: worldview-zitadel
+
+services:
+  zitadel-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: zitadel
+      POSTGRES_USER: zitadel
+      POSTGRES_PASSWORD: zitadel  # noqa: S105
+    volumes:
+      - zitadel_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zitadel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:stable
+    command: start-from-init --masterkeyFromEnv --tlsMode disabled
+    environment:
+      ZITADEL_DATABASE_POSTGRES_HOST: zitadel-db
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: zitadel  # noqa: S105
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: zitadel  # noqa: S105
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # Must be exactly 32 characters
+      ZITADEL_MASTERKEY: "MasterkeyNeedsToHave32Characters"
+      ZITADEL_EXTERNALPORT: 8088
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPROTOCOL: http
+    ports:
+      - "8088:8080"
+    depends_on:
+      zitadel-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/debug/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  zitadel_pg_data:

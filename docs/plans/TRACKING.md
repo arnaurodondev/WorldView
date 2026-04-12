@@ -19,7 +19,7 @@
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | in-progress | 7/9 | 2026-04-12 | 2026-04-12 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 | — | 2026-04-11 |
-| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 4/6 | — | 2026-04-12 |
+| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-12 | 2026-04-12 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/7 | — | 2026-04-11 |
 <!-- New plans are appended here by the /plan skill -->
 
