@@ -117,6 +117,27 @@ echo "Setting 30-day retention on market.prediction.v1"
     --entity-name market.prediction.v1 \
     --add-config retention.ms=2592000000
 
+# 30-day retention: primary pipeline topics — services may be down for extended
+# maintenance windows; 7-day Kafka default is insufficient to avoid silent
+# message loss beyond the retention window.
+echo "Setting 30-day retention on market.dataset.fetched"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name market.dataset.fetched \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on content.article.stored.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name content.article.stored.v1 \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on nlp.article.enriched.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name nlp.article.enriched.v1 \
+    --add-config retention.ms=2592000000
+
 # ── Verification ──────────────────────────────────────────────────────────────
 echo "All topics created. Current topic list:"
 "$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --list

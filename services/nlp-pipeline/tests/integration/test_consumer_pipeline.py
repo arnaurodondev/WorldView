@@ -194,15 +194,33 @@ def _make_event(doc_id: uuid.UUID | None = None) -> dict[str, Any]:
 _MOD = "nlp_pipeline.infrastructure.messaging.consumers.article_consumer"
 
 
-def _repo_patches(outbox_mock: Any = None) -> list[Any]:
+def _make_routing_mock(get_by_doc_side_effect: list[Any] | None = None) -> AsyncMock:
+    """Return a RoutingDecisionRepository mock.
+
+    By default ``get_by_doc`` returns ``None`` (article not yet processed),
+    so the idempotency guard in ``_run_pipeline`` lets the pipeline run.
+    Pass ``get_by_doc_side_effect`` for tests that need different call-by-call
+    return values (e.g. None on first delivery, a result on re-delivery).
+    """
+    rm = AsyncMock()
+    if get_by_doc_side_effect is not None:
+        rm.get_by_doc = AsyncMock(side_effect=get_by_doc_side_effect)
+    else:
+        rm.get_by_doc = AsyncMock(return_value=None)
+    return rm
+
+
+def _repo_patches(outbox_mock: Any = None, routing_mock: Any = None) -> list[Any]:
     """Return patch context managers for all repos used inside _run_pipeline."""
     om = outbox_mock or AsyncMock()
+    # Default routing mock has get_by_doc → None so the idempotency guard passes.
+    rm = routing_mock if routing_mock is not None else _make_routing_mock()
     return [
         patch(f"{_MOD}.SectionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.ChunkRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.EntityMentionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.DocumentEntityStatsRepository", return_value=AsyncMock()),
-        patch(f"{_MOD}.RoutingDecisionRepository", return_value=AsyncMock()),
+        patch(f"{_MOD}.RoutingDecisionRepository", return_value=rm),
         patch(f"{_MOD}.ChunkEntityMentionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.OutboxRepository", return_value=om),
         patch(f"{_MOD}.MentionResolutionRepository", return_value=AsyncMock()),
@@ -314,27 +332,34 @@ class TestBackpressure:
 
 @pytest.mark.integration
 class TestIdempotency:
-    """T-C-4-05-D: Same message delivered twice → outbox.add called both times.
+    """T-C-4-05-D: Re-delivery is skipped when routing_decision already exists.
 
-    The consumer uses at-least-once semantics; DB-level constraints (e.g., unique
-    primary keys) are responsible for deduplication, not the consumer itself.
+    Section/chunk IDs are generated with new_uuid7() (non-deterministic), so
+    DB ON CONFLICT guards on the primary key do NOT prevent duplicate rows on
+    re-delivery.  The consumer therefore performs an explicit pre-check: if a
+    routing_decision row already exists for the doc_id the full pipeline is
+    skipped — outbox.add is NOT called a second time.
     """
 
     @pytest.mark.asyncio
-    async def test_same_message_twice_calls_outbox_add_twice(self) -> None:
-        """Re-delivery must not be silently dropped at the consumer level."""
+    async def test_second_delivery_skipped_when_already_processed(self) -> None:
+        """Re-delivery is a no-op when the pipeline already committed for this doc_id."""
         consumer, _nlp_sess, _intel_sess = _make_consumer()
 
         outbox_add = AsyncMock()
         outbox_mock = AsyncMock()
         outbox_mock.add = outbox_add
 
-        event = _make_event()  # same event delivered twice
+        event = _make_event()  # same doc_id delivered twice
+
+        # First call: no routing_decision → pipeline runs → outbox.add called.
+        # Second call: routing_decision exists → idempotency guard fires → skip.
+        routing_mock = _make_routing_mock(get_by_doc_side_effect=[None, MagicMock()])
 
         with contextlib.ExitStack() as stack:
-            for p in _repo_patches(outbox_mock=outbox_mock):
+            for p in _repo_patches(outbox_mock=outbox_mock, routing_mock=routing_mock):
                 stack.enter_context(p)
             await consumer.process_message(key=None, value=event, headers={})
             await consumer.process_message(key=None, value=event, headers={})
 
-        assert outbox_add.call_count == 2, "outbox.add must be called for each delivery; DB constraint handles dedup"
+        assert outbox_add.call_count == 1, "Second delivery must be skipped: routing_decision already exists for doc_id"

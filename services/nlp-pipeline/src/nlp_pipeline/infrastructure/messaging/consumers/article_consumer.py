@@ -226,6 +226,21 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
     ) -> None:
         """Download text and run Blocks 3-10 in one atomic nlp_db transaction."""
 
+        # ── Idempotency guard ─────────────────────────────────────────────────
+        # Re-delivery window: DB commit succeeded but Kafka offset not yet
+        # committed.  Sections/chunks use new_uuid7() IDs so ON CONFLICT on the
+        # primary key never fires on re-delivery.  A routing_decision row is the
+        # reliable "pipeline completed" sentinel — if one exists for this doc_id
+        # we skip the entire pipeline to prevent duplicate artifacts.
+        async with self._nlp_sf() as check_session:
+            check_routing_repo = RoutingDecisionRepository(check_session)
+            if await check_routing_repo.get_by_doc(doc_id) is not None:
+                logger.info(  # type: ignore[no-any-return]
+                    "article_consumer.skip_already_processed",
+                    doc_id=str(doc_id),
+                )
+                return
+
         # ── Block 3: Sectioning (pure) ────────────────────────────────────────
         text = await self._download_article(minio_key)
         sections = section_document(doc_id, text, source_type)

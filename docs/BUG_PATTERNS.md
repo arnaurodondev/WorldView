@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-149](#bp-149) | Kafka consumer / idempotency | Silent duplicate artifacts (sections, chunks, mentions) accumulate when entity PKs are non-deterministic UUIDs — ON CONFLICT on PK never fires on re-delivery | S6 `ArticleProcessingConsumer`, any consumer where domain entity IDs are generated with `new_uuid7()` |
+| [BP-150](#bp-150) | Kafka / message retention | Services down >7 days silently lose the backlog — Kafka default 7-day retention causes consumer group to start from oldest *remaining* message after extended downtime | All pipeline-critical topics: `content.article.stored.v1`, `market.dataset.fetched`, `nlp.article.enriched.v1` |
 | [BP-138](#bp-138) | Kafka consumer / type coercion | `TypeError: float() argument must be a string or a number, not 'NoneType'` — consumer dead-letters on non-numeric field | Any consumer extracting float fields from Avro events (market_impact_score, etc.) |
 | [BP-139](#bp-139) | Frontend WebSocket / JSON | Uncaught `SyntaxError` in `onmessage` handler crashes React tree on malformed frame | Any React hook wrapping `WebSocket.onmessage` that calls `JSON.parse` |
 | [BP-140](#bp-140) | Config wiring / dead settings | Settings fields defined in `config.py` but never read — operators believe they can tune behavior via env vars but the code ignores them | Any new `Settings` field used to construct domain objects (ValueObjects, thresholds) |
@@ -5057,3 +5059,165 @@ app.add_middleware(OIDCAuthMiddleware)           # outermost of this pair — ru
 - Remember: in Starlette, "last `add_middleware()` call = outermost = first to receive requests".
 
 **First seen**: `services/api-gateway/src/api_gateway/app.py`, PLAN-0025 Wave B, fixed 2026-04-12.
+
+
+## BP-144 — Middleware Reads `app.state` at Construction Time — Feature Permanently Disabled
+
+**Category**: Middleware / FastAPI
+**Severity**: HIGH (silent feature failure — rate limiting / feature silently off)
+
+**Pattern**: A FastAPI middleware captures a dependency (e.g., Valkey client, config flag) at `__init__` time by reading `app.state.<attr>`. Because `add_middleware()` is called before the lifespan populates `app.state`, the value is always `None`. The `dispatch()` method then checks `self.attr` (always `None`) and fast-paths through, disabling the feature for the entire process lifetime.
+
+**Symptom**: Rate limiting, feature flags, or other middleware-controlled behavior never activates. No error is logged. Metrics counters remain at zero.
+
+**Root cause**: FastAPI lifespan populates `app.state` after all middleware is registered. `self.attr = app.state.attr_name` in `__init__` captures `None`.
+
+**Fix**: Read the dependency from `request.app.state` inside `dispatch()`:
+```python
+async def dispatch(self, request: Request, call_next):
+    client = getattr(request.app.state, "valkey", None)
+    if client is None:
+        return await call_next(request)  # graceful degradation
+    ...
+```
+
+**Prevention** (HR-028): Grep for `self\.<attr>\s*=.*app\.state` in middleware `__init__` methods. Any capture at construction time is suspect unless the value is a constant.
+
+**First seen**: `services/api-gateway/src/api_gateway/middleware/rate_limit.py`, PLAN-0025 QA Phase 2, fixed 2026-04-12.
+
+
+## BP-145 — JWT Decode Without `issuer=` — Issuer Spoofing Auth Bypass
+
+**Category**: Security / Authentication
+**Severity**: CRITICAL (auth bypass)
+
+**Pattern**: `jwt.decode(token, public_key, algorithms=["RS256"])` is called without `issuer=expected_issuer`. The library validates the signature but does NOT check the `"iss"` claim. A token signed by any provider — or an attacker's own key pair — is accepted.
+
+**Symptom**: Tokens from unexpected issuers are accepted silently. No error is raised. The `payload["sub"]` is trusted and used to identify the user.
+
+**Fix**: Always pass `issuer=oidc_config.issuer` (and `audience` if applicable):
+```python
+payload = jwt.decode(
+    token, public_key, algorithms=["RS256"],
+    issuer=settings.oidc_issuer,
+    audience=settings.oidc_client_id,
+)
+```
+
+**Prevention** (HR-026): Grep `jwt\.decode\(` and verify every call includes `issuer=`. Add a test asserting that a token from a different issuer is rejected with 401.
+
+**First seen**: `services/api-gateway/src/api_gateway/middleware/oidc_auth.py`, PLAN-0025 QA Phase 2, fixed 2026-04-12.
+
+
+## BP-146 — PKCE / One-Time Token: Non-Atomic GET + DEL Enables State Replay
+
+**Category**: Security / Race Condition
+**Severity**: CRITICAL (PKCE replay vulnerability)
+
+**Pattern**: A one-time-use secret (PKCE code verifier, nonce, CSRF token) is retrieved from Valkey using `GET key` then `DEL key` — two separate commands. Under concurrent load, two requests both execute `GET` before either executes `DEL`. Both receive the value, breaking the one-time-use guarantee.
+
+**Root cause**: `GET` + `DEL` is not atomic. Valkey pipelines help throughput but do not make two commands atomic.
+
+**Fix**: Use the atomic `GETDEL` command (Redis 6.2+, Valkey 7+):
+```python
+async def retrieve_and_delete(self, key: str) -> str | None:
+    return await self._client.getdel(key)  # atomic GET-then-DELETE
+```
+
+**Prevention** (HR-027): Any "retrieve once and delete" operation on a security token MUST use `GETDEL` or a Lua script. Never use `GET` + `DEL` on the same key for one-time-use tokens.
+
+**First seen**: `libs/messaging/src/messaging/valkey/client.py`, PLAN-0025 QA Phase 2, fixed 2026-04-12 (added `ValkeyClient.getdel()`).
+
+
+## BP-147 — Outbox Dispatcher Missing Serializer Registration → KeyError Dead-Letter
+
+**Category**: Kafka / Outbox
+**Severity**: HIGH (silent event loss)
+
+**Pattern**: A Kafka outbox dispatcher maps event type strings to Avro serializers via `_SERIALIZERS: dict[str, Callable]`. When a new Kafka event type is introduced (e.g., by a new PRD), the serializer dict is not updated. The dispatcher raises `KeyError` and the message is moved to the dead-letter queue.
+
+**Symptom**: New events never appear at the consumer. DLQ count increases. No startup error — failure occurs only when the first message of the new type is dispatched.
+
+**Fix**: Add the missing serializer registration:
+```python
+_SERIALIZERS = {
+    "content.article.raw.v1": article_ser,
+    "market.prediction.snapshot": prediction_ser,  # ← was missing
+}
+```
+
+**Prevention**: When adding a new Kafka event type, checklist: (1) Avro schema, (2) topic constant, (3) outbox serializer registration, (4) DLQ test. Write a startup validation test that asserts every known event type has a registered serializer.
+
+**First seen**: `services/content-ingestion/src/content_ingestion/infrastructure/messaging/outbox_dispatcher.py`, PLAN-0025 QA Phase 2, fixed 2026-04-12.
+
+
+## BP-148 — Avro Schema Field With Empty String Default — Schema Registry Rejection
+
+**Category**: Kafka / Avro Schema
+**Severity**: HIGH (producer initialization failure)
+
+**Pattern**: An Avro schema field is given `"default": ""` (empty string) on a non-string type (timestamp, enum, long). Schema Registry validates that the default value matches the declared type. An empty string is rejected for non-string fields.
+
+**Symptom**: On service startup or schema registration, Schema Registry returns `422 Unprocessable Entity: default value is not compatible with schema`. All producers fail to initialize.
+
+**Root cause**: Copy-paste of `"default": ""` from a string field onto a differently-typed field. The Avro Python library may not validate defaults locally, but Schema Registry enforces strict type correctness.
+
+**Fix**: Remove the default (making the field required) or use a type-valid default:
+```json
+{ "name": "occurred_at", "type": "string" }
+```
+
+**Prevention**: Run schema compatibility check (`scripts/gen-contracts.sh --validate`) after every Avro schema change. Register all schemas against Schema Registry in CI before producer tests run.
+
+**First seen**: `infra/kafka/schemas/market.prediction.v1.avsc`, PLAN-0025 QA Phase 2, fixed 2026-04-12.
+
+---
+
+## BP-149 — Non-Deterministic Entity PKs Break Kafka Re-Delivery Idempotency
+
+**Pattern**: Consumer generates entity primary keys with `new_uuid7()` during processing. ON CONFLICT DO NOTHING guards are keyed on these PKs. On Kafka re-delivery, the same message produces *new* PKs — the conflict is never detected, and duplicate rows accumulate silently.
+
+**Root cause**: `new_uuid7()` is not a function of the input — it yields a different UUID on each call. ON CONFLICT on a PK only protects against exact-same-PK retries, not logical-duplicate retries.
+
+**Affected code**: `section_document()` in S6, `run_ner_block()` in S6 — every new Section, Chunk, and EntityMention gets a fresh `new_uuid7()` on each pipeline run for the same article.
+
+**Symptom**: After a crash-and-restart that hits the re-delivery window (DB commit succeeded, Kafka offset not yet committed), duplicate section/chunk/mention rows appear in nlp_db with the same `doc_id` but different PKs.
+
+**Fix**: Add an explicit idempotency pre-check before the main write transaction. Use an existing "pipeline completed" sentinel — the `routing_decisions.doc_id` row — to detect already-processed articles and skip the pipeline entirely.
+
+```python
+# At the start of _run_pipeline:
+async with self._nlp_sf() as check_session:
+    check_routing_repo = RoutingDecisionRepository(check_session)
+    if await check_routing_repo.get_by_doc(doc_id) is not None:
+        logger.info("article_consumer.skip_already_processed", doc_id=str(doc_id))
+        return
+```
+
+**Prevention**:
+- Prefer deterministic IDs derived from input (e.g., `uuid5(namespace, f"{doc_id}:{index}")`) when idempotency via ON CONFLICT is required.
+- If IDs must be random (UUIDv7 monotonic), add a separate idempotency gate before the write session (see fix above).
+- In tests: mock `session.execute` result so `scalar_one_or_none()` returns `None` — otherwise the idempotency guard fires on the first call and skips the pipeline being tested.
+
+**First seen**: S6 `ArticleProcessingConsumer._run_pipeline`, investigation 2026-04-13, fixed 2026-04-13.
+
+---
+
+## BP-150 — Kafka Default Retention (7 Days) Causes Silent Backlog Loss on Extended Downtime
+
+**Pattern**: Pipeline consumer services are taken down for maintenance or a failure lasting >7 days. The Kafka default `log.retention.hours=168` (7 days) expires messages that accumulated during the downtime. On restart with `auto.offset.reset=earliest`, the consumer starts from the oldest *remaining* message — silently skipping everything from the downtime window.
+
+**Root cause**: Kafka topics created without explicit `retention.ms` configuration inherit the broker default (7 days). For high-value pipeline topics that carry non-reproducible articles and market data, this is insufficient for real maintenance windows.
+
+**Affected topics**: `content.article.stored.v1`, `market.dataset.fetched`, `nlp.article.enriched.v1` (and by extension all downstream topics in those pipelines).
+
+**Symptom**: After >7 days of downtime, the NLP pipeline / knowledge graph silently processes fewer articles than were published during the outage. No error is raised; the consumer simply has no messages to process.
+
+**Fix**: Set `retention.ms=2592000000` (30 days) on all primary pipeline topics in `infra/kafka/init/create-topics.sh`.
+
+**Prevention**:
+- Every new primary pipeline topic should have an explicit retention config in `create-topics.sh`.
+- Alert when consumer lag on `content.article.stored.v1` exceeds 3 days (half the old retention).
+- Dead-letter topics can use a shorter retention (14 days) — dead-lettered messages are for investigation, not replay.
+
+**First seen**: `infra/kafka/init/create-topics.sh`, investigation 2026-04-13, fixed 2026-04-13.
