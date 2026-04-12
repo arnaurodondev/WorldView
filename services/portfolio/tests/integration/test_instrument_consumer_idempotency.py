@@ -87,7 +87,7 @@ async def test_first_event_creates_instrument(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "AAPL",
             InstrumentModel.exchange == "NASDAQ",
-        )
+        ),
     )
     row = result.scalar_one_or_none()
     assert row is not None, "Expected instrument to be created"
@@ -127,7 +127,7 @@ async def test_replay_is_idempotent(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "MSFT",
             InstrumentModel.exchange == "NASDAQ",
-        )
+        ),
     )
     rows = list(result.scalars().all())
     assert len(rows) == 1, f"Expected exactly 1 instrument after replay, got {len(rows)}"
@@ -174,7 +174,7 @@ async def test_instrument_updated_upserts(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "GOOGL",
             InstrumentModel.exchange == "NASDAQ",
-        )
+        ),
     )
     row = result.scalar_one_or_none()
     assert row is not None, "Expected instrument to exist after update"
@@ -218,7 +218,7 @@ async def test_malformed_event_dead_lettered(
         select(InstrumentModel).where(
             InstrumentModel.symbol == "BAD",
             InstrumentModel.exchange == "NYSE",
-        )
+        ),
     )
     row = result.scalar_one_or_none()
     assert row is None, "Instrument should NOT be created when event_id is missing"

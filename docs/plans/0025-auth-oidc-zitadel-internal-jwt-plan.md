@@ -75,7 +75,7 @@ Wave A (S9 Foundation: config, domain types, middleware classes, JWKS)
 | Wave A | S9 Foundation & Security Hardening ✅ | done | 7/7 |
 | Wave B | S9 Auth Endpoints ✅ | done | 3/3 |
 | Wave C | S1 Schema + Provision Endpoint ✅ | done | 8/8 |
-| Wave D | Backend Services InternalJWTMiddleware | pending | 0/10 |
+| Wave D | Backend Services InternalJWTMiddleware | in-progress | 0/10 |
 | Wave E | Frontend Auth | pending | 0/7 |
 | Wave F | Infrastructure + Integration Tests | pending | 0/6 |
 

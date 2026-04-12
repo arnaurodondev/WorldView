@@ -101,7 +101,7 @@ class ProvisionUserUseCase:
             raise ProvisionConflictError(email=email, conflict_sub=conflict_user.external_id)
 
         # Step 4: brand-new user — create tenant + user atomically
-        tenant_name = username or email.split("@")[0]
+        tenant_name = username or email.split("@", maxsplit=1)[0]
         tenant = Tenant(name=tenant_name)
         await uow.tenants.save(tenant)
 
@@ -112,6 +112,9 @@ class ProvisionUserUseCase:
             role=TenantUserRole.OWNER,
         )
         await uow.users.save(user)
+        # Flush to ensure the user row is visible within the transaction before
+        # the audit log FK references it (ORM lacks a relationship() to auto-order).
+        await uow.flush()
 
         audit = AuthAuditEvent(
             event_type=AuthAuditEventType.USER_CREATED,

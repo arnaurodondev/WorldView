@@ -13,7 +13,6 @@ from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
 def _settings(**overrides: object) -> Settings:
     defaults = {
         "s1_portfolio_base_url": "http://s1:8001",
-        "internal_service_token": "test-token",
         "s8_internal_token": "test-s8-token",
         "s1_internal_token": "test-s1-token",
     }
@@ -81,7 +80,7 @@ class TestS1Client:
             "results": {
                 "e1": [{"user_id": "u1", "watchlist_id": "w1", "alert_types": []}],
                 "e2": [{"user_id": "u2", "watchlist_id": "w2", "alert_types": ["GRAPH_CHANGE"]}],
-            }
+            },
         }
         mock_resp.raise_for_status = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_resp)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import structlog
-from pydantic import Field, SecretStr, model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,8 +54,7 @@ class Settings(BaseSettings):
 
     # ── Security ───────────────────────────────────────────────────────────────
     admin_token: str = ""
-    # Inter-service token shared across all services (no CONTENT_STORE_ prefix)
-    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
+    api_gateway_url: str = "http://api-gateway:8000"
 
     # ── Outbox dispatcher ──────────────────────────────────────────────────────
     outbox_batch_size: int = 100

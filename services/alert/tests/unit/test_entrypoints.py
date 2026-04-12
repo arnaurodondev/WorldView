@@ -47,7 +47,6 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.kafka_topic_alert_delivered = "alert.delivered.v1"
     s.valkey_url = "redis://localhost:6379/0"
     s.s1_portfolio_base_url = "http://localhost:8001"
-    s.internal_service_token = "test-token"  # noqa: S105
     s.alert_dedup_window_seconds = 300
     s.watchlist_cache_ttl_seconds = 300
     s.alert_severity_critical_threshold = 0.85

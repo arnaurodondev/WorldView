@@ -285,6 +285,51 @@ async def find_similar_entities(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Alert endpoints (PRD-0025 T-D-1-10) ──────────────────────────────────────
+
+
+@router.get("/alerts/pending")
+async def get_pending_alerts(request: Request) -> Any:
+    """Proxy GET /api/v1/alerts/pending → S10 Alert service.
+
+    Requires authentication. Forwards X-Internal-JWT so S10's InternalJWTMiddleware
+    can extract user_id from the JWT (PRD-0025 §T-D-1-10).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.alert.get(
+        "/api/v1/alerts/pending",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/alerts/{alert_id}/ack", status_code=200)
+async def acknowledge_alert(alert_id: str, request: Request) -> Any:
+    """Proxy DELETE /api/v1/alerts/{alert_id}/ack → S10 Alert service.
+
+    Requires authentication. Forwards X-Internal-JWT so S10 can verify the user
+    owns the alert before acknowledging it (PRD-0025 §T-D-1-10).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.alert.delete(
+        f"/api/v1/alerts/{alert_id}/ack",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# TODO: WebSocket /alerts/stream proxying requires a dedicated WS proxy implementation.
+# S9 does not yet support transparent WebSocket proxying — clients must connect
+# directly to S10 (alert-delivery:8010) using a short-lived token from S9.
+
+
 # ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
 
 

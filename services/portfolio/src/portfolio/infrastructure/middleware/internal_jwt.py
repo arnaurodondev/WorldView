@@ -34,7 +34,7 @@ _SKIP_PATHS: frozenset[str] = frozenset(
         "/ready",
         "/readyz",
         "/internal/v1/health",
-    }
+    },
 )
 _SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz")
 

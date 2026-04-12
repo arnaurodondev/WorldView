@@ -137,49 +137,49 @@ class TestTransaction:
             "instrument_id": uuid.uuid4(),
             "transaction_type": TransactionType.BUY,
             "direction": TransactionDirection.INFLOW,
-            "quantity": Decimal("10"),
-            "price": Decimal("100"),
+            "quantity": Decimal(10),
+            "price": Decimal(100),
             "currency": "USD",
             "executed_at": datetime.now(tz=UTC),
-            "fees": Decimal("5"),
+            "fees": Decimal(5),
         }
         defaults.update(kwargs)
         return Transaction(**defaults)  # type: ignore[arg-type]
 
     def test_gross_amount_is_quantity_times_price(self) -> None:
-        txn = self._make_transaction(quantity=Decimal("10"), price=Decimal("100"))
-        assert txn.gross_amount() == Decimal("1000")
+        txn = self._make_transaction(quantity=Decimal(10), price=Decimal(100))
+        assert txn.gross_amount() == Decimal(1000)
 
     def test_gross_amount_does_not_include_fees(self) -> None:
-        txn = self._make_transaction(quantity=Decimal("5"), price=Decimal("200"), fees=Decimal("50"))
-        assert txn.gross_amount() == Decimal("1000")
+        txn = self._make_transaction(quantity=Decimal(5), price=Decimal(200), fees=Decimal(50))
+        assert txn.gross_amount() == Decimal(1000)
 
     def test_net_amount_inflow_adds_fees(self) -> None:
         txn = self._make_transaction(
             direction=TransactionDirection.INFLOW,
-            quantity=Decimal("10"),
-            price=Decimal("100"),
-            fees=Decimal("5"),
+            quantity=Decimal(10),
+            price=Decimal(100),
+            fees=Decimal(5),
         )
         # INFLOW: gross + fees = 1000 + 5 = 1005
-        assert txn.net_amount() == Decimal("1005")
+        assert txn.net_amount() == Decimal(1005)
 
     def test_net_amount_outflow_subtracts_fees(self) -> None:
         txn = self._make_transaction(
             direction=TransactionDirection.OUTFLOW,
-            quantity=Decimal("10"),
-            price=Decimal("100"),
-            fees=Decimal("5"),
+            quantity=Decimal(10),
+            price=Decimal(100),
+            fees=Decimal(5),
         )
         # OUTFLOW: gross - fees = 1000 - 5 = 995
-        assert txn.net_amount() == Decimal("995")
+        assert txn.net_amount() == Decimal(995)
 
     def test_net_amount_with_zero_fees(self) -> None:
         txn = self._make_transaction(
             direction=TransactionDirection.INFLOW,
-            quantity=Decimal("10"),
-            price=Decimal("100"),
-            fees=Decimal("0"),
+            quantity=Decimal(10),
+            price=Decimal(100),
+            fees=Decimal(0),
         )
         assert txn.net_amount() == txn.gross_amount()
 
@@ -200,41 +200,41 @@ class TestHolding:
 
     def test_apply_delta_buy_increases_quantity(self) -> None:
         holding = self._make_holding(quantity="10", average_cost="100")
-        holding.apply_delta(Decimal("5"), Decimal("100"))
-        assert holding.quantity == Decimal("15")
+        holding.apply_delta(Decimal(5), Decimal(100))
+        assert holding.quantity == Decimal(15)
 
     def test_apply_delta_buy_updates_weighted_average_cost(self) -> None:
         holding = self._make_holding(quantity="10", average_cost="100")
         # Buy 10 more at 200: weighted avg = (10*100 + 10*200) / 20 = 150
-        holding.apply_delta(Decimal("10"), Decimal("200"))
-        assert holding.average_cost == Decimal("150")
+        holding.apply_delta(Decimal(10), Decimal(200))
+        assert holding.average_cost == Decimal(150)
 
     def test_apply_delta_sell_decreases_quantity(self) -> None:
         holding = self._make_holding(quantity="10", average_cost="100")
-        holding.apply_delta(Decimal("-3"), Decimal("120"))
-        assert holding.quantity == Decimal("7")
+        holding.apply_delta(Decimal(-3), Decimal(120))
+        assert holding.quantity == Decimal(7)
 
     def test_apply_delta_sell_preserves_average_cost(self) -> None:
         holding = self._make_holding(quantity="10", average_cost="100")
-        holding.apply_delta(Decimal("-3"), Decimal("120"))
-        assert holding.average_cost == Decimal("100")
+        holding.apply_delta(Decimal(-3), Decimal(120))
+        assert holding.average_cost == Decimal(100)
 
     def test_apply_delta_negative_exceeding_quantity_raises(self) -> None:
         holding = self._make_holding(quantity="5", average_cost="100")
         with pytest.raises(InsufficientHoldingsError):
-            holding.apply_delta(Decimal("-10"), Decimal("100"))
+            holding.apply_delta(Decimal(-10), Decimal(100))
 
     def test_apply_delta_sell_to_zero_sets_average_cost_to_zero(self) -> None:
         holding = self._make_holding(quantity="10", average_cost="100")
-        holding.apply_delta(Decimal("-10"), Decimal("100"))
-        assert holding.quantity == Decimal("0")
-        assert holding.average_cost == Decimal("0")
+        holding.apply_delta(Decimal(-10), Decimal(100))
+        assert holding.quantity == Decimal(0)
+        assert holding.average_cost == Decimal(0)
 
     def test_buy_from_zero(self) -> None:
         holding = self._make_holding(quantity="0", average_cost="0")
-        holding.apply_delta(Decimal("5"), Decimal("200"))
-        assert holding.quantity == Decimal("5")
-        assert holding.average_cost == Decimal("200")
+        holding.apply_delta(Decimal(5), Decimal(200))
+        assert holding.quantity == Decimal(5)
+        assert holding.average_cost == Decimal(200)
 
 
 # ── InstrumentRef ──────────────────────────────────────────────────────────────
@@ -287,8 +287,8 @@ class TestTransactionExtra:
             instrument_id=uuid.uuid4(),
             transaction_type=TransactionType.BUY,
             direction=TransactionDirection.INFLOW,
-            quantity=Decimal("1"),
-            price=Decimal("100"),
+            quantity=Decimal(1),
+            price=Decimal(100),
             currency="USD",
             executed_at=datetime.now(tz=UTC),
         )
@@ -302,8 +302,8 @@ class TestTransactionExtra:
                 instrument_id=uuid.uuid4(),
                 transaction_type=TransactionType.BUY,
                 direction=TransactionDirection.INFLOW,
-                quantity=Decimal("1"),
-                price=Decimal("100"),
+                quantity=Decimal(1),
+                price=Decimal(100),
                 currency="USD",
                 executed_at=datetime.now(tz=UTC),
             )

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
+import jwt as _jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -18,9 +19,18 @@ _TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = UUID("00000000-0000-0000-0000-000000000002")
 _THREAD_ID = UUID("01950000-0000-7000-8000-000000000001")  # fake UUIDv7-like
 
+# InternalJWTMiddleware requires X-Internal-JWT; with no public key loaded (unit tests,
+# no lifespan) it decodes without signature verification and passes through.
+_INTERNAL_JWT = _jwt.encode(
+    {"sub": str(_USER_ID), "tenant_id": str(_TENANT_ID), "role": "user"},
+    "secret",
+    algorithm="HS256",
+)
+
 _AUTH_HEADERS = {
     "X-Tenant-Id": str(_TENANT_ID),
     "X-User-Id": str(_USER_ID),
+    "X-Internal-JWT": _INTERNAL_JWT,
 }
 
 

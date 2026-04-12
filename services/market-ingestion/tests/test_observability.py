@@ -72,19 +72,12 @@ async def test_request_id_rejects_invalid_header(client) -> None:
 
 
 async def test_metrics_endpoint_returns_prometheus() -> None:
-    """GET /metrics returns prometheus text format when X-Internal-Token is provided (M-004)."""
-    from market_ingestion.api.dependencies import get_settings
-    from market_ingestion.config import Settings
-
-    _TOKEN = "observability-test-token"  # noqa: S105
+    """GET /metrics returns prometheus text format (PRD-0025: /metrics is in _SKIP_PREFIXES)."""
     test_app = create_app()
-    test_settings = Settings(internal_service_token=_TOKEN)  # type: ignore[call-arg]
-    test_app.dependency_overrides[get_settings] = lambda: test_settings
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        response = await ac.get("/metrics", headers={"X-Internal-Token": _TOKEN})
+        response = await ac.get("/metrics")
 
-    test_app.dependency_overrides.clear()
     assert response.status_code == 200
     assert "text/plain" in response.headers.get("content-type", "")

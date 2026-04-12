@@ -33,6 +33,7 @@ from knowledge_graph.domain.errors import KnowledgeGraphError
 from knowledge_graph.infrastructure.intelligence_db.session import (
     _build_factories as _build_intel_factories,
 )
+from knowledge_graph.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -79,7 +80,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. intelligence_db session factories — R23 dual factory (write + read)
+    # 3. Start InternalJWTMiddleware — fetch JWKS from S9 at startup
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
+
+    # 4. intelligence_db session factories — R23 dual factory (write + read)
     engine, read_engine, write_factory, read_factory = _build_intel_factories(settings)
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
@@ -122,6 +128,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave D)
+    # We store the instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
 
     # Middleware (must be registered before app starts)
     app.add_middleware(RequestIdMiddleware)

@@ -27,6 +27,7 @@ from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
+from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -93,6 +94,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 7. Build and wire the GenerateBriefingUseCase
     _wire_briefing_uc(app, settings, valkey_client)
+
+    # 8. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
+    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    await jwt_mw.startup()
 
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
     yield
@@ -212,7 +217,6 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
 
     app.state.briefing_uc = GenerateBriefingUseCase(
         llm_chain=app.state.llm_chain,  # same chain as ChatOrchestrator
-        internal_service_token=settings.internal_service_token,
         valkey=valkey_client,
     )
 
@@ -230,6 +234,7 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
 
     # Middleware (must be registered before startup)
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{resolved.api_gateway_url}/internal/jwks")
     metrics: Any = create_metrics(service_name=resolved.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

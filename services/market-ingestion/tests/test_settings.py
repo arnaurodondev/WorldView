@@ -44,7 +44,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.dispatcher_max_attempts == 5
     assert s.otlp_endpoint == ""
     assert s.log_level == "INFO"
-    assert s.internal_service_token == ""
+    assert s.api_gateway_url == "http://api-gateway:8000"
 
 
 def test_settings_env_prefix(monkeypatch):

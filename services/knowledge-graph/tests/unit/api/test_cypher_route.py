@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import jwt as _jwt
 import pytest
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+
+# System JWT for InternalJWTMiddleware (PRD-0025 graceful degradation — decoded without sig when no JWKS)
+_SYSTEM_JWT = _jwt.encode(
+    {
+        "iss": "worldview-gateway",
+        "sub": "unit-test-system",
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    },
+    "unit-test-secret",
+    algorithm="HS256",
+)
 
 _SRC = uuid4()
 _TGT = uuid4()
@@ -51,7 +67,7 @@ def _make_app(*, cypher_enabled: bool = False, entity_exists: bool = True):
                 }
                 if entity_exists
                 else None
-            )
+            ),
         )
         bundle.entity_repo = entity_repo
         bundle.relation_repo = AsyncMock()
@@ -86,11 +102,18 @@ def enabled_no_entity_app():
 
 @pytest.fixture
 async def cypher_client(disabled_app):
-    """ASGI client using the cypher-disabled app."""
+    """ASGI client using the cypher-disabled app.
+
+    Includes X-Internal-JWT for InternalJWTMiddleware (PRD-0025 graceful degradation).
+    """
     from httpx import ASGITransport, AsyncClient
 
     transport = ASGITransport(app=disabled_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-JWT": _SYSTEM_JWT},
+    ) as ac:
         yield ac
 
 
@@ -161,7 +184,11 @@ class TestCypherPathEnabled:
         from httpx import ASGITransport, AsyncClient
 
         transport = ASGITransport(app=enabled_no_entity_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             resp = await ac.post(
                 "/api/v1/graph/cypher/path",
                 json={"source_entity_id": str(_SRC), "target_entity_id": str(_TGT)},
@@ -175,7 +202,11 @@ class TestCypherPathEnabled:
         from knowledge_graph.application.use_cases.cypher_path import CypherTimeoutError
 
         transport = ASGITransport(app=enabled_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             with patch(
                 "knowledge_graph.application.use_cases.cypher_path.CypherPathUseCase.execute",
                 new_callable=AsyncMock,
@@ -202,7 +233,11 @@ class TestCypherPathEnabled:
         )
 
         transport = ASGITransport(app=enabled_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             with patch(
                 "knowledge_graph.application.use_cases.cypher_path.CypherPathUseCase.execute",
                 new_callable=AsyncMock,
@@ -246,7 +281,11 @@ class TestCypherPathEnabled:
         )
 
         transport = ASGITransport(app=enabled_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             with patch(
                 "knowledge_graph.application.use_cases.cypher_path.CypherPathUseCase.execute",
                 new_callable=AsyncMock,
@@ -315,7 +354,11 @@ class TestCypherNeighborhoodEnabled:
         from httpx import ASGITransport, AsyncClient
 
         transport = ASGITransport(app=enabled_no_entity_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             resp = await ac.post(
                 "/api/v1/graph/cypher/neighborhood",
                 json={"entity_id": str(_ENT)},
@@ -348,7 +391,11 @@ class TestCypherNeighborhoodEnabled:
         )
 
         transport = ASGITransport(app=enabled_app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": _SYSTEM_JWT},
+        ) as ac:
             with patch.object(
                 CypherNeighborhoodUseCase,
                 "execute",

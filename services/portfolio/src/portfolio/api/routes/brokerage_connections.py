@@ -104,7 +104,7 @@ async def list_brokerage_connections(
                 created_at=c.created_at,
             )
             for c in result.items
-        ]
+        ],
     )
 
 
@@ -199,5 +199,5 @@ async def get_sync_errors(
                 created_at=e.created_at,
             )
             for e in result.items
-        ]
+        ],
     )

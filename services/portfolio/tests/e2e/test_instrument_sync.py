@@ -73,7 +73,7 @@ async def test_instrument_consumer_upserts_instrument(e2e_db_session: AsyncSessi
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
 
     result = await e2e_db_session.execute(
-        select(InstrumentModel).where(InstrumentModel.symbol == symbol, InstrumentModel.exchange == exchange)
+        select(InstrumentModel).where(InstrumentModel.symbol == symbol, InstrumentModel.exchange == exchange),
     )
     row = result.scalar_one_or_none()
     assert row is not None, f"InstrumentRef for {symbol}/{exchange} not found in DB"
@@ -120,7 +120,7 @@ async def test_instrument_consumer_idempotent(e2e_db_session: AsyncSession) -> N
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
 
     result = await e2e_db_session.execute(
-        select(func.count()).where(InstrumentModel.symbol == symbol, InstrumentModel.exchange == exchange)
+        select(func.count()).where(InstrumentModel.symbol == symbol, InstrumentModel.exchange == exchange),
     )
     count = result.scalar_one()
     assert count == 1, f"Expected 1 InstrumentRef row, got {count} (idempotency violation)"

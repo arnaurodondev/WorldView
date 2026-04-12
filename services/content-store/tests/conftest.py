@@ -2,18 +2,42 @@
 
 Unit tests use a lightweight app without the full lifespan (no DB/Kafka/MinIO).
 State attributes are set directly on the app — ASGI transport doesn't trigger lifespan.
+InternalJWTMiddleware is included (PRD-0025) with a system JWT in the default client.
 """
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock
 
+import jwt as _jwt
 import pytest
 from content_store.api.dlq import router as dlq_router
 from content_store.api.documents import router as documents_router
 from content_store.api.health import router as health_router
+from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+
+
+def _make_system_jwt() -> str:
+    """HS256 JWT with role=system for unit tests.
+
+    InternalJWTMiddleware decodes without signature verification when public_key is None
+    (JWKS server not running in unit test environment).
+    """
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "unit-test-system",
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "unit-test-secret", algorithm="HS256")
+
+
+_SYSTEM_JWT = _make_system_jwt()
 
 
 @pytest.fixture
@@ -23,10 +47,16 @@ def app():
     test_app.include_router(dlq_router)
     test_app.include_router(documents_router)
 
+    # InternalJWTMiddleware (PRD-0025) — public_key is None in tests (no JWKS at startup),
+    # so it decodes without signature verification (graceful degradation).
+    test_app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url="http://api-gateway:8000/internal/jwks",
+    )
+
     # Set mock state (ASGI transport does not trigger lifespan)
     settings = MagicMock()
     settings.admin_token = "test-admin-token"  # noqa: S105
-    settings.internal_service_token = "test-internal-secret"  # noqa: S105
 
     mock_session = AsyncMock()
     mock_session.execute = AsyncMock()
@@ -45,6 +75,18 @@ def app():
 
 @pytest.fixture
 async def client(app):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Internal-JWT": _SYSTEM_JWT},
+    ) as ac:
+        yield ac
+
+
+@pytest.fixture
+async def unauthenticated_client(app):
+    """Client without X-Internal-JWT — used to test InternalJWTMiddleware 401 behaviour."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

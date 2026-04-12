@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_ingestion.config import Settings
+from market_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -72,6 +73,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.write_session_factory = write_factory
     app.state.read_session_factory = read_factory
 
+    # 4. InternalJWTMiddleware startup (PRD-0025 Wave D)
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    await jwt_middleware.startup()
+    app.state._jwt_middleware = jwt_middleware
+
     log.info("service_started", service=settings.service_name, version=app.version)
     yield
     log.info("service_stopped", service=settings.service_name)
@@ -84,12 +90,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2026.3.0",
         lifespan=lifespan,
     )
-    settings = settings or Settings()  # type: ignore[call-arg]
-    app.state.settings = settings
+    _settings = settings or Settings()  # type: ignore[call-arg]
+    app.state.settings = _settings
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
-    metrics = create_metrics(service_name=settings.service_name)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{_settings.api_gateway_url}/internal/jwks")
+    metrics = create_metrics(service_name=_settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics

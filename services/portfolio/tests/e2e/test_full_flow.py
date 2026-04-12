@@ -51,7 +51,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     from sqlalchemy import select
 
     result = await e2e_db_session.execute(
-        select(OutboxEventModel).where(OutboxEventModel.event_type == "portfolio.created")
+        select(OutboxEventModel).where(OutboxEventModel.event_type == "portfolio.created"),
     )
     assert result.scalars().first() is not None, "PortfolioCreated event missing from outbox"
 
@@ -125,7 +125,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
         result = await e2e_db_session.execute(
             select(OutboxEventModel).where(
                 OutboxEventModel.tenant_id == tenant_id,
-            )
+            ),
         )
         outbox_rows = len(result.scalars().all())
         await e2e_db_session.rollback()
@@ -149,14 +149,14 @@ async def test_healthz_returns_ok(e2e_client: AsyncClient) -> None:
     assert resp.status_code == 200
 
 
-async def test_create_tenant_requires_system_role(e2e_client: AsyncClient) -> None:
-    """POST /tenants without system-role JWT → 401 (SEC-005 fix enforced in E2E).
+async def test_create_tenant_requires_system_role(unauthenticated_e2e_client: AsyncClient) -> None:
+    """POST /tenants without X-Internal-JWT → 401 (SEC-005 fix enforced in E2E).
 
     The endpoint now requires role=system via InternalJWTMiddleware (PRD-0025 Wave C).
     Callers without a valid JWT from S9 gateway receive 401.
     """
-    resp = await e2e_client.post("/api/v1/tenants", json={"name": f"NoCreds-{uuid.uuid4().hex[:6]}"})
-    # Without valid JWT carrying role=system, the route guard returns 401
+    resp = await unauthenticated_e2e_client.post("/api/v1/tenants", json={"name": f"NoCreds-{uuid.uuid4().hex[:6]}"})
+    # Without X-Internal-JWT header, the middleware returns 401
     assert resp.status_code == 401, f"Expected 401 (SEC-005), got {resp.status_code}: {resp.text}"
 
 
@@ -264,7 +264,7 @@ async def _seed_tenant_and_user(session: AsyncSession, email: str) -> tuple[str,
             tenant_id=t_id,
             email=email,
             status="active",
-        )
+        ),
     )
     await session.commit()
     return str(t_id), str(u_id)
@@ -284,7 +284,7 @@ async def _seed_instrument(session: AsyncSession, symbol: str, exchange: str) ->
             currency="USD",
             asset_class="equity",
             source_event_id=uuid.uuid4(),
-        )
+        ),
     )
     await session.commit()
     return inst_id

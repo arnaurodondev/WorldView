@@ -105,7 +105,8 @@ class BrokerageTransactionSyncWorker:
         """Single sync pass over all active/error connections."""
         # Load connections — close UoW before any SnapTrade calls (BP-057)
         async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
-            self._session_factory, snaptrade_cipher=self._cipher
+            self._session_factory,
+            snaptrade_cipher=self._cipher,
         ) as uow:
             connections = await uow.brokerage_connections.list_active_or_error()
 
@@ -148,7 +149,8 @@ class BrokerageTransactionSyncWorker:
                 # snaptrade_user_secret intentionally omitted
             )
             async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
-                self._session_factory, snaptrade_cipher=self._cipher
+                self._session_factory,
+                snaptrade_cipher=self._cipher,
             ) as uow:
                 connection.mark_error()
                 await uow.brokerage_connections.save(connection)
@@ -156,7 +158,8 @@ class BrokerageTransactionSyncWorker:
             return
 
         async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
-            self._session_factory, snaptrade_cipher=self._cipher
+            self._session_factory,
+            snaptrade_cipher=self._cipher,
         ) as uow:
             for activity in activities:
                 await self._process_activity(connection, activity, uow)
@@ -200,7 +203,7 @@ class BrokerageTransactionSyncWorker:
                     snaptrade_transaction_id=activity.snaptrade_transaction_id,
                     error_type=SyncErrorType.UNSUPPORTED_TYPE,
                     error_detail=f"Unsupported activity type: {activity.activity_type!r}",
-                )
+                ),
             )
             BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="unsupported_type").inc()
             return
@@ -227,7 +230,7 @@ class BrokerageTransactionSyncWorker:
                     snaptrade_transaction_id=activity.snaptrade_transaction_id,
                     error_type=SyncErrorType.UNKNOWN_INSTRUMENT,
                     error_detail=f"Instrument not found for symbol: {activity.symbol!r}",
-                )
+                ),
             )
             BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="unknown_instrument").inc()
             return
@@ -260,7 +263,7 @@ class BrokerageTransactionSyncWorker:
                     snaptrade_transaction_id=activity.snaptrade_transaction_id,
                     error_type=SyncErrorType.VALIDATION_ERROR,
                     error_detail=str(exc),
-                )
+                ),
             )
             BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="failed", error_type="validation_error").inc()
             return
@@ -286,7 +289,7 @@ class BrokerageTransactionSyncWorker:
         encoded_symbol = urllib.parse.quote(symbol, safe="")
         try:
             response = await self._http_client.get(
-                f"{self._settings.market_data_service_url}/api/v1/instruments/{encoded_symbol}"
+                f"{self._settings.market_data_service_url}/api/v1/instruments/{encoded_symbol}",
             )
         except Exception:
             return None

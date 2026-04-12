@@ -26,7 +26,7 @@ class Transaction:
     price: Decimal
     currency: str
     executed_at: datetime
-    fees: Decimal = Decimal("0")
+    fees: Decimal = Decimal(0)
     external_ref: str | None = None
     id: UUID = field(default_factory=new_uuid)
     created_at: datetime = field(default_factory=utc_now)

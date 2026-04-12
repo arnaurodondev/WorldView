@@ -6,6 +6,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
+import jwt
 import pytest
 from alert.api.dependencies import get_email_prefs_get_uc, get_email_prefs_update_uc
 from alert.app import create_app
@@ -18,6 +19,19 @@ from httpx import ASGITransport, AsyncClient
 _USER_ID = UUID("01912345-6789-7abc-8def-0123456789ab")
 _TENANT_ID = UUID("01912345-6789-7abc-8def-0123456789ac")
 _ADMIN_TOKEN = "test-admin-token"  # noqa: S105
+
+# Internal JWT for tests — HS256, decoded without sig verify since JWKS not loaded in unit tests
+_INTERNAL_JWT = jwt.encode(
+    {
+        "sub": str(_USER_ID),
+        "tenant_id": str(_TENANT_ID),
+        "role": "owner",
+        "iss": "worldview-gateway",
+        "exp": 9999999999,
+    },
+    "secret",
+    algorithm="HS256",
+)
 
 
 def _make_app() -> object:

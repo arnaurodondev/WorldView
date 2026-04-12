@@ -211,7 +211,7 @@ class SnapTradeClient:
                     currency=currency_str,
                     executed_at=_parse_trade_date(item.trade_date),
                     brokerage_name=str(item.institution) if item.institution else None,
-                )
+                ),
             )
 
         return activities

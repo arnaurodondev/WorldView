@@ -81,7 +81,10 @@ async def test_create_watchlist_success(uow: FakeUnitOfWork, tenant: Tenant, use
 
 @pytest.mark.asyncio
 async def test_create_watchlist_duplicate_name_raises(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     uc = CreateWatchlistUseCase()
     with pytest.raises(WatchlistAlreadyExistsError):
@@ -114,7 +117,10 @@ async def test_get_watchlist_not_found_raises(uow: FakeUnitOfWork, tenant: Tenan
 
 @pytest.mark.asyncio
 async def test_get_watchlist_wrong_owner_raises(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     uc = GetWatchlistUseCase()
     with pytest.raises(AuthorizationError):
@@ -126,7 +132,10 @@ async def test_get_watchlist_wrong_owner_raises(
 
 @pytest.mark.asyncio
 async def test_list_watchlists_returns_user_watchlists(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     uc = ListWatchlistsUseCase()
     result = await uc.execute(user.id, tenant.id, uow)
@@ -138,7 +147,10 @@ async def test_list_watchlists_returns_user_watchlists(
 
 @pytest.mark.asyncio
 async def test_delete_watchlist_soft_deletes(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     uc = DeleteWatchlistUseCase()
     await uc.execute(
@@ -160,13 +172,19 @@ async def test_delete_watchlist_soft_deletes(
 
 @pytest.mark.asyncio
 async def test_add_member_success_writes_outbox_event(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     entity_id = uuid4()
     uc = AddWatchlistMemberUseCase()
     member = await uc.execute(
         AddWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
         NoOpWatchlistCache(),
@@ -179,20 +197,29 @@ async def test_add_member_success_writes_outbox_event(
 
 @pytest.mark.asyncio
 async def test_add_member_duplicate_raises(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     entity_id = uuid4()
     uc = AddWatchlistMemberUseCase()
     await uc.execute(
         AddWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
     )
     with pytest.raises(WatchlistMemberAlreadyExistsError):
         await uc.execute(
             AddWatchlistMemberCommand(
-                tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=entity_id,
             ),
             uow,
         )
@@ -200,7 +227,10 @@ async def test_add_member_duplicate_raises(
 
 @pytest.mark.asyncio
 async def test_add_member_calls_cache_invalidation(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     """Cache invalidate_entity must be called after member is added."""
     invalidated: list = []
@@ -213,7 +243,10 @@ async def test_add_member_calls_cache_invalidation(
     uc = AddWatchlistMemberUseCase()
     await uc.execute(
         AddWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
         CapturingCache(),
@@ -226,20 +259,29 @@ async def test_add_member_calls_cache_invalidation(
 
 @pytest.mark.asyncio
 async def test_remove_member_success_writes_outbox_event(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     entity_id = uuid4()
     add_uc = AddWatchlistMemberUseCase()
     await add_uc.execute(
         AddWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
     )
     remove_uc = RemoveWatchlistMemberUseCase()
     await remove_uc.execute(
         RemoveWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
     )
@@ -250,13 +292,19 @@ async def test_remove_member_success_writes_outbox_event(
 
 @pytest.mark.asyncio
 async def test_remove_member_not_found_raises(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     uc = RemoveWatchlistMemberUseCase()
     with pytest.raises(WatchlistMemberNotFoundError):
         await uc.execute(
             RemoveWatchlistMemberCommand(
-                tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=uuid4()
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=uuid4(),
             ),
             uow,
         )
@@ -264,7 +312,10 @@ async def test_remove_member_not_found_raises(
 
 @pytest.mark.asyncio
 async def test_remove_member_calls_cache_invalidation(
-    uow: FakeUnitOfWork, tenant: Tenant, user: User, watchlist: Watchlist
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
 ) -> None:
     invalidated: list = []
 
@@ -276,7 +327,10 @@ async def test_remove_member_calls_cache_invalidation(
     add_uc = AddWatchlistMemberUseCase()
     await add_uc.execute(
         AddWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
     )
@@ -285,7 +339,10 @@ async def test_remove_member_calls_cache_invalidation(
     remove_uc = RemoveWatchlistMemberUseCase()
     await remove_uc.execute(
         RemoveWatchlistMemberCommand(
-            tenant_id=tenant.id, watchlist_id=watchlist.id, owner_id=user.id, entity_id=entity_id
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
         ),
         uow,
         CapturingCache(),

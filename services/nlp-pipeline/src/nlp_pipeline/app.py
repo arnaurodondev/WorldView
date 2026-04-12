@@ -27,6 +27,7 @@ from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
     _build_intelligence_factories,
 )
+from nlp_pipeline.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -83,7 +84,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database engines — R23 dual factory (write + read) for both DBs
+    # 3. Start InternalJWTMiddleware — fetch JWKS from S9 at startup
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
+
+    # 4. Database engines — R23 dual factory (write + read) for both DBs
     nlp_engine, nlp_read_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
     intel_engine, intel_read_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
     app.state.nlp_engine = nlp_engine
@@ -97,7 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.intel_write_factory = intel_sf
     app.state.intel_read_factory = intel_read_sf
 
-    # 4. Valkey + WatchlistCache
+    # 5. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
@@ -119,7 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     endpoint=settings.storage_endpoint,
                     access_key=settings.storage_access_key,
                     secret_key=settings.storage_secret_key,
-                )
+                ),
             )
             app.state.chunk_text_store = MinIOChunkTextStore(_obj_storage, settings.chunk_bucket)
             log.info("chunk_text_store_configured", bucket=settings.chunk_bucket)
@@ -163,6 +169,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     settings = settings or Settings()
     app.state.settings = settings
+
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave D)
+    # We store the instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
 
     # Middleware (must be registered before lifespan starts)
     app.add_middleware(RequestIdMiddleware)

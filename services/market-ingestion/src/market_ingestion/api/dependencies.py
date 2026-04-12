@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import hmac
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
 import httpx
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Request
 
 from market_ingestion.config import Settings
 
@@ -74,7 +73,7 @@ def get_provider_registry(
 
     client = httpx.AsyncClient()
     registry.register(
-        EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client, base_url=settings.eodhd_base_url)
+        EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client, base_url=settings.eodhd_base_url),
     )
     return registry
 
@@ -84,16 +83,3 @@ def get_canonical_serializer() -> CanonicalSerializer:
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 
     return DefaultCanonicalSerializer()
-
-
-async def verify_internal_token(
-    x_internal_token: Annotated[str | None, Header()] = None,
-    settings: Annotated[Settings, Depends(get_settings)] = ...,  # type: ignore[assignment]
-) -> None:
-    """Validate X-Internal-Token against the configured service token (QA-018)."""
-    expected = settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]

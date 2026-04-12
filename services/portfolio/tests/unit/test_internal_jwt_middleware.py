@@ -63,7 +63,7 @@ def _build_app(public_key: Any = None) -> FastAPI:
             {
                 "tenant_id": getattr(request.state, "tenant_id", None),
                 "role": getattr(request.state, "role", None),
-            }
+            },
         )
 
     @app.get("/health")

@@ -143,7 +143,9 @@ async def test_list_portfolios_limit_and_offset(uow: FakeUnitOfWork, active_tena
 
 @pytest.mark.asyncio
 async def test_get_portfolio_ownership_violation(
-    uow: FakeUnitOfWork, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """GetPortfolioUseCase raises AuthorizationError for wrong owner."""
     uc = GetPortfolioUseCase()
@@ -153,7 +155,10 @@ async def test_get_portfolio_ownership_violation(
 
 @pytest.mark.asyncio
 async def test_rename_portfolio_happy_path(
-    uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    active_user: User,
+    portfolio: Portfolio,
 ) -> None:
     """RenamePortfolioUseCase renames and emits PortfolioRenamed event."""
     uc = RenamePortfolioUseCase()
@@ -175,7 +180,9 @@ async def test_rename_portfolio_happy_path(
 
 @pytest.mark.asyncio
 async def test_rename_portfolio_not_owner_raises(
-    uow: FakeUnitOfWork, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """RenamePortfolioUseCase raises AuthorizationError for wrong owner."""
     uc = RenamePortfolioUseCase()
@@ -193,7 +200,10 @@ async def test_rename_portfolio_not_owner_raises(
 
 @pytest.mark.asyncio
 async def test_archive_portfolio_happy_path(
-    uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    active_user: User,
+    portfolio: Portfolio,
 ) -> None:
     """ArchivePortfolioUseCase archives portfolio + PortfolioArchived event."""
     uc = ArchivePortfolioUseCase()

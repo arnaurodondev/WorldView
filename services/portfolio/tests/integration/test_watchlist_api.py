@@ -42,8 +42,10 @@ async def watchlist_client(postgres_container: str) -> AsyncGenerator[AsyncClien
     app.state.session_factory = session_factory
     app.state.engine = engine
 
+    from tests.integration.helpers import _INTERNAL_HEADERS
+
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as ac:
         yield ac
 
     app.dependency_overrides.clear()

@@ -2,9 +2,13 @@
 
 Covers:
   - GET /api/v1/alerts/pending: pagination, empty results, user scoping
-  - DELETE /api/v1/alerts/{alert_id}/ack: 204 on success, 404 on wrong user,
+  - DELETE /api/v1/alerts/{alert_id}/ack: 200 on success, 404 on wrong user,
     404 on already-acknowledged, 404 on non-existent alert
   - WebSocket route is registered
+
+After PRD-0025 T-D-1-10, user_id is extracted from the RS256 internal JWT set
+by InternalJWTMiddleware.  Tests pass X-Internal-JWT (HS256, no sig verify in
+unit tests because public key is not loaded) to authenticate requests.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
+import jwt
 import pytest
 from alert.app import create_app
 from alert.config import Settings
@@ -25,6 +30,22 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _make_jwt(user_id: UUID) -> str:
+    """Encode a HS256 JWT.  InternalJWTMiddleware decodes without sig verify
+    when public key is not loaded (unit test mode — no JWKS endpoint)."""
+    return jwt.encode(
+        {
+            "sub": str(user_id),
+            "tenant_id": "tenant-test",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            "exp": 9999999999,
+        },
+        "secret",
+        algorithm="HS256",
+    )
 
 
 def _make_app() -> FastAPI:
@@ -89,7 +110,8 @@ class TestGetPendingAlerts:
     async def test_returns_empty_list_when_no_alerts(self) -> None:
         app, _session = _make_app()
         transport = ASGITransport(app=app)
-        user_id = str(uuid4())
+        user_id = uuid4()
+        token = _make_jwt(user_id)
 
         with (
             patch(_PENDING_REPO_PATH) as MockPendingRepo,
@@ -98,7 +120,7 @@ class TestGetPendingAlerts:
             MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[])
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+                resp = await client.get("/api/v1/alerts/pending", headers={"X-Internal-JWT": token})
 
         assert resp.status_code == 200
         data = resp.json()
@@ -112,6 +134,7 @@ class TestGetPendingAlerts:
         user_id = uuid4()
         alert = _make_alert()
         pending = _make_pending(user_id, alert.alert_id)
+        token = _make_jwt(user_id)
 
         with (
             patch(_PENDING_REPO_PATH) as MockPendingRepo,
@@ -121,7 +144,7 @@ class TestGetPendingAlerts:
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+                resp = await client.get("/api/v1/alerts/pending", headers={"X-Internal-JWT": token})
 
         assert resp.status_code == 200
         data = resp.json()
@@ -135,6 +158,7 @@ class TestGetPendingAlerts:
         app, _session = _make_app()
         transport = ASGITransport(app=app)
         user_id = uuid4()
+        token = _make_jwt(user_id)
 
         captured_args: list[dict] = []
 
@@ -154,7 +178,10 @@ class TestGetPendingAlerts:
             MockPendingRepo.return_value.list_by_user = _capture_list
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                await client.get(f"/api/v1/alerts/pending?user_id={user_id}&limit=10&offset=20")
+                await client.get(
+                    "/api/v1/alerts/pending?limit=10&offset=20",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert captured_args[0]["limit"] == 10
         assert captured_args[0]["offset"] == 20
@@ -166,6 +193,7 @@ class TestGetPendingAlerts:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         pending = _make_pending(user_id, uuid4())
+        token = _make_jwt(user_id)
 
         with (
             patch(_PENDING_REPO_PATH) as MockPendingRepo,
@@ -175,7 +203,7 @@ class TestGetPendingAlerts:
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=None)  # orphan
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+                resp = await client.get("/api/v1/alerts/pending", headers={"X-Internal-JWT": token})
 
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
@@ -188,6 +216,7 @@ class TestGetPendingAlerts:
         user_id = uuid4()
         alert = _make_alert(severity=AlertSeverity.HIGH)
         pending = _make_pending(user_id, alert.alert_id)
+        token = _make_jwt(user_id)
 
         with (
             patch(_PENDING_REPO_PATH) as MockPendingRepo,
@@ -197,7 +226,7 @@ class TestGetPendingAlerts:
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+                resp = await client.get("/api/v1/alerts/pending", headers={"X-Internal-JWT": token})
 
         assert resp.status_code == 200
         item = resp.json()["alerts"][0]
@@ -215,6 +244,7 @@ class TestGetPendingAlerts:
         user_id = uuid4()
         alert_high = _make_alert(severity=AlertSeverity.HIGH)
         pending_high = _make_pending(user_id, alert_high.alert_id)
+        token = _make_jwt(user_id)
 
         captured_min_severities: list[list[str] | None] = []
 
@@ -236,7 +266,10 @@ class TestGetPendingAlerts:
             MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert_high)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}&min_severity=high")
+                resp = await client.get(
+                    "/api/v1/alerts/pending?min_severity=high",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert resp.status_code == 200
         data = resp.json()
@@ -255,13 +288,17 @@ class TestGetPendingAlerts:
         app, _session = _make_app()
         transport = ASGITransport(app=app)
         user_id = uuid4()
+        token = _make_jwt(user_id)
 
         with (
             patch(_PENDING_REPO_PATH),
             patch(_ALERT_REPO_PATH),
         ):
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get(f"/api/v1/alerts/pending?user_id={user_id}&min_severity=extreme")
+                resp = await client.get(
+                    "/api/v1/alerts/pending?min_severity=extreme",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert resp.status_code == 422
 
@@ -276,12 +313,16 @@ class TestAcknowledgeAlert:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         alert_id = uuid4()
+        token = _make_jwt(user_id)
 
         with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=True)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+                resp = await client.delete(
+                    f"/api/v1/alerts/{alert_id}/ack",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "acknowledged"
@@ -293,12 +334,16 @@ class TestAcknowledgeAlert:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         alert_id = uuid4()
+        token = _make_jwt(user_id)
 
         with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=False)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+                resp = await client.delete(
+                    f"/api/v1/alerts/{alert_id}/ack",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert resp.status_code == 404
 
@@ -309,12 +354,16 @@ class TestAcknowledgeAlert:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         alert_id = uuid4()
+        token = _make_jwt(user_id)
 
         with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=False)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+                resp = await client.delete(
+                    f"/api/v1/alerts/{alert_id}/ack",
+                    headers={"X-Internal-JWT": token},
+                )
 
         # Same as wrong user — avoids user enumeration
         assert resp.status_code == 404
@@ -325,6 +374,7 @@ class TestAcknowledgeAlert:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         alert_id = uuid4()
+        token = _make_jwt(user_id)
         captured: list[tuple[UUID, UUID]] = []
 
         async def _capture_ack(uid: UUID, aid: UUID) -> bool:
@@ -335,7 +385,10 @@ class TestAcknowledgeAlert:
             MockPendingRepo.return_value.acknowledge = _capture_ack
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+                await client.delete(
+                    f"/api/v1/alerts/{alert_id}/ack",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert captured[0] == (user_id, alert_id)
 
@@ -346,12 +399,16 @@ class TestAcknowledgeAlert:
         transport = ASGITransport(app=app)
         user_id = uuid4()
         alert_id = uuid4()
+        token = _make_jwt(user_id)
 
         with patch(_PENDING_REPO_PATH) as MockPendingRepo:
             MockPendingRepo.return_value.acknowledge = AsyncMock(return_value=True)
 
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+                resp = await client.delete(
+                    f"/api/v1/alerts/{alert_id}/ack",
+                    headers={"X-Internal-JWT": token},
+                )
 
         assert resp.status_code == 200
         # The route must not call commit directly — AcknowledgeAlertUseCase does it (N-04).
@@ -365,12 +422,11 @@ class TestAcknowledgeAlert:
 
 class TestWebSocketRoute:
     @pytest.mark.unit
-    async def test_websocket_stream_requires_user_id(self) -> None:
-        """WebSocket /api/v1/alerts/stream requires user_id — rejects without it.
+    async def test_websocket_stream_requires_jwt(self) -> None:
+        """WebSocket /api/v1/alerts/stream requires X-Internal-JWT — rejects without it.
 
-        S9 API gateway injects user_id from the JWT before forwarding to S10.
-        This test confirms the endpoint does not accept connections/requests
-        that omit the required query parameter.
+        InternalJWTMiddleware intercepts the HTTP upgrade request and returns 401
+        when the X-Internal-JWT header is missing (PRD-0025 §T-D-1-10).
         """
         app, _ = _make_app()
         transport = ASGITransport(app=app)
@@ -378,6 +434,5 @@ class TestWebSocketRoute:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/api/v1/alerts/stream")
 
-        # Missing required query param → client error (422 or 403 depending on FastAPI/Starlette
-        # version's WebSocket route handling for non-upgrade HTTP requests)
+        # Missing X-Internal-JWT → 401 from InternalJWTMiddleware
         assert resp.status_code >= 400

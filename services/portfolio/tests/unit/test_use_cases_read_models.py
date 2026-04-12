@@ -55,7 +55,10 @@ async def portfolio(uow: FakeUnitOfWork, active_tenant: Tenant, active_user: Use
 
 @pytest.mark.asyncio
 async def test_get_holdings_empty(
-    uow: FakeUnitOfWork, active_user: User, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_user: User,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """GetHoldingsUseCase returns empty list when no holdings exist."""
     uc = GetHoldingsUseCase()
@@ -65,7 +68,9 @@ async def test_get_holdings_empty(
 
 @pytest.mark.asyncio
 async def test_get_holdings_ownership_violation(
-    uow: FakeUnitOfWork, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """GetHoldingsUseCase raises AuthorizationError for wrong owner."""
     uc = GetHoldingsUseCase()
@@ -83,7 +88,10 @@ async def test_get_holdings_portfolio_not_found(uow: FakeUnitOfWork, active_user
 
 @pytest.mark.asyncio
 async def test_get_holdings_returns_correct_data(
-    uow: FakeUnitOfWork, active_user: User, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_user: User,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """GetHoldingsUseCase returns all holdings for the portfolio."""
     instrument_id = uuid4()
@@ -92,16 +100,16 @@ async def test_get_holdings_returns_correct_data(
         instrument_id=instrument_id,
         tenant_id=active_tenant.id,
         currency="USD",
-        quantity=Decimal("10"),
-        average_cost=Decimal("150"),
+        quantity=Decimal(10),
+        average_cost=Decimal(150),
     )
     await uow.holdings.save(holding)
 
     uc = GetHoldingsUseCase()
     results = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
     assert len(results) == 1
-    assert results[0].quantity == Decimal("10")
-    assert results[0].average_cost == Decimal("150")
+    assert results[0].quantity == Decimal(10)
+    assert results[0].average_cost == Decimal(150)
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────
@@ -109,7 +117,10 @@ async def test_get_holdings_returns_correct_data(
 
 @pytest.mark.asyncio
 async def test_list_transactions_empty(
-    uow: FakeUnitOfWork, active_user: User, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_user: User,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """ListTransactionsUseCase returns empty list when no transactions."""
     uc = ListTransactionsUseCase()
@@ -120,7 +131,9 @@ async def test_list_transactions_empty(
 
 @pytest.mark.asyncio
 async def test_list_transactions_ownership_violation(
-    uow: FakeUnitOfWork, active_tenant: Tenant, portfolio: Portfolio
+    uow: FakeUnitOfWork,
+    active_tenant: Tenant,
+    portfolio: Portfolio,
 ) -> None:
     """ListTransactionsUseCase raises AuthorizationError for wrong owner."""
     uc = ListTransactionsUseCase()
@@ -130,7 +143,9 @@ async def test_list_transactions_ownership_violation(
 
 @pytest.mark.asyncio
 async def test_list_transactions_portfolio_not_found(
-    uow: FakeUnitOfWork, active_user: User, active_tenant: Tenant
+    uow: FakeUnitOfWork,
+    active_user: User,
+    active_tenant: Tenant,
 ) -> None:
     """ListTransactionsUseCase raises PortfolioNotFoundError when portfolio missing."""
     uc = ListTransactionsUseCase()

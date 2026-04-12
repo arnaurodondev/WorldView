@@ -278,6 +278,8 @@ class FakeUoW(UnitOfWork):
 
     async def rollback(self): ...
 
+    async def flush(self) -> None: ...
+
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -348,7 +350,7 @@ def cmd(tenant_id, owner_id, portfolio_id, instrument_id):
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -362,11 +364,11 @@ def cmd(tenant_id, owner_id, portfolio_id, instrument_id):
 async def test_buy_creates_transaction_and_holding(uow, cmd) -> None:
     uc = RecordTransactionUseCase()
     result = await uc.execute(cmd, uow)
-    assert result.transaction.quantity == Decimal("10")
+    assert result.transaction.quantity == Decimal(10)
     assert len(uow._transactions.saved) == 1
     holdings = await uow._holdings.list_by_portfolio(cmd.portfolio_id)
     assert len(holdings) == 1
-    assert holdings[0].quantity == Decimal("10")
+    assert holdings[0].quantity == Decimal(10)
     # T-G-1-01: verify commit was called exactly once (not zero, not two)
     assert uow.commit_count == 1
 
@@ -379,8 +381,8 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
         instrument_id=instrument_id,
         tenant_id=cmd.tenant_id,
         currency="USD",
-        quantity=Decimal("20"),
-        average_cost=Decimal("100"),
+        quantity=Decimal(20),
+        average_cost=Decimal(100),
     )
     uow._holdings._holdings[(portfolio_id, instrument_id)] = holding
 
@@ -391,8 +393,8 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
         instrument_id=instrument_id,
         transaction_type=TransactionType.SELL,
         direction=TransactionDirection.OUTFLOW,
-        quantity=Decimal("5"),
-        price=Decimal("200"),
+        quantity=Decimal(5),
+        price=Decimal(200),
         currency="USD",
         executed_at=_NOW,
     )
@@ -400,7 +402,7 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
     await uc.execute(sell_cmd, uow)
 
     holdings = await uow._holdings.list_by_portfolio(portfolio_id)
-    assert holdings[0].quantity == Decimal("15")
+    assert holdings[0].quantity == Decimal(15)
 
 
 @pytest.mark.asyncio
@@ -421,8 +423,8 @@ async def test_missing_instrument_raises(tenant, user, portfolio, tenant_id, own
         instrument_id=uuid4(),
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -439,8 +441,8 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
         instrument_id=instrument_id,
         tenant_id=cmd.tenant_id,
         currency="USD",
-        quantity=Decimal("1"),
-        average_cost=Decimal("100"),
+        quantity=Decimal(1),
+        average_cost=Decimal(100),
     )
     uow._holdings._holdings[(portfolio_id, instrument_id)] = holding
 
@@ -451,8 +453,8 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
         instrument_id=instrument_id,
         transaction_type=TransactionType.SELL,
         direction=TransactionDirection.OUTFLOW,
-        quantity=Decimal("999"),
-        price=Decimal("100"),
+        quantity=Decimal(999),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -583,6 +585,8 @@ class _IntegrityErrorUoW(FakeUoW):
         # Clear all pending saves — simulates the DB rollback undoing the writes.
         self._transactions.saved.clear()
 
+    async def flush(self) -> None: ...
+
 
 class _IntegrityErrorUoWWithWinner(FakeUoW):
     """FakeUoW where the 'winner' concurrent request already committed its transaction.
@@ -606,10 +610,19 @@ class _IntegrityErrorUoWWithWinner(FakeUoW):
         self._transactions.saved.clear()
         self._transactions.saved.append(self._winner_tx)
 
+    async def flush(self) -> None: ...
+
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() races with an IntegrityError and the winner's transaction exists,
     the loser returns the existing transaction (idempotent 200, not 500).
@@ -628,15 +641,19 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
-        fees=Decimal("0"),
+        fees=Decimal(0),
         currency="USD",
         executed_at=_NOW,
         external_ref=idem_key,
     )
     uow = _IntegrityErrorUoWWithWinner(
-        tenant=tenant, user=user, portfolio=portfolio, instrument=instrument, winner_tx=winner_tx
+        tenant=tenant,
+        user=user,
+        portfolio=portfolio,
+        instrument=instrument,
+        winner_tx=winner_tx,
     )
 
     cmd_with_key = RecordTransactionCommand(
@@ -646,7 +663,7 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -661,7 +678,14 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() raises IntegrityError and no idempotency key is present,
     IdempotencyConflictError is raised (maps to HTTP 409).
@@ -677,7 +701,7 @@ async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -690,7 +714,14 @@ async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_with_key_but_no_existing_raises_conflict(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() raises IntegrityError with an idempotency key but the winner's
     transaction is not yet visible (e.g. not flushed), IdempotencyConflictError is raised.
@@ -708,7 +739,7 @@ async def test_integrity_error_on_commit_with_key_but_no_existing_raises_conflic
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -746,7 +777,13 @@ async def test_f_ds_002_idem_key_recorded_transaction_missing_raises_conflict(uo
 
 @pytest.mark.asyncio
 async def test_inactive_tenant_raises_domain_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, user, portfolio, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    user,
+    portfolio,
+    instrument,
 ) -> None:
     """Inactive tenant must raise TenantInactiveError (T-G-1-03)."""
     from portfolio.domain.errors import TenantInactiveError
@@ -760,8 +797,8 @@ async def test_inactive_tenant_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -771,7 +808,13 @@ async def test_inactive_tenant_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_inactive_user_raises_domain_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, tenant, portfolio, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    tenant,
+    portfolio,
+    instrument,
 ) -> None:
     """Suspended user must raise UserInactiveError (T-G-1-03)."""
     from portfolio.domain.errors import UserInactiveError
@@ -785,8 +828,8 @@ async def test_inactive_user_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -796,7 +839,12 @@ async def test_inactive_user_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_portfolio_not_found_raises_domain_error(
-    tenant_id, owner_id, instrument_id, tenant, user, instrument
+    tenant_id,
+    owner_id,
+    instrument_id,
+    tenant,
+    user,
+    instrument,
 ) -> None:
     """Portfolio not found → PortfolioNotFoundError (T-G-1-03)."""
     from portfolio.domain.errors import PortfolioNotFoundError
@@ -817,8 +865,8 @@ async def test_portfolio_not_found_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -828,7 +876,13 @@ async def test_portfolio_not_found_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_wrong_owner_raises_authorization_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, tenant, user, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    tenant,
+    user,
+    instrument,
 ) -> None:
     """Portfolio owned by a different user → AuthorizationError (T-G-1-03)."""
     from portfolio.domain.errors import AuthorizationError
@@ -850,8 +904,8 @@ async def test_wrong_owner_raises_authorization_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )

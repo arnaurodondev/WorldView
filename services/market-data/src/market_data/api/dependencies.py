@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hmac
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Request
 
 from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
 
@@ -219,19 +218,3 @@ def get_prediction_market_history_uc(
     from market_data.application.use_cases.query_prediction_markets import GetPredictionMarketHistoryUseCase
 
     return GetPredictionMarketHistoryUseCase(uow)
-
-
-# ── Internal auth (M-004 — metrics endpoint protection) ──────────────────────
-
-
-async def verify_internal_token(
-    request: Request,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> None:
-    """Validate X-Internal-Token against the configured service token (M-004)."""
-    expected = request.app.state.settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]

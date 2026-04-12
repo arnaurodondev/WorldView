@@ -204,6 +204,6 @@ async def _seed_instrument(db_session, symbol: str, exchange: str) -> uuid.UUID:
         select(InstrumentModel.id).where(
             InstrumentModel.symbol == symbol,
             InstrumentModel.exchange == exchange,
-        )
+        ),
     )
     return result.scalar_one()

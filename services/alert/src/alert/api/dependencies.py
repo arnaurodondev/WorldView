@@ -14,6 +14,27 @@ from alert.application.use_cases.dlq_admin import DLQAdminUseCase
 from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
 from alert.application.use_cases.pending_alerts import AcknowledgeAlertUseCase, GetPendingAlertsUseCase
 
+# ── Current user (PRD-0025 §T-D-1-10) ────────────────────────────────────────
+
+
+def get_current_user_id(request: Request) -> UUID:
+    """Extract and validate user_id from InternalJWT state (PRD-0025 §T-D-1-10).
+
+    InternalJWTMiddleware sets request.state.user_id from the verified RS256 JWT.
+    Returns 401 if not set (unauthenticated request).
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return UUID(str(user_id))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid user identity in JWT") from exc
+
+
+CurrentUserIdDep = Annotated[UUID, Depends(get_current_user_id)]
+
+
 # ── Database session (write) ─────────────────────────────────────────────────
 
 

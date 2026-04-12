@@ -132,6 +132,9 @@ class FakeUoW(UnitOfWork):
     async def rollback(self) -> None:
         pass
 
+    async def flush(self) -> None:
+        pass
+
 
 _CONSUMER_GROUP = "portfolio-instrument-sync"
 _TOPICS = ["market.instrument.created", "market.instrument.updated"]

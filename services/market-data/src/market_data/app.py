@@ -13,7 +13,7 @@ import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from market_data.api.dependencies import InternalAuthDep
+from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -248,6 +248,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("market_data.app")
 
+    # 2. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    await jwt_middleware.startup()
+
     # 2. Tracing (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
@@ -326,6 +330,7 @@ def create_app() -> FastAPI:
     app.state.settings = settings
 
     # Middleware — must be registered before app starts (Starlette requirement)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
@@ -400,10 +405,8 @@ def create_app() -> FastAPI:
         return {"status": "ok", "checks": checks}
 
     @app.get("/metrics")
-    async def metrics_endpoint(
-        _auth: InternalAuthDep,
-    ) -> Response:
-        """Prometheus metrics — requires X-Internal-Token (M-004)."""
+    async def metrics_endpoint() -> Response:
+        """Prometheus metrics — protected by InternalJWTMiddleware (PRD-0025)."""
         data = prometheus_client.generate_latest()
         return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 

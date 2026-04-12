@@ -19,7 +19,6 @@ import prometheus_client
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from market_ingestion.api.dependencies import (
-    InternalAuthDep,
     get_object_store,
     get_settings,
     get_uow,
@@ -116,7 +115,6 @@ async def readyz(
 )
 async def trigger_ingestion(
     req: TriggerRequest,
-    _auth: InternalAuthDep,
     uow: UnitOfWork = Depends(get_uow),
 ) -> TriggerResponse:
     """Trigger immediate ingestion for one or more symbols."""
@@ -159,7 +157,6 @@ async def trigger_ingestion(
 )
 async def trigger_backfill(
     req: BackfillRequest,
-    _auth: InternalAuthDep,
     uow: UnitOfWork = Depends(get_uow),
 ) -> BackfillResponse:
     """Trigger a historical backfill for a single symbol."""
@@ -248,9 +245,7 @@ async def list_policies(
 
 
 @router.get("/metrics", tags=["probes"])
-async def metrics(
-    _auth: InternalAuthDep,
-) -> Response:
-    """Prometheus metrics — requires X-Internal-Token (M-004)."""
+async def metrics() -> Response:
+    """Prometheus metrics — protected by InternalJWTMiddleware (PRD-0025)."""
     data = prometheus_client.generate_latest()
     return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)

@@ -52,7 +52,7 @@ def _make_activity(
         snaptrade_transaction_id=txn_id,
         activity_type=activity_type,
         symbol=symbol,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=datetime(2026, 4, 1, 10, 0, 0, tzinfo=UTC),
@@ -328,7 +328,7 @@ async def _setup_full_uow() -> FakeUnitOfWork:
         instrument_id=instrument.id,
         tenant_id=TENANT_ID,
         currency="USD",
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         average_cost=Decimal("150.00"),
     )
     await uow.holdings.save(holding)
