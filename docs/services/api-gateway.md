@@ -40,6 +40,8 @@ See `docs/MASTER_PLAN.md` § Contracts for the full endpoint table.
 | `/v1/chat` | RAG/Chat S8 — sync chat (buffered) |
 | `/v1/chat/stream` | RAG/Chat S8 — SSE streaming (unbuffered, chunked) |
 | `/v1/threads`, `/v1/threads/{id}` | RAG/Chat S8 — conversation thread CRUD |
+| `/v1/alerts/pending` | Alert S10 — list pending alerts for authenticated user |
+| `/v1/alerts/{id}/ack` | Alert S10 — acknowledge (delete) an alert |
 
 **SSE Note**: `POST /v1/chat/stream` uses `StreamingResponse` with `aiter_bytes()` to forward
 Server-Sent Events without buffering. `X-Tenant-Id` and `X-User-Id` headers are injected from
@@ -67,13 +69,20 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
 
 ### Authentication (PRD-0025 — OIDC/Zitadel + RS256 Internal JWT)
 
-Auth is handled entirely by S9. Backends never validate user tokens directly.
+Auth is handled entirely by S9. All backends (S1–S8, S10) validate `X-Internal-JWT`
+via `InternalJWTMiddleware` (PRD-0025 Wave D). The `X-Internal-Token` (shared HMAC secret)
+pattern has been fully replaced.
 
 | Middleware | Role |
 |-----------|------|
 | `OIDCAuthMiddleware` | Validates Zitadel RS256 access tokens via JWKS cache. Sets `request.state.user`. |
 | `InternalJWTIssuerMiddleware` | Issues RS256 `X-Internal-JWT` header for every proxied backend request. |
 | `SecurityHeadersMiddleware` | Injects security headers (X-Frame-Options, CSP, etc.) on all responses. |
+
+**Backend JWT verification** (all S1–S8, S10): `InternalJWTMiddleware` fetches S9's
+RSA public key from `GET /internal/jwks` at startup and verifies every non-health
+request. Sets `request.state.user_id`, `request.state.tenant_id`, `request.state.role`.
+Health paths (`/health`, `/healthz`, `/readyz`, `/metrics`) bypass JWT verification.
 
 **Auth flow endpoints** (skip OIDC validation):
 - `GET /v1/auth/login` — PKCE login redirect to Zitadel

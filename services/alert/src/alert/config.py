@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     """Configuration for the Alert service (S10).
 
     All fields are read from environment variables prefixed with ``ALERT_``.
-    Exception: ``INTERNAL_SERVICE_TOKEN`` is shared across services (no prefix).
     """
 
     model_config = SettingsConfigDict(
