@@ -42,6 +42,11 @@ See `docs/MASTER_PLAN.md` § Contracts for the full endpoint table.
 | `/v1/threads`, `/v1/threads/{id}` | RAG/Chat S8 — conversation thread CRUD |
 | `/v1/alerts/pending` | Alert S10 — list pending alerts for authenticated user |
 | `/v1/alerts/{id}/ack` | Alert S10 — acknowledge (delete) an alert |
+| `POST /v1/brokerage-connections` | Portfolio S1 — initiate SnapTrade connection (auth required) |
+| `GET /v1/brokerage-connections` | Portfolio S1 — list connections for user (auth required) |
+| `DELETE /v1/brokerage-connections/{id}` | Portfolio S1 — disconnect and revoke (auth required) |
+| `GET /v1/brokerage-connections/{id}/callback` | Portfolio S1 — OAuth callback handler (auth required) |
+| `GET /v1/brokerage-connections/{id}/sync-errors` | Portfolio S1 — list sync errors (auth required) |
 
 **SSE Note**: `POST /v1/chat/stream` uses `StreamingResponse` with `aiter_bytes()` to forward
 Server-Sent Events without buffering. `X-Tenant-Id` and `X-User-Id` headers are injected from
