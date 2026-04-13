@@ -15,6 +15,7 @@ ALL_DBS=(
     nlp_db
     alert_db
     intelligence_db
+    rag_db
 )
 
 for DB in "${ALL_DBS[@]}"; do
