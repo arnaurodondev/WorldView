@@ -183,7 +183,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
 
     def test_all_four_fields_produce_update(self) -> None:
         """Full payload with all 4 metadata fields -> update_metadata called with all keys."""
-        consumer, def_worker, storage, sf, session = _make_consumer()
+        consumer, _def_worker, storage, _sf, session = _make_consumer()
         storage.get_json = AsyncMock(return_value=_FULL_PAYLOAD)
 
         msg = {
@@ -212,7 +212,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
 
     def test_partial_fields_only_present_keys_in_update(self) -> None:
         """Payload with only FullTimeEmployees -> update_metadata called with only employee_count."""
-        consumer, _def_worker, storage, _sf, session = _make_consumer()
+        consumer, _def_worker, storage, _sf, _session = _make_consumer()
         payload = {"General": {"FullTimeEmployees": 50000, "Description": "Some corp."}}
         storage.get_json = AsyncMock(return_value=payload)
 

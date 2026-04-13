@@ -101,7 +101,7 @@ class TestEconomicEventsWorkerHappyPath:
             "change_percentage": 50.0,
             "country": "US",
         }
-        event_repo, exposure_repo, entity_repo = _run_worker([ev])
+        event_repo, exposure_repo, _entity_repo = _run_worker([ev])
 
         event_repo.upsert_by_natural_key.assert_awaited_once()
         call_kwargs = event_repo.upsert_by_natural_key.call_args.kwargs

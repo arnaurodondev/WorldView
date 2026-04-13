@@ -60,8 +60,7 @@ def upgrade() -> None:
     """)
     op.execute("CREATE INDEX ix_api_entity_date ON article_price_impacts (entity_id, ohlcv_date)")
     op.execute(
-        "CREATE INDEX ix_api_impact_score_partial ON article_price_impacts "
-        "(impact_score DESC) WHERE impact_score > 0.3"
+        "CREATE INDEX ix_api_impact_score_partial ON article_price_impacts (impact_score DESC) WHERE impact_score > 0.3"
     )
 
 

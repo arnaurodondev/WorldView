@@ -103,7 +103,7 @@ class TestListSignalsUseCase:
         }
         repo = _make_signals_repo(signal_rows=[bad_row])
 
-        items, total = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+        items, _total = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
 
         # Bad row skipped; total from DB still 1 but items list is empty
         assert items == []

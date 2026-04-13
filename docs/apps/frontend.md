@@ -1,18 +1,36 @@
 # Frontend Web Application
 
-> **Package**: `@worldview/frontend` · **Port**: 5173 (dev) / 80 (production)
-> **Status**: New · **Tech**: Vite + React 18 + TypeScript + TanStack Query
+> **Package**: `@worldview/frontend` · **Port**: 3000 (dev) / 3000 (production via `next start`)
+> **Status**: Migration in progress (Vite → Next.js 15) · **Spec**: `docs/ui/frontend-migration.md`
+> **Tech**: Next.js 15 App Router + shadcn/ui + TypeScript + TanStack Query
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Browser-based UI for the Worldview platform — dashboard, company
-explorer, portfolio view, news timeline, interactive map, country profiles,
-and RAG-powered chat interface.
+**Owns**: Browser-based UI for the Worldview platform — dashboard, company explorer, portfolio view,
+news feed (with news intelligence), interactive map, country profiles, screener, and RAG-powered chat.
 
-**Never does**: Call backend services directly. All data fetching goes through
-the API Gateway (S9) via a typed client (`src/lib/gateway-client.ts`).
+**Never does**: Call backend services directly. All data fetching goes through S9 API Gateway
+via a typed client (`src/lib/gateway-client.ts`). The gateway URL is always `/api/*`.
+
+**Design canon**: `docs/ui/DESIGN_SYSTEM.md` — design tokens, component catalogue, UX patterns.
+
+---
+
+## Technology Stack
+
+| Concern | Choice | Notes |
+|---------|--------|-------|
+| Framework | Next.js 15 (App Router) | Node SSR; no `output: 'export'` (ADR-F-01) |
+| UI components | shadcn/ui only | Radix UI primitives + Tailwind CSS |
+| Charts | lightweight-charts 4 | `"use client"` wrapper required |
+| Server state | TanStack Query v5 | No `useState+useEffect` for API calls |
+| Theme | Dark only | `class="dark"` on `<html>` permanently (ADR-F-04) |
+| Real-time | WebSocket (alerts), SSE (chat) | Via `useAlertStream` + `EventSource` |
+| Auth | Zitadel OIDC + PKCE | Callback → access token in React state only |
+| Package manager | pnpm (exact versions) | `pnpm audit` must show 0 CVEs |
+| Tests | Vitest (unit) + Playwright (E2E) | |
 
 ---
 
@@ -20,156 +38,200 @@ the API Gateway (S9) via a typed client (`src/lib/gateway-client.ts`).
 
 ```
 apps/frontend/
-├── index.html              # Vite entry point
+├── app/
+│   ├── layout.tsx                    # Root: <html dark>, AuthProvider, QueryClientProvider
+│   ├── globals.css                   # Tailwind base + shadcn/ui CSS variables (dark theme)
+│   ├── login/page.tsx                # Public — Zitadel OIDC login
+│   ├── callback/page.tsx             # Public — OIDC callback handler
+│   └── (protected)/
+│       ├── layout.tsx                # Auth guard → /login if not authenticated
+│       ├── page.tsx                  # DashboardPage /
+│       ├── companies/
+│       │   ├── page.tsx              # CompaniesPage /companies
+│       │   └── [id]/page.tsx         # CompanyDetailPage /companies/:id
+│       ├── portfolio/page.tsx        # PortfolioPage /portfolio
+│       ├── news/page.tsx             # NewsPage /news (tabs: Feed | Top Today)
+│       ├── map/page.tsx              # MapPage /map
+│       ├── countries/[code]/page.tsx # CountryPage /countries/:code
+│       ├── chat/page.tsx             # ChatPage /chat (SSE streaming)
+│       └── screener/page.tsx         # ScreenerPage /screener
 ├── src/
-│   ├── main.tsx            # React root + providers (QueryClient, Router)
-│   ├── App.tsx             # Route definitions
-│   ├── index.css           # Global styles (CSS variables, dark theme)
 │   ├── components/
-│   │   ├── Layout.tsx      # App shell (sidebar nav + <Outlet/>)
-│   │   ├── OHLCVChart.tsx  # Candlestick chart (lightweight-charts)
-│   │   ├── NewsList.tsx    # Article list component
-│   │   └── ChatUI.tsx      # Chat interface with SSE streaming
-│   ├── pages/
-│   │   ├── DashboardPage.tsx       # /
-│   │   ├── CompaniesPage.tsx       # /companies
-│   │   ├── CompanyDetailPage.tsx   # /companies/:id
-│   │   ├── PortfolioPage.tsx       # /portfolio
-│   │   ├── NewsPage.tsx            # /news
-│   │   ├── MapPage.tsx             # /map
-│   │   ├── CountryPage.tsx         # /countries/:code
-│   │   └── ChatPage.tsx            # /chat
+│   │   ├── ui/                       # shadcn/ui auto-generated
+│   │   ├── layout/
+│   │   │   ├── AppSidebar.tsx
+│   │   │   └── TopBar.tsx
+│   │   ├── charts/
+│   │   │   └── OHLCVChart.tsx        # "use client" — lightweight-charts
+│   │   ├── chat/
+│   │   │   └── ChatUI.tsx            # "use client" — EventSource SSE
+│   │   ├── alerts/
+│   │   │   ├── AlertCard.tsx
+│   │   │   ├── SeverityBadge.tsx
+│   │   │   └── FlashOverlay.tsx      # Error boundary + auto-dismiss + Escape
+│   │   ├── news/
+│   │   │   ├── ArticleCard.tsx
+│   │   │   ├── NewsList.tsx
+│   │   │   ├── RelevanceBadge.tsx    # 0–100 coloured score badge
+│   │   │   ├── ImpactSparkline.tsx   # "use client" — day_t0→t5 mini chart
+│   │   │   └── TopNewsFilters.tsx    # "use client" — time range + score filters
+│   │   ├── instrument/
+│   │   │   ├── SimilarCompaniesPanel.tsx
+│   │   │   ├── EntityNewsPanel.tsx   # "use client" — chart-range-linked news
+│   │   │   └── FundamentalsBar.tsx   # "use client" — 6-metric bar + localStorage
+│   │   └── markets/
+│   │       └── PredictionMarketsPanel.tsx
+│   ├── contexts/
+│   │   ├── AuthContext.tsx           # "use client" — OIDC token, silent refresh
+│   │   └── AlertStreamContext.tsx    # "use client" — shared WebSocket
+│   ├── hooks/
+│   │   ├── useAuth.ts
+│   │   └── useAlertStream.ts
 │   └── lib/
-│       └── gateway-client.ts   # Typed API client for S9
-├── tests/
-│   ├── setup.ts
-│   └── OHLCVChart.test.tsx
-├── e2e/
-│   └── homepage.spec.ts
-├── deploy/
-│   └── nginx.conf          # Production SPA + API proxy
-├── Dockerfile              # Multi-stage: Node build → nginx serve
-├── vite.config.ts          # Dev proxy /api → localhost:8000
-├── vitest.config.ts        # Vitest + jsdom
-├── playwright.config.ts    # E2E with Chromium
-├── tsconfig.json
+│       ├── authClient.ts             # fetch wrapper with Bearer + 401 refresh
+│       └── gateway-client.ts         # Typed API methods
+├── designs/                          # pencil.dev canvas files (*.pen)
+├── tests/                            # Vitest unit tests
+├── e2e/                              # Playwright E2E tests
+├── next.config.ts                    # rewrites: /api/* → http://localhost:8000/*
+├── tailwind.config.ts
+├── components.json                   # shadcn/ui config
 ├── package.json
-└── .env.example
+├── pnpm-lock.yaml
+├── tsconfig.json
+└── Dockerfile                        # next build → node:alpine → next start
 ```
 
 ---
 
-## Routing Map
+## Route Map
 
-| Path | Page Component | Data Source |
-|------|---------------|-------------|
-| `/` | `DashboardPage` | — (placeholder) |
-| `/companies` | `CompaniesPage` | — (placeholder) |
-| `/companies/:id` | `CompanyDetailPage` | `GET /v1/companies/:id/overview` |
-| `/portfolio` | `PortfolioPage` | — (placeholder) |
-| `/news` | `NewsPage` | `GET /v1/news/relevant` |
-| `/map` | `MapPage` | `GET /v1/map/layers` |
-| `/countries/:code` | `CountryPage` | — (placeholder) |
-| `/chat` | `ChatPage` | `POST /v1/chat/stream` (SSE) |
+| Path | Page | Auth | Data Sources |
+|------|------|------|-------------|
+| `/login` | `LoginPage` | Public | — |
+| `/callback` | `CallbackPage` | Public | POST /v1/auth/refresh |
+| `/` | `DashboardPage` | Yes | alerts stream |
+| `/companies` | `CompaniesPage` | Yes | — |
+| `/companies/:id` | `CompanyDetailPage` | Yes | `GET /v1/companies/:id/overview`, OHLCV, news |
+| `/portfolio` | `PortfolioPage` | Yes | — |
+| `/news` | `NewsPage` (tabs) | Yes | `GET /v1/news/relevant`, `GET /v1/news/top` |
+| `/map` | `MapPage` | Yes | `GET /v1/map/layers` |
+| `/countries/:code` | `CountryPage` | Yes | — |
+| `/chat` | `ChatPage` | Yes | SSE `/v1/chat/stream` |
+| `/screener` | `ScreenerPage` | Yes | `POST /v1/fundamentals/screen` |
 
 ---
 
-## Data Fetching
+## Gateway Client (`src/lib/gateway-client.ts`)
 
-All API calls use TanStack Query for caching, deduplication, and background refetching.
+All API calls MUST go through this typed client. The base URL is always `/api` (proxied to S9 via `next.config.ts` rewrites).
+
+| Method | Endpoint | Notes |
+|--------|----------|-------|
+| `getCompanyOverview(id)` | `GET /v1/companies/:id/overview` | |
+| `getRelevantNews(limit)` | `GET /v1/news/relevant?limit=` | |
+| `getTopNews(params)` | `GET /v1/news/top` | PRD-0026 |
+| `getEntityNews(id, params)` | `GET /v1/news/entity/:id` | PRD-0026 |
+| `getMapLayers()` | `GET /v1/map/layers` | |
+| `getScreenFields()` | `GET /v1/fundamentals/screen/fields` | |
+| `screenInstruments(filters, opts)` | `POST /v1/fundamentals/screen` | |
+| `findSimilarEntities(id, opts)` | `POST /v1/entities/similar` | |
+| `getPredictionMarkets(params)` | `GET /v1/signals/prediction-markets` | PRD-0019 |
+| `streamChat(message)` | EventSource `/v1/chat/stream?q=` | |
+
+---
+
+## State Management
+
+| State type | Tool | Pattern |
+|------------|------|---------|
+| Server data | TanStack Query v5 | `useQuery`, `useMutation` |
+| Auth + session | React Context (`AuthContext`) | `"use client"` provider |
+| Alert WebSocket | React Context (`AlertStreamContext`) | `"use client"`, shared WS |
+| Complex client state | Zustand | auth state, alert queue |
+| Simple local UI state | `useState` / `useReducer` | filter values, modal open |
+
+---
+
+## Data Loading Pattern (Required for all data-dependent components)
 
 ```typescript
-// Example: CompanyDetailPage
-const { data } = useQuery({
-  queryKey: ["company", id],
-  queryFn: () => gateway.getCompanyOverview(id),
-});
+function Panel({ id }: { id: string }) {
+  const { data, isLoading, error, refetch } = useMyData(id)
+
+  if (isLoading) return <PanelSkeleton />
+  if (error)    return <ErrorCard message="..." onRetry={refetch} />
+  if (!data)    return <EmptyState message="..." />
+
+  return <PanelContent data={data} />
+}
 ```
 
-The gateway client (`src/lib/gateway-client.ts`) provides typed methods:
+**Never render a blank panel.** All three states are required, not optional.
 
-| Method | Gateway Endpoint | Return Type |
-|--------|-----------------|-------------|
-| `getCompanyOverview(id)` | `GET /v1/companies/:id/overview` | `CompanyOverview` |
-| `getRelevantNews(limit)` | `GET /v1/news/relevant` | `{ articles: Article[] }` |
-| `getMapLayers()` | `GET /v1/map/layers` | `{ layers: MapLayer[] }` |
-| `streamChat(message)` | SSE | `EventSource` |
+---
+
+## Real-Time Patterns
+
+### WebSocket (alert stream)
+- `useAlertStream(token)` — connects to `/api/v1/alerts/stream?token=<access_token>` (ADR-F-02)
+- Exponential backoff: 1s → 2s → 4s → ... → 30s cap
+- CRITICAL alerts → `criticalQueue` → `FlashOverlay`
+- All other alerts → `recentAlerts` → sidebar badge + list
+
+### SSE Streaming (chat)
+- State machine: `idle → sending → streaming → reconciling → settled`
+- `AbortController` per request; cancel button visible during streaming
+- `useRef` for closure safety; cleanup on done/error/cancel
 
 ---
 
 ## Development
 
-### Prerequisites
-
-| Tool | Version |
-|------|---------|
-| Node.js | 20+ |
-| pnpm | 9+ |
-
-### Commands
-
 ```bash
 cd apps/frontend
 pnpm install
-pnpm dev          # → http://localhost:5173 (proxies /api → localhost:8000)
-pnpm build        # Production build → dist/
+pnpm dev          # → http://localhost:3000 (rewrites /api → localhost:8000)
+pnpm build        # Production Next.js build
+pnpm start        # Run production build
 pnpm test         # Unit tests (Vitest)
-pnpm test:e2e     # E2E tests (Playwright + Chromium)
+pnpm test:e2e     # E2E tests (Playwright)
 pnpm lint         # ESLint
 pnpm typecheck    # tsc --noEmit
+pnpm audit        # Must show 0 vulnerabilities
 ```
-
-### Dev Proxy
-
-In development, Vite proxies `/api/*` to `http://localhost:8000` (S9 gateway),
-stripping the `/api` prefix. This avoids CORS issues during local development.
 
 ---
 
-## Testing Strategy
+## Tests
 
 | Type | Tool | Location | What |
 |------|------|----------|------|
-| Unit | Vitest + Testing Library | `tests/` | Component rendering, chart mount |
-| E2E | Playwright | `e2e/` | Navigation, page content |
+| Unit | Vitest + RTL + MSW | `tests/` | Components: loading/error/empty/happy path |
+| E2E | Playwright | `e2e/` | Page loads, navigation, data flow |
 
-### Coverage Targets
-
-| Area | Target |
-|------|--------|
-| Components | ≥ 70% |
-| Gateway client | ≥ 80% |
-| Pages | ≥ 50% (mostly integration) |
+**Every component must have at minimum**: a loading state test + a happy path test.
 
 ---
 
-## Deployment
+## Design Resources
 
-### Docker
-
-```bash
-docker build -t worldview-frontend .
-docker run -p 80:80 worldview-frontend
-```
-
-The Dockerfile uses a multi-stage build:
-1. **Builder**: Node 20 + pnpm → `pnpm build` → static files in `dist/`
-2. **Runtime**: nginx:alpine serving static files with SPA fallback
-
-### Nginx Configuration
-
-- SPA fallback: all routes → `index.html`
-- API proxy: `/api/*` → `http://api-gateway:8000/`
-- Static asset caching: 1 year with `immutable`
+| Resource | Purpose |
+|----------|---------|
+| `docs/ui/DESIGN_SYSTEM.md` | Design tokens, component catalogue, UX patterns |
+| `docs/ui/frontend-migration.md` | ADRs, full Next.js target spec, component inventory |
+| `docs/ui/news-intelligence.md` | News feature UI requirements |
+| `apps/frontend/designs/*.pen` | pencil.dev canvas design files |
 
 ---
 
-## Design Decisions
+## Key Architectural Decisions
 
-- **Dark theme only** (financial data readability)
-- **CSS variables** (no CSS-in-JS library — keeps bundle small)
-- **lightweight-charts** for OHLCV (TradingView open-source, ~45KB gzipped)
-- **No state management library** — TanStack Query handles server state;
-  local state uses React `useState`/`useReducer`
-- See [ADR-0002](../architecture/decisions/0002-frontend-tooling.md) for
-  full rationale on Vite + React + pnpm choice
+| ADR | Decision | Rationale |
+|-----|----------|-----------|
+| ADR-F-01 | Node SSR (not static export) | Middleware for auth redirects requires Node runtime |
+| ADR-F-02 | WS auth via `?token=` query param | Browser WebSocket API has no headers option |
+| ADR-F-03 | Migrate in-place (`apps/frontend/`) | Keeps docker-compose paths, CI unchanged |
+| ADR-F-04 | Dark mode only | Conventional for market intelligence; simpler |
+
+Full ADR details in `docs/ui/frontend-migration.md §1`.

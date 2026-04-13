@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
-import pytest_httpx  # noqa: TCH002
 from nlp_pipeline.infrastructure.http.market_data_client import MarketDataClient, OHLCVBar
+
+if TYPE_CHECKING:
+    import pytest_httpx
 
 pytestmark = pytest.mark.unit
 

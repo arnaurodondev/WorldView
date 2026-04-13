@@ -21,7 +21,7 @@ def upgrade() -> None:
     # C-02: composite unique constraint — user_id is globally unique but we enforce
     # the composite so per-tenant upsert conflict resolution works correctly with
     # index_elements=["tenant_id", "user_id"] in the repository.
-    op.execute("ALTER TABLE email_preferences " "ADD CONSTRAINT uq_email_prefs_tenant_user UNIQUE (tenant_id, user_id)")
+    op.execute("ALTER TABLE email_preferences ADD CONSTRAINT uq_email_prefs_tenant_user UNIQUE (tenant_id, user_id)")
 
     # B-01: outbox-first pattern writes a pending_send log entry before attempting
     # the email send, then updates the same row to sent/failed afterwards.

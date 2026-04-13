@@ -124,7 +124,7 @@ class TestDefinitionRefreshWorkerDefaults:
 class TestNonCompanyDescriptionGeneration:
     async def test_non_company_entity_uses_description_client(self) -> None:
         """For non-financial_instrument entities, generate_description is called."""
-        session_factory, session = _make_session_factory([])
+        session_factory, _session = _make_session_factory([])
         description_client = _make_description_client("Jerome Powell is the Chair of the Federal Reserve.")
         llm_client = AsyncMock()
 
@@ -216,7 +216,7 @@ class TestFinancialInstrumentSkipsDescriptionClient:
         llm_outputs = [MagicMock(embedding=[0.1, 0.2, 0.3])]
         llm_client.embed = AsyncMock(return_value=llm_outputs)
 
-        session_factory, session = _make_session_factory([])
+        session_factory, _session = _make_session_factory([])
 
         # Build emb_repo mock that returns one due row for financial_instrument
         emb_repo_mock = AsyncMock()

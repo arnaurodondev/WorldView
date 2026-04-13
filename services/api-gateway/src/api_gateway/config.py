@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from pydantic import SecretStr  # noqa: TCH002
+from typing import TYPE_CHECKING
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from pydantic import SecretStr
 
 
 class Settings(BaseSettings):

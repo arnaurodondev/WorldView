@@ -356,7 +356,7 @@ class TestAlertFanoutSeverity:
     async def test_alert_fanout_severity_medium_for_graph_event(self) -> None:
         """graph.state.changed.v1 → F-13 override → severity=MEDIUM regardless of score."""
         watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
-        use_case, _, _ = _make_use_case(watchers=watchers)
+        _use_case, _, _ = _make_use_case(watchers=watchers)
 
         # Track what Alert was created via alert_repo.save
         saved_alerts: list[Alert] = []

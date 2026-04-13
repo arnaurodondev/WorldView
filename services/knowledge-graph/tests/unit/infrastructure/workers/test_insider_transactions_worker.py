@@ -18,8 +18,8 @@ _RELATION_ID = UUID("01910000-0000-7000-8000-000000000030")
 _AAPL_INSTRUMENT = None  # initialised per-test via _make_instrument()
 
 # Patch paths for lazy repository imports inside the worker
-_ENTITY_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories" ".entity_repository.EntityRepository"
-_RELATION_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories" ".relation.RelationRepository"
+_ENTITY_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.entity_repository.EntityRepository"
+_RELATION_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -283,7 +283,7 @@ class TestInsiderTransactionsWorkerTitleFilter:
                 "transactionAcquiredDisposed": "A",
             },
         ]
-        entity_repo, relation_repo, _ = _run_worker(transactions=transactions)
+        _entity_repo, relation_repo, _ = _run_worker(transactions=transactions)
 
         # Only CEO creates a relation; VP Sales is skipped
         assert relation_repo.upsert_relation.await_count == 1

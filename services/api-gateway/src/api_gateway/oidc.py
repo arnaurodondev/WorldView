@@ -5,13 +5,15 @@ from __future__ import annotations
 import base64
 import hashlib
 from datetime import UTC
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx  # noqa: TCH002
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
 from api_gateway.domain import OIDCProviderConfig
+
+if TYPE_CHECKING:
+    import httpx
 
 try:
     from common.time import utc_now  # type: ignore[import-untyped]

@@ -72,26 +72,31 @@ def test_routes_registered() -> None:
 
 
 def test_readyz_returns_503_when_db_down() -> None:
-    """GET /readyz returns 503 when the DB is unreachable."""
+    """GET /readyz returns 503 when the DB is unreachable.
+
+    The lifespan runs on TestClient entry and sets app.state.session_factory to the
+    real engine factory.  We overwrite the state *inside* the `with` block (after
+    startup) so our error-raising mock takes effect for the readyz probe call.
+    """
     from market_data.app import create_app
 
     app = create_app()
 
-    # Set up minimal state so readyz can attempt its checks
     mock_sf = MagicMock()
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
     mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
     mock_sf.return_value = mock_session
-    app.state.session_factory = mock_sf
 
     mock_valkey = AsyncMock()
     mock_valkey.ping = AsyncMock(return_value=True)
-    app.state.valkey_client = mock_valkey
-    app.state.object_storage = None
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        # Override state after lifespan startup so the mock is used by readyz
+        app.state.session_factory = mock_sf
+        app.state.valkey_client = mock_valkey
+        app.state.object_storage = None
         resp = client.get("/readyz")
 
     assert resp.status_code == 503

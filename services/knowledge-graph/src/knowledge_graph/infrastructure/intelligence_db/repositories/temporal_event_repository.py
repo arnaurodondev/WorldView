@@ -163,7 +163,7 @@ RETURNING event_id
         if active_only:
             # Exclude EXPIRED: active_until IS NULL (still active) OR within residual window
             conditions.append(
-                "(te.active_until IS NULL" " OR now() - te.active_until <= te.residual_impact_days * INTERVAL '1 day')"
+                "(te.active_until IS NULL OR now() - te.active_until <= te.residual_impact_days * INTERVAL '1 day')"
             )
 
         if entity_id is not None:
