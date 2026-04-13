@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from pydantic import SecretStr  # noqa: TCH002
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-if TYPE_CHECKING:
-    from pydantic import SecretStr
 
 
 class Settings(BaseSettings):
@@ -33,6 +29,10 @@ class Settings(BaseSettings):
     oidc_client_id: str
     oidc_client_secret: SecretStr
     oidc_audience: str  # usually same as client_id
+    # Set to true in test/dev environments where Zitadel is not running.
+    # OIDC discovery failure becomes a warning instead of a fatal error;
+    # the gateway starts with internal-JWT-only auth (no external OIDC token validation).
+    oidc_discovery_optional: bool = False
 
     # Internal JWT (RS256) — PEM-encoded RSA-2048 key pair
     internal_jwt_private_key: SecretStr  # never logged — SecretStr

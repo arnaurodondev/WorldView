@@ -17,7 +17,7 @@ Changes (PRD-0018 §6.4):
   temporal_events (new table):
     - Stores geopolitical/regulatory/macro/sanctions/natural_disaster events
     - Lifecycle: PENDING_ACTIVE → ACTIVE → ENDED → RESIDUAL → EXPIRED
-    - Natural-key unique index on (event_type, region, title, date_trunc('day', active_from))
+    - Natural-key unique index on (event_type, region, title, date_trunc('day', timezone('UTC', active_from)))
 
   entity_event_exposures (new table):
     - Maps entities to temporal events with exposure type and confidence
@@ -60,6 +60,53 @@ CREATE INDEX IF NOT EXISTS idx_relations_updated_at
 """
 
 _CREATE_AGE_EXTENSION = "CREATE EXTENSION IF NOT EXISTS age"
+
+# Graceful AGE setup: wraps ALL AGE-related setup in a DO block so that
+# environments without the AGE shared library (e.g. test compose on pgvector:pg16)
+# can still run this migration and create temporal_events / entity_event_exposures.
+# AGE graph features (Cypher queries) will be unavailable but the table DDL succeeds.
+_SETUP_AGE_GRACEFUL = """
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS age;
+    LOAD 'age';
+    SET search_path = ag_catalog, "$user", public;
+    PERFORM create_graph('worldview_graph');
+    PERFORM create_vlabel('worldview_graph', 'Entity');
+    PERFORM create_vlabel('worldview_graph', 'TemporalEvent');
+    PERFORM create_elabel('worldview_graph', 'EMPLOYS');
+    PERFORM create_elabel('worldview_graph', 'BOARD_MEMBER_OF');
+    PERFORM create_elabel('worldview_graph', 'SUBSIDIARY_OF');
+    PERFORM create_elabel('worldview_graph', 'ACQUIRED_BY');
+    PERFORM create_elabel('worldview_graph', 'LISTED_ON');
+    PERFORM create_elabel('worldview_graph', 'SUPPLIER_OF');
+    PERFORM create_elabel('worldview_graph', 'PARTNER_OF');
+    PERFORM create_elabel('worldview_graph', 'COMPETES_WITH');
+    PERFORM create_elabel('worldview_graph', 'REGULATES');
+    PERFORM create_elabel('worldview_graph', 'HEADQUARTERED_IN');
+    PERFORM create_elabel('worldview_graph', 'ANALYST_RATING');
+    PERFORM create_elabel('worldview_graph', 'MARKET_SHARE_CLAIM');
+    PERFORM create_elabel('worldview_graph', 'PRICE_TARGET');
+    PERFORM create_elabel('worldview_graph', 'EARNINGS_GUIDANCE');
+    PERFORM create_elabel('worldview_graph', 'SENTIMENT_SIGNAL');
+    PERFORM create_elabel('worldview_graph', 'CREDIT_RATING');
+    PERFORM create_elabel('worldview_graph', 'INVESTMENT_IN');
+    PERFORM create_elabel('worldview_graph', 'OWNS_STAKE_IN');
+    PERFORM create_elabel('worldview_graph', 'ISSUES_DEBT');
+    PERFORM create_elabel('worldview_graph', 'PRODUCES');
+    PERFORM create_elabel('worldview_graph', 'IS_IN_SECTOR');
+    PERFORM create_elabel('worldview_graph', 'IS_IN_INDUSTRY');
+    PERFORM create_elabel('worldview_graph', 'EARNINGS_RELEASED');
+    PERFORM create_elabel('worldview_graph', 'CORPORATE_ACTION');
+    PERFORM create_elabel('worldview_graph', 'HAS_EXECUTIVE');
+    PERFORM create_elabel('worldview_graph', 'REVENUE_FROM_COUNTRY');
+    PERFORM create_elabel('worldview_graph', 'OPERATES_IN_COUNTRY');
+    PERFORM create_elabel('worldview_graph', 'EVENT_EXPOSES');
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'Apache AGE extension not available (%) — graph features disabled. Install AGE for full Knowledge Graph capability.', SQLERRM;
+END;
+$$;
+"""
 
 _LOAD_AGE = "LOAD 'age'"
 
@@ -151,10 +198,11 @@ _CREATE_TEMPORAL_EVENTS_INDEXES = [
     # region + recency: query-time global event injection by region (most recent first)
     "CREATE INDEX IF NOT EXISTS idx_temporal_events_region_from ON temporal_events (region, active_from DESC)",
     # natural deduplication key for EODHD economic events
-    # date_trunc('day', active_from) ensures same-day re-runs don't create duplicates
+    # timezone('UTC', active_from) converts TIMESTAMPTZ→TIMESTAMP(UTC) which is IMMUTABLE,
+    # allowing it to be used in an index expression (date_trunc(text, timestamptz) is NOT IMMUTABLE).
     """
 CREATE UNIQUE INDEX IF NOT EXISTS uidx_temporal_events_natural_key
-    ON temporal_events (event_type, region, title, date_trunc('day', active_from))
+    ON temporal_events (event_type, region, title, date_trunc('day', timezone('UTC', active_from)))
 """,
 ]
 
@@ -231,19 +279,10 @@ def upgrade() -> None:
     op.execute(_ADD_RELATIONS_UPDATED_AT)
     op.execute(_CREATE_RELATIONS_UPDATED_AT_IDX)
 
-    # ── Step 2: AGE extension + graph setup ──────────────────────────────────
-    # CREATE EXTENSION first, then LOAD + search_path (LOAD requires the extension to exist)
-    op.execute(_CREATE_AGE_EXTENSION)
-    op.execute(_LOAD_AGE)
-    op.execute(_SET_AGE_SEARCH_PATH)
-
-    op.execute(_CREATE_GRAPH)
-
-    for stmt in _CREATE_VERTEX_LABELS:
-        op.execute(stmt)
-
-    for stmt in _CREATE_EDGE_LABELS:
-        op.execute(stmt)
+    # ── Step 2: AGE extension + graph setup (graceful — fails silently if AGE unavailable) ──
+    # Wrapped in a DO block so test environments without AGE (e.g. pgvector:pg16) still migrate.
+    # AGE graph/Cypher features are unavailable when AGE is not installed, but all table DDL succeeds.
+    op.execute(_SETUP_AGE_GRACEFUL)
 
     # ── Step 3: temporal_events table ────────────────────────────────────────
     op.execute(_CREATE_TEMPORAL_EVENTS)
@@ -266,11 +305,20 @@ def downgrade() -> None:
     op.execute(_DROP_ENTITY_EVENT_EXPOSURES)
     op.execute(_DROP_TEMPORAL_EVENTS)
 
-    # AGE graph operations require LOAD + search_path even for downgrade
-    op.execute(_LOAD_AGE)
-    op.execute(_SET_AGE_SEARCH_PATH)
-    op.execute(_DROP_GRAPH)
-    op.execute(_DROP_AGE_EXTENSION)
+    # AGE graph operations require LOAD + search_path even for downgrade.
+    # Wrapped gracefully in case AGE was never installed (test environment).
+    op.execute("""
+DO $$
+BEGIN
+    LOAD 'age';
+    SET search_path = ag_catalog, "$user", public;
+    PERFORM drop_graph('worldview_graph', true);
+    DROP EXTENSION IF EXISTS age;
+EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'Apache AGE not available during downgrade (%) — skipping graph teardown.', SQLERRM;
+END;
+$$;
+""")
 
     op.execute(_DROP_RELATIONS_UPDATED_AT_IDX)
     op.execute(_DROP_RELATIONS_UPDATED_AT)

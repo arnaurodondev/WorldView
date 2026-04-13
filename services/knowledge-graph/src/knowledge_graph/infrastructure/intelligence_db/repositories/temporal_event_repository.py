@@ -4,7 +4,7 @@ These repositories implement the port interfaces defined in the application laye
 Uses raw SQL via ``text()`` — S7 does not own intelligence_db DDL.
 
 Natural-key deduplication for temporal events:
-  ``(event_type, region, title, date_trunc('day', active_from))``
+  ``(event_type, region, title, date_trunc('day', timezone('UTC', active_from)))``
 
 GLOBAL-scope events link only to sector/industry canonical entities; per-company
 exposure is inferred at query time via ``is_in_sector`` traversal (PRD-0018 §6.2).
@@ -52,7 +52,7 @@ class TemporalEventRepository(TemporalEventRepositoryPort):
     ) -> UUID:
         """Upsert a temporal event using the natural deduplication key.
 
-        ON CONFLICT fires when ``(event_type, region, title, date_trunc('day', active_from))``
+        ON CONFLICT fires when ``(event_type, region, title, date_trunc('day', timezone('UTC', active_from)))``
         matches an existing row.  The conflict target requires region to be non-NULL;
         for NULL-region (LOCAL) events the insert always proceeds.
 
@@ -81,7 +81,7 @@ INSERT INTO temporal_events (
     :source_article_ids, :source_url, :active_from, :active_until,
     :residual_impact_days, :confidence
 )
-ON CONFLICT (event_type, region, title, date_trunc('day', active_from)) DO UPDATE SET
+ON CONFLICT (event_type, region, title, date_trunc('day', timezone('UTC', active_from))) DO UPDATE SET
     scope                = EXCLUDED.scope,
     description          = EXCLUDED.description,
     source_url           = EXCLUDED.source_url,

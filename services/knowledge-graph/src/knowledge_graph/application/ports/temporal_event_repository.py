@@ -39,7 +39,7 @@ class TemporalEventRepositoryPort(ABC):
     ) -> UUID:
         """Upsert a temporal event using the natural deduplication key.
 
-        Natural key: ``(event_type, region, title, date_trunc('day', active_from))``.
+        Natural key: ``(event_type, region, title, date_trunc('day', timezone('UTC', active_from)))``.
         On conflict: updates description, scope, active_until, residual_impact_days,
         confidence, and source_url; leaves event_id, event_type, region, title,
         active_from, and created_at unchanged.

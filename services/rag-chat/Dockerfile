@@ -7,12 +7,14 @@ WORKDIR /build
 RUN pip install --no-cache-dir uv==0.4.29
 
 COPY libs/common /build/libs/common
+COPY libs/messaging /build/libs/messaging
 COPY libs/observability /build/libs/observability
 COPY services/rag-chat /build/services/rag-chat
 
 RUN uv venv /app/.venv && \
     uv pip install --no-cache --python /app/.venv \
         -e /build/libs/common \
+        -e /build/libs/messaging \
         -e /build/libs/observability \
         -e /build/services/rag-chat
 
@@ -30,7 +32,7 @@ COPY --from=builder /build/services/rag-chat/alembic /app/alembic
 COPY --from=builder /build/services/rag-chat/alembic.ini /app/alembic.ini
 
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/observability/src"
+ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/messaging/src:/app/libs/observability/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
