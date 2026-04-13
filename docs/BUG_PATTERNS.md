@@ -123,6 +123,8 @@
 | [BP-129](#bp-129) | Watermark sync / DDL | Incremental watermark sync fails when source table lacks `updated_at` — partitioned tables often have only `created_at` and domain-specific timestamp columns | `AgeSyncWorker` Worker 13F on `relations` table |
 | [BP-130](#bp-130) | Kafka / Protocol adapter | `AttributeError: 'cimpl.Producer' has no attribute 'produce_bytes'` — Protocol interface defined but no concrete adapter wraps `confluent_kafka.Producer` | `enriched_consumer_main.py`, `graph_write.py`, any EODHD worker wired with a direct producer |
 | [BP-131](#bp-131) | PostgreSQL / unique index | NULL values in multi-column unique index allow semantic duplicates — `ON CONFLICT` never fires when nullable column is NULL | `temporal_events.uidx_temporal_events_natural_key`, any table with nullable columns in a unique constraint |
+| [BP-157](#bp-157) | Test infrastructure / Auth | Root E2E conftest generates HS256 JWT; live stack loads RS256 public key from S9 and correctly rejects it — `InvalidTokenError` on all E2E test requests | `tests/e2e/conftest.py:_make_e2e_system_jwt()`; use `PORTFOLIO_E2E_INTERNAL_JWT` env var with RS256 token from live api-gateway |
+| [BP-158](#bp-158) | Test infrastructure / Auth | S6/S7/S10/S4/S2 E2E client fixtures + service-level E2E conftests missing `X-Internal-JWT` header after PLAN-0025 — all non-health endpoints 401 | `tests/e2e/conftest.py` s6_client/s7_client/s10_client; `services/{kg,market-data,content-ingestion,market-ingestion}/tests/e2e/conftest.py` |
 
 ---
 
@@ -5221,3 +5223,84 @@ async with self._nlp_sf() as check_session:
 - Dead-letter topics can use a shorter retention (14 days) — dead-lettered messages are for investigation, not replay.
 
 **First seen**: `infra/kafka/init/create-topics.sh`, investigation 2026-04-13, fixed 2026-04-13.
+
+---
+
+## BP-157 — Root E2E conftest HS256 JWT rejected by live RS256-keyed middleware
+
+**Date discovered**: 2026-04-13
+**Service affected**: All services in root `tests/e2e/` suite
+
+### Symptom
+
+Root E2E `conftest.py` `_make_e2e_system_jwt()` generates an HS256-signed JWT (`jwt.encode(..., algorithm="HS256")`). The live test stack loads the RS256 public key from `S9/internal/jwks` during service startup. `InternalJWTMiddleware` has `public_key != None` and calls `jwt.decode(token, public_key, algorithms=["RS256"])`. An HS256 token fails this check with `InvalidTokenError`, and all E2E test requests receive 401.
+
+### Root cause
+
+The conftest fallback (`public_key is None → skip sig verification`) was designed for the case where S9 is not running. When the full live stack is up, all services successfully load the RS256 key and enforce strict RS256 verification. The HS256 test token is not a valid RS256 token.
+
+### Fix
+
+Set `PORTFOLIO_E2E_INTERNAL_JWT` to a real RS256-signed token from the live api-gateway private key before running root E2E tests:
+
+```bash
+export PORTFOLIO_E2E_INTERNAL_JWT=$(python3 -c "
+import jwt, time, subprocess
+pem = subprocess.check_output(
+    ['docker', 'compose', '-f', 'infra/compose/docker-compose.test.yml',
+     'exec', '-T', 'api-gateway', 'bash', '-c', 'echo \"\$API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY\"'],
+).decode().strip()
+print(jwt.encode({'sub':'e2e','iss':'worldview-gateway','aud':['worldview-service'],
+    'iat':int(time.time()),'exp':int(time.time())+7200,'tenant_id':'e2e','user_id':'e2e','role':'system'},
+    pem, algorithm='RS256'))
+")
+```
+
+**Prevention**: Either update `_make_e2e_system_jwt()` to try RS256 with the api-gateway key, or use HS256 only when public_key is None (already the design). The real fix is ensuring the conftest reads the gateway private key when the stack is live.
+
+**First seen**: `tests/e2e/conftest.py:56-75`, 2026-04-13.
+
+---
+
+## BP-158 — E2E client fixtures missing X-Internal-JWT after PLAN-0025
+
+**Date discovered**: 2026-04-13
+**Service affected**: S2, S4, S6, S7, S10 E2E tests; KG/market-data/content-ingestion/market-ingestion service-level E2E conftests
+
+### Symptom
+
+After PLAN-0025 added `InternalJWTMiddleware` to all services (commit f21da3e), the root E2E conftest and service-level E2E conftests for S6/S7/S10/S4/S2 were not updated to include `X-Internal-JWT` in their `AsyncClient` default headers. All API calls to non-health endpoints return `{"detail":"Missing X-Internal-JWT header"}` (HTTP 401).
+
+BP-134 documented the same issue for some services; this is the remaining set.
+
+### Affected fixtures
+
+- `tests/e2e/conftest.py`: `s6_client` (line 229), `s7_client` (line 233), `s10_client` (line 234), `s4_internal_client` (if present)
+- `services/knowledge-graph/tests/e2e/conftest.py`: `e2e_client` fixture
+- `services/market-data/tests/e2e/conftest.py`: `e2e_client` fixture
+- `services/content-ingestion/tests/e2e/conftest.py`: `e2e_client` fixture
+- `services/market-ingestion/tests/e2e/conftest.py`: `e2e_client` (if applicable)
+- `services/alert/tests/integration/conftest.py`: `integration_client` fixture
+
+### Fix
+
+Add `X-Internal-JWT` to each fixture's `AsyncClient`:
+
+```python
+_INTERNAL_JWT = os.getenv("PORTFOLIO_E2E_INTERNAL_JWT", "") or _make_e2e_system_jwt()
+
+@pytest.fixture
+async def s6_client() -> AsyncGenerator[AsyncClient, None]:
+    async with AsyncClient(
+        base_url=_S6_BASE_URL,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+        timeout=30.0,
+    ) as ac:
+        yield ac
+```
+
+For service-level conftests, add the same pattern to `e2e_client`.
+
+**Prevention**: When adding `InternalJWTMiddleware` to a service, update ALL test conftest files in that service (unit, integration, e2e) and the root `tests/e2e/conftest.py` client fixture for that service.
+
+**First seen**: Multiple service e2e conftests, 2026-04-13.
