@@ -19,10 +19,16 @@
 | PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | in-progress | 8/9 | — | 2026-04-12 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 | — | 2026-04-11 |
-| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-12 | 2026-04-12 |
+| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-13 | 2026-04-13 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/7 | — | 2026-04-11 |
 | PLAN-0027 | Frontend MVP UI — Professional Design v2.0: Landing (ComparisonTable/TrustBar/FAQ), Dashboard (HeatMap/TopMovers/MacroCalendar), Workspace (11 panels), Company Detail (18 fundamentals sections + full Intelligence tab), Portfolio (Strategy analytics + AddTransaction), Chat (thread search) + S8 Briefing + S9 bulk routes (20+ new proxy routes) | PRD-0027 | draft | 0/6 | — | 2026-04-12 |
 <!-- New plans are appended here by the /plan skill -->
+
+## QA Sessions
+
+| Date | Report | Scope | Result |
+|------|--------|-------|--------|
+| 2026-04-13 | [2026-04-13-qa-e2e-live-stack-report.md](../audits/2026-04-13-qa-e2e-live-stack-report.md) | Pre-demo live-stack QA — 47 containers, 10 DBs, all migrations, 4,210 pass / 4 fail (BP-134 JWT gaps) / 56 skip; direct API endpoint testing via RS256 JWT | GO |
 
 ## Execution Order (Dependency Graph)
 
