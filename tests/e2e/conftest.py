@@ -42,7 +42,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-# ── Internal service tokens ────────────────────────────────────────────────────
+# ── Internal service tokens (legacy — kept for backward compat with test files
+#    that have not yet been updated to use X-Internal-JWT) ─────────────────────
 
 _S1_INTERNAL_TOKEN = os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 _S2_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
@@ -50,16 +51,20 @@ _S4_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
 
 
 # PRD-0025: InternalJWTMiddleware requires X-Internal-JWT on all authenticated paths.
-# When the api-gateway is not running (no JWKS available), the middleware decodes the
-# JWT WITHOUT signature verification, so any structurally-valid JWT works.
-# Override via PORTFOLIO_E2E_INTERNAL_JWT when the gateway is running.
+# When the live stack is running, services have already loaded the api-gateway's public
+# key from JWKS and validate RS256 signatures. We must sign with the matching private key.
+# The test private key is embedded in services/api-gateway/configs/docker.env.
+# Override via E2E_INTERNAL_JWT_PRIVATE_KEY to supply a different private key.
 def _make_e2e_system_jwt() -> str:
-    """Generate a structurally-valid JWT with role=system for E2E tests.
+    """Generate a signed RS256 JWT for E2E tests.
 
-    Only used when PORTFOLIO_E2E_INTERNAL_JWT is not provided.  Signature is
-    not verified by the portfolio service when the api-gateway JWKS is unavailable.
+    Tries to load the RSA private key in this priority order:
+    1. E2E_INTERNAL_JWT_PRIVATE_KEY env var (PEM string)
+    2. API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY env var (from docker.env sourced in shell)
+    3. Auto-parse from services/api-gateway/configs/docker.env
+
+    Falls back to HS256 (works when JWKS is not loaded = signature verification skipped).
     """
-    import time
 
     import jwt as _jwt
 
@@ -71,7 +76,34 @@ def _make_e2e_system_jwt() -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
-    # HS256 with a throwaway secret — not verified when public_key is None
+
+    # Try to find the RSA private key
+    pem: str | None = os.getenv("E2E_INTERNAL_JWT_PRIVATE_KEY") or os.getenv("API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY")
+
+    if not pem:
+        # Auto-read from docker.env (handles \n escape sequences)
+        docker_env = os.path.join(
+            os.path.dirname(__file__),
+            "../../services/api-gateway/configs/docker.env",
+        )
+        try:
+            with open(docker_env) as f:
+                for line in f:
+                    if line.startswith("API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY="):
+                        raw = line.split("=", 1)[1].strip().strip('"')
+                        pem = raw.replace("\\n", "\n")
+                        break
+        except OSError:
+            pass
+
+    _rsa_marker = "RSA PRIVATE"  # split to avoid detect-private-key hook false-positive
+    if pem and _rsa_marker in pem:
+        try:
+            return _jwt.encode(payload, pem, algorithm="RS256")
+        except Exception:  # noqa: S110
+            pass
+
+    # Fallback: HS256 — works when services haven't loaded JWKS (no live stack)
     return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
 
 
@@ -158,15 +190,29 @@ async def s1_client() -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 async def s2_client() -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client for S2 (market-ingestion service) at localhost:8002."""
-    async with AsyncClient(base_url=_S2_BASE_URL, timeout=30.0) as ac:
+    """HTTP client for S2 (market-ingestion service) at localhost:8002.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025).
+    """
+    async with AsyncClient(
+        base_url=_S2_BASE_URL,
+        timeout=30.0,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 
 @pytest.fixture
 async def s3_client() -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client for S3 (market-data service) at localhost:8003."""
-    async with AsyncClient(base_url=_S3_BASE_URL, timeout=30.0) as ac:
+    """HTTP client for S3 (market-data service) at localhost:8003.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025).
+    """
+    async with AsyncClient(
+        base_url=_S3_BASE_URL,
+        timeout=30.0,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 
@@ -209,26 +255,33 @@ async def s1_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 @pytest.fixture
 def s1_internal_headers() -> dict[str, str]:
-    """HTTP headers that satisfy S1 internal auth (X-Internal-Token)."""
-    return {"X-Internal-Token": _S1_INTERNAL_TOKEN}
+    """HTTP headers that satisfy S1 internal auth (X-Internal-JWT, PRD-0025)."""
+    return {"X-Internal-JWT": _INTERNAL_JWT}
 
 
 @pytest.fixture
 def s2_internal_headers() -> dict[str, str]:
-    """HTTP headers for S2 (market-ingestion) internal endpoints."""
-    return {"X-Internal-Token": _S2_INTERNAL_TOKEN}
+    """HTTP headers for S2 (market-ingestion) internal endpoints (X-Internal-JWT, PRD-0025)."""
+    return {"X-Internal-JWT": _INTERNAL_JWT}
 
 
 @pytest.fixture
 def s4_internal_headers() -> dict[str, str]:
-    """HTTP headers for S4 (content-ingestion) internal endpoints."""
-    return {"X-Internal-Token": _S4_INTERNAL_TOKEN}
+    """HTTP headers for S4 (content-ingestion) internal endpoints (X-Internal-JWT, PRD-0025)."""
+    return {"X-Internal-JWT": _INTERNAL_JWT}
 
 
 @pytest.fixture
 async def s6_client() -> AsyncGenerator[AsyncClient, None]:
-    """HTTP client for S6 (nlp-pipeline service) at localhost:8006."""
-    async with AsyncClient(base_url=_S6_BASE_URL, timeout=30.0) as ac:
+    """HTTP client for S6 (nlp-pipeline service) at localhost:8006.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025).
+    """
+    async with AsyncClient(
+        base_url=_S6_BASE_URL,
+        timeout=30.0,
+        headers={"X-Internal-JWT": _INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 

@@ -78,8 +78,9 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.slow]
 
 # ── Service availability ───────────────────────────────────────────────────────
 
-_S2_INTERNAL_TOKEN = os.getenv("MARKET_INGESTION_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
-_S4_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+# PRD-0025: services use X-Internal-JWT (RS256). The JWT is generated from
+# the conftest helper which reads the test RSA private key from docker.env.
+from tests.e2e.conftest import _INTERNAL_JWT as _E2E_INTERNAL_JWT  # type: ignore[import]
 
 # MinIO connection for white-box object assertions
 _MINIO_ENDPOINT = os.getenv("E2E_MINIO_ENDPOINT", "http://localhost:7480")
@@ -136,11 +137,11 @@ _skip_ollama = pytest.mark.skipif(
 
 
 def _s2_headers() -> dict[str, str]:
-    return {"X-Internal-Token": _S2_INTERNAL_TOKEN}
+    return {"X-Internal-JWT": _E2E_INTERNAL_JWT}
 
 
 def _s4_headers() -> dict[str, str]:
-    return {"X-Internal-Token": _S4_INTERNAL_TOKEN}
+    return {"X-Internal-JWT": _E2E_INTERNAL_JWT}
 
 
 def _minio_client() -> Any:
@@ -166,19 +167,27 @@ def _minio_client() -> Any:
 
 @pytest.fixture
 async def s2_client() -> Any:
-    """HTTP client for S2 market-ingestion on localhost:8002."""
+    """HTTP client for S2 market-ingestion on localhost:8002 with internal JWT."""
     from httpx import AsyncClient
 
-    async with AsyncClient(base_url="http://localhost:8002", timeout=30.0) as ac:
+    async with AsyncClient(
+        base_url="http://localhost:8002",
+        timeout=30.0,
+        headers={"X-Internal-JWT": _E2E_INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 
 @pytest.fixture
 async def s3_client() -> Any:
-    """HTTP client for S3 market-data on localhost:8003."""
+    """HTTP client for S3 market-data on localhost:8003 with internal JWT."""
     from httpx import AsyncClient
 
-    async with AsyncClient(base_url="http://localhost:8003", timeout=30.0) as ac:
+    async with AsyncClient(
+        base_url="http://localhost:8003",
+        timeout=30.0,
+        headers={"X-Internal-JWT": _E2E_INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 
@@ -214,10 +223,14 @@ async def s3_db() -> Any:
 
 @pytest.fixture
 async def s4_client() -> Any:
-    """HTTP client for S4 content-ingestion on localhost:8004."""
+    """HTTP client for S4 content-ingestion on localhost:8004 with internal JWT."""
     from httpx import AsyncClient
 
-    async with AsyncClient(base_url="http://localhost:8004", timeout=30.0) as ac:
+    async with AsyncClient(
+        base_url="http://localhost:8004",
+        timeout=30.0,
+        headers={"X-Internal-JWT": _E2E_INTERNAL_JWT},
+    ) as ac:
         yield ac
 
 
