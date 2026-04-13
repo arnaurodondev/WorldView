@@ -84,7 +84,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     httpx_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
     app.state.httpx_client = httpx_client
 
-    # 4. OIDC discovery — fail-fast if unavailable (service cannot function without it)
+    # 4. OIDC discovery — fail-fast if unavailable (service cannot function without it).
+    # In test/dev environments where Zitadel is not running, set
+    # API_GATEWAY_OIDC_DISCOVERY_OPTIONAL=true to start with internal-JWT-only auth.
     from api_gateway.oidc import (
         build_jwks_response,
         fetch_oidc_discovery,
@@ -97,8 +99,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.oidc_config = oidc_config
         logger.info("oidc_discovery_complete", issuer=oidc_config.issuer)
     except Exception as exc:
-        logger.error("oidc_discovery_failed", error=str(exc))
-        raise RuntimeError(f"OIDC discovery failed at startup: {exc}") from exc
+        if settings.oidc_discovery_optional:
+            app.state.oidc_config = None
+            logger.warning(
+                "oidc_discovery_skipped",
+                error=str(exc),
+                detail="OIDC_DISCOVERY_OPTIONAL=true; starting with internal-JWT-only auth",
+            )
+        else:
+            logger.error("oidc_discovery_failed", error=str(exc))
+            raise RuntimeError(f"OIDC discovery failed at startup: {exc}") from exc
 
     # 5. RSA keypair for internal JWT signing
     private_key = load_rsa_private_key(settings.internal_jwt_private_key.get_secret_value())

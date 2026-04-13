@@ -81,10 +81,16 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
 _MEDIUM_OVERRIDE_TOPICS: frozenset[str] = frozenset({"graph.state.changed.v1", "intelligence.contradiction.v1"})
 
 # Schema file path — C-04 / BP-119: load from .avsc, never define inline
-# Layout: services/alert/src/alert/application/use_cases/alert_fanout.py
-#                                                          ^ parents[0]
-# parents[6] = repo root
-_SCHEMA_PATH = Path(__file__).parents[6] / "infra" / "kafka" / "schemas" / "alert.delivered.v1.avsc"
+# Docker layout:  /app/src/alert/application/use_cases/alert_fanout.py → parents[4] = /app
+# Local dev layout: services/alert/src/alert/application/use_cases/alert_fanout.py → parents[6] = repo root
+# Use first existing path to support both environments.
+# Guard parents[n] access: list construction is eager, so only index parents that exist.
+_SCHEMA_CANDIDATES = [
+    Path(__file__).parents[i] / "infra" / "kafka" / "schemas" / "alert.delivered.v1.avsc"
+    for i in (4, 6)
+    if i < len(Path(__file__).parents)
+]
+_SCHEMA_PATH = next((p for p in _SCHEMA_CANDIDATES if p.exists()), _SCHEMA_CANDIDATES[0])
 
 _PARSED_SCHEMA: dict[str, Any] | None = None
 
