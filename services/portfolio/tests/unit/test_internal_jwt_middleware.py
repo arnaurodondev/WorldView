@@ -83,7 +83,7 @@ def _build_app(public_key: Any = None) -> FastAPI:
 
 async def test_internal_jwt_middleware_rejects_missing_jwt() -> None:
     """No X-Internal-JWT header and public key loaded → 401."""
-    private_key, public_key = _generate_rsa_pair()
+    _private_key, public_key = _generate_rsa_pair()
     app = _build_app(public_key=public_key)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -137,7 +137,7 @@ async def test_internal_jwt_middleware_sets_tenant_id() -> None:
 
 async def test_internal_jwt_middleware_skips_health() -> None:
     """GET /health passes without X-Internal-JWT header."""
-    private_key, public_key = _generate_rsa_pair()
+    _private_key, public_key = _generate_rsa_pair()
     app = _build_app(public_key=public_key)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -148,7 +148,7 @@ async def test_internal_jwt_middleware_skips_health() -> None:
 
 async def test_internal_jwt_middleware_skips_metrics() -> None:
     """GET /metrics passes without X-Internal-JWT header."""
-    private_key, public_key = _generate_rsa_pair()
+    _private_key, public_key = _generate_rsa_pair()
     app = _build_app(public_key=public_key)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -172,7 +172,7 @@ async def test_internal_jwt_middleware_passes_through_when_no_key() -> None:
 
 async def test_internal_jwt_middleware_rejects_wrong_algorithm() -> None:
     """HS256 token (wrong algorithm) → 401."""
-    private_key, public_key = _generate_rsa_pair()
+    _private_key, public_key = _generate_rsa_pair()
     app = _build_app(public_key=public_key)
 
     # Sign with HS256 instead of RS256

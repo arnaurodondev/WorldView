@@ -72,7 +72,7 @@ class TestProvisionalEnrichmentWorkerNoPendingRows:
             ProvisionalEnrichmentWorker,
         )
 
-        session, factory = _make_session_with_rows([])
+        _session, factory = _make_session_with_rows([])
         producer = _make_producer()
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
@@ -161,7 +161,7 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             ProvisionalEnrichmentWorker,
         )
 
-        session, factory = _make_session_with_rows([_make_pending_row()])
+        _session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
 
         worker = ProvisionalEnrichmentWorker(
@@ -226,7 +226,7 @@ class TestProvisionalEnrichmentWorkerFailedEnrichment:
             ProvisionalEnrichmentWorker,
         )
 
-        session, factory = _make_session_with_rows([_make_pending_row()])
+        _session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
@@ -242,7 +242,7 @@ class TestProvisionalEnrichmentWorkerFailedEnrichment:
             ProvisionalEnrichmentWorker,
         )
 
-        session, factory = _make_session_with_rows([_make_pending_row()])
+        _session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
@@ -261,7 +261,7 @@ class TestProvisionalEnrichmentWorkerNoProducer:
             ProvisionalEnrichmentWorker,
         )
 
-        session, factory = _make_session_with_rows([_make_pending_row()])
+        _session, factory = _make_session_with_rows([_make_pending_row()])
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=None)
 

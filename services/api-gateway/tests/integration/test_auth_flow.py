@@ -309,9 +309,9 @@ async def test_proxy_request_includes_internal_jwt() -> None:
         )
 
     # The X-Internal-JWT should be forwarded to the downstream service
-    assert "X-Internal-JWT" in captured_headers, (
-        "Expected X-Internal-JWT in downstream headers — " "check InternalJWTIssuerMiddleware and _auth_headers()"
-    )
+    assert (
+        "X-Internal-JWT" in captured_headers
+    ), "Expected X-Internal-JWT in downstream headers — check InternalJWTIssuerMiddleware and _auth_headers()"
     # Verify it's a valid RS256 JWT signed by S9
     internal_jwt = captured_headers["X-Internal-JWT"]
     decoded = jwt.decode(

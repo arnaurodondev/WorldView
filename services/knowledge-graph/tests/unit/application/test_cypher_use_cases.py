@@ -144,7 +144,7 @@ class TestCypherPathUseCase:
         # Find the AGE Cypher execute call (has {"params": json_string})
         age_call = None
         for c in session.execute.call_args_list:
-            args, kwargs = c
+            args, _kwargs = c
             # The cypher execute call passes {"params": "..."} as the second argument
             if len(args) >= 2 and isinstance(args[1], dict) and "params" in args[1]:
                 age_call = c

@@ -21,6 +21,7 @@
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 | — | 2026-04-11 |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-12 | 2026-04-12 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/7 | — | 2026-04-11 |
+| PLAN-0027 | Frontend MVP UI — Professional Design v2.0: Landing (ComparisonTable/TrustBar/FAQ), Dashboard (HeatMap/TopMovers/MacroCalendar), Workspace (11 panels), Company Detail (18 fundamentals sections + full Intelligence tab), Portfolio (Strategy analytics + AddTransaction), Chat (thread search) + S8 Briefing + S9 bulk routes (20+ new proxy routes) | PRD-0027 | draft | 0/6 | — | 2026-04-12 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## Execution Order (Dependency Graph)
@@ -73,6 +74,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | QA-S6S7S8-2026-04-09 | Deep QA Pass S6/S7/S8: TOCTOU soft_delete (CRITICAL), VectorSearch query wiring, entity.canonical.created.v1 dispatcher fix, S8 integration tests (14), 506+313+212 tests green | N/A | 2026-04-09 | — | 2026-04-09 |
 | QA-S4S5-2026-04-09 | Deep QA Pass S4+S5: 5-agent review, 9 missing use-case unit tests added, F-DS-014 intra-batch dedup fix, 490+289 tests green, PASS_WITH_WARNINGS | N/A | 2026-04-09 | — | 2026-04-09 |
 | QA-DEPLOY-2026-04-09 | Pre-Hetzner Deployment QA: full unit suite ~4059 tests PASS across all services+libs; BP-134 live test scope mismatch (market-ingestion/market-data); observability gap (6/10 services in Prometheus); no production error tracking (Sentry/Glitchtip) | N/A | 2026-04-09 | — | 2026-04-09 |
+| QA-PRE-DEMO-2026-04-13 | Pre-Demo Full QA Pass (2nd run, Docker running): infra UP (postgres/kafka/valkey/minio/ollama); 6 Kafka topics; rag-chat BP-134 fix applied (conftest _make_system_jwt + X-Internal-JWT header); market-data readyz test fixed (state override inside TestClient block); 21 RUF059 fixed + 34 format files reformatted; ruff PASS; mypy PASS all 6 key services; libs 566 pass; services total ~3,650 pass, 0 fail; integration tests pass (api-gw 8, portfolio 53, market-data 67, nlp 10); Schema Registry networking issue (kafka:9092 vs localhost:9092 in compose); Ollama 0 models loaded; service .env files missing (runtime docker profile unusable — expected dev mode); DEMO READINESS: CONDITIONAL GO. See docs/audits/2026-04-13-qa-pre-demo-report.md | N/A | 2026-04-13 | — | 2026-04-13 |
 
 ## Conventions
 

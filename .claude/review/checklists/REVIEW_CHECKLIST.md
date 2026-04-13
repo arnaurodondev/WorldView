@@ -67,6 +67,11 @@
 - [ ] Token comparisons use `hmac.compare_digest()` (not `==`)
 - [ ] Query pagination has upper bound (max limit parameter)
 - [ ] URL inputs validate scheme and reject private IP ranges (SSRF prevention)
+- [ ] **JWT decode passes `issuer=` parameter** — `jwt.decode(token, key, algorithms=["RS256"], issuer=expected_issuer)` — missing issuer= enables issuer-spoofing auth bypass (BP-145, HR-026)
+- [ ] **One-time-use Valkey state (PKCE codes, nonces) uses atomic `GETDEL`**, not `GET` then `DEL` — two-command pipeline creates replay window (BP-146, HR-027)
+- [ ] **Middleware reads `app.state` inside `dispatch()`, not at `__init__` time** — constructors run before lifespan, capturing `None` permanently disables features (BP-144, HR-028)
+- [ ] **Repository `save()` methods do NOT call `session.rollback()`** — repo-level rollback poisons the shared session; only the use-case `async with session_factory()` context owns rollback (BP-141, HR-029)
+- [ ] **`InternalJWTMiddleware` is mounted on all services that accept internal requests** — adding a new service without it bypasses auth entirely (PLAN-0025 pattern)
 
 ## 6b. Schema & Data Pipeline Integrity
 
@@ -120,6 +125,56 @@
 - [ ] Pre-existing test failures encountered during this change were investigated and fixed — not ignored
 - [ ] Root cause is always assumed to be in the implementation first; test is only corrected after proving the test was wrong
 
+## 10. Frontend / TypeScript (applies when `apps/frontend/` files are changed)
+
+Mark N/A for pure backend changes.
+
+### 10a. Architecture
+- [ ] **Frontend only calls S9** — no direct backend service URLs anywhere in `apps/frontend/` (HR-030, R14)
+- [ ] All API calls go through `gatewayClient.<method>()` in `src/lib/gateway-client.ts`
+- [ ] New gateway endpoints are added as typed methods (no raw `fetch()` calls in components)
+- [ ] Next.js app routes follow the `app/(protected)/` auth-guarded layout for all pages requiring auth
+
+### 10b. TypeScript Correctness
+- [ ] **No `any` types** — all gateway responses, hook return values, and handler params are typed (HR-032)
+- [ ] `pnpm typecheck` passes with 0 errors
+- [ ] Interfaces used for object shapes; `type` for unions/intersections
+
+### 10c. State Management
+- [ ] **TanStack Query for all server state** — no `useState+useEffect` for API calls (HR-033)
+- [ ] `enabled: Boolean(id)` guard on all entity-specific queries
+- [ ] Auth token stored in React state only — never `localStorage`, never client-accessible cookie (HR-035)
+
+### 10d. UI States (Required — not optional)
+- [ ] **Every data-dependent component handles all 3 states**: loading skeleton, error card with retry, empty state (HR-034)
+- [ ] Skeletons match the shape of loaded content
+- [ ] Error states include a recovery action (retry button, navigation link)
+
+### 10e. Security
+- [ ] **No `dangerouslySetInnerHTML` without DOMPurify sanitization** (HR-031)
+- [ ] No PII in `localStorage` or `sessionStorage`
+- [ ] No secrets or API keys in `NEXT_PUBLIC_*` env vars or client-side code
+- [ ] WebSocket auth uses `?token=<access_token>`, not `?user_id=` (HR-038, ADR-F-02)
+- [ ] SSE streams use `AbortController` with cleanup on unmount (HR-039)
+
+### 10f. Dark Theme Compliance
+- [ ] All colors use CSS variables from `docs/ui/DESIGN_SYSTEM.md §2` — no hardcoded hex (HR-037)
+- [ ] Positive values use `--positive` (green), negative use `--negative` (red) — consistently
+- [ ] `class="dark"` remains on `<html>` — no conditional theme switching
+
+### 10g. Dependencies
+- [ ] **Exact version pins** in `package.json` (no `^` or `~`) (HR-036)
+- [ ] `pnpm audit` shows 0 vulnerabilities after any dependency change
+- [ ] No UI libraries added other than shadcn/ui (Radix primitives + Tailwind)
+- [ ] `pnpm-lock.yaml` committed and in sync
+
+### 10h. Tests
+- [ ] Every new component has at minimum: loading state test + happy path test
+- [ ] Gateway client is mocked at the `gatewayClient` boundary (not `fetch`)
+- [ ] E2E test added for new pages (smoke + data flow)
+
+---
+
 ## Scoring
 
 | Result | Meaning |
@@ -128,4 +183,5 @@
 | FAIL in sections 7-8 only | **APPROVE WITH NOTES** (improvements recommended) |
 | FAIL in sections 1-6 | **REQUEST CHANGES** (must fix) |
 | FAIL in section 9 | **BLOCK** (test integrity violation — R19) |
+| FAIL in section 10a, 10b, 10e | **REQUEST CHANGES** (frontend arch/security violations) |
 | Multiple FAIL in 1-6 | **BLOCK** (serious issues) |

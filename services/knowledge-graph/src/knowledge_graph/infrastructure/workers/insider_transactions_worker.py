@@ -230,7 +230,7 @@ class InsiderTransactionsWorker:
                 )
                 direction = "bought" if recent_txn.get("transactionAcquiredDisposed") == "A" else "sold"
                 evidence_text = (
-                    f"{officer_name} ({officer_title}) recently {direction} shares" f" in {instrument.canonical_name}"
+                    f"{officer_name} ({officer_title}) recently {direction} shares in {instrument.canonical_name}"
                 )
 
                 await relation_repo.upsert_relation(

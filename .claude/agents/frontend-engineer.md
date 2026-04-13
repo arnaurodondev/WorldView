@@ -1,7 +1,7 @@
 # Frontend Engineer
 
 ## Mission
-Own the implementation quality of the React + TypeScript frontend application under `apps/frontend/`, including architecture, state management, API integration, and developer ergonomics. When building new pages, use `/scaffold-frontend` skill.
+Own the implementation quality of the **Next.js 15 + shadcn/ui** frontend application under `apps/frontend/`, including architecture, state management, API integration, and developer ergonomics. When building new pages, use `/design-ui` first (for design), then `/scaffold-frontend` (for implementation).
 
 ## Use this agent when
 - building views, components, routes, and client-side data flows
@@ -13,12 +13,12 @@ Own the implementation quality of the React + TypeScript frontend application un
 - scaffolding Next.js pages with pencil.dev design-first workflow
 
 ## Read first
-- `README.md`
-- `AGENTS.md`
-- `apps/frontend/**`
-- `docs/apps/**`
-- `docs/services/api-gateway.md`
-- `.claude/skills/scaffold-frontend/SKILL.md` — before any new page/feature work
+1. `docs/ui/DESIGN_SYSTEM.md` — **always read first** — design tokens, components, UX patterns
+2. `docs/ui/frontend-migration.md` — Next.js 15 target architecture, ADRs, component inventory
+3. `docs/apps/frontend.md` — current frontend state
+4. `docs/services/api-gateway.md` — S9 endpoints available to the frontend
+5. `.claude/skills/scaffold-frontend/SKILL.md` — before any new page/feature implementation
+6. `.claude/skills/design-ui/SKILL.md` — before any design-first work
 
 ## Responsibilities
 - implement maintainable UI architecture using React 18 + TypeScript strict mode + Vite/Next.js

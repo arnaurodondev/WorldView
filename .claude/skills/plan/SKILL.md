@@ -63,17 +63,36 @@ Determine the execution order of plans:
 
 Present the plan dependency graph to the user for approval.
 
-### 1.3 Codebase State Verification (Mandatory)
+### 1.3 Codebase State Verification (Mandatory — Read the Code)
 
-For each entity, table, topic, or endpoint referenced in the PRD, verify the current state of the codebase:
+For each entity, table, topic, or endpoint referenced in the PRD, **read the actual source files** and document the current state. Do not rely on documentation alone — read the code.
 
-| PRD Reference | Type | Expected State | Actual State (read code) | Delta |
-|--------------|------|---------------|--------------------------|-------|
-| `entity_embedding_state` | DB table | exists in S7 | ? | none / needs migration |
-| `market.signal.v1` | Kafka topic | new | ? | create in Wave 1 |
-| ... | ... | ... | ... | ... |
+**What to read for each affected service**:
+- `services/<svc>/src/<svc>/domain/entities/*.py` — actual entity fields and types
+- `services/<svc>/src/<svc>/infrastructure/db/models/*.py` — actual ORM model columns
+- `services/<svc>/alembic/versions/` — most recent migration file (current schema head)
+- `services/<svc>/src/<svc>/api/routers/*.py` — actual endpoint signatures (path, params, response model)
+- `services/<svc>/src/<svc>/application/use_cases/*.py` — existing use case interfaces
+- `services/<svc>/tests/` — existing test files (to know what tests will break)
+- `infra/kafka/schemas/*.avsc` — actual Avro schema fields and types
+- `libs/contracts/src/contracts/*.py` — existing canonical models
 
-**Rule**: If the actual state differs from the PRD's assumed state (e.g., table already exists with different columns, topic already exists with different schema), flag the delta and resolve before writing wave tasks. This prevents tasks that silently assume a stale baseline.
+Fill in this table with actual values from code (not assumptions):
+
+| PRD Reference | Type | Service | Actual Current State (from code) | PRD Expected State | Delta |
+|--------------|------|---------|----------------------------------|--------------------|-------|
+| `entity_embedding_state` | DB table | S7 | 6 columns: id, entity_id, model_id, embedding, created_at, updated_at | add `embedding_version` column | migration needed |
+| `market.signal.v1` | Kafka topic / Avro schema | S6→S3 | does not exist | new | create schema + topic |
+| `GET /api/v1/entities/{id}` | endpoint | S9 | returns EntityPublic (6 fields) | add `description` field | response schema change |
+| ... | ... | ... | ... | ... | ... |
+
+**Rules**:
+- Every row with a Delta ≠ "none" must have a task in Wave 1 or a prerequisite wave that brings the codebase to the PRD's baseline
+- Every Alembic migration delta must specify: current head revision, new revision name, column type with server_default
+- Every entity extension delta must specify: which existing tests will break and how they'll be updated
+- Every endpoint change must specify: whether existing frontend/consumer code will break
+
+**Do not write any wave tasks until this table is complete.** Tasks written against a stale baseline produce broken implementations.
 
 ## Phase 2 — Wave Decomposition (Per Plan)
 
@@ -198,6 +217,17 @@ Each wave must include:
 - [ ] Integration tests pass (if applicable)
 - [ ] Documentation updated (if API/events/schema changed)
 - [ ] No architecture violations (domain has no infra imports)
+
+#### Break Impact (Mandatory — must not be empty)
+List every file outside the target files that will break when this wave's changes are applied, and how to fix each:
+
+| Broken File | Why It Breaks | Fix Required |
+|-------------|--------------|-------------|
+| `services/S5/tests/unit/test_article.py` | Article entity gains `relevance_score` field | Add `relevance_score=None` to all Article(...) constructor calls in test fixtures |
+| `libs/contracts/src/contracts/article.py` | Canonical model must match new entity | Add `relevance_score: float \| None = None` field |
+| `services/S9/tests/api/test_news.py` | GET /api/v1/news response shape changed | Update assert for new `top` path and new response fields |
+
+**Rule**: An agent picking up this wave MUST update all items in this table as part of the wave — not as a follow-up. A wave is not complete until all break-impact items are resolved and all tests pass.
 
 #### Regression Guardrails (Mandatory — must not be empty)
 Scan `docs/BUG_PATTERNS.md` and list every pattern applicable to this wave's changes:

@@ -6,14 +6,17 @@ import asyncio
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nlp_pipeline.domain.models import ArticlePriceImpact  # noqa: TCH002
 from nlp_pipeline.infrastructure.http.market_data_client import OHLCVBar
 from nlp_pipeline.infrastructure.workers.price_impact_labelling_worker import (
     PriceImpactLabellingWorker,
 )
+
+if TYPE_CHECKING:
+    from nlp_pipeline.domain.models import ArticlePriceImpact
 
 pytestmark = pytest.mark.unit
 
@@ -55,10 +58,10 @@ def _make_worker(
     market_client_mock: AsyncMock,
     normalisation_cap_pct: float = 5.0,
 ) -> tuple[PriceImpactLabellingWorker, MagicMock]:
-    factory, session = _make_session_factory(repo_mock)
+    factory, _session = _make_session_factory(repo_mock)
 
     with patch(
-        "nlp_pipeline.infrastructure.workers.price_impact_labelling_worker." "ArticlePriceImpactRepository",
+        "nlp_pipeline.infrastructure.workers.price_impact_labelling_worker.ArticlePriceImpactRepository",
         return_value=repo_mock,
     ):
         worker = PriceImpactLabellingWorker(

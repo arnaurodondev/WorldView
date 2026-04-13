@@ -163,7 +163,7 @@ class TestGetPendingAlertsUseCase:
         pending = _make_pending(user_id, low_alert.alert_id)
         alert_map = {low_alert.alert_id: low_alert}
 
-        uc, mock_repo = _make_get_uc([pending], alert_map)
+        uc, _mock_repo = _make_get_uc([pending], alert_map)
         # Repo returns the LOW alert even though min_severity=HIGH was requested.
         # This simulates what happens when the filter is fully delegated to SQL
         # (use case must trust the repo's result and not re-filter).

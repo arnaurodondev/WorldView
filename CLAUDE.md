@@ -22,7 +22,8 @@
 | **Refactoring** | `/refactor` | Safe behavior-preserving restructure |
 | **Documentation audit** | `/docs-audit` | Find gaps, staleness, inconsistencies in docs |
 | **Scaffold new service** | `/scaffold-service` | Full hexagonal service skeleton: domain, API, tests, docker-compose |
-| **Scaffold frontend page/feature** | `/scaffold-frontend` | Design-first (pencil.dev) → Next.js/React: dark theme, S9 gateway, TanStack Query, Vitest |
+| **Design a UI page (wireframe only)** | `/design-ui` | pencil.dev canvas design → component spec. Use BEFORE `/scaffold-frontend` to explore the design |
+| **Scaffold frontend page/feature** | `/scaffold-frontend` | Design-first (pencil.dev) → Next.js 15 + shadcn/ui: dark theme, S9 gateway, TanStack Query, Vitest |
 | **DB migration** | `/migrate-db` | Generate, validate, and test Alembic migration (forward-compat + rollback) |
 
 **Always use a skill for non-trivial work.** Skills enforce the correct workflow, validation gates, and mandatory compounding updates.
@@ -42,6 +43,12 @@
 6. `docs/MASTER_PLAN.md` — full system architecture
 7. `docs/services/<service>.md` — detailed service documentation
 8. `docs/BUG_PATTERNS.md` — known failure patterns
+
+### For frontend/UI work:
+9. `docs/ui/DESIGN_SYSTEM.md` — design tokens, component catalogue, UX patterns (read first for any UI task)
+10. `docs/ui/frontend-migration.md` — Next.js 15 target architecture, ADRs, component inventory
+11. `docs/apps/frontend.md` — frontend app reference
+12. `docs/services/api-gateway.md` — S9 endpoints available to the frontend
 
 ### For review/quality work:
 9. `.claude/review/checklists/REVIEW_CHECKLIST.md` — review checklist

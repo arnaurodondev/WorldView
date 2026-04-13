@@ -27,11 +27,7 @@ class SnapTradeUser:
     snaptrade_user_secret: str  # NEVER LOG — secret token
 
     def __repr__(self) -> str:
-        return (
-            f"SnapTradeUser("
-            f"snaptrade_user_id={self.snaptrade_user_id!r}, "
-            f"snaptrade_user_secret='***REDACTED***')"
-        )
+        return f"SnapTradeUser(snaptrade_user_id={self.snaptrade_user_id!r}, snaptrade_user_secret='***REDACTED***')"
 
 
 @dataclass(frozen=True)
