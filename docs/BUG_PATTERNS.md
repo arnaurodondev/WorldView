@@ -23,6 +23,7 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-159](#bp-159) | FastAPI middleware / Starlette | `app.add_middleware()` creates a DIFFERENT instance than `MiddlewareClass(app, ...)` — `startup()` on the stored instance never populates `self._public_key` on the serving instance | Any middleware that calls startup() to load external keys/config and stores them in `self.*` |
 | [BP-149](#bp-149) | Kafka consumer / idempotency | Silent duplicate artifacts (sections, chunks, mentions) accumulate when entity PKs are non-deterministic UUIDs — ON CONFLICT on PK never fires on re-delivery | S6 `ArticleProcessingConsumer`, any consumer where domain entity IDs are generated with `new_uuid7()` |
 | [BP-150](#bp-150) | Kafka / message retention | Services down >7 days silently lose the backlog — Kafka default 7-day retention causes consumer group to start from oldest *remaining* message after extended downtime | All pipeline-critical topics: `content.article.stored.v1`, `market.dataset.fetched`, `nlp.article.enriched.v1` |
 | [BP-138](#bp-138) | Kafka consumer / type coercion | `TypeError: float() argument must be a string or a number, not 'NoneType'` — consumer dead-letters on non-numeric field | Any consumer extracting float fields from Avro events (market_impact_score, etc.) |
@@ -5304,3 +5305,52 @@ For service-level conftests, add the same pattern to `e2e_client`.
 **Prevention**: When adding `InternalJWTMiddleware` to a service, update ALL test conftest files in that service (unit, integration, e2e) and the root `tests/e2e/conftest.py` client fixture for that service.
 
 **First seen**: Multiple service e2e conftests, 2026-04-13.
+
+---
+
+## BP-159 — BaseHTTPMiddleware Dual-Instance: startup() on Wrong Instance
+
+**Category**: FastAPI / Starlette middleware wiring
+**Severity**: CRITICAL (silent security bypass when the stored instance holds security keys)
+**First seen**: `InternalJWTMiddleware`, portfolio service, 2026-04-14
+
+### Symptom
+
+`InternalJWTMiddleware.startup()` is called in the FastAPI lifespan on the explicitly-created instance:
+```python
+jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+app.state._jwt_middleware = jwt_middleware
+await jwt_middleware.startup()  # sets jwt_middleware._public_key
+```
+
+But `app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)` creates a **second instance** when `app.build_middleware_stack()` runs. That second instance is the one that actually handles requests — and its `_public_key` is always `None`.
+
+Any code in `dispatch()` that reads `self._public_key` sees `None` regardless of whether startup() succeeded. In this case, the fallback was an unverified JWT decode (auth bypass). The test suite never catches this because tests construct the middleware manually, bypassing `add_middleware`.
+
+### Root Cause
+
+Starlette's middleware stack construction calls `cls(app=self.router, **kwargs)` for each registered middleware (not for the `app.add_middleware()` call itself). The explicitly-instantiated `jwt_middleware` and the stack instance are different Python objects.
+
+### Fix
+
+Store shared state on `app.state` instead of `self.*` in the middleware. Use `request.app.state` in `dispatch()` to read it (works because `request.app` is the FastAPI instance regardless of which middleware instance serves the request):
+
+```python
+async def startup(self) -> None:
+    key = await self._fetch_public_key()
+    self._public_key = key  # keep for background refresh
+    if hasattr(self.app, "state"):
+        self.app.state._internal_jwt_public_key = key  # share across instances
+
+async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    public_key = getattr(request.app.state, "_internal_jwt_public_key", None)
+    if public_key is None:
+        return Response('{"detail":"Service not ready"}', status_code=503)
+    ...
+```
+
+In tests, pre-populate `app.state._internal_jwt_public_key = test_key` before the middleware stack is built.
+
+### Prevention
+
+Never read security-critical state from `self.*` in a `BaseHTTPMiddleware` that is added via `app.add_middleware()`. Always route through `app.state` (readable via `request.app.state` in dispatch).
