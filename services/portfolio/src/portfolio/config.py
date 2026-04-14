@@ -64,15 +64,16 @@ class Settings(BaseSettings):
     # Internal JWT (RS256) — PRD-0025
     # S1 fetches the public key from S9's JWKS endpoint at startup.
     api_gateway_url: str = "http://api-gateway:8000"
+    internal_jwt_issuer: str = Field(default="worldview-gateway")
 
     # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
     # AliasChoices supports both bare SNAPTRADE_* and PORTFOLIO_SNAPTRADE_* env vars.
-    snaptrade_client_id: str = Field(
-        default="",
+    snaptrade_client_id: SecretStr = Field(
+        default=SecretStr(""),
         validation_alias=AliasChoices("SNAPTRADE_CLIENT_ID", "PORTFOLIO_SNAPTRADE_CLIENT_ID"),
     )
-    snaptrade_consumer_key: str = Field(
-        default="",
+    snaptrade_consumer_key: SecretStr = Field(
+        default=SecretStr(""),
         validation_alias=AliasChoices("SNAPTRADE_CONSUMER_KEY", "PORTFOLIO_SNAPTRADE_CONSUMER_KEY"),
     )
     snaptrade_redirect_uri: str = Field(
@@ -113,7 +114,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_missing_snaptrade_credentials(self) -> Settings:
         """Warn at startup if SnapTrade credentials are unset (PRD-0022 F-23)."""
-        if not self.snaptrade_client_id:
+        if not self.snaptrade_client_id.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "missing_snaptrade_client_id",
                 message=(

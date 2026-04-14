@@ -100,8 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from portfolio.infrastructure.brokerage.snaptrade_client import SnapTradeClient
 
     app.state.brokerage_client = SnapTradeClient(
-        client_id=settings.snaptrade_client_id,
-        consumer_key=settings.snaptrade_consumer_key,
+        client_id=settings.snaptrade_client_id.get_secret_value(),
+        consumer_key=settings.snaptrade_consumer_key.get_secret_value(),
     )
 
     # 7. Create Valkey client for watchlist reverse-index cache
@@ -151,10 +151,12 @@ def create_app() -> FastAPI:
 
     # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave C)
     # We store the instance on app.state so lifespan can call startup() on it.
+    # startup() writes the public key to app.state._internal_jwt_public_key so the
+    # separate middleware stack instance (created by add_middleware) can read it in dispatch().
     jwks_url = f"{settings.api_gateway_url}/internal/jwks"
-    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url, issuer=settings.internal_jwt_issuer)
     app.state._jwt_middleware = jwt_middleware
-    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
+    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url, issuer=settings.internal_jwt_issuer)
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)

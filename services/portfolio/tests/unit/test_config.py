@@ -48,9 +48,9 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.log_level == "INFO"
     assert s.log_format == "json"
     assert s.otlp_endpoint == ""
-    # SnapTrade defaults (PRD-0022 §12)
-    assert s.snaptrade_client_id == ""
-    assert s.snaptrade_consumer_key == ""
+    # SnapTrade defaults (PRD-0022 §12) — SecretStr; compare via get_secret_value()
+    assert s.snaptrade_client_id.get_secret_value() == ""
+    assert s.snaptrade_consumer_key.get_secret_value() == ""
     assert s.snaptrade_redirect_uri == "http://localhost:5173/portfolio/brokerage/callback"
     assert s.brokerage_sync_cycle_seconds == 14400
     assert s.brokerage_sync_history_days == 730

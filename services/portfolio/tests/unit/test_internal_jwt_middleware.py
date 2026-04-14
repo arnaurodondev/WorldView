@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 from portfolio.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+pytestmark = [pytest.mark.unit]
 
 # ── RSA key helpers ───────────────────────────────────────────────────────────
 
@@ -54,8 +54,17 @@ class _PreKeyedJWTMiddleware(InternalJWTMiddleware):
 
 
 def _build_app(public_key: Any = None) -> FastAPI:
-    """Build a FastAPI app with _PreKeyedJWTMiddleware."""
+    """Build a FastAPI app with _PreKeyedJWTMiddleware.
+
+    The public key is stored on app.state._internal_jwt_public_key so that
+    InternalJWTMiddleware.dispatch() can read it via request.app.state.
+    """
     app = FastAPI()
+
+    # Inject the key into app.state so dispatch() can read it.
+    # This mirrors what startup() does in production (writing to self.app.state).
+    if public_key is not None:
+        app.state._internal_jwt_public_key = public_key
 
     @app.get("/api/v1/data")
     async def data_route(request: Request) -> JSONResponse:
@@ -157,8 +166,13 @@ async def test_internal_jwt_middleware_skips_metrics() -> None:
     assert resp.status_code == 200
 
 
-async def test_internal_jwt_middleware_passes_through_when_no_key() -> None:
-    """When _public_key is None (startup not called), request passes through (test-safe)."""
+async def test_internal_jwt_middleware_returns_503_when_no_key() -> None:
+    """When JWKS not loaded (public_key is None), return 503 Service Unavailable.
+
+    F-SEC-001: The fail-open path (unverified decode) was removed. Requests must be
+    rejected when the service hasn't loaded its public key yet — this prevents auth
+    bypass via timing attacks during startup.
+    """
     app = _build_app(public_key=None)  # no key loaded
 
     token = "any-token-value"  # noqa: S105
@@ -166,8 +180,8 @@ async def test_internal_jwt_middleware_passes_through_when_no_key() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
 
-    # Passes through — no key to validate against
-    assert resp.status_code == 200
+    assert resp.status_code == 503
+    assert "not ready" in resp.json()["detail"].lower()
 
 
 async def test_internal_jwt_middleware_rejects_wrong_algorithm() -> None:

@@ -34,12 +34,15 @@ router = APIRouter(tags=["brokerage-connections"])
 
 
 def _require_user_headers(request: Request) -> tuple[UUID, UUID]:
-    """Extract and validate X-User-Id / X-Tenant-Id headers (injected by S9)."""
-    user_id_str = request.headers.get("X-User-Id")
-    tenant_id_str = request.headers.get("X-Tenant-Id")
+    """Extract and validate user/tenant IDs from request.state (set by InternalJWTMiddleware)."""
+    user_id_str = getattr(request.state, "user_id", None)
+    tenant_id_str = getattr(request.state, "tenant_id", None)
     if not user_id_str or not tenant_id_str:
-        raise HTTPException(status_code=401, detail="Missing auth headers")
-    return UUID(user_id_str), UUID(tenant_id_str)
+        raise HTTPException(status_code=401, detail="Missing auth claims")
+    try:
+        return UUID(str(user_id_str)), UUID(str(tenant_id_str))
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid auth claims format") from exc
 
 
 @router.post(
