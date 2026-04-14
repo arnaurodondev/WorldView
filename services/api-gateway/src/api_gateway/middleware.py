@@ -10,6 +10,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from observability import get_logger  # type: ignore[import-untyped]
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -214,6 +218,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Fall back to self.valkey for test overrides; None means rate limiting is disabled.
         valkey = getattr(request.app.state, "valkey", None) or self.valkey
         if valkey is None:
+            logger.debug(  # type: ignore[no-any-return]
+                "rate_limiting_disabled",
+                path=str(request.url.path),
+            )
             return cast("Response", await call_next(request))
 
         user = getattr(request.state, "user", None)

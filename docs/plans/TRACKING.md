@@ -21,7 +21,8 @@
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 | — | 2026-04-11 |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-13 | 2026-04-13 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/7 | — | 2026-04-11 |
-| PLAN-0027 | Frontend MVP UI — Professional Design v2.0: Landing (ComparisonTable/TrustBar/FAQ), Dashboard (HeatMap/TopMovers/MacroCalendar), Workspace (11 panels), Company Detail (18 fundamentals sections + full Intelligence tab), Portfolio (Strategy analytics + AddTransaction), Chat (thread search) + S8 Briefing + S9 bulk routes (20+ new proxy routes) | PRD-0027 | draft | 0/6 | — | 2026-04-12 |
+| PLAN-0027 | Frontend MVP UI — Professional Design v2.0: Landing (ComparisonTable/TrustBar/FAQ), Dashboard (HeatMap/TopMovers/MacroCalendar), Workspace (11 panels), Company Detail (18 fundamentals sections + full Intelligence tab), Portfolio (Strategy analytics + AddTransaction), Chat (thread search) + S8 Briefing + S9 bulk routes (20+ new proxy routes) | PRD-0027 | in-progress | 5/6 (P5 Landing ✅; P6 Markets/Screener ✅, Intelligence⬜ Portfolio⬜; P7 Design-System ✅; P8 Workspace ✅; P9 Settings ✅; P10 Onboarding ✅; P4 Instrument Detail: State A ✅ State E ✅ State F ⚠️ State B ⬜ State C ⬜ State D ⬜; Canvas design plan 0027-design-canvas-plan.md 0/6 waves) | 2026-04-14 | 2026-04-14 |
+| PLAN-0027-V2 | Frontend MVP UI — Complete Implementation v2 (Canvas C-1..C-6 + Backend Security S-1 + Frontend Code F-1..F-12 + Tests T-1). Supersedes PLAN-0027-DESIGN and PLAN-0027-B. 18 waves total, maximally parallelised. S-1 ✅ (security fixes done 2026-04-14) | PRD-0027 | in-progress | 1/18 | — | 2026-04-14 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -29,6 +30,7 @@
 | Date | Report | Scope | Result |
 |------|--------|-------|--------|
 | 2026-04-13 | [2026-04-13-qa-e2e-live-stack-report.md](../audits/2026-04-13-qa-e2e-live-stack-report.md) | Pre-demo live-stack QA — 47 containers, 10 DBs, all migrations, 4,210 pass / 4 fail (BP-134 JWT gaps) / 56 skip; direct API endpoint testing via RS256 JWT | GO |
+| 2026-04-13 | [2026-04-13-qa-plan-0027-design-review.md](../audits/2026-04-13-qa-plan-0027-design-review.md) | PLAN-0027 canvas design QA — 12 pages reviewed and enhanced in worldview-mvp.pen; Bloomberg-quality density achieved across all pages; 2 new pages built (Alerts, Chat/Brief); shadcn/ui component map added to Design System | GO |
 
 ## Execution Order (Dependency Graph)
 

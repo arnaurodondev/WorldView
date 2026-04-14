@@ -55,9 +55,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     middleware instance.
     """
 
-    def __init__(self, app: Any, jwks_url: str) -> None:
+    def __init__(self, app: Any, jwks_url: str, issuer: str = "worldview-gateway") -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
+        self._issuer = issuer
         self._public_key: RSAPublicKey | None = None
         self._refresh_task: asyncio.Task | None = None
 
@@ -67,6 +68,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             try:
                 key = await self._fetch_public_key()
                 self._public_key = key
+                # Store on app.state so the middleware stack instance (separate from this one)
+                # can read the key via request.app.state in dispatch().
+                if hasattr(self.app, "state"):
+                    self.app.state._internal_jwt_public_key = key
                 logger.info(  # type: ignore[no-any-return]
                     "internal_jwt_public_key_loaded",
                     jwks_url=self._jwks_url,
@@ -85,7 +90,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         logger.error(  # type: ignore[no-any-return]
             "internal_jwt_startup_failed_all_attempts",
             jwks_url=self._jwks_url,
-            detail="Service will return 401 on all authenticated requests until JWKS is fetched.",
+            detail="Service will return 503 on all authenticated requests until JWKS is fetched.",
         )
 
     async def _background_refresh(self) -> None:
@@ -93,7 +98,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         while True:
             await asyncio.sleep(_JWKS_REFRESH_INTERVAL_SECONDS)
             try:
-                self._public_key = await self._fetch_public_key()
+                new_key = await self._fetch_public_key()
+                self._public_key = new_key
+                if hasattr(self.app, "state"):
+                    self.app.state._internal_jwt_public_key = new_key
                 logger.info("internal_jwt_public_key_refreshed")  # type: ignore[no-any-return]
             except Exception as exc:
                 logger.warning("internal_jwt_public_key_refresh_failed", error=str(exc))  # type: ignore[no-any-return]
@@ -135,35 +143,30 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        public_key = self._public_key
+        # Read public key from app.state (populated by startup() during lifespan).
+        # Using app.state ensures all middleware stack instances share the same key
+        # regardless of which instance called startup() — the middleware stack instance
+        # created by add_middleware() is different from the one stored on app.state._jwt_middleware.
+        public_key = getattr(request.app.state, "_internal_jwt_public_key", None)
         if public_key is None:
-            # Public key not yet loaded (startup not completed or JWKS unavailable).
-            # Decode claims WITHOUT signature verification so that request.state is
-            # populated for downstream route handlers (e.g., role-based guards).
-            # Signature integrity is NOT enforced in this path — this is intentional
-            # for graceful degradation when the api-gateway JWKS is unavailable
-            # (e.g., E2E tests without the full stack, or transient startup delay).
-            try:
-                payload = jwt.decode(token, options={"verify_signature": False})
-                request.state.tenant_id = payload.get("tenant_id", "")
-                request.state.user_id = payload.get("sub", "")
-                request.state.role = payload.get("role", "")
-            except jwt.DecodeError:
-                request.state.tenant_id = ""
-                request.state.user_id = ""
-                request.state.role = ""
-            return cast("Response", await call_next(request))
+            logger.warning(  # type: ignore[no-any-return]
+                "internal_jwt_public_key_not_loaded",
+                path=path,
+            )
+            return Response(
+                content='{"detail":"Service not ready — JWKS not loaded"}',
+                status_code=503,
+                media_type="application/json",
+            )
 
         try:
             payload = jwt.decode(
                 token,
                 public_key,
                 algorithms=["RS256"],
+                issuer=self._issuer,
                 options={"require": ["sub", "tenant_id", "role", "exp", "iss"]},
             )
-            if payload.get("iss") != "worldview-gateway":
-                raise jwt.InvalidIssuerError("iss != worldview-gateway")
-
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
@@ -173,7 +176,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 status_code=401,
                 media_type="application/json",
             )
-        except jwt.InvalidTokenError as exc:
+        except Exception as exc:
             logger.debug("internal_jwt_invalid", error=str(exc))  # type: ignore[no-any-return]
             return Response(
                 content='{"detail":"Invalid internal JWT"}',

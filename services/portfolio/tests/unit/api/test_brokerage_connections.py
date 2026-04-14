@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from httpx import ASGITransport, AsyncClient
@@ -22,7 +22,7 @@ from portfolio.domain.errors import DomainError
 from common.time import utc_now  # type: ignore[import-untyped]
 from tests.unit.fakes import FakeBrokerageClient, FakeUnitOfWork
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+pytestmark = [pytest.mark.unit]
 
 USER_ID = uuid4()
 TENANT_ID = uuid4()
@@ -52,6 +52,15 @@ def _make_app(uow: FakeUnitOfWork, brokerage_client: FakeBrokerageClient | None 
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)  # type: ignore[arg-type]
 
     app.include_router(brokerage_connections_router, prefix="/api/v1")
+
+    # Map X-User-Id / X-Tenant-Id test headers into request.state, mirroring what
+    # InternalJWTMiddleware does in production from validated JWT claims.
+    @app.middleware("http")
+    async def inject_auth_state(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.user_id = request.headers.get("X-User-Id", "")
+        request.state.tenant_id = request.headers.get("X-Tenant-Id", "")
+        return await call_next(request)
+
     return app
 
 

@@ -346,8 +346,8 @@ async def main() -> None:
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     brokerage_client = SnapTradeClient(
-        client_id=settings.snaptrade_client_id,
-        consumer_key=settings.snaptrade_consumer_key,
+        client_id=settings.snaptrade_client_id.get_secret_value(),
+        consumer_key=settings.snaptrade_consumer_key.get_secret_value(),
     )
     worker = BrokerageTransactionSyncWorker(
         session_factory=write_factory,
