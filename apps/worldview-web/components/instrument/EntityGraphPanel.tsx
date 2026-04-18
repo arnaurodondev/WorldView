@@ -1,21 +1,25 @@
 /**
- * components/instrument/EntityGraphPanel.tsx — SVG entity relationship graph
+ * components/instrument/EntityGraphPanel.tsx — SVG entity relationship graph (compact, depth=1)
  *
  * WHY THIS EXISTS: Knowledge graph visualisation helps analysts understand
  * second-order effects. If AAPL falls, the CEO (Tim Cook), competitors
  * (MSFT, GOOGL), and suppliers (TSMC, Foxconn) are all implicated. A graph
  * panel lets fund managers see these connections at a glance.
  *
- * WHY SVG (not sigma.js): sigma.js is not in package.json and would add ~200KB.
- * For MVP, a simple radial SVG layout communicates the graph structure adequately.
- * The center entity is always the focus node; related entities radiate outward.
- * Color-coded by relationship type (company=blue, person=green, event=amber).
+ * WHY SVG (not sigma.js): This panel is the Overview sidebar — compact and
+ * lightweight. The full interactive sigma.js graph lives in IntelligenceTab
+ * (EntityGraph.tsx). SVG is deterministic, zero WebGL dependency, adequate
+ * for a 320×280px compact sidebar graph.
  *
- * WHY useQuery (not prop-drilling): The graph data is large (~50 nodes for
- * depth=2). Fetching it here avoids passing a huge payload through page.tsx.
+ * WHY depth=1 (direct neighbors only): The sidebar has limited space (~320px).
+ * Depth=2 would clutter the SVG with 50+ nodes. Depth=1 gives 5–15 nodes —
+ * just the directly connected entities. The full depth=2 graph is in Intelligence tab.
+ *
+ * WHY useQuery (not prop-drilling): Fetching here isolates the graph query
+ * from the rest of the overview page data. The query caches for 10 min.
  *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Overview tab sidebar)
- * DATA SOURCE: S9 GET /v1/entities/{entityId}/graph?depth=2
+ * DATA SOURCE: S9 GET /v1/entities/{entityId}/graph?depth=1
  * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail overview, State C entity graph
  */
 
@@ -118,8 +122,10 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   const { data: graph, isLoading, isError } = useQuery({
-    queryKey: ["entity-graph", entityId],
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 2),
+    queryKey: ["entity-graph", entityId, 1],
+    // WHY depth=1: Overview sidebar is compact (~320px). Depth=1 = direct neighbors only.
+    // The full depth=2 interactive graph lives in the Intelligence tab (EntityGraph.tsx).
+    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
     enabled: !!accessToken && !!entityId,
     // WHY 10min: knowledge graph edges don't change frequently
     staleTime: 10 * 60_000,
@@ -145,10 +151,11 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
 
-  // Cap at 30 nodes to keep SVG performant; center node always included
+  // Cap at 19 neighbor nodes (+ center = 20 total) — depth=1 gives fewer nodes
+  // so this cap mostly acts as a safety guard for dense entity graphs.
   const cappedNodes = [
     graph.nodes.find((n) => n.id === entityId)!,
-    ...graph.nodes.filter((n) => n.id !== entityId).slice(0, 29),
+    ...graph.nodes.filter((n) => n.id !== entityId).slice(0, 19),
   ].filter(Boolean);
 
   const positions = computeRadialLayout(
