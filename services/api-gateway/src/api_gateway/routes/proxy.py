@@ -12,7 +12,9 @@ from api_gateway.clients import (
     ServiceClients,
     get_company_overview,
     get_map_layers,
+    get_market_heatmap,
     get_relevant_news,
+    get_top_movers,
 )
 
 if TYPE_CHECKING:
@@ -35,7 +37,8 @@ def _auth_headers(request: Request) -> dict[str, str]:
     user: dict[str, Any] | None = getattr(request.state, "user", None)
     headers: dict[str, str] = {}
     # Forward RS256 internal JWT issued by InternalJWTIssuerMiddleware
-    internal_jwt = request.headers.get("X-Internal-JWT") or request.headers.get("x-internal-jwt")
+    # F-014: Starlette headers are case-insensitive; single lookup suffices
+    internal_jwt = request.headers.get("X-Internal-JWT")
     if internal_jwt:
         headers["X-Internal-JWT"] = internal_jwt
     if not user:
@@ -484,3 +487,518 @@ async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+def _portfolio_headers(request: Request) -> dict[str, str]:
+    """Auth headers with X-Owner-ID mapping for S1 Portfolio service.
+
+    S1 expects X-Owner-ID (not X-User-Id). The OIDC user_id from request.state.user
+    is the same value — just a different header name required by S1's FastAPI route
+    parameter declarations.
+    """
+    headers = _auth_headers(request)
+    # S1 expects X-Owner-ID; map from X-User-Id
+    if user_id := headers.pop("X-User-Id", None):
+        headers["X-Owner-ID"] = user_id
+    return headers
+
+
+# ── OHLCV + Quotes + Fundamentals (PRD-0028 Wave S9-1) ──────────────────────
+
+
+@router.get("/ohlcv/{instrument_id}")
+async def get_ohlcv(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/ohlcv/{instrument_id} → S3 Market Data.
+
+    Requires authentication. Forwards query parameters (period, from, to, etc.)
+    to S3 for OHLCV bar data retrieval.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/quotes/{instrument_id}")
+async def get_quote(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/quotes/{instrument_id} → S3 Market Data.
+
+    Requires authentication. Returns the latest quote snapshot for the instrument.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/quotes/{instrument_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/quotes/batch")
+async def get_quotes_batch(request: Request) -> Any:
+    """Proxy POST /api/v1/quotes/batch → S3 Market Data.
+
+    Requires authentication. Forwards the request body containing a list of
+    instrument_ids to S3 for batch quote retrieval.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.post(
+        "/api/v1/quotes/batch",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# NOTE: /fundamentals/economic-calendar MUST be registered before /fundamentals/{instrument_id}
+# to avoid the path parameter matching "economic-calendar" as an instrument_id.
+@router.get("/fundamentals/economic-calendar")
+async def economic_calendar(request: Request) -> Any:
+    """Proxy GET /api/v1/temporal-events → S7 Knowledge Graph.
+
+    Returns upcoming macro economic events for the EconomicCalendar dashboard widget.
+    Filters for economic event type from S7's temporal events store (PRD-0018).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/temporal-events",
+        # F-010: filter out user-supplied 'type' to enforce economic-only filter
+        params={"type": "economic", **{k: v for k, v in dict(request.query_params).items() if k != "type"}},
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}")
+async def get_fundamentals(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.
+
+    Requires authentication. Forwards query parameters (fields, etc.) to S3 for
+    fundamentals data retrieval. Distinct from the public screener endpoints.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Entity Graph + Contradictions (PRD-0028 Wave S9-1) ───────────────────────
+
+
+@router.get("/entities/{entity_id}/graph")
+async def get_entity_graph(entity_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
+
+    Requires authentication. Forwards query parameters (depth, etc.) for
+    entity relationship graph traversal.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/graph",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/entities/{entity_id}/contradictions")
+async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/contradictions → S7 Knowledge Graph.
+
+    Requires authentication. Returns detected contradictions for the entity.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/contradictions",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── News (PRD-0028 Wave S9-1) ────────────────────────────────────────────────
+
+
+@router.get("/news/top")
+async def get_news_top(request: Request) -> Any:
+    """Proxy GET /v1/articles/relevant → S5 Content Store.
+
+    No authentication required — public endpoint.
+    Forwards query parameters (hours, limit, offset) unchanged.
+
+    TODO(PRD-0026): S5 endpoint path will change once PRD-0026 news intelligence
+    APIs are implemented. Update the downstream path when S5 exposes /v1/news/top.
+    """
+    clients = _clients(request)
+    resp = await clients.content_store.get(
+        "/v1/articles/relevant",
+        params=dict(request.query_params),
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/news/entity/{entity_id}")
+async def get_news_entity(entity_id: str, request: Request) -> Any:
+    """Proxy GET /v1/articles → S5 Content Store (filtered by entity_id).
+
+    Requires authentication. Forwards query parameters plus entity_id to S5
+    for entity-scoped article retrieval.
+
+    TODO(PRD-0026): S5 endpoint path will change once PRD-0026 news intelligence
+    APIs are implemented. Update the downstream path when S5 exposes
+    /v1/entities/{entity_id}/articles.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    params = dict(request.query_params)
+    params["entity_id"] = entity_id
+    resp = await clients.content_store.get(
+        "/v1/articles",
+        params=params,
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
+
+
+@router.get("/briefings/morning")
+async def get_morning_briefing(request: Request) -> Any:
+    """Proxy GET /api/v1/briefings/morning → S8 RAG/Chat service.
+
+    Requires authentication. Returns the AI-generated morning market briefing.
+
+    Note: S8 does not yet expose this GET endpoint — the proxy route will return
+    404/503 from S8 until the briefing endpoints are implemented in S8.
+    The proxy is correct and will work automatically once S8 adds the route.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.rag_chat.get(
+        "/api/v1/briefings/morning",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/briefings/instrument/{entity_id}")
+async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/briefings/instrument/{entity_id} → S8 RAG/Chat service.
+
+    Requires authentication. Returns the AI-generated briefing for a specific
+    instrument/entity.
+
+    Note: S8 does not yet expose this GET endpoint — the proxy route will return
+    404/503 from S8 until the briefing endpoints are implemented in S8.
+    The proxy is correct and will work automatically once S8 adds the route.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.rag_chat.get(
+        f"/api/v1/briefings/instrument/{entity_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
+
+
+@router.get("/portfolios")
+async def list_portfolios(request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios → S1 Portfolio service.
+
+    Requires authentication. Returns all portfolios owned by the authenticated user.
+    Uses _portfolio_headers() to map X-User-Id → X-Owner-ID as S1 expects.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/portfolios",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/holdings/{portfolio_id}")
+async def get_holdings(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/holdings/{portfolio_id} → S1 Portfolio service.
+
+    Requires authentication. Returns all holdings for the specified portfolio.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/holdings/{portfolio_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/transactions")
+async def list_transactions(request: Request) -> Any:
+    """Proxy GET /api/v1/transactions → S1 Portfolio service.
+
+    Requires authentication. Forwards query parameters (portfolio_id, limit, offset)
+    to S1 for transaction listing.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/transactions",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/transactions")
+async def create_transaction(request: Request) -> Any:
+    """Proxy POST /api/v1/transactions → S1 Portfolio service.
+
+    Requires authentication. Forwards the request body containing the transaction
+    details to S1.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/transactions",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Watchlists (PRD-0028 Wave S9-2) ─────────────────────────────────────────
+
+# TODO: PATCH /watchlists/{id} (rename) — S1 does not expose watchlist rename yet
+
+
+@router.get("/watchlists")
+async def list_watchlists(request: Request) -> Any:
+    """Proxy GET /api/v1/watchlists → S1 Portfolio service.
+
+    Requires authentication. Returns all watchlists owned by the authenticated user.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/watchlists",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/watchlists")
+async def create_watchlist(request: Request) -> Any:
+    """Proxy POST /api/v1/watchlists → S1 Portfolio service.
+
+    Requires authentication. Forwards the request body for watchlist creation.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/watchlists",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/watchlists/{watchlist_id}")
+async def get_watchlist(watchlist_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/watchlists/{watchlist_id} → S1 Portfolio service.
+
+    Requires authentication. Returns a single watchlist with its members.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/watchlists/{watchlist_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/watchlists/{watchlist_id}", status_code=200)
+async def delete_watchlist(watchlist_id: str, request: Request) -> Any:
+    """Proxy DELETE /api/v1/watchlists/{watchlist_id} → S1 Portfolio service.
+
+    Uses status_code=200 (BP-064: FastAPI ≤0.111 validation error with 204+body).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.delete(
+        f"/api/v1/watchlists/{watchlist_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/watchlists/{watchlist_id}/members")
+async def add_watchlist_member(watchlist_id: str, request: Request) -> Any:
+    """Proxy POST /api/v1/watchlists/{watchlist_id}/members → S1 Portfolio service.
+
+    Requires authentication. Forwards the entity to add as a watchlist member.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        f"/api/v1/watchlists/{watchlist_id}/members",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/watchlists/{watchlist_id}/members/{entity_id}", status_code=200)
+async def remove_watchlist_member(watchlist_id: str, entity_id: str, request: Request) -> Any:
+    """Proxy DELETE /api/v1/watchlists/{wid}/members/{eid} → S1 Portfolio service.
+
+    Uses status_code=200 (BP-064: FastAPI ≤0.111 validation error with 204+body).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.delete(
+        f"/api/v1/watchlists/{watchlist_id}/members/{entity_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Search (PRD-0028 Wave S9-3, OQ-01) ──────────────────────────────────────
+
+
+@router.get("/search/instruments")
+async def search_instruments(
+    request: Request,
+    q: str = Query("", max_length=200, description="Search query"),
+    limit: int = Query(10, ge=1, le=50),
+) -> Any:
+    """Instrument search for the top-bar command palette.
+
+    Proxies to S3 GET /api/v1/instruments with query filter.
+    No auth required — instrument names are public data.
+    """
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/instruments",
+        params={"query": q, "limit": limit},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Market Heatmap (PRD-0028 Wave S9-3, OQ-02) ──────────────────────────────
+
+
+@router.get("/market/heatmap")
+async def market_heatmap(request: Request) -> dict[str, Any]:
+    """Sector heatmap — aggregated daily_return per GICS sector.
+
+    Composed endpoint: makes 11 parallel S3 screener calls (one per sector),
+    computes average daily_return, returns HeatCell-ready data.
+    Uses asyncio.gather with return_exceptions=True (BP-114).
+    Auth required.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        return await get_market_heatmap(_clients(request))
+    except DownstreamError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
+# ── Top Movers (PRD-0028 Wave S9-3, OQ-03) ──────────────────────────────────
+
+
+@router.get("/market/top-movers")
+async def top_movers(
+    request: Request,
+    mover_type: str = Query("gainers", alias="type", description="gainers or losers"),
+    limit: int = Query(10, ge=1, le=20),
+) -> dict[str, Any]:
+    """Top gainers or losers — screener sorted by daily_return.
+
+    Composed endpoint: single S3 screener call with sort_by=daily_return.
+    Auth required.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if mover_type not in ("gainers", "losers"):
+        raise HTTPException(status_code=400, detail="type must be 'gainers' or 'losers'")
+    try:
+        return await get_top_movers(_clients(request), mover_type=mover_type, limit=limit)
+    except DownstreamError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
+# ── AI Signals stub (PRD-0028 Wave S9-3) ────────────────────────────────────
+
+
+@router.get("/signals/ai")
+async def ai_signals(request: Request) -> Any:
+    """AI price-impact signal scores (PRD-0020).
+
+    TODO: S9 does not yet have an S6 NLP Pipeline client. Returns empty list.
+    Once S9 gets an nlp_pipeline client and S6 exposes GET /api/v1/signals/price-impact,
+    replace this stub with a real proxy.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"signals": [], "total": 0}

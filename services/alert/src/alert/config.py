@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # ── Security ───────────────────────────────────────────────────────────
     admin_token: str = ""
 
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
+
     # ── Outbox dispatcher ──────────────────────────────────────────────────
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50

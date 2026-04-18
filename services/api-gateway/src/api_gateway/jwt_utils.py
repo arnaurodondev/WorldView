@@ -19,6 +19,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 _ISSUER = "worldview-gateway"
 _USER_TTL = 300  # 5 minutes
 _SYSTEM_TTL = 60  # 1 minute
+_WS_TTL = 30  # 30 seconds — short-lived for WebSocket URL token exposure
 
 
 def issue_user_jwt(
@@ -60,6 +61,34 @@ def issue_system_jwt(
         "jti": str(new_uuid7()),
         "iat": iat,
         "exp": iat + _SYSTEM_TTL,
+        "kid": kid,
+    }
+    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]
+
+
+def issue_ws_jwt(
+    user_id: str,
+    tenant_id: str,
+    private_key: RSAPrivateKey,
+    kid: str,
+) -> str:
+    """Issue a 30-second short-lived RS256 JWT for WebSocket authentication.
+
+    Why 30s TTL (not 15 min like the access token):
+    - The token appears in the WebSocket URL (?token=) and therefore in server logs
+    - Short TTL limits log-based token exposure to a narrow window
+    - Frontend fetches a fresh token before each WebSocket connection attempt
+    """
+    iat = int(utc_now().timestamp())
+    payload = {
+        "iss": _ISSUER,
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "role": "user",
+        "scope": "alerts:stream",
+        "jti": str(new_uuid7()),
+        "iat": iat,
+        "exp": iat + _WS_TTL,
         "kid": kid,
     }
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]
