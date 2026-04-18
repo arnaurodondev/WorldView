@@ -43,7 +43,8 @@ if TYPE_CHECKING:
 def _make_system_jwt() -> str:
     """HS256 JWT with role=system for integration tests.
 
-    InternalJWTMiddleware decodes without signature verification when public_key is None
+    InternalJWTMiddleware decodes without signature verification when
+    internal_jwt_skip_verification=True and public_key is None
     (JWKS server not running in integration test environment).
     """
     payload = {
@@ -162,6 +163,9 @@ def integration_settings(postgres_container: str, s1_base_url: str) -> Settings:
         log_json=False,
         s8_internal_token="test-s8-token",
         s1_internal_token="test-s1-token",
+        # F-001: skip_verification=True because JWKS server is not running
+        # in integration test environment (public_key stays None).
+        internal_jwt_skip_verification=True,
     )
 
 
@@ -220,8 +224,8 @@ async def integration_client(integration_app: Any) -> AsyncGenerator[AsyncClient
     """ASGI httpx client wired to the integration app.
 
     Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025, BP-158).
-    InternalJWTMiddleware accepts any well-formed JWT when public_key is None
-    (JWKS server not running in integration test environment).
+    InternalJWTMiddleware accepts any well-formed JWT when skip_verification=True
+    and public_key is None (JWKS server not running in integration test environment).
     """
     transport = ASGITransport(app=integration_app)
     async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as client:

@@ -15,13 +15,20 @@ from httpx import ASGITransport, AsyncClient
 pytestmark = pytest.mark.unit
 
 
-def _make_app() -> object:
+def _make_app(*, internal_jwt_skip_verification: bool = True) -> object:
+    """Create a wired app for auth guard tests.
+
+    ``internal_jwt_skip_verification`` defaults to True so that JWT tokens are
+    decoded without signature verification (no public key loaded in unit tests).
+    F-001: The middleware now returns 503 by default when the key is missing.
+    """
     settings = Settings(
         database_url="postgresql+asyncpg://x:x@localhost/x",
         service_name="alert-auth-test",
         log_json=False,
         s8_internal_token="test-s8",
         s1_internal_token="test-s1",
+        internal_jwt_skip_verification=internal_jwt_skip_verification,
     )
     app = create_app(settings)
     # Wire minimal state so routes can run past the dependency injection

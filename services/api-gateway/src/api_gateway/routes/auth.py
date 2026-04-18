@@ -6,6 +6,8 @@ Implements the PKCE auth flow (F-01..F-07) from PRD-0025:
   POST /v1/auth/refresh  — rotate refresh_token cookie → new access_token
   POST /v1/auth/logout   — revoke token, clear cookie
   GET  /v1/auth/me       — return user profile from validated access_token
+  GET  /v1/auth/register — redirect to Zitadel self-registration (OQ-05)
+  GET  /v1/auth/ws-token — issue 30-second short-lived JWT for WebSocket auth
 """
 
 from __future__ import annotations
@@ -483,3 +485,60 @@ async def me(request: Request) -> Response:
             "email_verified": email_verified,
         },
     )
+
+
+# ── Registration + WebSocket token (PRD-0028 Wave S9-2) ─────────────────────
+
+
+@router.get("/register")
+async def register(request: Request) -> Response:
+    """Redirect browser to Zitadel self-registration page (OQ-05).
+
+    Public endpoint — no authentication required.
+    Zitadel self-registration URL: {oidc_issuer_url}/ui/console/register.
+    """
+    settings = request.app.state.settings
+    registration_url = f"{settings.oidc_issuer_url}/ui/console/register"
+    return RedirectResponse(url=registration_url, status_code=302)
+
+
+@router.get("/ws-token")
+async def ws_token(request: Request) -> Response:
+    """Issue a 30-second short-lived internal JWT for WebSocket authentication.
+
+    Called by the frontend immediately before opening the alert stream WebSocket.
+    The returned token goes in ?token= on the WS URL (browser WS API cannot set headers).
+
+    Auth: requires Bearer access token (normal OIDC flow).
+    """
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+
+    user = getattr(request.state, "user", None)
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "authentication_required"})
+
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid = getattr(request.app.state, "rsa_kid", None)
+    if private_key is None or kid is None:
+        return JSONResponse(status_code=503, content={"error": "jwt_signing_unavailable"})
+
+    # Validate required claims before issuing token (F-004: reject incomplete auth state)
+    user_id = user.get("sub") or user.get("user_id")
+    tenant_id = user.get("tenant_id")
+    if not user_id or not tenant_id:
+        logger.warning("ws_token_incomplete_claims", action="ws_token", result="error")
+        return JSONResponse(status_code=401, content={"error": "incomplete_auth_claims"})
+
+    from api_gateway.jwt_utils import issue_ws_jwt
+
+    token = issue_ws_jwt(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        private_key=private_key,
+        kid=kid,
+    )
+
+    logger.info("ws_token_issued", action="ws_token", result="success")
+    return JSONResponse(status_code=200, content={"token": token, "expires_in": 30})

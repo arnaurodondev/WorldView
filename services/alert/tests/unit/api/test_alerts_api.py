@@ -56,6 +56,8 @@ def _make_app() -> FastAPI:
         log_json=False,
         s8_internal_token="test-s8-token",
         s1_internal_token="test-s1-token",
+        # F-001: skip_verification=True — no JWKS public key loaded in unit tests
+        internal_jwt_skip_verification=True,
     )
     app = create_app(settings)
     # Wire minimal state so dependency injection works without a real DB
