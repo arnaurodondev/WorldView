@@ -18,3 +18,16 @@ import "@testing-library/jest-dom";
 if (typeof window !== "undefined") {
   window.HTMLElement.prototype.scrollIntoView = function () {};
 }
+
+// WHY ResizeObserver stub: jsdom does not implement ResizeObserver (a browser
+// layout API). OHLCVChart uses ResizeObserver to resize the chart when the
+// container changes. The stub is a no-op class that satisfies the constructor
+// call without triggering layout operations.
+if (typeof window !== "undefined" && !window.ResizeObserver) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
