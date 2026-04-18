@@ -122,7 +122,7 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
 | S10 | **Alert Service** | 8010 | `alert_db` | ✅ Mature | Fan-out alerts via WebSocket, watchlist resolution, dedup, REST API, health, metrics |
 | -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |
-| -- | **Frontend** | 5173 | -- | ⏳ Scaffolded | React + Vite + TypeScript web app |
+| -- | **worldview-web** | 3001 | -- | ✅ Mature | Next.js 15 App Router + shadcn/ui · PLAN-0028 complete |
 
 **Status key**: ✅ Mature (production-ready, tested) | 🔄 In-progress (compliant scaffold, active PRD 0014) | ⏳ Planned (scaffolded only)
 
@@ -361,7 +361,11 @@ Session outcomes in `.claude/evals/sessions/`. Monthly review compounds improvem
 
 ## 13. Frontend Architecture
 
-React 18 + TypeScript strict + Vite 5 + TanStack Query v5 + lightweight-charts v4. Tests: Vitest (unit) + Playwright (E2E). Lint: ESLint 9 + Prettier. Port 5173. **Hard rule**: Frontend talks **only** to S9 (API Gateway) at `:8000`.
+**✅ Mature — PLAN-0028 complete (2026-04-17)**
+
+`apps/worldview-web/` — Next.js 15 App Router + shadcn/ui + TanStack Query v5 + lightweight-charts v4. Tests: Vitest (unit, 206 pass) + Playwright (E2E, 15 specs). Lint: ESLint 9 + TypeScript strict. Port 3001 in dev. **Hard rule**: Frontend talks **only** to S9 (API Gateway) via `/api/*` proxy rewrites.
+
+Pages: Landing · Login/Register · Dashboard (9 widgets) · Instrument Detail (4 tabs: chart/fundamentals/news/intelligence) · Screener · Portfolio · Alerts · Chat (SSE streaming) · Workspace (8 panel types) · Settings. Auth: Zitadel OIDC/PKCE, RS256 token in React state only.
 
 ---
 
