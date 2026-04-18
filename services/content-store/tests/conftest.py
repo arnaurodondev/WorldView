@@ -47,11 +47,12 @@ def app():
     test_app.include_router(dlq_router)
     test_app.include_router(documents_router)
 
-    # InternalJWTMiddleware (PRD-0025) — public_key is None in tests (no JWKS at startup),
-    # so it decodes without signature verification (graceful degradation).
+    # InternalJWTMiddleware (PRD-0025) — public_key is None in tests (no JWKS at startup).
+    # F-001: skip_verification=True allows unverified decode in unit tests only.
     test_app.add_middleware(
         InternalJWTMiddleware,
         jwks_url="http://api-gateway:8000/internal/jwks",
+        skip_verification=True,
     )
 
     # Set mock state (ASGI transport does not trigger lifespan)

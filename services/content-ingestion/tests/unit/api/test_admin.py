@@ -114,8 +114,9 @@ def mock_bronze():
 def mock_app(mock_uow, mock_bronze):
     """Create a FastAPI app with mocked state for testing."""
     from content_ingestion.app import create_app
+    from content_ingestion.config import Settings
 
-    app = create_app()
+    app = create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
 
     # Mock lifespan dependencies on app.state
     app.state.settings = MagicMock(

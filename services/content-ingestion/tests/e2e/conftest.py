@@ -213,7 +213,11 @@ def e2e_app(e2e_session_factory):
     # graceful-degradation mode (no signature verification — claims decoded as-is).
     from content_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 
-    app.add_middleware(InternalJWTMiddleware, jwks_url="http://api-gateway:8000/internal/jwks")
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url="http://api-gateway:8000/internal/jwks",
+        skip_verification=True,
+    )
 
     return app
 

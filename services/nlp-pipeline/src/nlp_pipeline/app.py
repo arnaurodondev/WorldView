@@ -173,9 +173,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave D)
     # We store the instance on app.state so lifespan can call startup() on it.
     jwks_url = f"{settings.api_gateway_url}/internal/jwks"
-    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url)
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     app.state._jwt_middleware = jwt_middleware
-    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url)
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # Middleware (must be registered before lifespan starts)
     app.add_middleware(RequestIdMiddleware)

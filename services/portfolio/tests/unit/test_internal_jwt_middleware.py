@@ -169,9 +169,9 @@ async def test_internal_jwt_middleware_skips_metrics() -> None:
 async def test_internal_jwt_middleware_returns_503_when_no_key() -> None:
     """When JWKS not loaded (public_key is None), return 503 Service Unavailable.
 
-    F-SEC-001: The fail-open path (unverified decode) was removed. Requests must be
-    rejected when the service hasn't loaded its public key yet — this prevents auth
-    bypass via timing attacks during startup.
+    F-001 / F-SEC-001: The fail-open path (unverified decode) was removed. Requests
+    must be rejected when the service hasn't loaded its public key yet — this prevents
+    auth bypass via timing attacks during startup.
     """
     app = _build_app(public_key=None)  # no key loaded
 
@@ -181,7 +181,7 @@ async def test_internal_jwt_middleware_returns_503_when_no_key() -> None:
         resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
 
     assert resp.status_code == 503
-    assert "not ready" in resp.json()["detail"].lower()
+    assert "jwks not loaded" in resp.json()["detail"].lower()
 
 
 async def test_internal_jwt_middleware_rejects_wrong_algorithm() -> None:

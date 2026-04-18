@@ -33,7 +33,10 @@ _SYSTEM_JWT = _make_system_jwt()
 
 @pytest.fixture
 def app():
-    return create_app()
+    from content_ingestion.config import Settings
+
+    settings = Settings(internal_jwt_skip_verification=True)  # type: ignore[call-arg]
+    return create_app(settings)
 
 
 @pytest.fixture

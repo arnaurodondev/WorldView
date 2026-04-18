@@ -1,8 +1,9 @@
 """Fixtures for knowledge-graph API unit tests.
 
 Overrides the read-only session dependency so tests don't need a real DB.
-InternalJWTMiddleware (PRD-0025) is included via create_app(). The api_client
-fixture includes a system JWT so protected endpoints are accessible in unit tests.
+InternalJWTMiddleware (PRD-0025) is included via create_app() with
+``internal_jwt_skip_verification=True``. The api_client fixture includes
+a system JWT so protected endpoints are accessible in unit tests.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from knowledge_graph.api.dependencies import get_readonly_session
 from knowledge_graph.app import create_app
+from knowledge_graph.config import Settings
 
 
 def _make_system_jwt() -> str:
@@ -30,12 +32,13 @@ def _make_system_jwt() -> str:
 
 
 _SYSTEM_JWT = _make_system_jwt()
+_INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _SYSTEM_JWT}
 
 
 @pytest.fixture
 def api_app():
     """FastAPI app with readonly session dependency overridden."""
-    app = create_app()
+    app = create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
 
     async def _mock_readonly_session():
         yield AsyncMock()
@@ -49,13 +52,13 @@ async def api_client(api_app):
     """ASGI test client using the overridden app.
 
     Includes X-Internal-JWT for InternalJWTMiddleware (PRD-0025).
-    When api-gateway JWKS is unavailable (public_key is None), the middleware
+    With skip_verification=True and public_key=None, the middleware
     decodes without signature verification — any structurally-valid JWT works.
     """
     transport = ASGITransport(app=api_app)
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Internal-JWT": _SYSTEM_JWT},
+        headers=_INTERNAL_HEADERS,
     ) as ac:
         yield ac

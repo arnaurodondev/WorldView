@@ -249,7 +249,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger("market_data.app")
 
     # 2. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
-    jwt_middleware = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     await jwt_middleware.startup()
 
     # 2. Tracing (optional — middleware already registered in create_app)
@@ -330,7 +334,11 @@ def create_app() -> FastAPI:
     app.state.settings = settings
 
     # Middleware — must be registered before app starts (Starlette requirement)
-    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)

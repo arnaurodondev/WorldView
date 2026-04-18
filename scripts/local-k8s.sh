@@ -123,6 +123,16 @@ EOF
         --set "ports.websecure.port=443" \
         --set ingressClass.enabled=true \
         --set ingressClass.isDefaultClass=true \
+        --set logs.access.enabled=true \
+        --set logs.access.format=json \
+        --set logs.access.fields.general.defaultmode=keep \
+        --set logs.access.fields.general.names.RequestQuery=drop \
+        --set logs.access.fields.headers.defaultmode=drop \
+        --set logs.access.fields.headers.names.User-Agent=keep \
+        --set logs.access.fields.headers.names.Content-Type=keep \
+        --set logs.access.fields.headers.names.Authorization=redact \
+        --set logs.access.fields.headers.names.X-Internal-JWT=drop \
+        --set logs.access.fields.headers.names.X-Request-ID=keep \
         --wait --timeout 120s
 
     echo ""
