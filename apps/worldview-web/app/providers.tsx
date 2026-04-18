@@ -16,6 +16,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type ReactNode } from "react";
+import { AuthProvider } from "@/contexts/AuthContext";
 
 // WHY useState for QueryClient (not module-level singleton):
 // In Next.js App Router, module-level singletons are shared across ALL requests
@@ -55,8 +56,16 @@ export function Providers({ children }: ProvidersProps) {
   const [queryClient] = useState(() => makeQueryClient());
 
   return (
+    // WHY QueryClientProvider wraps AuthProvider: Auth state depends on React Query
+    // only indirectly (via the gateway client), but placing QueryClient at the top
+    // ensures any future auth-related queries (e.g., user profile refresh) have access.
+    // AuthProvider must be INSIDE QueryClientProvider for this reason.
     <QueryClientProvider client={queryClient}>
-      {children}
+      {/* AuthProvider: manages OIDC session state (accessToken, user, isAuthenticated).
+          Must wrap all children so protected layouts can read auth state via useAuth(). */}
+      <AuthProvider>
+        {children}
+      </AuthProvider>
       {/* ReactQueryDevtools: visible only in development
           Shows cache state, query status, and timing — useful for debugging
           data freshness issues in complex dashboards */}
