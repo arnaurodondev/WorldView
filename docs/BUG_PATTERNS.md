@@ -5354,3 +5354,64 @@ In tests, pre-populate `app.state._internal_jwt_public_key = test_key` before th
 ### Prevention
 
 Never read security-critical state from `self.*` in a `BaseHTTPMiddleware` that is added via `app.add_middleware()`. Always route through `app.state` (readable via `request.app.state` in dispatch).
+
+---
+
+## BP-160 — jsdom localStorage.clear() Not a Function in Vitest + Node.js
+
+**Category**: Frontend / Testing
+**Affected areas**: Any Vitest test that calls `localStorage.clear()` in `beforeEach`
+**First seen**: PLAN-0028 Wave F-2 (2026-04-18)
+
+### Symptom
+
+```
+TypeError: localStorage.clear is not a function
+```
+
+Also preceded by:
+```
+Warning: '--localstorage-file' was provided without a valid path
+```
+
+### Root Cause
+
+Node.js 22+ has experimental `localStorage` support via `--experimental-webstorage`. When Vitest
+runs under Node.js ≥22, Node intercepts `--localstorage-file` CLI arguments and installs its own
+`localStorage` global — a non-standard object that does not implement the full `Storage` interface
+(notably missing `.clear()`). This replaces jsdom's proper `Storage` object before tests run.
+
+### Fix
+
+Use `vi.stubGlobal` to install a fully-mocked localStorage in `beforeEach`:
+
+```ts
+const localStorageMock = {
+  getItem: vi.fn<(key: string) => string | null>(() => null),
+  setItem: vi.fn<(key: string, value: string) => void>(),
+  removeItem: vi.fn<(key: string) => void>(),
+  clear: vi.fn<() => void>(),
+  length: 0 as number,
+  key: vi.fn<(index: number) => string | null>(() => null),
+};
+
+beforeEach(() => {
+  vi.stubGlobal("localStorage", localStorageMock as unknown as Storage);
+  localStorageMock.getItem.mockReturnValue(null);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+```
+
+### Why vi.fn() generic syntax matters
+
+Vitest v1+ changed the `vi.fn()` generic signature from `vi.fn<[Args], Return>()` (v0 style)
+to `vi.fn<FunctionSignature>()`. Using the old 2-arg form causes TS2558. Use single-arg form.
+
+### Prevention
+
+Never call `localStorage.clear()` directly in test setup. Always stub localStorage explicitly.
+Do NOT type the mock object as `Storage` — this strips Vitest's `Mock<...>` methods like
+`mockReturnValue`. Keep the inferred type and cast with `as unknown as Storage` only where needed.
