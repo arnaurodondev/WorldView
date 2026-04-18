@@ -156,13 +156,26 @@ export function createGateway(token?: string | null) {
     // ── Auth ─────────────────────────────────────────────────────────
 
     /**
-     * exchangeCode — exchange OIDC authorization code for tokens
-     * Called from app/callback/page.tsx after Zitadel redirect
+     * exchangeCode — PKCE token exchange with S9
+     *
+     * WHY POST (not GET): The code_verifier is sensitive (it proves ownership of
+     * the code_challenge sent during authorization). GET params appear in server
+     * logs, proxy logs, and browser history. POST body is not logged or cached.
+     *
+     * WHY S9 handles the exchange (not direct Zitadel): S9 calls Zitadel's token
+     * endpoint server-to-server, sets the httpOnly refresh cookie, and returns
+     * only the access token to the browser. The refresh token never touches
+     * browser-side JS — it stays in the httpOnly cookie (XSS-safe).
      */
-    exchangeCode(code: string, state: string): Promise<AuthCallbackResponse> {
-      return apiFetch<AuthCallbackResponse>(
-        `/v1/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-      );
+    exchangeCode(params: {
+      code: string;
+      code_verifier: string;
+      redirect_uri: string;
+    }): Promise<AuthCallbackResponse> {
+      return apiFetch<AuthCallbackResponse>("/v1/auth/callback", {
+        method: "POST",
+        body: params,
+      });
     },
 
     /**

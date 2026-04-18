@@ -43,6 +43,13 @@ const nextConfig: NextConfig = {
       process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8010",
     // App name used in TopBar, page titles, and landing page
     NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME ?? "Worldview",
+    // Zitadel OIDC configuration — used by login/callback pages for PKCE flow
+    // These are NOT secrets: they are public OIDC params that belong in the browser.
+    // The actual tokens are handled server-side by S9 (never visible in the browser).
+    NEXT_PUBLIC_ZITADEL_URL:
+      process.env.NEXT_PUBLIC_ZITADEL_URL ?? "http://localhost:8080",
+    NEXT_PUBLIC_ZITADEL_CLIENT_ID:
+      process.env.NEXT_PUBLIC_ZITADEL_CLIENT_ID ?? "worldview-web",
   },
 
   // Allow images from common financial data providers
