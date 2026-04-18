@@ -38,7 +38,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { createGateway } from "@/lib/gateway";
+import { createGateway, GatewayError } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import type { AlertPayload } from "@/types/alerts";
 
@@ -79,7 +79,11 @@ interface AlertStreamProviderProps {
 }
 
 export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
-  const { accessToken, isAuthenticated } = useAuth();
+  // WHY isLoading: guard connect() from firing while AuthProvider's initial
+  // refresh check is still in flight. Without this, a stale isAuthenticated=true
+  // value from a previous render cycle could trigger a premature WS connection
+  // before the new auth check resolves — DS-010 fix.
+  const { accessToken, isAuthenticated, isLoading } = useAuth();
 
   const [recentAlerts, setRecentAlerts] = useState<AlertPayload[]>([]);
   const [criticalQueue, setCriticalQueue] = useState<AlertPayload[]>([]);
@@ -91,6 +95,11 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
+  // WHY isMountedRef: guards against scheduling a reconnect after the component
+  // unmounts. Without this, the onclose handler (still captured on the stack)
+  // can call connect() after cleanup runs, causing a "state update on unmounted
+  // component" warning and a dangling WebSocket. Set to false in cleanup.
+  const isMountedRef = useRef(true);
 
   /** dispatch — route an incoming alert to the correct state bucket */
   const dispatch = useCallback((alert: AlertPayload) => {
@@ -109,7 +118,10 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
 
   /** connect — open a WebSocket to S10 with a fresh ws-token */
   const connect = useCallback(async () => {
-    if (!isAuthenticated || !accessToken) return;
+    // WHY check isLoading: AuthProvider fires a POST /auth/refresh on mount.
+    // Until it resolves (isLoading = false), isAuthenticated may reflect stale
+    // state from a previous render. Prevent premature connection during that window.
+    if (!isAuthenticated || !accessToken || isLoading) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return; // already connected
 
     try {
@@ -142,10 +154,23 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
       };
 
       ws.onclose = () => {
+        // Guard: if the component has already unmounted (cleanup ran), do not
+        // schedule another reconnect. Without this check, a close event that fires
+        // after unmount would call connect(), mutate wsRef, and set React state on
+        // an unmounted component — causing a memory leak and a React warning.
+        if (!isMountedRef.current) return;
+
         setIsConnected(false);
         wsRef.current = null;
 
-        // Schedule reconnect with exponential backoff
+        // Schedule reconnect with exponential backoff.
+        // WHY clearTimeout first: if connect() is called concurrently (e.g., auth
+        // token refresh re-triggers the effect), a stale timer from the previous
+        // attempt could still be pending. Clearing it prevents multiple concurrent
+        // reconnect timers from accumulating and hammering S10.
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+        }
         const delay = getBackoffDelay(attemptRef.current);
         attemptRef.current++;
 
@@ -160,22 +185,42 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
       };
 
       wsRef.current = ws;
-    } catch {
-      // WHY: ws-token fetch failed (e.g., 401 — session expired). Retry after backoff.
+    } catch (err) {
+      // WHY: ws-token fetch failed.
+      // DS-009 fix: distinguish 401 (session expired — no point retrying) from
+      // transient errors (503, network failure — backoff and retry).
+      if (err instanceof GatewayError && err.status === 401) {
+        // Session is expired. The auth context's silent refresh should handle
+        // re-authentication. No point retrying here — we'd just keep getting 401.
+        // The AlertStreamProvider will reconnect when accessToken changes.
+        setIsConnected(false);
+        return;
+      }
+      // Transient error (503, network unreachable): retry with backoff.
+      if (!isMountedRef.current) return; // guard against unmounted component
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       const delay = getBackoffDelay(attemptRef.current);
       attemptRef.current++;
       reconnectTimerRef.current = setTimeout(() => void connect(), delay);
     }
-  }, [isAuthenticated, accessToken, dispatch]);
+  }, [isAuthenticated, accessToken, dispatch, isLoading]);
 
-  // Open the WS connection when the user is authenticated
+  // Open the WS connection when the user is authenticated AND auth check complete
   useEffect(() => {
-    if (isAuthenticated && accessToken) {
+    // WHY check !isLoading: mirrors the guard inside connect() — only attempt
+    // connection once AuthProvider has finished its initial refresh check.
+    if (isAuthenticated && accessToken && !isLoading) {
       void connect();
     }
 
     // Cleanup: close WS and clear reconnect timer when auth state changes or unmount
     return () => {
+      // Signal to all pending onclose handlers that the component is gone.
+      // This prevents any in-flight close event from scheduling a reconnect
+      // after we have already cleaned up (see DS-002 fix: isMountedRef check
+      // at the top of the onclose handler).
+      isMountedRef.current = false;
+
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -189,7 +234,7 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
       }
       setIsConnected(false);
     };
-  }, [isAuthenticated, accessToken, connect]);
+  }, [isAuthenticated, accessToken, connect, isLoading]);
 
   // Dequeue: called by FlashOverlay after displaying (and dismissing) the first alert
   const dequeueCritical = useCallback(() => {

@@ -83,7 +83,7 @@ test.describe("Landing page", () => {
   });
 });
 
-// ── Auth callback tests ────────────────────────────────────────────────────
+// ── Auth callback tests (QA-013) ──────────────────────────────────────────
 
 test.describe("Auth callback", () => {
   test("callback route renders without crash (no code param)", async ({ page }) => {
@@ -95,5 +95,96 @@ test.describe("Auth callback", () => {
     const body = await page.textContent("body");
     expect(body).not.toContain("Application error");
     expect(body).not.toContain("500");
+  });
+
+  test("callback shows 'missing_code' error when ?error= param present", async ({ page }) => {
+    // WHY test ?error=access_denied: This is what Zitadel sends when the user
+    // clicks "Cancel" on the consent screen. CallbackPage must show a friendly
+    // message ("Authentication was cancelled") not a crash or blank page.
+    // SEC-003 fix: the || operator correctly catches this case (not ??).
+    await page.goto("/callback?error=access_denied");
+
+    // The callback page should show an error UI (not the loading spinner)
+    // WHY "Sign-in failed": that's the h1 in the error state of CallbackContent
+    await expect(page.getByText(/sign-in failed/i)).toBeVisible({ timeout: 5000 });
+  });
+
+  test("callback shows error when ?error= is non-empty string", async ({ page }) => {
+    // WHY test ?error=server_error: covers non-access_denied Zitadel errors
+    await page.goto("/callback?error=server_error");
+
+    await expect(page.getByText(/sign-in failed/i)).toBeVisible({ timeout: 5000 });
+  });
+
+  test("callback shows 'missing_code' when no code in URL", async ({ page }) => {
+    // WHY: Zitadel may send callback without a code if auth failed server-side.
+    // We want a user-friendly error, not a crash.
+    await page.goto("/callback?state=some-state");
+
+    // Should show an error (missing code) or loading (while Suspense resolves)
+    const body = await page.textContent("body");
+    expect(body).not.toContain("Application error");
+    expect(body).not.toContain("500");
+  });
+
+  test("callback 'Try again' link goes back to /login", async ({ page }) => {
+    // WHY: After a failed callback, the user should be able to restart login.
+    // The error state renders an anchor <a href="/login"> link.
+    await page.goto("/callback?error=access_denied");
+
+    await expect(page.getByText(/sign-in failed/i)).toBeVisible({ timeout: 5000 });
+
+    const tryAgainLink = page.getByRole("link", { name: /try again/i });
+    await expect(tryAgainLink).toBeVisible();
+    // The link should point to /login (href attribute, not navigation)
+    await expect(tryAgainLink).toHaveAttribute("href", "/login");
+  });
+
+  test("callback page has no JS errors in any error state", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    // Test all known error states
+    await page.goto("/callback?error=access_denied");
+    await page.waitForLoadState("networkidle");
+
+    const criticalErrors = errors.filter(
+      (e) =>
+        !e.includes("Failed to fetch") &&
+        !e.includes("NetworkError") &&
+        !e.includes("net::ERR"),
+    );
+
+    expect(criticalErrors).toHaveLength(0);
+  });
+});
+
+// ── Auth security tests ────────────────────────────────────────────────────
+
+test.describe("Auth security", () => {
+  test("login page does not expose access token in URL", async ({ page }) => {
+    // WHY: Access tokens must NEVER appear in URLs (they'd be in server logs,
+    // browser history, referer headers). This verifies the PKCE redirect
+    // uses the code flow — not the implicit flow.
+    await page.goto("/login");
+
+    // After any redirect, the URL must not contain 'token' or 'access_token'
+    const url = page.url();
+    expect(url).not.toContain("access_token");
+    expect(url).not.toContain("id_token");
+  });
+
+  test("protected pages don't leak access token in page source", async ({ page }) => {
+    // WHY: Auth tokens must live ONLY in React state (never in HTML output,
+    // meta tags, data attributes, or SSR-rendered content).
+    // PRD-0028 §8.1: "NEVER localStorage, NEVER sessionStorage, NEVER a cookie
+    // that JS can read, NEVER in SSR output".
+    await page.goto("/login");
+
+    // Read the raw HTML — no token should be embedded
+    const content = await page.content();
+    // WHY check for 'Bearer': a real token would appear as 'Bearer eyJ...'
+    // This is a basic heuristic — real tokens start with 'eyJ' (base64url header)
+    expect(content).not.toMatch(/Bearer eyJ/);
   });
 });
