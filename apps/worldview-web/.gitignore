@@ -1,0 +1,23 @@
+# Next.js build artifacts
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Testing artifacts
+coverage/
+playwright-report/
+test-results/
+
+# OS files
+.DS_Store
+Thumbs.db
