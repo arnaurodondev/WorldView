@@ -17,6 +17,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type ReactNode } from "react";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
 
 // WHY useState for QueryClient (not module-level singleton):
 // In Next.js App Router, module-level singletons are shared across ALL requests
@@ -64,7 +65,12 @@ export function Providers({ children }: ProvidersProps) {
       {/* AuthProvider: manages OIDC session state (accessToken, user, isAuthenticated).
           Must wrap all children so protected layouts can read auth state via useAuth(). */}
       <AuthProvider>
-        {children}
+        {/* AlertStreamProvider: opens S10 WebSocket for real-time alerts.
+            Must be INSIDE AuthProvider so it can read accessToken for ws-token fetch.
+            Wraps all children so TopBar, FlashOverlay, and AlertsPage share one WS connection. */}
+        <AlertStreamProvider>
+          {children}
+        </AlertStreamProvider>
       </AuthProvider>
       {/* ReactQueryDevtools: visible only in development
           Shows cache state, query status, and timing — useful for debugging

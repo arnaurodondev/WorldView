@@ -1,13 +1,14 @@
 /**
- * app/(app)/layout.tsx — Protected route layout guard
+ * app/(app)/layout.tsx — Protected route layout guard + shell
  *
  * WHY THIS EXISTS: All authenticated pages live under the (app)/ route group.
- * This layout checks auth state on every render and redirects unauthenticated
- * users to /login BEFORE rendering any protected content.
+ * This layout:
+ * 1. Guards against unauthenticated access (redirects to /login)
+ * 2. Renders the persistent shell (TopBar + Sidebar) around page content
  *
  * WHY A ROUTE GROUP (app): Next.js route groups (parentheses in folder name)
  * let us apply a layout to a set of pages without adding the group name to the URL.
- * So `/app/(app)/dashboard/page.tsx` maps to the URL `/dashboard` — clean URLs
+ * So `app/(app)/dashboard/page.tsx` maps to the URL `/dashboard` — clean URLs
  * without the "app" prefix showing up to users.
  *
  * WHY CLIENT COMPONENT: Auth state lives in React context (client-side only).
@@ -19,16 +20,21 @@
  * WHO USES IT: All protected pages — Dashboard, Instrument Detail, Screener,
  * Portfolio, Chat, Alerts, Workspace, Settings.
  * DATA SOURCE: AuthContext (React state)
- * DESIGN REFERENCE: PRD-0028 §6.6.1 Auth Guard
+ * DESIGN REFERENCE: PRD-0028 §6.6.1 Auth Guard, §6.5 Shell Layout
  */
 
 "use client";
 // WHY "use client": Reads AuthContext via useAuth() hook — requires client-side
 // React rendering. Server Components cannot access React context.
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { TopBar } from "@/components/shell/TopBar";
+import { Sidebar } from "@/components/shell/Sidebar";
+import { FlashOverlay } from "@/components/shell/FlashOverlay";
+import { AskAiPanel } from "@/components/shell/AskAiPanel";
+import { useAlertStream } from "@/contexts/AlertStreamContext";
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -37,6 +43,14 @@ interface AppLayoutProps {
 export default function AppLayout({ children }: AppLayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
+
+  // WHY askAiOpen state here (not in TopBar): The AskAiPanel needs to be rendered
+  // at the layout level so it floats over ALL page content. TopBar only shows the
+  // trigger button; the panel itself must be a sibling of the page content.
+  // IMPORTANT: All hooks must be called unconditionally (React rules) — even though
+  // we have early returns below, hooks must come first.
+  const [askAiOpen, setAskAiOpen] = useState(false);
+  const { unreadCount } = useAlertStream();
 
   useEffect(() => {
     // WHY check isLoading first: On first mount, AuthProvider fires a POST
@@ -76,6 +90,29 @@ export default function AppLayout({ children }: AppLayoutProps) {
     return null;
   }
 
-  // Authenticated: render the protected page content
-  return <>{children}</>;
+  // Authenticated: render the protected shell layout
+  return (
+    // WHY flex flex-col h-screen: pins the layout to viewport height so the
+    // main content area scrolls independently without moving the TopBar/Sidebar
+    <div className="flex h-screen flex-col bg-background">
+      <TopBar
+        onOpenAskAi={() => setAskAiOpen((prev) => !prev)}
+        unreadAlerts={unreadCount}
+      />
+
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
+        {/* Main content area — scrollable, fills remaining space */}
+        <main className="flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+
+      {/* FlashOverlay — full-screen critical alert overlay (z-[9999], above everything) */}
+      <FlashOverlay />
+
+      {/* AskAiPanel — floats bottom-right (z-50, below FlashOverlay) */}
+      {askAiOpen && <AskAiPanel onClose={() => setAskAiOpen(false)} />}
+    </div>
+  );
 }
