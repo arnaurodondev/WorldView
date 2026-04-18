@@ -1,0 +1,150 @@
+/**
+ * globals.css — Midnight Pro design system CSS variables + Tailwind base
+ *
+ * WHY THIS EXISTS: Defines the "Midnight Pro" color palette as CSS custom
+ * properties. All Tailwind utility classes (bg-background, text-primary, etc.)
+ * reference these variables, so changing them here updates the entire UI.
+ *
+ * PALETTE SOURCE: docs/ui/DESIGN_SYSTEM.md §2 "Color Palette — Direction B"
+ * TradingView #131722 background is the defining choice — distinguishes us
+ * from generic fintech apps that use plain black or slate-950.
+ *
+ * DARK MODE: Permanent. No :root (light) variant needed.
+ * class="dark" is set permanently on <html> (ADR-F-04).
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── Midnight Pro — Dark Theme (permanent, ADR-F-04) ─────────────── */
+  :root {
+    /* Backgrounds — elevation hierarchy from darkest (page) to lightest (hover) */
+    --background: 222 47% 11%;    /* #131722 — TradingView background */
+    --card: 215 28% 14%;          /* #1E2329 — panel/card backgrounds */
+    --muted: 213 20% 19%;         /* #2B3139 — elevated surfaces, hover states */
+    --popover: 222 47% 11%;       /* same as --background for dropdown menus */
+    --accent: 213 20% 19%;        /* same as --muted for subtle hover highlights */
+
+    /* Text — warm white primary, slate secondary for labels/timestamps */
+    --foreground: 220 14% 85%;    /* #D1D4DC — TradingView primary text */
+    --card-foreground: 220 14% 85%;
+    --popover-foreground: 220 14% 85%;
+    --muted-foreground: 220 9% 50%; /* #787B86 — labels, timestamps, axis captions */
+    --accent-foreground: 220 14% 85%;
+    --secondary: 213 20% 19%;
+    --secondary-foreground: 220 14% 85%;
+
+    /* Interactive — sky-500 accent (#0EA5E9), DISTINCTIVE from Tailwind blue-500 */
+    --primary: 199 89% 48%;       /* #0EA5E9 — sky-500 accent */
+    --primary-foreground: 222 47% 11%; /* dark text on sky button */
+
+    /* Structural */
+    --border: 213 20% 19%;        /* #2B3139 — dividers, table borders */
+    --input: 213 20% 19%;
+    --ring: 199 89% 48%;          /* focus rings match accent */
+
+    /* Destructive actions (delete, error states) */
+    --destructive: 0 63% 62%;     /* #EF5350 — TradingView muted red */
+    --destructive-foreground: 220 14% 85%;
+
+    /* ── Financial domain tokens (no Tailwind equivalent) ────────── */
+    --positive: 174 42% 40%;      /* #26A69A — TradingView teal-green (price up) */
+    --negative: 0 63% 62%;        /* #EF5350 — price down / loss */
+    --warning: 38 92% 50%;        /* #F59E0B — amber-500 alerts/warnings */
+
+    /* Border radius — slightly rounded for professional feel */
+    --radius: 0.375rem;
+  }
+
+  /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work */
+  .dark {
+    --background: 222 47% 11%;
+    --card: 215 28% 14%;
+    --muted: 213 20% 19%;
+    --popover: 222 47% 11%;
+    --accent: 213 20% 19%;
+    --foreground: 220 14% 85%;
+    --card-foreground: 220 14% 85%;
+    --popover-foreground: 220 14% 85%;
+    --muted-foreground: 220 9% 50%;
+    --accent-foreground: 220 14% 85%;
+    --secondary: 213 20% 19%;
+    --secondary-foreground: 220 14% 85%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 222 47% 11%;
+    --border: 213 20% 19%;
+    --input: 213 20% 19%;
+    --ring: 199 89% 48%;
+    --destructive: 0 63% 62%;
+    --destructive-foreground: 220 14% 85%;
+    --positive: 174 42% 40%;
+    --negative: 0 63% 62%;
+    --warning: 38 92% 50%;
+    --radius: 0.375rem;
+  }
+}
+
+@layer base {
+  /* Apply border color consistently — shadcn/ui components rely on this */
+  * {
+    @apply border-border;
+  }
+
+  /* Body: page background + text from Midnight Pro palette */
+  body {
+    @apply bg-background text-foreground;
+    /* Tabular numerals globally: ensures numbers align in columns without
+       needing to add tabular-nums to every single cell (ADR-F-15).
+       Components that show non-numeric text are unaffected. */
+    font-feature-settings: "tnum" 1;
+    /* Tight line height for information density — finance users scan fast */
+    line-height: 1.4;
+  }
+
+  /* Headings: medium weight, tight leading for compact dashboards */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-medium leading-tight;
+  }
+
+  /* Scrollbars: thin + styled to match dark theme */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+}
+
+/* ── Finance-specific utility classes ─────────────────────────── */
+@layer utilities {
+  /* .price-up / .price-down: semantic classes for P&L coloring */
+  .price-up {
+    color: hsl(var(--positive));
+  }
+  .price-down {
+    color: hsl(var(--negative));
+  }
+  .price-neutral {
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* .data-cell: compact table cell for high-density data grids */
+  .data-cell {
+    @apply px-2 py-1 text-xs font-mono tabular-nums;
+  }
+
+  /* .compact-row: Bloomberg-style tight table row */
+  .compact-row {
+    @apply h-8 border-b border-border hover:bg-muted/50 transition-colors;
+  }
+}
