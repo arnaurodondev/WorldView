@@ -17,6 +17,7 @@ def _make_settings(**kwargs):
     defaults = {
         "kafka_bootstrap_servers": "localhost:9092",
         "kafka_schema_registry_url": "http://localhost:8081",
+        "internal_jwt_skip_verification": True,
     }
     defaults.update(kwargs)
     return Settings(**defaults)  # type: ignore[call-arg]
@@ -166,7 +167,7 @@ async def test_middleware_rejects_expired_jwt_with_public_key() -> None:
     from starlette.requests import Request
     from starlette.responses import Response
 
-    mw_instance = InternalJWTMiddleware(app, jwks_url="http://mock/jwks")
+    mw_instance = InternalJWTMiddleware(app, jwks_url="http://mock/jwks", skip_verification=True)
     mw_instance._public_key = public_key
 
     called: list[bool] = []

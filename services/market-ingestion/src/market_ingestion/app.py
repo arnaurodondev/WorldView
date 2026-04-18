@@ -74,7 +74,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.read_session_factory = read_factory
 
     # 4. InternalJWTMiddleware startup (PRD-0025 Wave D)
-    jwt_middleware = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     await jwt_middleware.startup()
     app.state._jwt_middleware = jwt_middleware
 
@@ -95,7 +99,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{_settings.api_gateway_url}/internal/jwks")
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{_settings.api_gateway_url}/internal/jwks",
+        skip_verification=_settings.internal_jwt_skip_verification,
+    )
     metrics = create_metrics(service_name=_settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

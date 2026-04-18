@@ -96,7 +96,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _wire_briefing_uc(app, settings, valkey_client)
 
     # 8. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
-    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    jwt_mw = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     await jwt_mw.startup()
 
     log.info("rag_chat_started", service=settings.service_name)  # type: ignore[no-any-return]
@@ -234,7 +238,11 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
 
     # Middleware (must be registered before startup)
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{resolved.api_gateway_url}/internal/jwks")
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{resolved.api_gateway_url}/internal/jwks",
+        skip_verification=resolved.internal_jwt_skip_verification,
+    )
     metrics: Any = create_metrics(service_name=resolved.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

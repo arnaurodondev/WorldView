@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # Auth (PRD-0025 Wave D) — S9 api-gateway base URL for JWKS fetch
     api_gateway_url: str = "http://api-gateway:8000"
 
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-ingestion"
     log_level: str = "INFO"

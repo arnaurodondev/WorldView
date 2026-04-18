@@ -48,12 +48,12 @@ def _make_token(
 class _PreKeyedJWTMiddleware(InternalJWTMiddleware):
     """Subclass that accepts a pre-built public key to avoid HTTP calls in tests."""
 
-    def __init__(self, app: Any, public_key: Any) -> None:
-        super().__init__(app, jwks_url="http://unused-in-test/internal/jwks")
+    def __init__(self, app: Any, public_key: Any, *, skip_verification: bool = False) -> None:
+        super().__init__(app, jwks_url="http://unused-in-test/internal/jwks", skip_verification=skip_verification)
         self._public_key = public_key
 
 
-def _build_app(public_key: Any = None) -> FastAPI:
+def _build_app(public_key: Any = None, *, skip_verification: bool = False) -> FastAPI:
     """Build a minimal FastAPI app with _PreKeyedJWTMiddleware."""
     app = FastAPI()
 
@@ -74,7 +74,7 @@ def _build_app(public_key: Any = None) -> FastAPI:
     async def metrics_route() -> JSONResponse:
         return JSONResponse({"metric": 1})
 
-    app.add_middleware(_PreKeyedJWTMiddleware, public_key=public_key)
+    app.add_middleware(_PreKeyedJWTMiddleware, public_key=public_key, skip_verification=skip_verification)
     return app
 
 
@@ -137,10 +137,24 @@ async def test_middleware_sets_claims_on_valid_jwt() -> None:
     assert body["role"] == "user"
 
 
-async def test_middleware_passes_through_when_no_public_key() -> None:
-    """When _public_key is None (startup not called), request with token passes through."""
-    app = _build_app(public_key=None)
+async def test_middleware_returns_503_when_no_public_key_fail_closed() -> None:
+    """F-001: When _public_key is None and skip_verification=False, return 503 (fail-closed)."""
+    app = _build_app(public_key=None, skip_verification=False)
     token = "any-token-value"  # noqa: S105
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/relations", headers={"X-Internal-JWT": token})
+    assert resp.status_code == 503
+    assert "JWKS not loaded" in resp.json()["detail"]
+
+
+async def test_middleware_passes_through_when_no_public_key_skip_verification() -> None:
+    """When _public_key is None and skip_verification=True, decode without verification."""
+    app = _build_app(public_key=None, skip_verification=True)
+    token = jwt.encode(
+        {"sub": "u", "tenant_id": "t", "role": "user", "iss": "worldview-gateway", "exp": int(time.time()) + 3600},
+        "any-secret",
+        algorithm="HS256",
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/relations", headers={"X-Internal-JWT": token})
     assert resp.status_code == 200

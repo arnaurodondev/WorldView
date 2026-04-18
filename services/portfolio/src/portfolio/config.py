@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     api_gateway_url: str = "http://api-gateway:8000"
     internal_jwt_issuer: str = Field(default="worldview-gateway")
 
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
+
     # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
     # AliasChoices supports both bare SNAPTRADE_* and PORTFOLIO_SNAPTRADE_* env vars.
     snaptrade_client_id: SecretStr = Field(

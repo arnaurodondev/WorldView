@@ -154,9 +154,19 @@ def create_app() -> FastAPI:
     # startup() writes the public key to app.state._internal_jwt_public_key so the
     # separate middleware stack instance (created by add_middleware) can read it in dispatch().
     jwks_url = f"{settings.api_gateway_url}/internal/jwks"
-    jwt_middleware = InternalJWTMiddleware(app, jwks_url=jwks_url, issuer=settings.internal_jwt_issuer)
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=jwks_url,
+        issuer=settings.internal_jwt_issuer,
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     app.state._jwt_middleware = jwt_middleware
-    app.add_middleware(InternalJWTMiddleware, jwks_url=jwks_url, issuer=settings.internal_jwt_issuer)
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=jwks_url,
+        issuer=settings.internal_jwt_issuer,
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)

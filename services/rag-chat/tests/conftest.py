@@ -1,9 +1,9 @@
 """Shared test fixtures for rag-chat service.
 
 Unit tests use the full app created by create_app() with InternalJWTMiddleware included.
-The middleware degrades gracefully when public_key is None (JWKS not fetched at unit-test time),
-accepting any well-formed JWT without signature verification.
-The default `client` fixture injects a system JWT via X-Internal-JWT header (BP-134 fix).
+``internal_jwt_skip_verification=True`` is set so that when public_key is None (JWKS server
+not running in unit tests), the middleware still decodes tokens without signature verification.
+The default ``client`` fixture injects a system JWT via X-Internal-JWT header (BP-134 fix).
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ def settings() -> RagChatSettings:
         s1_internal_token="test-token",
         log_json=False,
         log_level="WARNING",
+        internal_jwt_skip_verification=True,
     )
 
 

@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     # Auth
     api_gateway_url: str = "http://api-gateway:8000"
 
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
+
     # Admin API
     admin_token: str = ""
 

@@ -130,7 +130,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = http_client
 
     # 7. JWT middleware key fetch — must run after logging is configured
-    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    jwt_mw = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     await jwt_mw.startup()
 
     log.info("service_started", service=settings.service_name)
@@ -191,7 +195,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(InternalJWTMiddleware, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)

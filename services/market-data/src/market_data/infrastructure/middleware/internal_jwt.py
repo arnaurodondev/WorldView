@@ -55,11 +55,21 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     middleware instance.
     """
 
-    def __init__(self, app: Any, jwks_url: str) -> None:
+    def __init__(self, app: Any, jwks_url: str, *, skip_verification: bool = False) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
         self._public_key: RSAPublicKey | None = None
         self._refresh_task: asyncio.Task | None = None
+        self._skip_verification = skip_verification
+
+        if self._skip_verification:
+            logger.critical(  # type: ignore[no-any-return]
+                "internal_jwt_skip_verification_enabled",
+                detail=(
+                    "InternalJWTMiddleware signature verification is DISABLED. "
+                    "This MUST NOT be used in production — any forged JWT will be accepted."
+                ),
+            )
 
     async def startup(self) -> None:
         """Fetch JWKS from S9 at startup with up to 3 retries (3-second sleep between attempts)."""
@@ -137,12 +147,26 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
         public_key = self._public_key
         if public_key is None:
-            # Public key not yet loaded (startup not completed or JWKS unavailable).
-            # Decode claims WITHOUT signature verification so that request.state is
-            # populated for downstream route handlers (e.g., role-based guards).
-            # Signature integrity is NOT enforced in this path — this is intentional
-            # for graceful degradation when the api-gateway JWKS is unavailable
-            # (e.g., E2E tests without the full stack, or transient startup delay).
+            # F-001: Fail-closed by default when JWKS public key is unavailable.
+            # Without the public key we cannot verify JWT signatures, so accepting
+            # tokens here would allow any forged JWT to pass through unchecked.
+            if not self._skip_verification:
+                logger.error(  # type: ignore[no-any-return]
+                    "internal_jwt_no_public_key",
+                    detail="JWKS public key not loaded — rejecting request (fail-closed).",
+                )
+                return Response(
+                    content='{"detail":"Service Unavailable — JWKS not loaded"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
+
+            # skip_verification=True: decode WITHOUT signature verification.
+            # This path exists ONLY for E2E tests without the full S9 stack.
+            logger.critical(  # type: ignore[no-any-return]
+                "internal_jwt_unverified_decode",
+                detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
+            )
             try:
                 payload = jwt.decode(token, options={"verify_signature": False})
                 request.state.tenant_id = payload.get("tenant_id", "")
