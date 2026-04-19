@@ -1,4 +1,12 @@
-"""Unit tests for POST /internal/v1/briefings (T-B-2-06, PRD-0016 §6.2)."""
+"""Unit tests for POST /internal/v1/briefings (T-B-2-06, PRD-0016 §6.2).
+
+F-MIN-002: These tests use httpx.AsyncClient against the FastAPI app. While they
+test at the HTTP layer, they use mocked dependencies (no real DB/Kafka) and
+run in-process, so they are classified as unit tests per project convention.
+
+F-MIN-001: @pytest.mark.asyncio is NOT required per-test because pyproject.toml
+configures ``asyncio_mode = "auto"``.
+"""
 
 from __future__ import annotations
 
@@ -44,6 +52,8 @@ def settings() -> RagChatSettings:
         s1_internal_token="s1-token",
         log_json=False,
         log_level="WARNING",
+        # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
+        internal_jwt_skip_verification=True,
     )
 
 
@@ -124,8 +134,14 @@ async def test_briefing_missing_jwt_401(settings: RagChatSettings) -> None:
     assert resp.status_code == 401
 
 
-async def test_briefing_malformed_jwt_401(settings: RagChatSettings) -> None:
-    """Malformed X-Internal-JWT (not a JWT at all) -> 401 (InternalJWTMiddleware decode error)."""
+async def test_briefing_malformed_jwt_unit_mode(settings: RagChatSettings) -> None:
+    """D-005 (unit mode): Malformed JWT with skip_verification=True -> 200.
+
+    With skip_verification=True and no public key, the middleware's DecodeError path
+    passes through with empty state. The briefing route does not check state (it accepts
+    body-provided user_id/tenant_id), so mock UC returns 200.
+    Real enforcement is tested in test_internal_jwt_middleware.py with skip_verification=False.
+    """
     app = _make_app(settings)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -134,10 +150,34 @@ async def test_briefing_malformed_jwt_401(settings: RagChatSettings) -> None:
             json=_VALID_BODY,
             headers={"X-Internal-JWT": "not.a.jwt"},
         )
-    # Middleware has no public key → tries decode without verification → DecodeError → passes through
-    # with empty state. Route does not check state so response is 200 (mock UC returns success).
-    # The real enforcement happens when the key IS loaded (tested in test_internal_jwt_middleware.py).
-    assert resp.status_code in (200, 401)
+    # Unit mode (skip_verification=True): DecodeError -> empty state -> route processes -> 200
+    assert resp.status_code == 200
+
+
+async def test_briefing_malformed_jwt_integration_mode() -> None:
+    """D-005 (integration mode): Malformed JWT with skip_verification=False -> 401.
+
+    With skip_verification=False and no public key (no lifespan in unit tests),
+    the middleware returns 503 (fail-closed F-001). However, sending a truly
+    malformed JWT to a fail-closed middleware still results in a rejection.
+    """
+    integration_settings = RagChatSettings(
+        database_url="postgresql+asyncpg://fake:fake@localhost:5432/fake_rag_db",
+        s1_internal_token="s1-token",
+        log_json=False,
+        log_level="WARNING",
+        # integration mode: skip_verification=False (default)
+    )
+    app = _make_app(integration_settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/internal/v1/briefings",
+            json=_VALID_BODY,
+            headers={"X-Internal-JWT": "not.a.jwt"},
+        )
+    # Integration mode (skip_verification=False, no public key): fail-closed -> 503
+    assert resp.status_code in (401, 503)
 
 
 # ── Rate limit ────────────────────────────────────────────────────────────────
@@ -462,3 +502,131 @@ async def test_generate_briefing_uc_no_ttl_on_subsequent_requests() -> None:
     )
 
     mock_valkey.expire.assert_not_called()
+
+
+# ── F-NIT-001: JWT role test for system rejection ────────────────────────────
+
+
+async def test_briefing_system_role_not_enforced_at_route_level(settings: RagChatSettings) -> None:
+    """F-NIT-001: The briefing route does NOT enforce role-based access control.
+
+    The ``role`` claim in the JWT is extracted by InternalJWTMiddleware and stored
+    in ``request.state.role``, but the briefing route handler does not check it.
+    A ``system`` role token is therefore accepted.  Role enforcement is by design
+    NOT implemented at the individual route level for internal-only endpoints
+    (PRD-0025 §6.5: internal JWT carries role for auditing, not gating).
+    """
+    _system_jwt = _jwt.encode(
+        {"sub": str(_USER_ID), "tenant_id": str(_TENANT_ID), "role": "system"},
+        "secret",
+        algorithm="HS256",
+    )
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/internal/v1/briefings",
+            json=_VALID_BODY,
+            headers={"X-Internal-JWT": _system_jwt},
+        )
+    # Internal endpoints do not gate on role — system tokens pass through.
+    assert resp.status_code == 200
+
+
+# ── F-NIT-002: HHI edge cases ────────────────────────────────────────────────
+
+
+async def test_generate_briefing_uc_hhi_empty_portfolio() -> None:
+    """F-NIT-002: Empty portfolio positions → concentration_score = 0.0."""
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    async def _fake_stream(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+        yield "ok"
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = _fake_stream
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={"positions": []},
+        market_snapshots=[{"symbol": "AAPL"}],
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    assert result["risk_summary"]["concentration_score"] == 0.0
+
+
+async def test_generate_briefing_uc_hhi_zero_value_holdings() -> None:
+    """F-NIT-002: All positions with value=0 → concentration_score = 0.0 (no division by zero)."""
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    async def _fake_stream(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+        yield "ok"
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = _fake_stream
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={
+            "positions": [
+                {"symbol": "AAPL", "value": 0, "sector": "tech"},
+                {"symbol": "MSFT", "value": 0, "sector": "tech"},
+            ],
+        },
+        market_snapshots=[{"symbol": "AAPL"}],
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    # total_value=0 → weights can't be computed → concentration_score stays 0.0
+    assert result["risk_summary"]["concentration_score"] == 0.0
+
+
+async def test_generate_briefing_uc_hhi_no_positions_key() -> None:
+    """F-NIT-002: Missing 'positions' key in portfolio_context → concentration_score = 0.0."""
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    async def _fake_stream(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+        yield "ok"
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = _fake_stream
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={},  # no 'positions' key at all
+        market_snapshots=[{"symbol": "AAPL"}],
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    assert result["risk_summary"]["concentration_score"] == 0.0

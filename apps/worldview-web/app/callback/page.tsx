@@ -30,6 +30,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway, GatewayError } from "@/lib/gateway";
+import { sanitizeRedirect } from "@/lib/utils";
 
 // ── Error types for user-facing messages ──────────────────────────────────────
 
@@ -38,6 +39,23 @@ type CallbackErrorType =
   | "missing_code"      // Zitadel didn't return a code (auth was cancelled or failed)
   | "exchange_failed"   // S9 token exchange returned an error
   | "missing_verifier"; // sessionStorage was cleared mid-flow (tab was closed and re-opened)
+
+// WHY whitelist: OIDC IdP redirects can include arbitrary error strings in the
+// ?error= query parameter. Without validation, a crafted redirect URL could inject
+// unexpected content into console logs or UI. Only accept known OAuth 2.0 / OIDC
+// error codes as defined in RFC 6749 §4.1.2.1 and OpenID Connect Core §3.1.2.6.
+const KNOWN_OIDC_ERRORS = new Set([
+  "access_denied",
+  "invalid_request",
+  "unauthorized_client",
+  "unsupported_response_type",
+  "invalid_scope",
+  "server_error",
+  "temporarily_unavailable",
+  "interaction_required",
+  "login_required",
+  "consent_required",
+]);
 
 const ERROR_MESSAGES: Record<CallbackErrorType, string> = {
   state_mismatch:
@@ -85,7 +103,19 @@ function CallbackContent() {
       const errorParam = searchParams.get("error");
 
       // WHY check error param: If user cancels auth, Zitadel returns ?error=access_denied
-      if (errorParam ?? !code) {
+      // WHY || not ??: nullish coalescing (??) only skips null/undefined, treating
+      // errorParam="" (empty string) as falsy — which would miss an empty error param
+      // sent by a misconfigured IdP. Logical OR (||) correctly treats any falsy value
+      // (null, undefined, "") as "no error param" and falls through to !code check.
+      if (errorParam || !code) {
+        // Sanitize the error param against a whitelist of known OIDC error codes.
+        // WHY: prevents log injection from crafted redirect URLs containing arbitrary
+        // strings in ?error=. Only known RFC 6749 / OIDC error codes are logged;
+        // anything else is replaced with the generic "unknown_error" label.
+        const safeError = errorParam && KNOWN_OIDC_ERRORS.has(errorParam)
+          ? errorParam
+          : "unknown_error";
+        console.warn("OIDC callback error:", safeError);
         setErrorType("missing_code");
         return;
       }
@@ -125,8 +155,12 @@ function CallbackContent() {
         setTokens(response.access_token, response.user, response.expires_in);
 
         // Step 6: Navigate to original destination (or dashboard as fallback)
-        const redirectTo = sessionStorage.getItem("auth_redirect_to") ?? "/dashboard";
+        // WHY sanitizeRedirect: The stored value came from a URL query param which
+        // an attacker can control. Validate it is a same-origin relative path before
+        // navigating — prevents open redirect via crafted sessionStorage value.
+        const rawRedirect = sessionStorage.getItem("auth_redirect_to");
         sessionStorage.removeItem("auth_redirect_to");
+        const redirectTo = sanitizeRedirect(rawRedirect);
 
         // WHY router.replace (not push): The callback URL should not remain
         // in browser history — hitting "back" should not re-trigger the exchange.

@@ -83,3 +83,55 @@ qa: lint typecheck test-unit
 
 test-arch:
 	python -m pytest tests/architecture/ -v --tb=short
+
+# ── Development Environment ──────────────────────────────────────────────────
+
+.PHONY: dev dev-down dev-reset dev-logs dev-ps dev-rebuild fetch-secrets fetch-secrets-prod seed
+
+## Start the full development stack (all services + dev tools + MailHog)
+dev:
+	$(COMPOSE_DEV) up -d
+	@echo ""
+	@echo "🚀 Worldview dev stack is running!"
+	@echo ""
+	@echo "  Frontend:        http://localhost:3001"
+	@echo "  API Gateway:     http://localhost:8000"
+	@echo "  MailHog:         http://localhost:8025"
+	@echo "  pgweb:           http://localhost:8091"
+	@echo "  Kafka UI:        http://localhost:8092"
+	@echo "  MinIO Console:   http://localhost:7481"
+	@echo ""
+
+COMPOSE_DEV := docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml --profile infra
+
+## Stop the development stack (--timeout 5 avoids 30s hang on workers without SIGTERM handlers)
+dev-down:
+	$(COMPOSE_DEV) down --timeout 5
+
+## Stop and remove all data (clean reset)
+dev-reset:
+	$(COMPOSE_DEV) down -v --remove-orphans --timeout 5
+
+## Show logs for all services (follow mode)
+dev-logs:
+	$(COMPOSE_DEV) logs -f --tail=50
+
+## Show container health status
+dev-ps:
+	$(COMPOSE_DEV) ps
+
+## Rebuild all images and restart
+dev-rebuild:
+	$(COMPOSE_DEV) up -d --build
+
+## Fetch secrets from worldview-config repo (requires gh CLI)
+fetch-secrets:
+	@./scripts/fetch-secrets.sh dev
+
+## Fetch production secrets from worldview-config repo
+fetch-secrets-prod:
+	@./scripts/fetch-secrets.sh prod
+
+## Seed development data (instruments, entities, sample articles)
+seed:
+	@./scripts/seed-dev-data.sh

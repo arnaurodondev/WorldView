@@ -20,6 +20,8 @@ from portfolio.application.use_cases.watchlist import (
     ListWatchlistsUseCase,
     RemoveWatchlistMemberCommand,
     RemoveWatchlistMemberUseCase,
+    RenameWatchlistCommand,
+    RenameWatchlistUseCase,
 )
 from portfolio.domain.enums import WatchlistStatus
 from portfolio.domain.errors import (
@@ -252,6 +254,62 @@ async def test_add_member_calls_cache_invalidation(
         CapturingCache(),
     )
     assert entity_id in invalidated
+
+
+# ── RenameWatchlistUseCase ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rename_watchlist_success(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    uc = RenameWatchlistUseCase()
+    cmd = RenameWatchlistCommand(
+        watchlist_id=watchlist.id,
+        owner_id=user.id,
+        tenant_id=tenant.id,
+        new_name="Renamed",
+    )
+    result = await uc.execute(cmd, uow)
+    assert result.name == "Renamed"
+
+
+@pytest.mark.asyncio
+async def test_rename_watchlist_not_found(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+) -> None:
+    uc = RenameWatchlistUseCase()
+    cmd = RenameWatchlistCommand(
+        watchlist_id=uuid4(),
+        owner_id=user.id,
+        tenant_id=tenant.id,
+        new_name="X",
+    )
+    with pytest.raises(WatchlistNotFoundError):
+        await uc.execute(cmd, uow)
+
+
+@pytest.mark.asyncio
+async def test_rename_watchlist_wrong_owner(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    uc = RenameWatchlistUseCase()
+    cmd = RenameWatchlistCommand(
+        watchlist_id=watchlist.id,
+        owner_id=uuid4(),
+        tenant_id=tenant.id,
+        new_name="X",
+    )
+    with pytest.raises(AuthorizationError):
+        await uc.execute(cmd, uow)
 
 
 # ── RemoveWatchlistMemberUseCase ───────────────────────────────────────────────

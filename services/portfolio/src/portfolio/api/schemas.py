@@ -199,6 +199,10 @@ class WatchlistCreateRequest(BaseModel):
     )
 
 
+class WatchlistRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class WatchlistResponse(BaseModel):
     id: UUID
     tenant_id: UUID

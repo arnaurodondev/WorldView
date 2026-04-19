@@ -28,7 +28,7 @@ import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ArticleImpactBadge } from "@/components/news/ArticleImpactBadge";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, safeExternalUrl } from "@/lib/utils";
 import type { Article } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
           the new page from accessing window.opener (security). noreferrer stops
           the referrer header leaking the app URL to third-party publishers. */}
       <a
-        href={article.url}
+        href={safeExternalUrl(article.url)}
         target="_blank"
         rel="noopener noreferrer"
         className="mb-1.5 block text-sm font-medium leading-snug text-foreground transition-colors group-hover:text-primary"

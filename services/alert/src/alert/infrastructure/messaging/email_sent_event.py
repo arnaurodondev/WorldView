@@ -22,11 +22,22 @@ import fastavro.schema  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from uuid import UUID
 
-# Resolve schema path relative to this file's location in the repo tree.
-# Layout: services/alert/src/alert/infrastructure/messaging/email_sent_event.py
-#                                                              ^ parents[0]
-# parents[6] = repo root
-_SCHEMA_PATH = Path(__file__).parents[6] / "infra" / "kafka" / "schemas" / "alert.email.sent.v1.avsc"
+
+def _find_schema_path(schema_name: str) -> Path:
+    """Find Avro schema file by walking up from this file to the repo/container root.
+
+    Works in both development (deep path) and Docker (shallow /app path).
+    """
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "infra" / "kafka" / "schemas" / schema_name
+        if candidate.is_file():
+            return candidate
+    msg = f"Cannot locate {schema_name} in any parent of {current}"
+    raise FileNotFoundError(msg)
+
+
+_SCHEMA_PATH = _find_schema_path("alert.email.sent.v1.avsc")
 
 _TOPIC = "alert.email.sent.v1"
 

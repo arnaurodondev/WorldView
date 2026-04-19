@@ -74,14 +74,14 @@ flowchart LR
 - Pushes to container registry (if configured)
 ```
 
-#### 6. `frontend` — Lint, typecheck, test, build
+#### 6. `test-frontend` — Lint, typecheck, test, build
 
 ```yaml
-- Runs pnpm install in apps/frontend/
+- Runs pnpm install --frozen-lockfile in apps/worldview-web/
 - ESLint + TypeScript typecheck
 - Vitest unit tests
-- Vite production build
-- Only triggered when apps/frontend/** changes
+- Next.js production build (standalone output)
+- Only triggered when apps/worldview-web/** changes
 ```
 
 ---

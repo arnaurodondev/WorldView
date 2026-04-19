@@ -91,6 +91,11 @@ export function GlobalSearch() {
             // Delay close to allow click on result item to register
             setTimeout(() => setOpen(false), 150);
           }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setOpen(false);
+            }
+          }}
           className="h-8 text-sm"
         />
 

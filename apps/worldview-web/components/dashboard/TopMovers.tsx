@@ -75,9 +75,13 @@ export function TopMovers() {
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error state — WHY muted (not destructive red): "unavailable" is a
+         transient backend issue, not a user error. Red alarming text makes the
+         dashboard look broken; muted text with a retry prompt is professional. */}
       {isError && (
-        <p className="text-sm text-destructive">Movers unavailable</p>
+        <p className="text-sm text-muted-foreground">
+          Market movers unavailable — data will appear when market data is ingested.
+        </p>
       )}
 
       {/* Movers row — horizontal scroll */}

@@ -51,10 +51,13 @@ export function MarketHeatmap() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────────
+  // WHY muted (not destructive red): backend service offline is not a user error.
   if (isError || !data) {
     return (
       <div className="flex h-24 items-center justify-center">
-        <p className="text-sm text-destructive">Heatmap unavailable</p>
+        <p className="text-sm text-muted-foreground">
+          Heatmap unavailable — sector data will appear once market data is ingested.
+        </p>
       </div>
     );
   }

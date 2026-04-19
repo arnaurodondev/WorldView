@@ -41,7 +41,9 @@ beforeEach(() => {
 
 describe("createGateway() — URL construction", () => {
   it("calls /api/v1/portfolios for getPortfolios()", async () => {
-    const spy = mockFetch(200, []);
+    // WHY {items: []}: S1 returns PaginatedResponse<PortfolioResponse> envelope.
+    // The gateway unwraps .items and maps id → portfolio_id.
+    const spy = mockFetch(200, { items: [], total: 0, limit: 100, offset: 0 });
     const gw = createGateway("test-token");
     await gw.getPortfolios();
 
@@ -50,7 +52,9 @@ describe("createGateway() — URL construction", () => {
   });
 
   it("constructs correct holdings URL with portfolio ID", async () => {
-    const spy = mockFetch(200, { portfolio_id: "p-1", holdings: [] });
+    // WHY bare array: S1 returns list[HoldingResponse] (not wrapped in an object).
+    // The gateway wraps it into HoldingsResponse = {portfolio_id, holdings: [...], ...}
+    const spy = mockFetch(200, []);
     const gw = createGateway("test-token");
     await gw.getHoldings("portfolio-123");
 
@@ -77,7 +81,8 @@ describe("createGateway() — URL construction", () => {
   });
 
   it("constructs search URL with query params", async () => {
-    const spy = mockFetch(200, { results: [], query: "apple" });
+    // WHY {items: []}: S3 returns InstrumentListResponse, gateway transforms to SearchResponse
+    const spy = mockFetch(200, { items: [], total: 0, limit: 5, offset: 0 });
     const gw = createGateway();
     await gw.searchInstruments("apple", 5);
 
@@ -101,7 +106,8 @@ describe("createGateway() — URL construction", () => {
 
 describe("createGateway() — auth headers", () => {
   it("injects Authorization header when token provided", async () => {
-    const spy = mockFetch(200, []);
+    // WHY {items: []}: S1 returns paginated envelope, gateway expects this shape
+    const spy = mockFetch(200, { items: [], total: 0, limit: 100, offset: 0 });
     const gw = createGateway("my-bearer-token");
     await gw.getPortfolios();
 
@@ -111,7 +117,8 @@ describe("createGateway() — auth headers", () => {
   });
 
   it("does not inject Authorization when no token", async () => {
-    const spy = mockFetch(200, { results: [], query: "" });
+    // WHY {items: []}: S3 InstrumentListResponse shape, gateway transforms to SearchResponse
+    const spy = mockFetch(200, { items: [], total: 0, limit: 10, offset: 0 });
     const gw = createGateway(); // no token
     await gw.searchInstruments("apple");
 
@@ -121,7 +128,7 @@ describe("createGateway() — auth headers", () => {
   });
 
   it("does not inject Authorization when null token", async () => {
-    const spy = mockFetch(200, { results: [], query: "" });
+    const spy = mockFetch(200, { items: [], total: 0, limit: 10, offset: 0 });
     const gw = createGateway(null);
     await gw.searchInstruments("test");
 
@@ -220,12 +227,252 @@ describe("createGateway() — HTTP methods", () => {
   });
 
   it("uses GET method for getPortfolios (default)", async () => {
-    const spy = mockFetch(200, []);
+    const spy = mockFetch(200, { items: [], total: 0, limit: 100, offset: 0 });
     const gw = createGateway("token");
     await gw.getPortfolios();
 
     const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
     // GET requests don't need method explicitly — should be undefined or "GET"
     expect(calledInit?.method).toBeUndefined();
+  });
+});
+
+// ── Response transformations ─────────────────────────────────────────────
+//
+// WHY THESE TESTS EXIST: The gateway transforms raw S9/S1/S3 API responses into
+// the frontend types defined in types/api.ts. These transformations are the most
+// critical code in the gateway — if a field mapping is wrong, components render
+// blank or crash. Each test uses a realistic S1/S3 response shape (verified from
+// the actual Pydantic schemas in the backend service code).
+
+describe("createGateway() — response transformations", () => {
+  it("getPortfolios() unwraps paginated response and maps id → portfolio_id", async () => {
+    // Realistic S1 PaginatedResponse<PortfolioResponse> shape
+    mockFetch(200, {
+      items: [
+        {
+          id: "p-uuid-1",
+          tenant_id: "t-uuid-1",
+          owner_id: "u-uuid-1",
+          name: "Demo Portfolio",
+          currency: "USD",
+          status: "active",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    const gw = createGateway("token");
+    const portfolios = await gw.getPortfolios();
+
+    // WHY these assertions: verify the id → portfolio_id mapping is correct
+    // and all required frontend fields are populated
+    expect(portfolios).toHaveLength(1);
+    expect(portfolios[0].portfolio_id).toBe("p-uuid-1");
+    expect(portfolios[0].name).toBe("Demo Portfolio");
+    expect(portfolios[0].currency).toBe("USD");
+    expect(portfolios[0].owner_id).toBe("u-uuid-1");
+    expect(portfolios[0].created_at).toBe("2026-01-01T00:00:00Z");
+    // updated_at defaults to created_at since S1 doesn't return it
+    expect(portfolios[0].updated_at).toBe("2026-01-01T00:00:00Z");
+  });
+
+  it("getHoldings() wraps bare array into HoldingsResponse", async () => {
+    // Realistic S1 list[HoldingResponse] — bare array with Decimal strings
+    mockFetch(200, [
+      {
+        id: "h-uuid-1",
+        portfolio_id: "p-uuid-1",
+        instrument_id: "inst-uuid-1",
+        quantity: "10.00000000",
+        average_cost: "150.50000000",
+        currency: "USD",
+      },
+    ]);
+    const gw = createGateway("token");
+    const result = await gw.getHoldings("p-uuid-1");
+
+    // WHY: verify the wrapping and Decimal string → number conversion
+    expect(result.portfolio_id).toBe("p-uuid-1");
+    expect(result.holdings).toHaveLength(1);
+    expect(result.holdings[0].holding_id).toBe("h-uuid-1");
+    expect(result.holdings[0].quantity).toBe(10);
+    expect(result.holdings[0].average_cost).toBe(150.5);
+    // P&L fields should be null (computed client-side from live quotes)
+    expect(result.total_value).toBeNull();
+    expect(result.total_unrealised_pnl).toBeNull();
+  });
+
+  it("getHoldings() handles empty array gracefully", async () => {
+    mockFetch(200, []);
+    const gw = createGateway("token");
+    const result = await gw.getHoldings("p-uuid-1");
+
+    expect(result.portfolio_id).toBe("p-uuid-1");
+    expect(result.holdings).toHaveLength(0);
+  });
+
+  it("getWatchlists() maps id → watchlist_id and user_id → owner_id", async () => {
+    // Realistic S1 list[WatchlistResponse] — bare array
+    mockFetch(200, [
+      {
+        id: "wl-uuid-1",
+        tenant_id: "t-uuid-1",
+        user_id: "u-uuid-1",
+        name: "Tech Watchlist",
+        status: "active",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    const gw = createGateway("token");
+    const watchlists = await gw.getWatchlists();
+
+    expect(watchlists).toHaveLength(1);
+    expect(watchlists[0].watchlist_id).toBe("wl-uuid-1");
+    expect(watchlists[0].owner_id).toBe("u-uuid-1");
+    expect(watchlists[0].name).toBe("Tech Watchlist");
+    // Members default to empty since list endpoint doesn't include them
+    expect(watchlists[0].members).toEqual([]);
+    expect(watchlists[0].member_count).toBe(0);
+  });
+
+  it("searchInstruments() transforms InstrumentListResponse to SearchResponse", async () => {
+    // Realistic S3 InstrumentListResponse shape
+    mockFetch(200, {
+      items: [
+        {
+          id: "inst-uuid-1",
+          security_id: "sec-1",
+          symbol: "AAPL",
+          exchange: "US",
+          is_active: true,
+          flags: { has_ohlcv: true, has_quotes: true, has_fundamentals: true },
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      total: 1,
+      limit: 10,
+      offset: 0,
+    });
+    const gw = createGateway();
+    const result = await gw.searchInstruments("AAPL");
+
+    expect(result.query).toBe("AAPL");
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].instrument_id).toBe("inst-uuid-1");
+    expect(result.results[0].ticker).toBe("AAPL");
+    expect(result.results[0].exchange).toBe("US");
+    // Name synthesised from symbol + exchange since S3 has no name field
+    expect(result.results[0].name).toBe("AAPL (US)");
+    expect(result.results[0].type).toBe("equity");
+  });
+
+  it("getPredictionMarkets() transforms items → markets with outcome probabilities", async () => {
+    // Realistic S3 PredictionMarketsListResponse shape
+    mockFetch(200, {
+      items: [
+        {
+          market_id: "pm-uuid-1",
+          question: "Will BTC reach $100k by 2027?",
+          outcomes: [
+            { name: "Yes", token_id: "tok-yes", price: 0.65 },
+            { name: "No", token_id: "tok-no", price: 0.35 },
+          ],
+          volume_24h: 125000,
+          close_time: "2027-01-01T00:00:00Z",
+          resolution_status: "open",
+          resolved_answer: null,
+          updated_at: "2026-04-01T12:00:00Z",
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    const gw = createGateway("token");
+    const result = await gw.getPredictionMarkets();
+
+    expect(result.total).toBe(1);
+    expect(result.markets).toHaveLength(1);
+    expect(result.markets[0].title).toBe("Will BTC reach $100k by 2027?");
+    expect(result.markets[0].yes_probability).toBe(0.65);
+    expect(result.markets[0].no_probability).toBe(0.35);
+    expect(result.markets[0].volume_usd).toBe(125000);
+    expect(result.markets[0].status).toBe("open");
+  });
+
+  it("getTopMovers() transforms screener results to Mover[]", async () => {
+    // Realistic S9 composed endpoint — returns raw screener results
+    mockFetch(200, {
+      results: [
+        {
+          instrument_id: "inst-1",
+          symbol: "NVDA",
+          name: "NVIDIA Corp",
+          exchange: "US",
+          metrics: { daily_return: 5.23, market_cap: 3200000000000 },
+        },
+      ],
+      total: 1,
+    });
+    const gw = createGateway("token");
+    const result = await gw.getTopMovers("gainers", 5);
+
+    expect(result.type).toBe("gainers");
+    expect(result.movers).toHaveLength(1);
+    expect(result.movers[0].ticker).toBe("NVDA");
+    expect(result.movers[0].name).toBe("NVIDIA Corp");
+    expect(result.movers[0].change_pct).toBe(5.23);
+  });
+
+  it("getTopMovers() passes through pre-shaped movers response", async () => {
+    // If S9 is updated to return the correct shape directly, it should work too
+    mockFetch(200, {
+      movers: [{ instrument_id: "i-1", ticker: "TSLA", name: "Tesla", price: 250, change_pct: 3.5, volume: 80000000 }],
+      type: "losers",
+    });
+    const gw = createGateway("token");
+    const result = await gw.getTopMovers("losers", 5);
+
+    expect(result.type).toBe("losers");
+    expect(result.movers[0].ticker).toBe("TSLA");
+    expect(result.movers[0].price).toBe(250);
+  });
+
+  it("getTransactions() unwraps paginated response and maps fields", async () => {
+    // Realistic S1 PaginatedResponse<TransactionListItem>
+    mockFetch(200, {
+      items: [
+        {
+          id: "tx-uuid-1",
+          portfolio_id: "p-uuid-1",
+          instrument_id: "inst-uuid-1",
+          transaction_type: "TRADE",
+          direction: "BUY",
+          quantity: "5.00000000",
+          price: "150.25000000",
+          fees: "1.00000000",
+          currency: "USD",
+          executed_at: "2026-04-01T10:00:00Z",
+          external_ref: null,
+          created_at: "2026-04-01T10:00:01Z",
+        },
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    const gw = createGateway("token");
+    const result = await gw.getTransactions("p-uuid-1");
+
+    expect(result.total).toBe(1);
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].transaction_id).toBe("tx-uuid-1");
+    expect(result.transactions[0].type).toBe("BUY");
+    expect(result.transactions[0].quantity).toBe(5);
+    expect(result.transactions[0].price).toBe(150.25);
+    expect(result.transactions[0].fee).toBe(1);
   });
 });

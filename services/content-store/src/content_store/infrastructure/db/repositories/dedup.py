@@ -1,13 +1,18 @@
-"""Dedup hash repository — Stage A/B hash existence checks and insertions."""
+"""Dedup hash repository — Stage A/B hash existence checks and insertions.
+
+Uses ``INSERT ... ON CONFLICT DO NOTHING`` for idempotent inserts (BP-040).
+Duplicate hash inserts (e.g. Kafka consumer re-delivery) are silently ignored
+rather than raising ``UniqueViolationError``.
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import common.ids  # type: ignore[import-untyped]
-import common.time  # type: ignore[import-untyped]
 from content_store.application.ports.repositories import DedupHashRepositoryPort
 from content_store.infrastructure.db.models import DedupHashModel
 
@@ -34,17 +39,30 @@ class DedupHashRepository(DedupHashRepositoryPort):
         return result.scalar_one_or_none()  # type: ignore[no-any-return]
 
     async def insert(self, doc_id: UUID, hash_type: str, hash_value: str) -> None:
-        """Insert a dedup hash record (raw_sha256 or normalized_sha256)."""
-        self._session.add(
-            DedupHashModel(
+        """Insert a dedup hash record (raw_sha256 or normalized_sha256).
+
+        Uses ``ON CONFLICT DO NOTHING`` on the ``uq_dedup_hashes_type_value``
+        unique constraint so duplicate inserts (e.g. Kafka re-delivery) are
+        silently ignored instead of raising ``UniqueViolationError`` (BP-040).
+        """
+        stmt = (
+            pg_insert(DedupHashModel)
+            .values(
                 hash_id=common.ids.new_uuid7(),
                 doc_id=doc_id,
                 hash_type=hash_type,
                 hash_value=hash_value,
             )
+            .on_conflict_do_nothing(
+                constraint="uq_dedup_hashes_type_value",
+            )
         )
+        await self._session.execute(stmt)
 
     async def insert_pair(self, doc_id: UUID, raw_hash: str, normalized_hash: str) -> None:
-        """Insert both Stage A (raw) and Stage B (normalized) hashes in one call."""
+        """Insert both Stage A (raw) and Stage B (normalized) hashes in one call.
+
+        Each insert is individually idempotent via ``ON CONFLICT DO NOTHING``.
+        """
         await self.insert(doc_id, "raw_sha256", raw_hash)
         await self.insert(doc_id, "normalized_sha256", normalized_hash)

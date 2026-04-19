@@ -8,8 +8,13 @@
  * 4. Handle API errors gracefully (show error states, not crash)
  *
  * This spec provides a "smoke test" sweep of all 9 protected routes using
- * the same auth mock pattern established in dashboard.spec.ts. Individual
- * pages get deeper coverage in their own spec files (workspace.spec.ts, etc.)
+ * strict per-endpoint API mocks (D-002). Individual pages get deeper coverage
+ * in their own spec files (workspace.spec.ts, etc.)
+ *
+ * D-002: strict per-endpoint mocks — no wildcard to prevent API shape drift.
+ * Each S9 endpoint is mocked individually with typed response shapes that match
+ * the actual S9 OpenAPI contract. If S9 changes a response field, the TypeScript
+ * compiler will catch the mismatch in api-mocks.ts at build time.
  *
  * COVERAGE:
  * - /dashboard, /screener, /chat, /portfolio, /alerts, /workspace, /settings
@@ -20,83 +25,12 @@
  * NOTE: These tests require `pnpm dev` running at localhost:3001.
  */
 
-import { test, expect, type Page } from "@playwright/test";
-
-// ── Shared auth mock ───────────────────────────────────────────────────────────
-
-function buildFakeToken(userId = "e2e-user"): string {
-  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }))
-    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const payload = btoa(JSON.stringify({
-    sub: userId,
-    tenant_id: "e2e-tenant",
-    email: "e2e@test.local",
-    name: "E2E Test User",
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  })).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  return `${header}.${payload}.fake-e2e-sig`;
-}
-
-/**
- * installAuthMocks — set up auth refresh + S9 data stubs before navigation.
- * WHY call before page.goto(): mocks must be registered before the first request.
- */
-async function installAuthMocks(page: Page, apiStatus = 200) {
-  const fakeToken = buildFakeToken();
-
-  await page.route("**/api/v1/auth/refresh", (route) => {
-    void route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        access_token: fakeToken,
-        expires_in: 3600,
-        user: { user_id: "e2e-user", tenant_id: "e2e-tenant", email: "e2e@test.local", name: "E2E Test User" },
-      }),
-    });
-  });
-
-  await page.route("**/api/v1/auth/ws-token", (route) => {
-    void route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ token: "fake-ws-token" }),
-    });
-  });
-
-  // WHY configurable apiStatus: some tests need to simulate 500 errors
-  // to verify pages handle backend failures gracefully (no crash, error UI shown).
-  await page.route("**/api/v1/**", (route) => {
-    if (apiStatus === 200) {
-      void route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-        // WHY provide minimal array shapes: some components call .map() on the response;
-        // returning "{}" (empty object) causes TypeError if the component expects an array.
-        results: [], items: [], alerts: [], portfolios: [], holdings: [],
-        threads: [], transactions: [], panels: [],
-      }) });
-    } else {
-      void route.fulfill({ status: apiStatus, contentType: "application/json", body: JSON.stringify({ detail: "test error" }) });
-    }
-  });
-}
-
-function collectCriticalErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  return errors;
-}
-
-function filterCriticalErrors(errors: string[]): string[] {
-  // Filter out expected non-critical errors in test environment
-  return errors.filter(
-    (e) =>
-      !e.includes("Failed to fetch") &&
-      !e.includes("NetworkError") &&
-      !e.includes("net::ERR") &&
-      !e.includes("WebSocket") &&
-      !e.includes("NEXT_REDIRECT"),
-  );
-}
+import { test, expect } from "@playwright/test";
+import {
+  installStrictApiMocks,
+  collectCriticalErrors,
+  filterCriticalErrors,
+} from "./fixtures/api-mocks";
 
 // ── Smoke tests for all protected pages ───────────────────────────────────────
 
@@ -115,11 +49,12 @@ test.describe("Authenticated page smoke tests", () => {
     test(`${label} (${route}) renders without crash when APIs return empty`, async ({ page }) => {
       const errors = collectCriticalErrors(page);
 
-      await installAuthMocks(page);
+      // D-002: strict per-endpoint mocks — each S9 route mocked individually
+      await installStrictApiMocks(page);
       await page.goto(route);
 
       // WHY wait for main: confirms the page rendered (not stuck on loading or redirected)
-      await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+      await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
       // Should not show Next.js error overlay
       await expect(page.locator("body")).not.toContainText("Application error");
@@ -136,7 +71,10 @@ test.describe("Authenticated page error resilience", () => {
       // Each widget showing an error banner is correct; a JS crash is not.
       const errors = collectCriticalErrors(page);
 
-      await installAuthMocks(page, 500);
+      // D-002: strict per-endpoint mocks with 500 status — auth endpoints still
+      // return 200 (broken auth would prevent the page from loading at all,
+      // masking the actual error-resilience behaviour we want to test).
+      await installStrictApiMocks(page, 500);
       await page.goto(route);
 
       // Page should render the shell (not redirect or crash)
@@ -158,9 +96,9 @@ test.describe("Layout integrity", () => {
     // WHY 1280px: standard laptop / Bloomberg terminal resolution
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     const overflow = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
@@ -173,9 +111,9 @@ test.describe("Layout integrity", () => {
   test("Screener has no horizontal scroll", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/screener");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     const overflow = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
@@ -188,36 +126,36 @@ test.describe("Layout integrity", () => {
 
 test.describe("Client-side navigation (no full reload)", () => {
   test("navigates from /dashboard to /screener via client-side link", async ({ page }) => {
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     // WHY use Sidebar link: The sidebar contains nav links for client-side routing.
     // A full reload would flash the loading spinner — link navigation should be instant.
-    const screenerLink = page.getByRole("link", { name: /screener/i });
+    const screenerLink = page.locator('a[href="/screener"]');
     if (await screenerLink.count() > 0) {
       await screenerLink.first().click();
       await expect(page).toHaveURL(/\/screener/, { timeout: 5000 });
-      await expect(page.getByRole("main")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByRole("main").first()).toBeVisible({ timeout: 5000 });
     } else {
       // Sidebar might use icons without text labels — navigate directly
       await page.goto("/screener");
-      await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+      await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
     }
   });
 
   test("navigates from /dashboard to /chat", async ({ page }) => {
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
-    const chatLink = page.getByRole("link", { name: /chat/i });
+    const chatLink = page.locator('a[href="/chat"]');
     if (await chatLink.count() > 0) {
       await chatLink.first().click();
       await expect(page).toHaveURL(/\/chat/, { timeout: 5000 });
     } else {
       await page.goto("/chat");
-      await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+      await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
     }
   });
 });
@@ -226,13 +164,13 @@ test.describe("Instrument detail page", () => {
   test("/instruments/:entityId renders without crash", async ({ page }) => {
     const errors = collectCriticalErrors(page);
 
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
 
     // WHY AAPL-NASDAQ: a valid entity_id format that the route accepts.
-    // The mocked API returns {} for all endpoints, so quote/ohlcv/etc. return empty.
+    // The mocked API returns empty arrays for all endpoints (strict mocks).
     await page.goto("/instruments/AAPL-NASDAQ");
 
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
     await expect(page.locator("body")).not.toContainText("Application error");
     expect(filterCriticalErrors(errors)).toHaveLength(0);
   });
@@ -249,9 +187,9 @@ test.describe("Flash overlay (CRITICAL alerts)", () => {
     // Ensure it's inert when the queue is empty — no layout shift or z-index issues.
     const errors = collectCriticalErrors(page);
 
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     // FlashOverlay should NOT be visible when no critical alerts exist
     // WHY role="alertdialog": that's the ARIA role for modal alert dialogs.
@@ -266,9 +204,9 @@ test.describe("Flash overlay (CRITICAL alerts)", () => {
 
 test.describe("AskAI panel (shell feature)", () => {
   test("Ask AI button in TopBar opens the panel", async ({ page }) => {
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     // WHY look for "Ask AI" text button: TopBar has a button that toggles AskAiPanel
     const askAiBtn = page.getByRole("button", { name: /ask ai/i });
@@ -285,9 +223,9 @@ test.describe("AskAI panel (shell feature)", () => {
   });
 
   test("Ask AI panel closes with Escape key", async ({ page }) => {
-    await installAuthMocks(page);
+    await installStrictApiMocks(page);
     await page.goto("/dashboard");
-    await expect(page.getByRole("main")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
     const askAiBtn = page.getByRole("button", { name: /ask ai/i });
     if (await askAiBtn.count() === 0) {

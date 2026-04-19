@@ -132,17 +132,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // ── Security invariant (dev only) ──────────────────────────────────────
 
-  if (process.env.NODE_ENV === "development") {
-    // This check runs on every render in dev mode.
-    // WHY: Catches accidental localStorage writes before they reach production.
-    // In production, this check is removed by the bundler (dead code elimination).
-    if (typeof window !== "undefined" && window.localStorage.getItem("access_token")) {
-      throw new Error(
-        "SECURITY VIOLATION: access_token found in localStorage. " +
-          "Auth tokens must live in React state only (PRD-0028 §8.1).",
-      );
+  useEffect(() => {
+    // WHY useEffect (not render body): Running this check in the render body
+    // causes an error on every render cycle, which can trigger error boundary
+    // loops in Strict Mode. useEffect runs once on mount, which is sufficient
+    // to catch accidental localStorage writes during development.
+    // In production, dead code elimination removes this entire block.
+    if (process.env.NODE_ENV === "development") {
+      if (typeof window !== "undefined" && window.localStorage.getItem("access_token")) {
+        // WHY console.error (not throw): Throwing in useEffect crashes the error boundary.
+        // console.error still surfaces the issue prominently in the dev console.
+        console.error(
+          "SECURITY VIOLATION: access_token found in localStorage. " +
+            "Auth tokens must live in React state only (PRD-0028 §8.1).",
+        );
+      }
     }
-  }
+  }, []); // only on mount
 
   // ── Silent refresh scheduler ───────────────────────────────────────────
 

@@ -1,0 +1,5 @@
+{
+  "name": "worldview",
+  "private": true,
+  "description": "Worldview platform — pnpm workspace root"
+}

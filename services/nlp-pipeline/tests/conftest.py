@@ -51,6 +51,7 @@ def _make_ok_session_factory() -> MagicMock:
 
 @pytest.fixture
 def app():
+    # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
     application = create_app(Settings(internal_jwt_skip_verification=True))
     # Populate the state that readyz / other endpoints require so that
     # basic health tests pass without running the full lifespan.

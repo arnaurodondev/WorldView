@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 
 pytestmark = pytest.mark.unit
@@ -30,6 +32,20 @@ def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
     resp.status_code = status
     resp.content = content
     return resp
+
+
+def _inject_rsa_keys(application) -> None:
+    """Inject real RSA keys into app state so _system_headers() can issue JWTs."""
+    from api_gateway.oidc import rsa_key_id
+
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend(),
+    )
+    application.state.rsa_private_key = private_key
+    application.state.rsa_public_key = private_key.public_key()
+    application.state.rsa_kid = rsa_key_id(private_key.public_key())
 
 
 # ── OHLCV ────────────────────────────────────────────────────────────────────
@@ -419,3 +435,31 @@ async def test_news_entity_authenticated(authed_app, authed_mock_clients) -> Non
     call_kwargs = authed_mock_clients.content_store.get.call_args[1]
     # Verify entity_id is passed as a query param to S5
     assert call_kwargs["params"]["entity_id"] == entity_id
+
+
+# ── F-02: Public proxy routes forward system JWT headers ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_news_top_sends_system_jwt_header(app, mock_clients) -> None:
+    """F-02: GET /v1/news/top (public) sends X-Internal-JWT system header to S5."""
+    _inject_rsa_keys(app)
+    mock_clients.content_store.get = AsyncMock(
+        return_value=_mock_response(200, b'{"articles": []}'),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/news/top", params={"limit": "5"})
+
+    assert resp.status_code == 200
+    # Verify X-Internal-JWT was sent to the downstream
+    call_kwargs = mock_clients.content_store.get.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs.get("headers", {})
+    # Verify the JWT is decodable and has system claims
+    from api_gateway.jwt_utils import decode_internal_jwt
+
+    token = call_kwargs["headers"]["X-Internal-JWT"]
+    payload = decode_internal_jwt(token, app.state.rsa_public_key)
+    assert payload["sub"] == "system:api-gateway"
+    assert payload["role"] == "system"

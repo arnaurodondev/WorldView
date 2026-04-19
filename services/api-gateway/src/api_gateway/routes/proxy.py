@@ -16,6 +16,7 @@ from api_gateway.clients import (
     get_relevant_news,
     get_top_movers,
 )
+from api_gateway.jwt_utils import issue_public_jwt
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -29,25 +30,39 @@ def _clients(request: Request) -> ServiceClients:
 
 
 def _auth_headers(request: Request) -> dict[str, str]:
-    """Extract auth headers (internal JWT + tenant/user IDs) for downstream services.
+    """Extract auth headers for downstream services.
 
-    Forwards ``X-Internal-JWT`` set by ``InternalJWTIssuerMiddleware`` and the
-    legacy ``X-Tenant-Id``/``X-User-Id`` headers derived from ``request.state.user``.
+    Forwards only ``X-Internal-JWT`` set by ``InternalJWTIssuerMiddleware``.
+    Backends extract tenant_id/user_id from the JWT payload via their own
+    InternalJWTMiddleware (PRD-0025). Legacy X-Tenant-Id / X-User-Id headers
+    are no longer forwarded (F-MAJOR-013 remediation).
     """
-    user: dict[str, Any] | None = getattr(request.state, "user", None)
     headers: dict[str, str] = {}
     # Forward RS256 internal JWT issued by InternalJWTIssuerMiddleware
     # F-014: Starlette headers are case-insensitive; single lookup suffices
     internal_jwt = request.headers.get("X-Internal-JWT")
     if internal_jwt:
         headers["X-Internal-JWT"] = internal_jwt
-    if not user:
-        return headers
-    if tenant_id := user.get("tenant_id"):
-        headers["X-Tenant-Id"] = str(tenant_id)
-    if user_id := user.get("sub") or user.get("user_id"):
-        headers["X-User-Id"] = str(user_id)
     return headers
+
+
+def _system_headers(request: Request) -> dict[str, str]:
+    """Issue a system-level JWT for public proxy routes.
+
+    Backend services require ``X-Internal-JWT`` on every API request
+    (InternalJWTMiddleware).  For public endpoints that don't have a real
+    user, the gateway issues a short-lived system JWT (nil-UUID user/tenant,
+    role=system) so the backend can authenticate the request.
+
+    Returns an empty dict if RSA keys are not configured (tests without
+    lifespan) — the downstream mock will not check for the header.
+    """
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid = getattr(request.app.state, "rsa_kid", None)
+    if private_key is None or kid is None:
+        return {}
+    token = issue_public_jwt(private_key, kid)
+    return {"X-Internal-JWT": token}
 
 
 # ── Company ───────────────────────────────────────────────
@@ -55,9 +70,13 @@ def _auth_headers(request: Request) -> dict[str, str]:
 
 @router.get("/companies/{company_id}/overview")
 async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
-    """Composed endpoint: fundamentals + OHLCV chart + latest news."""
+    """Composed endpoint: fundamentals + OHLCV chart + latest news.
+
+    Forwards ``X-Internal-JWT`` to all downstream calls so S3 and S5 can
+    authenticate the request via InternalJWTMiddleware.
+    """
     try:
-        return await get_company_overview(_clients(request), company_id)
+        return await get_company_overview(_clients(request), company_id, headers=_auth_headers(request))
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -70,9 +89,13 @@ async def relevant_news(
     request: Request,
     limit: int = Query(20, ge=1, le=100),
 ) -> dict[str, Any]:
-    """Most relevant news articles across all sources."""
+    """Most relevant news articles across all sources.
+
+    Public endpoint — issues a system JWT so S5's InternalJWTMiddleware
+    accepts the request.
+    """
     try:
-        return await get_relevant_news(_clients(request), limit=limit)
+        return await get_relevant_news(_clients(request), limit=limit, headers=_system_headers(request))
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -91,7 +114,12 @@ async def map_layers(request: Request) -> dict[str, Any]:
 
 @router.post("/chat")
 async def chat(request: Request) -> Any:
-    """Proxy synchronous chat request to S8 RAG/Chat service."""
+    """Proxy synchronous chat request to S8 RAG/Chat service.
+
+    Requires authentication — chat uses user context for personalised responses.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
@@ -111,10 +139,12 @@ async def chat(request: Request) -> Any:
 async def chat_stream(request: Request) -> Any:
     """Proxy SSE streaming chat to S8 — not buffered (chunked transfer).
 
-    Forwards the request body to S8 `/api/v1/chat/stream` and streams
-    back Server-Sent Events without buffering, preserving the
+    Requires authentication. Forwards the request body to S8 `/api/v1/chat/stream`
+    and streams back Server-Sent Events without buffering, preserving the
     `text/event-stream` content type.
     """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
@@ -230,15 +260,15 @@ async def update_email_preferences(request: Request) -> Any:
 async def screen_instruments(request: Request) -> Any:
     """Proxy POST /api/v1/fundamentals/screen → S3 Market Data.
 
-    Public endpoint (no auth headers forwarded).  S3 returns 400 for no filters,
-    422 for invalid metric/sort_by.
+    Public endpoint — issues a system JWT so the backend's InternalJWTMiddleware
+    accepts the request.  S3 returns 400 for no filters, 422 for invalid metric/sort_by.
     """
     body = await request.body()
     clients = _clients(request)
     resp = await clients.market_data.post(
         "/api/v1/fundamentals/screen",
         content=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_system_headers(request)},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -247,10 +277,14 @@ async def screen_instruments(request: Request) -> Any:
 async def get_screen_fields(request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/screen/fields → S3 Market Data.
 
-    Public endpoint. Returns screener field metadata (Valkey-backed, 6h refresh).
+    Public endpoint — issues a system JWT for backend authentication.
+    Returns screener field metadata (Valkey-backed, 6h refresh).
     """
     clients = _clients(request)
-    resp = await clients.market_data.get("/api/v1/fundamentals/screen/fields")
+    resp = await clients.market_data.get(
+        "/api/v1/fundamentals/screen/fields",
+        headers=_system_headers(request),
+    )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
@@ -258,12 +292,14 @@ async def get_screen_fields(request: Request) -> Any:
 async def get_fundamentals_timeseries(request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/timeseries → S3 Market Data.
 
+    Public endpoint — issues a system JWT for backend authentication.
     Forwards query parameters unchanged.
     """
     clients = _clients(request)
     resp = await clients.market_data.get(
         "/api/v1/fundamentals/timeseries",
         params=dict(request.query_params),
+        headers=_system_headers(request),
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -275,15 +311,15 @@ async def get_fundamentals_timeseries(request: Request) -> Any:
 async def find_similar_entities(request: Request) -> Any:
     """Proxy POST /api/v1/entities/similar → S7 Knowledge Graph.
 
-    Public endpoint. S7 returns 404 (entity not found), 422 (no embedding),
-    503 (pgvector unavailable).
+    Public endpoint — issues a system JWT for backend authentication.
+    S7 returns 404 (entity not found), 422 (no embedding), 503 (pgvector unavailable).
     """
     body = await request.body()
     clients = _clients(request)
     resp = await clients.knowledge_graph.post(
         "/api/v1/entities/similar",
         content=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_system_headers(request)},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -490,17 +526,12 @@ async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any
 
 
 def _portfolio_headers(request: Request) -> dict[str, str]:
-    """Auth headers with X-Owner-ID mapping for S1 Portfolio service.
+    """Auth headers for S1 Portfolio service.
 
-    S1 expects X-Owner-ID (not X-User-Id). The OIDC user_id from request.state.user
-    is the same value — just a different header name required by S1's FastAPI route
-    parameter declarations.
+    S1 now reads tenant_id/user_id from the JWT (InternalJWTMiddleware).
+    Only X-Internal-JWT is forwarded (F-MAJOR-013 remediation).
     """
-    headers = _auth_headers(request)
-    # S1 expects X-Owner-ID; map from X-User-Id
-    if user_id := headers.pop("X-User-Id", None):
-        headers["X-Owner-ID"] = user_id
-    return headers
+    return _auth_headers(request)
 
 
 # ── OHLCV + Quotes + Fundamentals (PRD-0028 Wave S9-1) ──────────────────────
@@ -649,7 +680,8 @@ async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
 async def get_news_top(request: Request) -> Any:
     """Proxy GET /v1/articles/relevant → S5 Content Store.
 
-    No authentication required — public endpoint.
+    No authentication required — public endpoint.  Issues a system JWT so S5's
+    InternalJWTMiddleware accepts the request.
     Forwards query parameters (hours, limit, offset) unchanged.
 
     TODO(PRD-0026): S5 endpoint path will change once PRD-0026 news intelligence
@@ -659,6 +691,7 @@ async def get_news_top(request: Request) -> Any:
     resp = await clients.content_store.get(
         "/v1/articles/relevant",
         params=dict(request.query_params),
+        headers=_system_headers(request),
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -813,7 +846,24 @@ async def create_transaction(request: Request) -> Any:
 
 # ── Watchlists (PRD-0028 Wave S9-2) ─────────────────────────────────────────
 
-# TODO: PATCH /watchlists/{id} (rename) — S1 does not expose watchlist rename yet
+
+@router.patch("/watchlists/{watchlist_id}")
+async def rename_watchlist(watchlist_id: str, request: Request) -> Any:
+    """Proxy PATCH /api/v1/watchlists/{watchlist_id} → S1 Portfolio service.
+
+    Requires authentication. Renames the watchlist (body: {"name": "New Name"}).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        f"/api/v1/watchlists/{watchlist_id}",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
 @router.get("/watchlists")
@@ -934,12 +984,14 @@ async def search_instruments(
     """Instrument search for the top-bar command palette.
 
     Proxies to S3 GET /api/v1/instruments with query filter.
-    No auth required — instrument names are public data.
+    No auth required — public endpoint.  Issues a system JWT so S3's
+    InternalJWTMiddleware accepts the request.
     """
     clients = _clients(request)
     resp = await clients.market_data.get(
         "/api/v1/instruments",
         params={"query": q, "limit": limit},
+        headers=_system_headers(request),
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -954,12 +1006,12 @@ async def market_heatmap(request: Request) -> dict[str, Any]:
     Composed endpoint: makes 11 parallel S3 screener calls (one per sector),
     computes average daily_return, returns HeatCell-ready data.
     Uses asyncio.gather with return_exceptions=True (BP-114).
-    Auth required.
+    Auth required. Forwards X-Internal-JWT to all downstream screener calls.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        return await get_market_heatmap(_clients(request))
+        return await get_market_heatmap(_clients(request), headers=_auth_headers(request))
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -976,29 +1028,39 @@ async def top_movers(
     """Top gainers or losers — screener sorted by daily_return.
 
     Composed endpoint: single S3 screener call with sort_by=daily_return.
-    Auth required.
+    Auth required. Forwards X-Internal-JWT to the downstream screener call.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     if mover_type not in ("gainers", "losers"):
         raise HTTPException(status_code=400, detail="type must be 'gainers' or 'losers'")
     try:
-        return await get_top_movers(_clients(request), mover_type=mover_type, limit=limit)
+        return await get_top_movers(
+            _clients(request),
+            mover_type=mover_type,
+            limit=limit,
+            headers=_auth_headers(request),
+        )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
-# ── AI Signals stub (PRD-0028 Wave S9-3) ────────────────────────────────────
+# ── AI Signals (PRD-0028 Wave S9-3 → real proxy to S6) ────────────────────
 
 
 @router.get("/signals/ai")
 async def ai_signals(request: Request) -> Any:
-    """AI price-impact signal scores (PRD-0020).
+    """Proxy GET /api/v1/signals → S6 NLP Pipeline.
 
-    TODO: S9 does not yet have an S6 NLP Pipeline client. Returns empty list.
-    Once S9 gets an nlp_pipeline client and S6 exposes GET /api/v1/signals/price-impact,
-    replace this stub with a real proxy.
+    Returns price-impact signals. Forwards query parameters (e.g., min_impact_score).
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
-    return {"signals": [], "total": 0}
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.nlp_pipeline.get(
+        "/api/v1/signals",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

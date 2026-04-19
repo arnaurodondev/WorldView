@@ -296,7 +296,7 @@ class TestValkeyLSHClientQueryPartialFailure:
         decision = await client.query(sig, "eodhd", fetch_signature=_fetch_sig)
 
         # Does not raise; found a candidate from the healthy band subset
-        assert decision.outcome != DedupOutcome.UNIQUE or True  # resilient regardless
+        assert decision.outcome != DedupOutcome.UNIQUE  # healthy bands must find the candidate
 
 
 class TestValkeyLSHClientIndexPartialFailure:

@@ -42,6 +42,7 @@ def _make_app() -> object:
         log_json=False,
         s8_internal_token="test-s8-token",
         s1_internal_token="test-s1-token",
+        # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
         # F-001: skip_verification=True — no JWKS public key loaded in unit tests
         internal_jwt_skip_verification=True,
     )
@@ -103,8 +104,6 @@ class TestGetEmailPreferences:
                 "/api/v1/email/preferences",
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 
@@ -117,37 +116,43 @@ class TestGetEmailPreferences:
         assert body["send_hour_utc"] == 8
 
     @pytest.mark.unit
-    async def test_missing_tenant_header_returns_401(self) -> None:
+    async def test_missing_jwt_returns_401(self) -> None:
+        """No X-Internal-JWT -> middleware doesn't set state -> 401."""
+        app = _make_app()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/v1/email/preferences")
+
+        assert resp.status_code == 401
+
+    @pytest.mark.unit
+    async def test_jwt_with_missing_tenant_returns_401(self) -> None:
+        """JWT without tenant_id claim -> extract_tenant_user returns 401."""
+        # JWT with only sub (user_id), no tenant_id
+        bad_jwt = jwt.encode(
+            {"sub": str(_USER_ID), "role": "user", "iss": "worldview-gateway", "exp": 9999999999},
+            "secret",
+            algorithm="HS256",
+        )
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/v1/email/preferences",
-                headers={"X-User-ID": str(_USER_ID)},
+                headers={"X-Internal-JWT": bad_jwt},
             )
 
         assert resp.status_code == 401
 
     @pytest.mark.unit
-    async def test_missing_user_header_returns_401(self) -> None:
+    async def test_malformed_jwt_returns_401(self) -> None:
+        """Malformed JWT string -> middleware decode failure -> 401."""
         app = _make_app()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/v1/email/preferences",
-                headers={"X-Tenant-ID": str(_TENANT_ID)},
-            )
-
-        assert resp.status_code == 401
-
-    @pytest.mark.unit
-    async def test_invalid_uuid_header_returns_401(self) -> None:
-        app = _make_app()
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get(
-                "/api/v1/email/preferences",
-                headers={"X-Tenant-ID": "not-a-uuid", "X-User-ID": str(_USER_ID)},
+                headers={"X-Internal-JWT": "not.a.jwt"},
             )
 
         assert resp.status_code == 401
@@ -166,8 +171,6 @@ class TestGetEmailPreferences:
                 "/api/v1/email/preferences",
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 
@@ -200,8 +203,6 @@ class TestUpdateEmailPreferences:
                 },
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 
@@ -234,8 +235,6 @@ class TestUpdateEmailPreferences:
                 json={"send_day_of_week": 7, "email_address": None},
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 
@@ -256,8 +255,6 @@ class TestUpdateEmailPreferences:
                 json={"send_day_of_week": 1, "email_address": None},
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 
@@ -280,8 +277,6 @@ class TestUpdateEmailPreferences:
                 json={"email_address": None},
                 headers={
                     "X-Internal-JWT": _INTERNAL_JWT,
-                    "X-Tenant-ID": str(_TENANT_ID),
-                    "X-User-ID": str(_USER_ID),
                 },
             )
 

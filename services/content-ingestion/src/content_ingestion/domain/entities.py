@@ -167,6 +167,21 @@ class ContentIngestionTask:
             self.status = IngestionTaskStatus.RETRY
         self.updated_at = common.time.utc_now()
 
+    def retry(self, reason: str) -> None:
+        """Transition RUNNING → RETRY unconditionally (e.g. advisory lock held).
+
+        Unlike ``fail()``, this always transitions to RETRY regardless of
+        ``attempt_count`` vs ``max_attempts``.  The attempt is not counted as
+        a true failure — it was pre-empted by contention, not an error.
+        """
+        if self.status != IngestionTaskStatus.RUNNING:
+            raise InvalidStateTransition(f"Cannot retry task in status {self.status!r}; must be RUNNING")
+        self.error_detail = reason
+        self.worker_id = None
+        self.lease_expires = None
+        self.status = IngestionTaskStatus.RETRY
+        self.updated_at = common.time.utc_now()
+
     # ── Queries ───────────────────────────────────────────────────────────
 
     @property

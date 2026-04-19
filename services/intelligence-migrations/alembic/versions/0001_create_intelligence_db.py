@@ -366,6 +366,18 @@ CREATE INDEX idx_raw_evidence_provisional ON relation_evidence_raw (provisional_
     # -------------------------------------------------------------------------
     # Block I -- relation_evidence (RANGE-partitioned by month, immutable)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
+    #
+    # COMPOSITE PK: (evidence_id, evidence_date)
+    #   PostgreSQL requires the partition key (evidence_date) in the PK for
+    #   RANGE-partitioned tables.  All queries MUST include evidence_date in
+    #   WHERE clauses for efficient partition pruning — lookups by evidence_id
+    #   alone will scan all partitions.  Use the relation_id or doc_id indexes
+    #   for typical access patterns.
+    #
+    # RETENTION: 24-month rolling window (D-004 decision).
+    #   Partitions older than 24 months are detached and dropped by the monthly
+    #   partition retention script (scripts/partition_retention.py).
+    #   See docs/runbooks/partition-retention.md for operational details.
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE relation_evidence (
@@ -454,6 +466,7 @@ CREATE INDEX idx_relation_summary_emb_hnsw ON relation_summaries
     # -------------------------------------------------------------------------
     # Block L -- claims (RANGE-partitioned by month)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
+    # RETENTION: 24-month rolling window — see scripts/partition_retention.py
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE claims (
@@ -493,6 +506,7 @@ CREATE INDEX idx_claims_by_claimer ON claims
     # -------------------------------------------------------------------------
     # Block M -- events (RANGE-partitioned by month)
     # Pre-seed 2024-01 through 2026-12 (36 partitions)
+    # RETENTION: 24-month rolling window — see scripts/partition_retention.py
     # -------------------------------------------------------------------------
     op.execute("""
 CREATE TABLE events (

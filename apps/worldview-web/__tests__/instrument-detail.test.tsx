@@ -439,6 +439,48 @@ describe("OHLCVChart", () => {
     expect(screen.getByText("1D")).toBeInTheDocument();
   });
 
+  it("shows 'Chart unavailable' fallback when dynamic import fails", async () => {
+    // WHY test this: F-CRIT-006 — if lightweight-charts fails to load (CDN down,
+    // bundle corruption, missing module), the chart component MUST show a visible
+    // fallback instead of silently rendering blank space. Financial UIs that go
+    // blank erode user trust ("is the price frozen? is the app broken?").
+    //
+    // HOW: We temporarily override the module-level mock to make the dynamic
+    // import reject with an error. The component's try-catch (added in the fix)
+    // should catch this and set chartError=true, rendering the fallback UI.
+
+    // Override the lightweight-charts mock to throw on import
+    vi.doMock("lightweight-charts", () => {
+      throw new Error("Module load failed");
+    });
+
+    // Re-import the component so it picks up the throwing mock.
+    // WHY dynamic re-import: vi.doMock only affects subsequent imports, not the
+    // module-level vi.mock above. We need a fresh import that triggers the error.
+    const { OHLCVChart: OHLCVChartWithError } = await import(
+      "@/components/instrument/OHLCVChart"
+    );
+
+    render(<OHLCVChartWithError instrumentId="ins-001" />, { wrapper });
+
+    // Wait for the error state to render (async effect → setState → re-render)
+    await waitFor(() => {
+      expect(screen.getByText("Chart unavailable")).toBeInTheDocument();
+    });
+
+    // Restore the original mock for subsequent tests
+    vi.doMock("lightweight-charts", () => ({
+      createChart: vi.fn(() => ({
+        addCandlestickSeries: vi.fn(() => ({
+          setData: vi.fn(),
+        })),
+        applyOptions: vi.fn(),
+        timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+        remove: vi.fn(),
+      })),
+    }));
+  });
+
   it("does not show skeleton when loading but initial bars provided", () => {
     const initialBars = [
       { timestamp: "2026-04-16T00:00:00Z", open: 185.0, high: 188.0, low: 184.0, close: 187.43, volume: 52000000 },

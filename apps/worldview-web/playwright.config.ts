@@ -10,6 +10,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  testMatch: "**/*.spec.ts",
   // Run in parallel across multiple workers for speed
   fullyParallel: true,
   // Fail the build on CI if tests are accidentally left in focused/todo state

@@ -53,9 +53,13 @@ export function EconomicCalendar() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────────
+  // WHY muted (not destructive red): backend service offline is not a user error.
+  // Muted text avoids making the dashboard look broken.
   if (isError) {
     return (
-      <p className="text-sm text-destructive">Calendar unavailable</p>
+      <p className="text-sm text-muted-foreground">
+        Economic calendar unavailable — events will appear once macro data is ingested.
+      </p>
     );
   }
 

@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 
 pytestmark = pytest.mark.unit
@@ -33,6 +35,20 @@ def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
     resp.text = content.decode()
     resp.json.return_value = json.loads(content)
     return resp
+
+
+def _inject_rsa_keys(application) -> None:
+    """Inject real RSA keys into app state so _system_headers() can issue JWTs."""
+    from api_gateway.oidc import rsa_key_id
+
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend(),
+    )
+    application.state.rsa_private_key = private_key
+    application.state.rsa_public_key = private_key.public_key()
+    application.state.rsa_kid = rsa_key_id(private_key.public_key())
 
 
 # ── Search instruments ───────────────────────────────────────────────────────
@@ -243,12 +259,15 @@ async def test_economic_calendar_proxies_to_s7(authed_app, authed_mock_clients) 
     assert call_kwargs["params"]["type"] == "economic"
 
 
-# ── AI signals stub ──────────────────────────────────────────────────────────
+# ── AI signals proxy (PLAN-0029: stub replaced with real S6 proxy) ──���────────
 
 
 @pytest.mark.asyncio
-async def test_ai_signals_stub_returns_empty(authed_app, authed_mock_clients) -> None:
-    """GET /v1/signals/ai returns empty stub response."""
+async def test_ai_signals_proxy_to_s6(authed_app, authed_mock_clients) -> None:
+    """GET /v1/signals/ai proxies to S6 NLP Pipeline (no longer a stub)."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(
+        return_value=_mock_response(200, b'{"signals": [{"id": "s1"}], "total": 1}'),
+    )
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
@@ -258,8 +277,9 @@ async def test_ai_signals_stub_returns_empty(authed_app, authed_mock_clients) ->
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["signals"] == []
-    assert body["total"] == 0
+    assert body["signals"] == [{"id": "s1"}]
+    assert body["total"] == 1
+    authed_mock_clients.nlp_pipeline.get.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -270,6 +290,38 @@ async def test_ai_signals_requires_auth(app, mock_clients) -> None:
         resp = await client.get("/v1/signals/ai")
 
     assert resp.status_code == 401
+
+
+# ── Watchlist rename proxy (PLAN-0029) ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_watchlist_proxy_requires_auth(app, mock_clients) -> None:
+    """PATCH /v1/watchlists/{id} without auth → 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch("/v1/watchlists/wl-1", json={"name": "X"})
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_patch_watchlist_proxy_forwards_body(authed_app, authed_mock_clients) -> None:
+    """PATCH /v1/watchlists/{id} forwards body to S1 with portfolio headers."""
+    authed_mock_clients.portfolio.patch = AsyncMock(
+        return_value=_mock_response(200, b'{"id": "wl-1", "name": "Renamed"}'),
+    )
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch(
+            "/v1/watchlists/wl-1",
+            json={"name": "Renamed"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Renamed"
+    authed_mock_clients.portfolio.patch.assert_called_once()
 
 
 # ── F-002: Downstream error handling ────────────────────────────────────────
@@ -384,3 +436,23 @@ async def test_search_instruments_downstream_error(app, mock_clients) -> None:
 
     assert resp.status_code == 500
     mock_clients.market_data.get.assert_called_once()
+
+
+# ── F-02: Search instruments sends system JWT ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_instruments_sends_system_jwt(app, mock_clients) -> None:
+    """F-02: GET /v1/search/instruments (public) sends X-Internal-JWT to S3."""
+    _inject_rsa_keys(app)
+    mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items": [], "total": 0}'),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/search/instruments", params={"q": "AAPL"})
+
+    assert resp.status_code == 200
+    call_kwargs = mock_clients.market_data.get.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs.get("headers", {})

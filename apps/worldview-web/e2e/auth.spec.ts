@@ -61,15 +61,15 @@ test.describe("Landing page", () => {
   test("renders the hero section", async ({ page }) => {
     await page.goto("/");
 
-    // Landing page should display the product name
-    await expect(page.getByText(/Worldview/i)).toBeVisible();
+    // Landing page should display the primary hero heading
+    await expect(page.getByRole("heading", { name: /market intelligence terminal/i })).toBeVisible();
   });
 
   test("Sign In link navigates to /login", async ({ page }) => {
     await page.goto("/");
 
     // Find and click the Sign In CTA
-    const signInLink = page.getByRole("link", { name: /sign in/i });
+    const signInLink = page.getByRole("link", { name: /sign in/i }).first();
     if (await signInLink.count() > 0) {
       await signInLink.click();
       await expect(page).toHaveURL(/\/login/);
@@ -146,7 +146,7 @@ test.describe("Auth callback", () => {
 
     // Test all known error states
     await page.goto("/callback?error=access_denied");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const criticalErrors = errors.filter(
       (e) =>
@@ -156,6 +156,114 @@ test.describe("Auth callback", () => {
     );
 
     expect(criticalErrors).toHaveLength(0);
+  });
+});
+
+// ── Auth success path tests (F-MAJOR-007) ─────────────────────────────────
+
+test.describe("Auth callback success path", () => {
+  test("callback with valid code + state exchanges tokens and redirects to dashboard", async ({ page }) => {
+    // WHY test success path: the callback page is the hinge of the entire
+    // authentication flow. Error paths are tested above but the HAPPY path
+    // (code exchange succeeds → user lands on /dashboard) was missing.
+    // Without this test, a regression in the exchange logic would only be
+    // caught in production.
+
+    // Step 1: Mock S9 POST /api/v1/auth/callback to return a valid token response.
+    // WHY route mock: we can't run a real S9 in e2e tests, so we simulate the
+    // token exchange response that S9 would return after validating with Zitadel.
+    await page.route("**/api/v1/auth/callback", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          access_token: "mock-access-token-for-e2e",
+          expires_in: 3600,
+          user: {
+            user_id: "test-uid",
+            tenant_id: "test-tid",
+            email: "test@example.com",
+            name: "Test User",
+          },
+        }),
+      }),
+    );
+
+    // Also mock the auth refresh endpoint so the dashboard page can load after redirect
+    await page.route("**/api/v1/auth/refresh", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          access_token: "mock-access-token-for-e2e",
+          expires_in: 3600,
+          user: {
+            user_id: "test-uid",
+            tenant_id: "test-tid",
+            email: "test@example.com",
+            name: "Test User",
+          },
+        }),
+      }),
+    );
+
+    // Mock the ws-token endpoint (AlertStreamContext connects on auth)
+    await page.route("**/api/v1/auth/ws-token", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ token: "fake-ws-token" }),
+      }),
+    );
+
+    // Mock data endpoints that dashboard will request after redirect
+    // WHY wildcard for data endpoints here: this test focuses on the auth
+    // redirect behaviour, not API contract shapes. The authenticated-pages
+    // tests cover strict endpoint mocks (D-002).
+    await page.route("**/api/v1/portfolios", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    );
+    await page.route("**/api/v1/watchlists", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    );
+    await page.route("**/api/v1/news/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], total: 0 }) }),
+    );
+    await page.route("**/api/v1/market/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sectors: [], movers: [] }) }),
+    );
+    await page.route("**/api/v1/alerts/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], total: 0 }) }),
+    );
+    await page.route("**/api/v1/briefings/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sections: [] }) }),
+    );
+    await page.route("**/api/v1/signals/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ signals: [], markets: [] }) }),
+    );
+    await page.route("**/api/v1/fundamentals/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events: [] }) }),
+    );
+
+    // Step 2: Set up PKCE state in sessionStorage BEFORE navigation.
+    // WHY addInitScript: sessionStorage must be populated before the callback
+    // page reads it. addInitScript runs in the page context before any JS executes.
+    // The "pkce_state" value must match the ?state= query param (CSRF check).
+    await page.addInitScript(() => {
+      sessionStorage.setItem("pkce_state", "test-state-123");
+      sessionStorage.setItem("pkce_verifier", "test-verifier-abc");
+    });
+
+    // Step 3: Navigate to the callback URL with valid OIDC params.
+    // WHY ?code=valid-code&state=test-state-123: simulates what Zitadel sends
+    // after a successful user authentication. The state must match the one
+    // stored in sessionStorage (set in Step 2).
+    await page.goto("/callback?code=valid-code&state=test-state-123");
+
+    // Step 4: Verify the callback exchanges tokens and redirects to /dashboard.
+    // WHY waitForURL with timeout: the exchange is async (POST to S9 mock) and
+    // the redirect uses router.replace() which is also async.
+    await page.waitForURL("**/dashboard", { timeout: 10000 });
   });
 });
 

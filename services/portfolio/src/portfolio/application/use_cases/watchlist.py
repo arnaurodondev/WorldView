@@ -1,7 +1,8 @@
-"""Watchlist use cases — create, get, list, delete, add member, remove member."""
+"""Watchlist use cases — create, get, list, delete, rename, add member, remove member."""
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -172,6 +173,33 @@ class DeleteWatchlistUseCase:
         )
         await uow.commit()
         logger.info("watchlist_deleted", watchlist_id=str(cmd.watchlist_id))
+
+
+@dataclass(frozen=True)
+class RenameWatchlistCommand:
+    watchlist_id: UUID
+    owner_id: UUID
+    tenant_id: UUID
+    new_name: str
+
+
+class RenameWatchlistUseCase:
+    async def execute(self, cmd: RenameWatchlistCommand, uow: UnitOfWork) -> Watchlist:
+        watchlist = await _fetch_watchlist_for_owner(cmd.watchlist_id, cmd.owner_id, cmd.tenant_id, uow)
+
+        # Watchlist is a frozen dataclass — construct a new instance with the updated name.
+        renamed = dataclasses.replace(watchlist, name=cmd.new_name)
+        await uow.watchlists.save(renamed)
+
+        # TODO: emit outbox event for watchlist.renamed — event type not yet in the event mapper
+        await uow.commit()
+        logger.info(
+            "watchlist_renamed",
+            watchlist_id=str(cmd.watchlist_id),
+            old_name=watchlist.name,
+            new_name=cmd.new_name,
+        )
+        return renamed
 
 
 @dataclass

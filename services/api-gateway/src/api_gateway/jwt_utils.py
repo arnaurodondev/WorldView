@@ -19,7 +19,12 @@ from common.time import utc_now  # type: ignore[import-untyped]
 _ISSUER = "worldview-gateway"
 _USER_TTL = 300  # 5 minutes
 _SYSTEM_TTL = 60  # 1 minute
+_PUBLIC_TTL = 60  # 1 minute — short-lived JWT for public proxy routes
 _WS_TTL = 30  # 30 seconds — short-lived for WebSocket URL token exposure
+
+# Nil UUID used as user_id and tenant_id for public/anonymous proxy requests.
+# Backends recognise this as a system-level request with no real user context.
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def issue_user_jwt(
@@ -61,6 +66,32 @@ def issue_system_jwt(
         "jti": str(new_uuid7()),
         "iat": iat,
         "exp": iat + _SYSTEM_TTL,
+        "kid": kid,
+    }
+    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]
+
+
+def issue_public_jwt(
+    private_key: RSAPrivateKey,
+    kid: str,
+) -> str:
+    """Issue a system-level RS256 JWT for public proxy routes (valid 60 s).
+
+    Used when the gateway proxies a public (no-auth) endpoint to a backend
+    service that still requires a valid ``X-Internal-JWT``.  The JWT carries
+    a nil UUID for user_id/tenant_id and ``role: "system"`` so backends can
+    distinguish system-level traffic from real user requests.
+    """
+    iat = int(utc_now().timestamp())
+    payload = {
+        "iss": _ISSUER,
+        "sub": "system:api-gateway",
+        "user_id": _NIL_UUID,
+        "tenant_id": _NIL_UUID,
+        "role": "system",
+        "jti": str(new_uuid7()),
+        "iat": iat,
+        "exp": iat + _PUBLIC_TTL,
         "kid": kid,
     }
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]

@@ -66,9 +66,14 @@ class ContentIngestionOutboxDispatcher(BaseOutboxDispatcher):
         return self._producer
 
     def get_serializer(self, event_type: str) -> Any:
-        # Serialization is handled by OutboxEventValueSerializer registered
-        # on the producer at construction time — this method is unused but
-        # required by the abstract interface.
+        """Return the Avro value serializer for a given event type.
+
+        The ``OutboxEventValueSerializer`` multiplexes per-topic serializers
+        internally, so this method delegates to the shared instance.  The
+        ``event_type`` parameter is accepted for interface compatibility with
+        ``BaseOutboxDispatcher`` but is not used for routing here — the
+        serializer routes based on the ``topic`` field of each outbox record.
+        """
         return self._get_value_serializer()
 
     # ── Internal helpers ──────────────────────────────────────────────────────

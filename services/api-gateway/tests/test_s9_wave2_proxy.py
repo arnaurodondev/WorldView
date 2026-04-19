@@ -67,11 +67,11 @@ async def test_portfolios_proxy_authenticated(authed_app, authed_mock_clients) -
 
 
 @pytest.mark.asyncio
-async def test_portfolios_proxy_owner_id_header(authed_app, authed_mock_clients) -> None:
-    """GET /v1/portfolios sends X-Owner-ID (not X-User-Id) to S1.
+async def test_portfolios_proxy_no_legacy_headers(authed_app, authed_mock_clients) -> None:
+    """F-MAJOR-013: GET /v1/portfolios does NOT send legacy X-Owner-ID / X-User-Id / X-Tenant-Id.
 
-    S1 expects X-Owner-ID — the _portfolio_headers() helper maps the
-    X-User-Id from _auth_headers() to X-Owner-ID for all S1 calls.
+    S1 now reads tenant_id/user_id from the X-Internal-JWT payload via InternalJWTMiddleware.
+    Only X-Internal-JWT is forwarded by _portfolio_headers().
     """
     authed_mock_clients.portfolio.get = AsyncMock(
         return_value=_mock_response(200, b'{"portfolios": []}'),
@@ -87,11 +87,10 @@ async def test_portfolios_proxy_owner_id_header(authed_app, authed_mock_clients)
     assert resp.status_code == 200
     call_kwargs = authed_mock_clients.portfolio.get.call_args[1]
     headers_sent = call_kwargs["headers"]
-    # X-Owner-ID must be present (S1 requirement)
-    assert "X-Owner-ID" in headers_sent
-    assert headers_sent["X-Owner-ID"] == "user-1"
-    # X-User-Id must NOT be present (was remapped)
+    # Legacy headers must NOT be present (F-MAJOR-013)
+    assert "X-Owner-ID" not in headers_sent
     assert "X-User-Id" not in headers_sent
+    assert "X-Tenant-Id" not in headers_sent
 
 
 # ── Holdings ─────────────────────────────────────────────────────────────────
@@ -384,15 +383,14 @@ async def test_transactions_post_downstream_error(authed_app, authed_mock_client
     authed_mock_clients.portfolio.post.assert_called_once()
 
 
-# ── F-008: X-Owner-ID header assertions ─────────────────────────────────────
+# ── F-MAJOR-013: No legacy header assertions ──────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_holdings_proxy_owner_id_header(authed_app, authed_mock_clients) -> None:
-    """GET /v1/holdings/{id} sends X-Owner-ID (not X-User-Id) to S1.
+async def test_holdings_proxy_no_legacy_headers(authed_app, authed_mock_clients) -> None:
+    """F-MAJOR-013: GET /v1/holdings/{id} does NOT send legacy X-Owner-ID / X-User-Id.
 
-    The _portfolio_headers() helper remaps X-User-Id → X-Owner-ID for all
-    S1 Portfolio calls.
+    S1 now reads user_id from the X-Internal-JWT payload via InternalJWTMiddleware.
     """
     authed_mock_clients.portfolio.get = AsyncMock(
         return_value=_mock_response(200, b'{"holdings": []}'),
@@ -408,17 +406,15 @@ async def test_holdings_proxy_owner_id_header(authed_app, authed_mock_clients) -
     assert resp.status_code == 200
     call_kwargs = authed_mock_clients.portfolio.get.call_args[1]
     headers_sent = call_kwargs["headers"]
-    assert "X-Owner-ID" in headers_sent
-    assert headers_sent["X-Owner-ID"] == "user-1"
+    assert "X-Owner-ID" not in headers_sent
     assert "X-User-Id" not in headers_sent
 
 
 @pytest.mark.asyncio
-async def test_watchlists_list_sends_owner_id_header(authed_app, authed_mock_clients) -> None:
-    """GET /v1/watchlists sends X-Owner-ID (not X-User-Id) to S1.
+async def test_watchlists_list_no_legacy_headers(authed_app, authed_mock_clients) -> None:
+    """F-MAJOR-013: GET /v1/watchlists does NOT send legacy X-Owner-ID / X-User-Id.
 
-    Verifies that the watchlists list endpoint also uses _portfolio_headers()
-    to remap X-User-Id → X-Owner-ID.
+    S1 now reads user_id from the X-Internal-JWT payload via InternalJWTMiddleware.
     """
     authed_mock_clients.portfolio.get = AsyncMock(
         return_value=_mock_response(200, b'{"watchlists": []}'),
@@ -434,6 +430,5 @@ async def test_watchlists_list_sends_owner_id_header(authed_app, authed_mock_cli
     assert resp.status_code == 200
     call_kwargs = authed_mock_clients.portfolio.get.call_args[1]
     headers_sent = call_kwargs["headers"]
-    assert "X-Owner-ID" in headers_sent
-    assert headers_sent["X-Owner-ID"] == "user-1"
+    assert "X-Owner-ID" not in headers_sent
     assert "X-User-Id" not in headers_sent

@@ -98,7 +98,7 @@ test.describe("Workspace page (authenticated)", () => {
     await page.goto("/workspace");
 
     // Should NOT redirect to login
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     expect(page.url()).not.toMatch(/\/login/);
   });
 
@@ -108,7 +108,7 @@ test.describe("Workspace page (authenticated)", () => {
 
     await setupAuthMock(page);
     await page.goto("/workspace");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const criticalErrors = errors.filter(
       (e) =>

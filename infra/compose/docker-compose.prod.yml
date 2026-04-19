@@ -1,0 +1,23 @@
+---
+# docker-compose.prod.yml — Production overrides
+#
+# Usage:
+#   docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile infra up -d
+#
+# Overrides:
+#   - Forces OIDC discovery (not optional)
+#   - Enables secure cookies
+#   - Removes debug mode from all services
+#
+# IMPORTANT: This file requires real credentials in services/*/configs/docker.env.
+# Use scripts/fetch-secrets.sh --env prod to populate them from worldview-config.
+
+name: worldview
+
+services:
+  api-gateway:
+    environment:
+      API_GATEWAY_OIDC_DISCOVERY_OPTIONAL: "false"
+      API_GATEWAY_COOKIE_SECURE: "true"
+      API_GATEWAY_DEBUG: "false"
+      API_GATEWAY_LOG_LEVEL: INFO

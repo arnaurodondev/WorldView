@@ -79,10 +79,14 @@ def _make_oidc_config():
 
 
 def _make_integration_app(
-    valkey: Any = None,
+    valkey: Any = "auto",
     httpx_client: Any = None,
 ):
-    """Build a full app suitable for auth integration tests."""
+    """Build a full app suitable for auth integration tests.
+
+    ``valkey="auto"`` (default) creates a mock Valkey that allows rate-limited
+    requests through. Pass an explicit mock to override (e.g. for PKCE tests).
+    """
     from api_gateway.app import create_app
     from api_gateway.clients import ServiceClients
     from api_gateway.config import Settings
@@ -119,20 +123,36 @@ def _make_integration_app(
     app.state.rsa_public_key = _S9_PUBLIC
     app.state.rsa_kid = rsa_key_id(_S9_PUBLIC)
     app.state.internal_jwks = None
-    app.state.valkey = valkey
+    if valkey == "auto":
+        # Default: mock Valkey that allows requests through rate limiting (F-CRIT-003)
+        mock_valkey = MagicMock()
+        mock_valkey.incr = AsyncMock(return_value=1)
+        mock_valkey.expire = AsyncMock(return_value=True)
+        mock_valkey.get = AsyncMock(return_value=None)
+        mock_valkey.set = AsyncMock()
+        app.state.valkey = mock_valkey
+    else:
+        app.state.valkey = valkey
     app.state.httpx_client = httpx_client or MagicMock(spec=httpx.AsyncClient)
 
     return app
 
 
 def _make_mock_valkey_with_pkce(state: str, code_verifier: str) -> MagicMock:
-    """Valkey mock that has PKCE state stored and caches user identity."""
+    """Valkey mock that has PKCE state stored and caches user identity.
+
+    Also provides ``incr``/``expire`` for the RateLimitMiddleware (F-CRIT-003:
+    fail-closed requires a working Valkey to pass requests through).
+    """
     valkey = MagicMock()
     valkey.set = AsyncMock()
     valkey.get = AsyncMock(return_value=None)
     valkey.delete = AsyncMock(return_value=1)
     # Atomic GETDEL — returns the stored code_verifier and deletes the key in one command.
     valkey.getdel = AsyncMock(return_value=code_verifier)
+    # Rate-limiting ops (F-CRIT-003: fail-closed needs working Valkey)
+    valkey.incr = AsyncMock(return_value=1)
+    valkey.expire = AsyncMock(return_value=True)
 
     return valkey
 
@@ -245,6 +265,9 @@ async def test_logout_best_effort() -> None:
 
     valkey = MagicMock()
     valkey.delete = AsyncMock(return_value=1)
+    # F-CRIT-003: RateLimitMiddleware needs incr/expire to pass requests through
+    valkey.incr = AsyncMock(return_value=1)
+    valkey.expire = AsyncMock(return_value=True)
 
     app = _make_integration_app(valkey=valkey, httpx_client=httpx_client)
 

@@ -63,11 +63,8 @@ ReadDbSessionDep = Annotated[AsyncSession, Depends(get_read_db_session)]
 # ── Tenant + User auth ────────────────────────────────────────────────────────
 
 
-async def extract_tenant_user(
-    x_tenant_id: str | None = Header(None),
-    x_user_id: str | None = Header(None),
-) -> tuple[UUID, UUID]:
-    """Extract and validate X-Tenant-ID and X-User-ID headers.
+async def extract_tenant_user(request: Request) -> tuple[UUID, UUID]:
+    """Extract tenant_id and user_id from request.state set by InternalJWTMiddleware.
 
     Returns
     -------
@@ -75,15 +72,23 @@ async def extract_tenant_user(
 
     Raises
     ------
-        HTTPException 401: If either header is absent or not a valid UUID.
+        HTTPException 401: If either value is absent or not a valid UUID.
 
+    PRD-0025: backends MUST use JWT-derived request.state, never raw headers
+    (F-CRIT-001 remediation).
     """
-    if not x_tenant_id or not x_user_id:
-        raise HTTPException(status_code=401, detail="X-Tenant-ID and X-User-ID headers required")
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    raw_user_id = getattr(request.state, "user_id", None)
+
+    if not raw_tenant_id or not raw_user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing required auth context (tenant_id / user_id not set by JWT middleware)",
+        )
     try:
-        return UUID(x_tenant_id), UUID(x_user_id)
+        return UUID(str(raw_tenant_id)), UUID(str(raw_user_id))
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail="X-Tenant-ID and X-User-ID must be valid UUIDs") from exc
+        raise HTTPException(status_code=401, detail="tenant_id and user_id must be valid UUIDs") from exc
 
 
 TenantUserDep = Annotated[tuple[UUID, UUID], Depends(extract_tenant_user)]

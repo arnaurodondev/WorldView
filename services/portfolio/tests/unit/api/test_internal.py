@@ -1,16 +1,16 @@
-"""Unit tests for internal API endpoints (S10 → S1).
+"""Unit tests for internal API endpoints (S10 -> S1).
 
 Tests use FakeUnitOfWork with in-memory repositories.
-Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) — PRD-0025 Wave C.
-In unit tests the middleware passes through (public key not loaded), so route-level
-behavior (data retrieval, 404s) is tested here; middleware auth is tested separately
-in test_provision_endpoint.py.
+Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) -- PRD-0025 Wave C.
+F-CRIT-002: Routes now read tenant_id/user_id from request.state set by the JWT
+middleware, not from headers or query strings. Test middleware injects these values.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -21,13 +21,38 @@ from portfolio.domain.entities.user import User
 from portfolio.domain.entities.watchlist import Watchlist
 from portfolio.domain.entities.watchlist_member import WatchlistMember
 from portfolio.domain.enums import WatchlistStatus
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from tests.unit.fakes import FakeUnitOfWork
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
-def _make_app(uow: FakeUnitOfWork) -> FastAPI:
+class _InjectStateMiddleware(BaseHTTPMiddleware):
+    """Test-only middleware that sets request.state.tenant_id and user_id.
+
+    Simulates what InternalJWTMiddleware does in production after decoding the JWT.
+    """
+
+    def __init__(self, app: Any, tenant_id: UUID | None = None, user_id: UUID | None = None) -> None:
+        super().__init__(app)
+        self._tenant_id = tenant_id
+        self._user_id = user_id
+
+    async def dispatch(self, request: Any, call_next: Any) -> Any:
+        if self._tenant_id is not None:
+            request.state.tenant_id = str(self._tenant_id)
+        if self._user_id is not None:
+            request.state.user_id = str(self._user_id)
+        return await call_next(request)
+
+
+def _make_app(
+    uow: FakeUnitOfWork,
+    *,
+    tenant_id: UUID | None = None,
+    user_id: UUID | None = None,
+) -> FastAPI:
     """Create a minimal FastAPI app with only the internal router."""
     app = FastAPI()
 
@@ -37,6 +62,10 @@ def _make_app(uow: FakeUnitOfWork) -> FastAPI:
     app.dependency_overrides[get_uow] = override_uow
     app.dependency_overrides[get_read_uow] = override_uow  # same fake for read
     app.include_router(internal_router)
+
+    if tenant_id is not None or user_id is not None:
+        app.add_middleware(_InjectStateMiddleware, tenant_id=tenant_id, user_id=user_id)
+
     return app
 
 
@@ -69,7 +98,7 @@ def _seed_watchlist_data(uow: FakeUnitOfWork) -> tuple:
     return tenant_id, user_id, watchlist_id, entity_id
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# -- Health ----------------------------------------------------------------
 
 
 async def test_internal_health() -> None:
@@ -82,7 +111,7 @@ async def test_internal_health() -> None:
     assert resp.json() == {"status": "healthy"}
 
 
-# ── Single entity lookup ──────────────────────────────────────────────────────
+# -- Single entity lookup ---------------------------------------------------
 
 
 async def test_by_entity_returns_watchers() -> None:
@@ -101,7 +130,7 @@ async def test_by_entity_returns_watchers() -> None:
 
 
 async def test_by_entity_empty() -> None:
-    """Unknown entity → empty watchers array."""
+    """Unknown entity -> empty watchers array."""
     uow = FakeUnitOfWork()
     app = _make_app(uow)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -110,7 +139,7 @@ async def test_by_entity_empty() -> None:
     assert resp.json()["watchers"] == []
 
 
-# ── Batch lookup ──────────────────────────────────────────────────────────────
+# -- Batch lookup -----------------------------------------------------------
 
 
 async def test_by_entities_batch() -> None:
@@ -132,7 +161,7 @@ async def test_by_entities_batch() -> None:
 
 
 async def test_by_entities_max_100() -> None:
-    """> 100 entity_ids → 400 error."""
+    """> 100 entity_ids -> 400 error."""
     uow = FakeUnitOfWork()
     app = _make_app(uow)
     ids = [str(uuid4()) for _ in range(101)]
@@ -144,7 +173,7 @@ async def test_by_entities_max_100() -> None:
     assert resp.status_code == 400
 
 
-# ── Watchlist entities ────────────────────────────────────────────────────────
+# -- Watchlist entities -----------------------------------------------------
 
 
 async def test_watchlist_entities_list() -> None:
@@ -160,7 +189,7 @@ async def test_watchlist_entities_list() -> None:
     assert str(entity_id) in data["entity_ids"]
 
 
-# ── GET /internal/v1/users/{user_id} ─────────────────────────────────────────
+# -- GET /internal/v1/users/{user_id} --------------------------------------
 
 
 def _seed_user(uow: FakeUnitOfWork) -> tuple:
@@ -182,12 +211,9 @@ async def test_get_user_for_digest_returns_email() -> None:
     """GET /internal/v1/users/{user_id} returns email_address for digest delivery."""
     uow = FakeUnitOfWork()
     tenant_id, user_id, email = _seed_user(uow)
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=tenant_id, user_id=user_id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}",
-            headers={"X-Tenant-ID": str(tenant_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["user_id"] == str(user_id)
@@ -197,30 +223,24 @@ async def test_get_user_for_digest_returns_email() -> None:
 
 
 async def test_get_user_for_digest_404_unknown_user() -> None:
-    """Unknown user_id → 404."""
+    """Unknown user_id -> 404."""
     uow = FakeUnitOfWork()
     tenant_id = uuid4()
     unknown_id = uuid4()
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=tenant_id, user_id=unknown_id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{unknown_id}",
-            headers={"X-Tenant-ID": str(tenant_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{unknown_id}")
     assert resp.status_code == 404
 
 
 async def test_get_user_for_digest_404_wrong_tenant() -> None:
-    """User in tenant A is not visible to tenant B → 404."""
+    """User in tenant A is not visible to tenant B -> 404."""
     uow = FakeUnitOfWork()
     _tenant_id, user_id, _ = _seed_user(uow)
     other_tenant = uuid4()
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=other_tenant, user_id=user_id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}",
-            headers={"X-Tenant-ID": str(other_tenant)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}")
     assert resp.status_code == 404
 
 
@@ -228,12 +248,9 @@ async def test_get_user_for_digest_response_shape() -> None:
     """Response contains exactly: user_id, tenant_id, email_address, username, created_at."""
     uow = FakeUnitOfWork()
     tenant_id, user_id, _email = _seed_user(uow)
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=tenant_id, user_id=user_id)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}",
-            headers={"X-Tenant-ID": str(tenant_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}")
     assert resp.status_code == 200
     data = resp.json()
     expected_keys = {"user_id", "tenant_id", "email_address", "username", "created_at"}

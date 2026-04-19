@@ -46,6 +46,7 @@ def settings() -> RagChatSettings:
         s1_internal_token="test-token",
         log_json=False,
         log_level="WARNING",
+        # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
         internal_jwt_skip_verification=True,
     )
 

@@ -116,15 +116,15 @@ def test_ohlcv_bar_matches_avro():
 
 ## Frontend Testing
 
-The web frontend (`apps/frontend/`) follows a separate test strategy:
+The web frontend (`apps/worldview-web/`) follows a separate test strategy:
 
 | Type | Tool | Location | What |
 |------|------|----------|------|
-| Unit | Vitest + Testing Library | `apps/frontend/tests/` | Component rendering, hooks |
-| E2E | Playwright (Chromium) | `apps/frontend/e2e/` | Navigation, page content |
+| Unit | Vitest + Testing Library | `apps/worldview-web/__tests__/` | Component rendering, hooks |
+| E2E | Playwright (Chromium) | `apps/worldview-web/e2e/` | Navigation, page content |
 
 ```bash
-cd apps/frontend
+cd apps/worldview-web
 pnpm test         # Unit tests
 pnpm test:e2e     # E2E tests (starts dev server)
 ```

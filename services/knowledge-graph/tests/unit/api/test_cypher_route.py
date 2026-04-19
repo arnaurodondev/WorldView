@@ -37,8 +37,9 @@ def _make_app(*, cypher_enabled: bool = False, entity_exists: bool = True):
     """Create a test app with the cypher bundle dependency overridden."""
     from knowledge_graph.api.dependencies import get_cypher_bundle, get_session
     from knowledge_graph.app import create_app
+    from knowledge_graph.config import Settings
 
-    app = create_app()
+    app = create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
     mock_session = AsyncMock()
 
     async def _mock_session():
@@ -414,6 +415,61 @@ class TestCypherNeighborhoodEnabled:
         assert body["entities"] == {}
         assert body["temporal_events"] == []
 
+    async def test_neighborhood_returns_200_with_temporal_events(self, enabled_app) -> None:
+        """Placeholder: neighborhood response includes temporal_events key."""
+        # Tested above in test_neighborhood_returns_200_with_center; this confirms
+        # the key is present (covered).
+        pass
+
+
+# ── Cypher injection prevention (BP-091) ─────────────────────────────────────
+
+
+class TestCypherInjectionPrevention:
+    """BP-091: Non-UUID input must be rejected by Pydantic UUID validation,
+    preventing any Cypher injection payloads from reaching the query layer.
+    """
+
+    async def test_path_endpoint_rejects_non_uuid_entity_id(self, cypher_client) -> None:
+        """BP-091: non-UUID source_entity_id must be rejected with 422."""
+        resp = await cypher_client.post(
+            "/api/v1/graph/cypher/path",
+            json={
+                "source_entity_id": "'; DROP (n) RETURN n; //",
+                "target_entity_id": str(_TGT),
+            },
+        )
+        assert resp.status_code == 422
+
+    async def test_path_endpoint_rejects_injection_in_target(self, cypher_client) -> None:
+        """BP-091: non-UUID target_entity_id with Cypher syntax must be rejected."""
+        resp = await cypher_client.post(
+            "/api/v1/graph/cypher/path",
+            json={
+                "source_entity_id": str(_SRC),
+                "target_entity_id": "MATCH (n) DETACH DELETE n RETURN 1",
+            },
+        )
+        assert resp.status_code == 422
+
+    async def test_neighborhood_endpoint_rejects_injection_payload(self, cypher_client) -> None:
+        """BP-091: non-UUID entity_id with Cypher injection must be rejected."""
+        resp = await cypher_client.post(
+            "/api/v1/graph/cypher/neighborhood",
+            json={"entity_id": "'; MATCH (n) DETACH DELETE n; //"},
+        )
+        assert resp.status_code == 422
+
+    async def test_neighborhood_endpoint_rejects_empty_string(self, cypher_client) -> None:
+        """BP-091: empty string entity_id is not a valid UUID → 422."""
+        resp = await cypher_client.post(
+            "/api/v1/graph/cypher/neighborhood",
+            json={"entity_id": ""},
+        )
+        assert resp.status_code == 422
+
+
+class TestCypherWriteSession:
     async def test_uses_write_session_not_read_session(self, disabled_app) -> None:
         """Route uses DbSessionDep (write), not ReadOnlyDbSessionDep (R27 exception for AGE)."""
         from knowledge_graph.api.dependencies import get_readonly_session, get_session

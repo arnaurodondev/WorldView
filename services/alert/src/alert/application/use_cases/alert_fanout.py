@@ -80,17 +80,23 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
 # Topics that always get MEDIUM severity regardless of market_impact_score (PRD-0021 F-13)
 _MEDIUM_OVERRIDE_TOPICS: frozenset[str] = frozenset({"graph.state.changed.v1", "intelligence.contradiction.v1"})
 
+
+def _find_schema_path(schema_name: str) -> Path:
+    """Find Avro schema file by walking up from this file to the repo/container root.
+
+    Works in both development (deep path) and Docker (shallow /app path).
+    """
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "infra" / "kafka" / "schemas" / schema_name
+        if candidate.is_file():
+            return candidate
+    msg = f"Cannot locate {schema_name} in any parent of {current}"
+    raise FileNotFoundError(msg)
+
+
 # Schema file path — C-04 / BP-119: load from .avsc, never define inline
-# Docker layout:  /app/src/alert/application/use_cases/alert_fanout.py → parents[4] = /app
-# Local dev layout: services/alert/src/alert/application/use_cases/alert_fanout.py → parents[6] = repo root
-# Use first existing path to support both environments.
-# Guard parents[n] access: list construction is eager, so only index parents that exist.
-_SCHEMA_CANDIDATES = [
-    Path(__file__).parents[i] / "infra" / "kafka" / "schemas" / "alert.delivered.v1.avsc"
-    for i in (4, 6)
-    if i < len(Path(__file__).parents)
-]
-_SCHEMA_PATH = next((p for p in _SCHEMA_CANDIDATES if p.exists()), _SCHEMA_CANDIDATES[0])
+_SCHEMA_PATH = _find_schema_path("alert.delivered.v1.avsc")
 
 _PARSED_SCHEMA: dict[str, Any] | None = None
 

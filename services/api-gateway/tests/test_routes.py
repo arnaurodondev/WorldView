@@ -6,8 +6,24 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 pytestmark = pytest.mark.unit
+
+
+def _inject_rsa_keys(application) -> None:
+    """Inject real RSA keys into app state so _system_headers() can issue JWTs."""
+    from api_gateway.oidc import rsa_key_id
+
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend(),
+    )
+    application.state.rsa_private_key = private_key
+    application.state.rsa_public_key = private_key.public_key()
+    application.state.rsa_kid = rsa_key_id(private_key.public_key())
 
 
 @pytest.mark.asyncio
@@ -276,3 +292,97 @@ async def test_find_similar_entities_propagates_s7_503(client, mock_clients) -> 
         headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 503
+
+
+# ── F-02: Public proxy routes send system JWT to backends ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_screen_instruments_sends_system_jwt(app, mock_clients) -> None:
+    """F-02: POST /v1/fundamentals/screen (public) sends X-Internal-JWT to S3."""
+    _inject_rsa_keys(app)
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = b'{"results": [], "count": 0, "total": 0}'
+    mock_clients.market_data.post = AsyncMock(return_value=downstream_resp)
+
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/fundamentals/screen",
+            content=b'{"filters": []}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_clients.market_data.post.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_screen_fields_sends_system_jwt(app, mock_clients) -> None:
+    """F-02: GET /v1/fundamentals/screen/fields (public) sends X-Internal-JWT to S3."""
+    _inject_rsa_keys(app)
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = b'{"fields": []}'
+    mock_clients.market_data.get = AsyncMock(return_value=downstream_resp)
+
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/fundamentals/screen/fields")
+
+    assert response.status_code == 200
+    call_kwargs = mock_clients.market_data.get.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs.get("headers", {})
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_timeseries_sends_system_jwt(app, mock_clients) -> None:
+    """F-02: GET /v1/fundamentals/timeseries (public) sends X-Internal-JWT to S3."""
+    _inject_rsa_keys(app)
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = b'{"points": []}'
+    mock_clients.market_data.get = AsyncMock(return_value=downstream_resp)
+
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/fundamentals/timeseries",
+            params={"instrument_id": "abc", "metric": "pe_ratio"},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_clients.market_data.get.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs.get("headers", {})
+
+
+@pytest.mark.asyncio
+async def test_similar_entities_sends_system_jwt(app, mock_clients) -> None:
+    """F-02: POST /v1/entities/similar (public) sends X-Internal-JWT to S7."""
+    _inject_rsa_keys(app)
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = b'{"results": [], "total": 0}'
+    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+
+    from httpx import ASGITransport, AsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/entities/similar",
+            content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    call_kwargs = mock_clients.knowledge_graph.post.call_args[1]
+    assert "X-Internal-JWT" in call_kwargs["headers"]

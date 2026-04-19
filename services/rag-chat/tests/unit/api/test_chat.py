@@ -1,4 +1,9 @@
-"""Unit tests for chat API endpoints (T-F-4-03)."""
+"""Unit tests for chat API endpoints (T-F-4-03).
+
+F-MIN-001: @pytest.mark.asyncio is NOT required per-test because
+pyproject.toml configures ``asyncio_mode = "auto"`` which auto-detects
+async test functions.
+"""
 
 from __future__ import annotations
 
@@ -25,9 +30,9 @@ _INTERNAL_JWT = _jwt.encode(
     algorithm="HS256",
 )
 
+# F-CRIT-001: Only X-Internal-JWT is used; backends read tenant_id/user_id from
+# the JWT payload via InternalJWTMiddleware. Legacy headers removed.
 _AUTH_HEADERS = {
-    "X-Tenant-Id": str(_TENANT_ID),
-    "X-User-Id": str(_USER_ID),
     "X-Internal-JWT": _INTERNAL_JWT,
 }
 
@@ -88,6 +93,8 @@ def settings() -> RagChatSettings:
         s1_internal_token="test-token",
         log_json=False,
         log_level="WARNING",
+        # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
+        internal_jwt_skip_verification=True,
     )
 
 
