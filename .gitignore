@@ -64,3 +64,21 @@ secrets/
 terraform.tfvars
 *.tfbackend
 *.tfstate*
+
+# Claude Code local state
+.claude/projects/
+.mcp.json
+
+# Node
+node_modules/
+
+# Design tool artifacts (too large for git)
+*.pen
+
+# Test output
+test-results/
+out.txt
+
+# Non-project directories
+SF_trip/
+meshx-ai-engineers/
