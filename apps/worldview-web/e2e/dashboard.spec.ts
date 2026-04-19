@@ -24,7 +24,7 @@ test.describe("Dashboard (unauthenticated redirect)", () => {
     page.on("pageerror", (error) => errors.push(error.message));
 
     await page.goto("/login");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Filter out expected errors (e.g., network request to Zitadel that fails in test env)
     const criticalErrors = errors.filter(
@@ -135,7 +135,7 @@ test.describe("Dashboard layout (visual checks)", () => {
     });
 
     await page.goto("/dashboard");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Filter expected "fetch failed" errors from unmocked endpoints
     const criticalErrors = errors.filter(

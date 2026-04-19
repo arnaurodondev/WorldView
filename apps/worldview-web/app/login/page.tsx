@@ -32,9 +32,12 @@
 // window.location.replace() for redirect, sessionStorage for code_verifier.
 // None of these are available in Server Components.
 
-import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway, GatewayError } from "@/lib/gateway";
+import { sanitizeRedirect } from "@/lib/utils";
 
 // ── PKCE helpers ──────────────────────────────────────────────────────────────
 
@@ -89,16 +92,94 @@ function generateState(): string {
  */
 function LoginContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const { setTokens } = useAuth();
 
   // WHY track isInitiating: Prevents double-clicks from firing two PKCE flows
   // (second click before the first redirect completes would overwrite sessionStorage)
   const [isInitiating, setIsInitiating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Dev Login state ───────────────────────────────────────────────────
+  // WHY devLoginAvailable: When Zitadel is not running (local dev), the
+  // gateway's /v1/auth/login returns 502 (oidc_discovery_failed). We detect
+  // this and show a "Dev Login" button that calls POST /v1/auth/dev-login.
+  // This lets developers use the full frontend without configuring Zitadel.
+  const [devLoginAvailable, setDevLoginAvailable] = useState(false);
+  const [isDevLoggingIn, setIsDevLoggingIn] = useState(false);
+
   // WHY read redirect_to from URL: The (app) layout guard appends this param
   // when redirecting unauthenticated users. After login succeeds, /callback
   // reads it from sessionStorage and navigates back to the original destination.
-  const redirectTo = searchParams.get("redirect_to") ?? "/dashboard";
+  // WHY sanitizeRedirect: Prevent open redirect — an attacker could craft
+  // /login?redirect_to=https://evil.com to redirect the user after authentication.
+  // Only same-origin relative paths (starting with "/") are allowed.
+  const redirectTo = sanitizeRedirect(searchParams.get("redirect_to"));
+
+  // ── Probe whether Zitadel is available ────────────────────────────────
+  // WHY useEffect: On mount, we check if OIDC env vars are missing OR if the
+  // gateway itself reports that OIDC is not configured. If either is true,
+  // we show the dev login button. This avoids confusing error messages when
+  // developers don't have Zitadel running locally.
+  useEffect(() => {
+    const zitadelBaseUrl = process.env.NEXT_PUBLIC_ZITADEL_URL;
+    const clientId = process.env.NEXT_PUBLIC_ZITADEL_CLIENT_ID;
+
+    // If OIDC env vars are missing, Zitadel is definitely not configured
+    if (!zitadelBaseUrl || !clientId) {
+      setDevLoginAvailable(true);
+      return;
+    }
+
+    // If env vars ARE set, also probe S9 to see if OIDC discovery succeeded.
+    // WHY: env vars might be set to defaults ("http://localhost:8088") but
+    // Zitadel might not actually be running. The gateway knows the truth.
+    async function probeOidc() {
+      try {
+        // A lightweight check: try to hit the login redirect endpoint.
+        // If OIDC is not configured, it returns 502.
+        const resp = await fetch("/api/v1/auth/login", {
+          method: "GET",
+          redirect: "manual", // Don't follow the 302 redirect to Zitadel
+        });
+        // 302 = OIDC is working (Zitadel redirect); 502 = OIDC unavailable
+        if (resp.status === 502) {
+          setDevLoginAvailable(true);
+        }
+      } catch {
+        // Network error (gateway not running) — show dev login too
+        setDevLoginAvailable(true);
+      }
+    }
+    void probeOidc();
+  }, []);
+
+  // ── Dev Login handler ──────────────────────────────────────────────────
+  // WHY useCallback: This function is only created once (empty deps).
+  // It calls POST /v1/auth/dev-login on S9, which issues a JWT for the
+  // demo user. The response has the same shape as the real OIDC callback
+  // so we can reuse AuthContext.setTokens() identically.
+  const handleDevLogin = useCallback(async () => {
+    setIsDevLoggingIn(true);
+    setError(null);
+    try {
+      const gw = createGateway();
+      const response = await gw.devLogin();
+      // Hydrate auth context with the demo JWT — same as a real OIDC callback
+      setTokens(response.access_token, response.user, response.expires_in);
+      // Navigate to the intended destination
+      router.replace(redirectTo);
+    } catch (err) {
+      setIsDevLoggingIn(false);
+      if (err instanceof GatewayError && err.status === 403) {
+        // 403 means OIDC is actually configured — shouldn't happen but handle gracefully
+        setDevLoginAvailable(false);
+        setError("Dev login is disabled because Zitadel is configured. Use the normal login flow.");
+      } else {
+        setError(err instanceof Error ? err.message : "Dev login failed. Is the API Gateway running?");
+      }
+    }
+  }, [redirectTo, router, setTokens]);
 
   // WHY initiateLogin is async: crypto.subtle.digest() is Promise-based (Web Crypto API)
   const initiateLogin = async () => {
@@ -172,26 +253,55 @@ function LoginContent() {
           </div>
         )}
 
-        {/* Primary CTA — initiates PKCE flow */}
-        <Button
-          onClick={() => void initiateLogin()}
-          disabled={isInitiating}
-          className="w-full"
-          size="lg"
-        >
-          {isInitiating ? "Redirecting to Zitadel…" : "Sign in with Zitadel"}
-        </Button>
+        {/* Primary CTA — initiates PKCE flow (hidden when Zitadel is unavailable) */}
+        {!devLoginAvailable && (
+          <Button
+            onClick={() => void initiateLogin()}
+            disabled={isInitiating}
+            className="w-full"
+            size="lg"
+          >
+            {isInitiating ? "Redirecting to Zitadel…" : "Sign in with Zitadel"}
+          </Button>
+        )}
+
+        {/* Dev Login — shown only when Zitadel OIDC is not configured.
+            WHY separate button: Makes it visually obvious that this is a dev-only
+            shortcut, not the real auth flow. The amber outline reinforces this. */}
+        {devLoginAvailable && (
+          <div className="space-y-3">
+            <Button
+              onClick={() => void handleDevLogin()}
+              disabled={isDevLoggingIn}
+              variant="outline"
+              className="w-full border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+              size="lg"
+            >
+              {isDevLoggingIn ? "Signing in…" : "Dev Login (no Zitadel)"}
+            </Button>
+            {/* WHY this caption: Developers need to know this bypasses real auth.
+                If they see this in a context where Zitadel SHOULD be running,
+                it signals a misconfiguration. */}
+            <p className="text-center text-xs text-muted-foreground">
+              Zitadel is not configured. Using local demo credentials.
+              <br />
+              Run <code className="text-xs">make seed</code> first to create the demo user.
+            </p>
+          </div>
+        )}
 
         {/* Register link — navigates to register page which redirects to Zitadel self-registration */}
-        <p className="text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <a
-            href="/register"
-            className="font-medium text-primary underline-offset-4 hover:underline"
-          >
-            Register
-          </a>
-        </p>
+        {!devLoginAvailable && (
+          <p className="text-center text-sm text-muted-foreground">
+            Don&apos;t have an account?{" "}
+            <a
+              href="/register"
+              className="font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Register
+            </a>
+          </p>
+        )}
       </div>
     </div>
   );

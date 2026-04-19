@@ -1,0 +1,374 @@
+# Worldview Web Application (Next.js 15)
+
+> **Package**: `worldview-web` · **Port**: 3001 (dev + prod)
+> **Status**: Active development (canonical frontend) · **Spec**: PRD-0028
+> **Location**: `apps/worldview-web/`
+
+---
+
+## Mission & Boundaries
+
+**Owns**: Production browser-based UI for the Worldview platform — professional
+Bloomberg/TradingView-grade financial intelligence terminal with dashboard, instrument
+explorer, portfolio view, news feed, screener, entity graph, workspace, and RAG chat.
+
+**Never does**: Call backend services directly. All data fetching goes through S9 API
+Gateway via `/api/*` (Next.js rewrites). Auth tokens are managed via S9 OIDC flow.
+
+**Design canon**: `docs/ui/DESIGN_SYSTEM.md` — Midnight Pro palette, IBM Plex fonts, shadcn/ui only.
+
+---
+
+## Technology Stack
+
+| Concern | Choice | Notes |
+|---------|--------|-------|
+| Framework | Next.js 15.1.7 (App Router) | Node SSR required (ADR-F-01) |
+| React | 19.0.0 | React 19 with server components |
+| UI components | shadcn/ui only | 40+ Radix UI primitives + Tailwind CSS |
+| Charts | lightweight-charts 4.2.3 | `"use client"` wrapper required |
+| Server state | TanStack Query 5.62.7 | No `useState+useEffect` for API calls |
+| Workspace | react-grid-layout 1.5.0 | Drag-drop multi-panel layout |
+| Markdown | react-markdown 9.0.3 + remark-gfm | Chat/briefing rendering |
+| Search | cmdk 1.0.4 | Command palette (Cmd+K) |
+| Theme | Dark only (permanent) | `class="dark"` on `<html>` (ADR-F-04) |
+| Real-time | WebSocket (alerts), SSE (chat) | `useAlertStream` + `EventSource` |
+| Auth | Zitadel OIDC + PKCE via S9 | Access token in React state only |
+| Package manager | pnpm 10+ (exact versions) | `pnpm audit` must show 0 CVEs |
+| Tests | Vitest 2.1.8 (unit) + Playwright 1.49.1 (E2E) | MSW for API mocking |
+| TypeScript | 5.7.2 | Strict mode |
+| Styling | Tailwind CSS 3.4.17 | Midnight Pro design tokens |
+
+---
+
+## Architecture
+
+```
+apps/worldview-web/
+├── app/
+│   ├── layout.tsx                       # Root: <html dark>, providers
+│   ├── providers.tsx                    # QueryClient + Auth + Alert providers
+│   ├── globals.css                      # Tailwind + Midnight Pro CSS vars
+│   ├── page.tsx                         # Public landing page
+│   ├── error.tsx                        # Global error boundary
+│   ├── not-found.tsx                    # 404 page
+│   ├── login/page.tsx                   # OIDC login entry
+│   ├── callback/page.tsx                # OIDC callback handler
+│   ├── register/page.tsx                # New user registration
+│   └── (app)/                           # Protected routes (auth guard in layout)
+│       ├── layout.tsx                   # Sidebar + TopBar + content outlet
+│       ├── dashboard/page.tsx           # Dashboard (morning brief, portfolio, alerts)
+│       ├── workspace/page.tsx           # Drag-drop multi-panel terminal
+│       ├── instruments/[entityId]/page.tsx  # Instrument detail + chart
+│       ├── screener/page.tsx            # Dynamic filter + results table
+│       ├── portfolio/page.tsx           # Holdings, P&L, transactions
+│       ├── alerts/page.tsx              # Alert history + news feed
+│       ├── chat/page.tsx                # RAG chat threads
+│       └── settings/page.tsx            # User profile + preferences
+├── components/
+│   ├── ui/                              # shadcn/ui auto-generated (40+)
+│   ├── shell/                           # App-wide shell components
+│   │   ├── Sidebar.tsx                  # Navigation + watchlist
+│   │   ├── TopBar.tsx                   # Search + indices + status
+│   │   ├── FlashOverlay.tsx             # WebSocket CRITICAL alert overlay
+│   │   ├── AskAiPanel.tsx               # Mini RAG chat panel
+│   │   ├── GlobalSearch.tsx             # cmdk command palette
+│   │   ├── IndexTicker.tsx              # Live index quotes
+│   │   ├── MarketStatusPill.tsx         # Market hours indicator
+│   │   └── UtcClock.tsx                 # Real-time UTC clock
+│   ├── dashboard/                       # Dashboard widgets
+│   │   ├── MorningBriefCard.tsx
+│   │   ├── PortfolioSummary.tsx
+│   │   ├── RecentAlerts.tsx
+│   │   ├── TopMovers.tsx
+│   │   ├── WatchlistNews.tsx
+│   │   ├── AiSignals.tsx
+│   │   ├── MarketHeatmap.tsx
+│   │   └── EconomicCalendar.tsx
+│   ├── instrument/                      # Instrument detail components
+│   │   ├── OHLCVChart.tsx               # lightweight-charts wrapper
+│   │   ├── FundamentalsTab.tsx
+│   │   ├── IntelligenceTab.tsx
+│   │   ├── EntityGraphPanel.tsx         # Graph visualization
+│   │   └── LiveQuoteBadge.tsx           # Real-time price
+│   ├── news/
+│   │   ├── ArticleCard.tsx
+│   │   └── ArticleImpactBadge.tsx       # Relevance score badge
+│   ├── screener/
+│   │   └── HeatCell.tsx                 # 7-step colored metric cells
+│   └── alerts/
+│       ├── AlertsList.tsx
+│       └── SeverityBadge.tsx
+├── hooks/
+│   ├── useAuth.ts                       # Token + auth state
+│   ├── useDebounce.ts
+│   └── useMarketStatus.ts              # Exchange hours logic
+├── contexts/
+│   ├── AuthContext.tsx                  # OIDC + silent refresh
+│   └── AlertStreamContext.tsx           # WebSocket alert stream
+├── lib/
+│   ├── gateway.ts                       # Typed S9 API client (41 methods)
+│   ├── market-schedule.ts               # Exchange hours
+│   └── utils.ts                         # cn(), formatters
+├── types/
+│   └── api.ts                           # TypeScript API contracts
+├── __tests__/                           # 13 Vitest test files
+├── e2e/                                 # Playwright tests
+├── next.config.ts                       # API rewrite: /api/* → API_GATEWAY_URL
+├── vitest.config.ts
+├── vitest.setup.ts                      # MSW + jest-dom matchers
+├── playwright.config.ts                 # Chrome + WebKit
+├── tailwind.config.ts                   # Midnight Pro palette
+├── components.json                      # shadcn/ui config
+├── tsconfig.json                        # Path alias: @ → ./
+├── postcss.config.mjs
+├── package.json
+├── .env.example
+└── .eslintrc.json
+```
+
+---
+
+## Route Map
+
+| Path | Page | Auth | Key Data Sources |
+|------|------|------|-----------------|
+| `/` | Landing | Public | — |
+| `/login` | Login | Public | S9 `/v1/auth/login` |
+| `/callback` | Callback | Public | S9 `/v1/auth/callback` |
+| `/register` | Register | Public | S9 `/v1/auth/register` |
+| `/(app)/dashboard` | Dashboard | Yes | Briefings, portfolio, alerts, movers, heatmap |
+| `/(app)/workspace` | Workspace | Yes | User-configurable multi-panel grid |
+| `/(app)/instruments/[entityId]` | Instrument Detail | Yes | OHLCV, fundamentals, graph, news |
+| `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` |
+| `/(app)/portfolio` | Portfolio | Yes | Portfolios, holdings, transactions |
+| `/(app)/alerts` | Alerts & News | Yes | Pending alerts + top news |
+| `/(app)/chat` | Chat | Yes | SSE `/v1/chat/stream` |
+| `/(app)/settings` | Settings | Yes | Email preferences |
+
+### Route Groups
+
+- **Public routes** (`/`, `/login`, `/callback`, `/register`) — no auth required
+- **Protected routes** (`/(app)/*`) — `AuthContext` in `(app)/layout.tsx` redirects to `/login` if not authenticated (ADR-F-06)
+
+---
+
+## API Integration
+
+### Gateway Client (`lib/gateway.ts`)
+
+All API calls go through this typed client. Base URL is `/api` (proxied by `next.config.ts` rewrites to `API_GATEWAY_URL`).
+
+```
+/api/v1/portfolios → API_GATEWAY_URL/v1/portfolios → S1 Portfolio
+```
+
+**41 typed methods** covering: auth (4), instruments/market data (5), knowledge graph (2), news (3), screener (2), portfolio (4), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
+
+### Real-Time Patterns
+
+**WebSocket (Alert Stream)**:
+- URL: direct to S10 via `NEXT_PUBLIC_WS_BASE_URL` + `/v1/alerts/stream?token=<ws_token>`
+- Token: 30-second RS256 JWT from `GET /v1/auth/ws-token` (ADR-F-02)
+- Exponential backoff: 1s → 2s → 4s → ... → 30s cap
+- CRITICAL alerts → FlashOverlay (full-screen, 12s auto-dismiss, Escape to close)
+
+**SSE (Chat Streaming)**:
+- State machine: `idle → sending → streaming → reconciling → settled`
+- Cancel via AbortController per request
+- `useRef` for closure safety
+
+---
+
+## State Management
+
+| State Type | Tool | Pattern |
+|------------|------|---------|
+| Server data | TanStack Query v5 | `useQuery`, `useMutation`, `useSuspenseQuery` |
+| Auth | React Context (`AuthContext`) | `"use client"` provider |
+| Alert stream | React Context (`AlertStreamContext`) | `"use client"`, shared WS |
+| Local UI state | `useState` / `useReducer` | Filters, modals, selections |
+| Workspace layout | `localStorage` + React state | Persisted grid layout |
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env.local`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `API_GATEWAY_URL` | `http://localhost:8000` | S9 gateway URL (server-side, NOT public) |
+| `NEXT_PUBLIC_WS_BASE_URL` | `ws://localhost:8010` | S10 WebSocket URL (client-side) |
+| `NEXT_PUBLIC_APP_NAME` | `Worldview` | App name for UI |
+| `NEXT_PUBLIC_ZITADEL_URL` | `http://localhost:8080` | Zitadel OIDC endpoint |
+| `NEXT_PUBLIC_ZITADEL_CLIENT_ID` | `worldview-web` | OIDC client ID |
+
+---
+
+## Development
+
+```bash
+cd apps/worldview-web
+
+# 1. Install dependencies
+pnpm install
+
+# 2. Copy env
+cp .env.example .env.local
+
+# 3. Start dev server (requires S9 running on :8000)
+pnpm dev              # → http://localhost:3001
+
+# 4. Build for production
+pnpm build            # → .next/
+pnpm start            # Production server on :3001
+```
+
+### All Commands
+
+| Command | Purpose |
+|---------|---------|
+| `pnpm dev` | Dev server at http://localhost:3001 |
+| `pnpm build` | Production build (`.next/`) |
+| `pnpm start` | Run production build on :3001 |
+| `pnpm test` | Vitest (single run) |
+| `pnpm test:watch` | Vitest interactive mode |
+| `pnpm test:coverage` | Vitest with v8 coverage report |
+| `pnpm test:e2e` | Playwright (Chrome + WebKit) |
+| `pnpm lint` | Next.js lint |
+| `pnpm typecheck` | `tsc --noEmit` |
+
+---
+
+## Testing
+
+| Type | Tool | Location | What |
+|------|------|----------|------|
+| Unit | Vitest + RTL + MSW | `__tests__/` | Components: loading/error/empty/happy path |
+| E2E | Playwright | `e2e/` | Page loads, navigation, data flow |
+| Mocking | MSW 2.6.8 | `vitest.setup.ts` | API response mocking |
+
+**Every component must have**: loading state test + happy path test (minimum).
+
+### Running Tests
+
+```bash
+pnpm test                  # Unit tests (CI mode)
+pnpm test:coverage         # + coverage report
+pnpm test:e2e              # Playwright (auto-starts dev server)
+```
+
+---
+
+## Design System Reference
+
+| Token | Value |
+|-------|-------|
+| Background | `#131722` (Midnight Pro) |
+| Card | `#1E2329` |
+| Text | `#D1D4DC` |
+| Accent | `#0EA5E9` (sky-500) |
+| Positive | `#26A69A` (teal) |
+| Negative | `#EF5350` (muted red) |
+| UI Font | IBM Plex Sans (300–700) |
+| Data Font | IBM Plex Mono (400–600) — **mandatory for ALL numbers** |
+
+Full reference: `docs/ui/DESIGN_SYSTEM.md`
+
+---
+
+## Key Architectural Decisions
+
+| ADR | Decision | Rationale |
+|-----|----------|-----------|
+| ADR-F-01 | Node SSR (not static export) | Middleware for auth redirects requires Node runtime |
+| ADR-F-02 | WS direct to S10 via `?token=` query param | Browser WebSocket API has no headers; Next.js rewrites don't support WS upgrade ([full ADR](../architecture/decisions/ADR-F-02-websocket-direct-connection.md)) |
+| ADR-F-03 | New app (`apps/worldview-web/`), not in-place migration | Zero-risk parallel development |
+| ADR-F-04 | Dark mode only (permanent) | Professional market intelligence convention |
+| ADR-F-06 | `/(app)/*` protected route group | Auth guard in group layout |
+| ADR-F-07 | Workspace layout in localStorage | User-customizable grid persists |
+| ADR-F-15 | IBM Plex Mono for ALL numbers | Highest-impact professional appearance rule |
+
+Full ADR details in `docs/ui/frontend-migration.md §1`.
+
+### Recent Hardening (2026-04-18 QA, F-CRIT-006 / F-MAJOR-007/008)
+
+- **OHLCVChart error boundary**: `OHLCVChart.tsx` uses `next/dynamic` with `ssr: false` for `lightweight-charts`. A React error boundary wraps the dynamic import to gracefully handle load failures (e.g., network errors, chunk 404) instead of crashing the instrument detail page.
+- **Callback OIDC error sanitization**: `callback/page.tsx` sanitizes OIDC `error` and `error_description` query parameters against the RFC 6749 whitelist before rendering. Prevents reflected XSS from malicious error values in the redirect URL.
+- **E2E strict per-endpoint mocks (D-002)**: Playwright E2E tests use strict per-endpoint MSW mocks — each test declares exactly which API endpoints it expects, and unmocked requests fail loudly. This replaces the previous blanket mock approach and catches missing/stale mock definitions.
+
+---
+
+## Dev Login (Local Development)
+
+When Zitadel is not configured (`OIDC_DISCOVERY_OPTIONAL=true` and no OIDC issuer set on S9), the platform provides a simplified login flow for local development:
+
+1. The frontend login page (`/login`) detects that Zitadel is unavailable and renders a **"Dev Login"** button alongside the normal OIDC login.
+2. Clicking "Dev Login" calls `POST /v1/auth/dev-login` on S9, which returns a valid internal JWT (same shape as `/v1/auth/callback`) for the demo user from seed data.
+3. The frontend stores the token and redirects to the dashboard as normal.
+
+**Prerequisites**: Run `make seed` to populate the demo user and sample data (portfolios, watchlists, instruments).
+
+**Security**: The dev-login endpoint returns `403 Forbidden` when OIDC is configured (i.e., in production). It is never accessible outside local development.
+
+---
+
+## Docker
+
+No Dockerfile yet — production deployment via Node.js server is pending. Will follow:
+
+```dockerfile
+# Build: node:20-alpine → pnpm build → .next/
+# Run:   node:20-alpine → next start --port 3001
+```
+
+---
+
+## Design Resources
+
+| Resource | Purpose |
+|----------|---------|
+| `docs/ui/DESIGN_SYSTEM.md` | Tokens, component catalogue, UX patterns |
+| `docs/ui/frontend-migration.md` | ADRs, component inventory, target architecture |
+| `docs/ui/news-intelligence.md` | News feature UI requirements |
+| `docs/ui/competitive-design-research.md` | Bloomberg/TradingView research |
+| `docs/frontend/NEXTJS_GUIDE.md` | Next.js 15 developer guide |
+| `apps/worldview-web/designs/*.pen` | pencil.dev canvas design files |
+
+---
+
+## Docker
+
+The app uses a multi-stage Dockerfile (`apps/worldview-web/Dockerfile`) with Next.js standalone output:
+
+```
+Stage 1 (deps)    — pnpm install --frozen-lockfile
+Stage 2 (builder) — pnpm build → .next/standalone
+Stage 3 (runner)  — node:20-alpine, non-root user, ~120 MB
+```
+
+### Docker Compose
+
+The `worldview-web` service is defined in `infra/compose/docker-compose.yml` (profiles: `infra`, `all`):
+
+```bash
+# Full platform including frontend
+docker compose -f infra/compose/docker-compose.yml --profile infra up -d
+
+# Frontend logs
+docker compose -f infra/compose/docker-compose.yml logs -f worldview-web
+```
+
+| Env Var | Default | Purpose |
+|---------|---------|---------|
+| `API_GATEWAY_URL` | `http://api-gateway:8000` | S9 proxy target (server-side rewrites) |
+| `NEXT_PUBLIC_ZITADEL_URL` | `http://localhost:8088` | OIDC provider for login |
+| `NEXT_PUBLIC_ZITADEL_CLIENT_ID` | `worldview-web` | OIDC client ID |
+
+### Standalone build
+
+```bash
+docker build -t worldview-web apps/worldview-web/
+docker run -p 3001:3001 -e API_GATEWAY_URL=http://host.docker.internal:8000 worldview-web
+```

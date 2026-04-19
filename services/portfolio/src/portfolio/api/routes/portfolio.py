@@ -1,10 +1,15 @@
-"""Portfolio API routes."""
+"""Portfolio API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT. Routes read these values from request.state, never from
+raw headers (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import UoWDep
@@ -26,6 +31,22 @@ from portfolio.application.use_cases.portfolio_ops import (
 router = APIRouter(tags=["portfolios"])
 
 
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
+
+
 def _to_response(portfolio) -> PortfolioResponse:  # type: ignore[no-untyped-def]
     return PortfolioResponse(
         id=portfolio.id,
@@ -42,8 +63,9 @@ def _to_response(portfolio) -> PortfolioResponse:  # type: ignore[no-untyped-def
 async def create_portfolio(
     body: PortfolioCreateRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> PortfolioResponse:
+    x_tenant_id = _extract_tenant_id(request)
     uc = CreatePortfolioUseCase()
     portfolio = await uc.execute(
         CreatePortfolioCommand(
@@ -60,11 +82,12 @@ async def create_portfolio(
 @router.get("/portfolios", response_model=PaginatedResponse[PortfolioResponse])
 async def list_portfolios(
     uow: UoWDep,
-    owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> PaginatedResponse[PortfolioResponse]:
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = ListPortfoliosUseCase()
     portfolios, total = await uc.execute(owner_id, x_tenant_id, uow, limit=limit, offset=offset)
     return PaginatedResponse(items=[_to_response(p) for p in portfolios], total=total, limit=limit, offset=offset)
@@ -74,9 +97,10 @@ async def list_portfolios(
 async def get_portfolio(
     portfolio_id: UUID,
     uow: UoWDep,
-    owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> PortfolioResponse:
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = GetPortfolioUseCase()
     portfolio = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
     return _to_response(portfolio)
@@ -87,9 +111,10 @@ async def rename_portfolio(
     portfolio_id: UUID,
     body: PortfolioRenameRequest,
     uow: UoWDep,
-    owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> PortfolioResponse:
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = RenamePortfolioUseCase()
     portfolio = await uc.execute(
         RenamePortfolioCommand(
@@ -112,8 +137,9 @@ async def rename_portfolio(
 async def archive_portfolio(
     portfolio_id: UUID,
     uow: UoWDep,
-    owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> None:
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = ArchivePortfolioUseCase()
     await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)

@@ -102,3 +102,21 @@ class BriefingResponse(BaseModel):
     risk_summary: dict[str, Any]
     citations: list[dict[str, Any]] = []
     generated_at: str
+
+
+# ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
+
+
+class PublicBriefingResponse(BaseModel):
+    """Response for GET /api/v1/briefings/* (called via S9 proxy).
+
+    Extends BriefingResponse with ``cached`` flag and optional ``entity_id``
+    to indicate cache hits and instrument-specific briefings.
+    """
+
+    narrative: str
+    risk_summary: dict[str, Any] = {}
+    citations: list[dict[str, Any]] = []
+    generated_at: str
+    cached: bool = False
+    entity_id: str | None = None

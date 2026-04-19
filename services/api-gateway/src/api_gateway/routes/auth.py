@@ -1,13 +1,14 @@
 """OIDC auth endpoints for the API Gateway.
 
 Implements the PKCE auth flow (F-01..F-07) from PRD-0025:
-  GET  /v1/auth/login    — generate PKCE state, redirect to Zitadel
-  GET  /v1/auth/callback — exchange code for tokens, provision user, set cookie
-  POST /v1/auth/refresh  — rotate refresh_token cookie → new access_token
-  POST /v1/auth/logout   — revoke token, clear cookie
-  GET  /v1/auth/me       — return user profile from validated access_token
-  GET  /v1/auth/register — redirect to Zitadel self-registration (OQ-05)
-  GET  /v1/auth/ws-token — issue 30-second short-lived JWT for WebSocket auth
+  GET  /v1/auth/login     — generate PKCE state, redirect to Zitadel
+  GET  /v1/auth/callback  — exchange code for tokens, provision user, set cookie
+  POST /v1/auth/refresh   — rotate refresh_token cookie → new access_token
+  POST /v1/auth/logout    — revoke token, clear cookie
+  GET  /v1/auth/me        — return user profile from validated access_token
+  GET  /v1/auth/register  — redirect to Zitadel self-registration (OQ-05)
+  GET  /v1/auth/ws-token  — issue 30-second short-lived JWT for WebSocket auth
+  POST /v1/auth/dev-login — dev-only: skip Zitadel, issue JWT for demo user
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ async def login(request: Request) -> Response:
         f"&code_challenge_method=S256"
     )
     auth_url = f"{oidc_config.authorization_endpoint}?{params}"
-    logger.info("login_redirect", action="login", state=state[:8])
+    logger.info("login_redirect", action="login")
     return RedirectResponse(url=auth_url, status_code=302)
 
 
@@ -542,3 +543,95 @@ async def ws_token(request: Request) -> Response:
 
     logger.info("ws_token_issued", action="ws_token", result="success")
     return JSONResponse(status_code=200, content={"token": token, "expires_in": 30})
+
+
+# ── Dev-login (development only — no Zitadel required) ─────────────────────
+
+# Fixed UUIDs for the demo user.  Must match scripts/seed-dev-data.sql so
+# the demo user already exists in portfolio_db when make seed has been run.
+_DEV_USER_ID = "01900000-0000-7000-8000-000000000010"
+_DEV_TENANT_ID = "01900000-0000-7000-8000-000000000001"
+_DEV_SUB = "dev-user"
+_DEV_EMAIL = "demo@worldview.dev"
+
+
+@router.post("/dev-login")
+async def dev_login(request: Request) -> Response:
+    """Issue an access token for the demo user WITHOUT Zitadel.
+
+    SECURITY GATE: This endpoint is ONLY available when ``oidc_config is None``
+    (i.e., OIDC discovery was skipped because Zitadel is not running AND
+    ``API_GATEWAY_OIDC_DISCOVERY_OPTIONAL=true``).  In production, OIDC
+    discovery succeeds, ``oidc_config`` is populated, and this endpoint
+    returns 403.
+
+    Returns the same response shape as ``GET /v1/auth/callback`` so the
+    frontend can use an identical ``setTokens()`` call.
+    """
+    from observability import get_logger  # type: ignore[import-untyped]
+
+    logger = get_logger("api_gateway.auth")
+
+    # ── Guard: only allow when Zitadel is NOT configured ──────────────────
+    oidc_config = getattr(request.app.state, "oidc_config", None)
+    if oidc_config is not None:
+        logger.warning("dev_login_blocked", action="dev_login", result="error")
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "dev_login_disabled",
+                "detail": "Dev login is only available when OIDC is not configured",
+            },
+        )
+
+    # ── Guard: RSA key must be available for JWT signing ──────────────────
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid: str = getattr(request.app.state, "rsa_kid", "default")
+    if private_key is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "jwt_signing_unavailable"},
+        )
+
+    # ── Issue an internal JWT for the demo user ───────────────────────────
+    from api_gateway.jwt_utils import issue_user_jwt
+
+    access_token = issue_user_jwt(
+        user_id=_DEV_USER_ID,
+        tenant_id=_DEV_TENANT_ID,
+        oidc_sub=_DEV_SUB,
+        private_key=private_key,
+        kid=kid,
+    )
+
+    # ── Cache demo user identity in Valkey (same as real login) ───────────
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        try:
+            import json
+
+            await valkey.set(
+                f"auth:user:{_DEV_SUB}",
+                json.dumps({"user_id": _DEV_USER_ID, "tenant_id": _DEV_TENANT_ID}),
+                ttl=86400,  # 24 h — generous for local dev
+            )
+        except Exception:  # noqa: S110 — fail-open: cache miss handled on next request
+            pass
+
+    logger.info("dev_login_success", action="dev_login", user_id=_DEV_USER_ID, result="success")
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "access_token": access_token,
+            "expires_in": 300,
+            "token_type": "Bearer",
+            "user": {
+                "user_id": _DEV_USER_ID,
+                "tenant_id": _DEV_TENANT_ID,
+                "email": _DEV_EMAIL,
+                "sub": _DEV_SUB,
+                "email_verified": True,
+            },
+        },
+    )

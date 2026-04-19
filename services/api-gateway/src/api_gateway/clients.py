@@ -42,10 +42,16 @@ async def _checked_get(
     client: httpx.AsyncClient,
     service_name: str,
     path: str,
+    *,
+    headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """GET with error translation."""
-    resp = await client.get(path, **kwargs)
+    """GET with error translation.
+
+    ``headers`` are merged into the request so callers can forward
+    ``X-Internal-JWT`` or other auth headers to downstream services.
+    """
+    resp = await client.get(path, headers=headers, **kwargs)
     if resp.status_code >= 400:
         # F-005: truncate error detail to avoid leaking internal service details to frontend
         raise DownstreamError(service_name, resp.status_code, resp.text[:200])
@@ -56,10 +62,16 @@ async def _checked_post(
     client: httpx.AsyncClient,
     service_name: str,
     path: str,
+    *,
+    headers: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """POST with error translation."""
-    resp = await client.post(path, **kwargs)
+    """POST with error translation.
+
+    ``headers`` are merged into the request so callers can forward
+    ``X-Internal-JWT`` or other auth headers to downstream services.
+    """
+    resp = await client.post(path, headers=headers, **kwargs)
     if resp.status_code >= 400:
         # F-005: truncate error detail to avoid leaking internal service details to frontend
         raise DownstreamError(service_name, resp.status_code, resp.text[:200])
@@ -72,17 +84,35 @@ async def _checked_post(
 async def get_company_overview(
     clients: ServiceClients,
     company_id: str,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Compose company overview from Market Data + Content Store."""
+    """Compose company overview from Market Data + Content Store.
+
+    ``headers`` (typically containing ``X-Internal-JWT``) are forwarded to
+    every downstream call so backends can authenticate the request.
+    """
     import asyncio
 
     fundamentals, ohlcv, news = await asyncio.gather(
-        _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/fundamentals"),
-        _checked_get(clients.market_data, "market-data", f"/v1/instruments/{company_id}/ohlcv", params={"limit": 90}),
+        _checked_get(
+            clients.market_data,
+            "market-data",
+            f"/v1/instruments/{company_id}/fundamentals",
+            headers=headers,
+        ),
+        _checked_get(
+            clients.market_data,
+            "market-data",
+            f"/v1/instruments/{company_id}/ohlcv",
+            headers=headers,
+            params={"limit": 90},
+        ),
         _checked_get(
             clients.content_store,
             "content-store",
             "/v1/articles",
+            headers=headers,
             params={"symbol": company_id, "limit": 10},
         ),
     )
@@ -97,12 +127,18 @@ async def get_company_overview(
 async def get_relevant_news(
     clients: ServiceClients,
     limit: int = 20,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Get most relevant news articles."""
+    """Get most relevant news articles.
+
+    ``headers`` are forwarded to S5 for ``X-Internal-JWT`` authentication.
+    """
     return await _checked_get(
         clients.content_store,
         "content-store",
         "/v1/articles/relevant",
+        headers=headers,
         params={"limit": limit},
     )
 
@@ -142,9 +178,13 @@ GICS_SECTORS = [
 async def _screener_for_sector(
     client: httpx.AsyncClient,
     sector: str,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Screen instruments for a single GICS sector sorted by daily_return.
 
+    ``headers`` are forwarded so ``X-Internal-JWT`` reaches S3's
+    InternalJWTMiddleware.
     Returns the raw S3 response or an error dict on failure.
     """
     import json as _json
@@ -160,7 +200,7 @@ async def _screener_for_sector(
     resp = await client.post(
         "/api/v1/fundamentals/screen",
         content=body.encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     if resp.status_code >= 400:
         return {"error": True, "sector": sector}
@@ -171,16 +211,23 @@ async def _screener_for_sector(
         return {"error": True, "sector": sector}
 
 
-async def get_market_heatmap(clients: ServiceClients) -> dict[str, Any]:
+async def get_market_heatmap(
+    clients: ServiceClients,
+    *,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Compute sector heatmap from S3 screener data.
 
     Makes 11 parallel S3 screener calls (one per GICS sector), computes average
     daily_return per sector. Uses asyncio.gather with return_exceptions=True
     so partial failures don't crash the whole heatmap (BP-114).
+
+    ``headers`` are forwarded to each screener call for ``X-Internal-JWT``
+    authentication.
     """
     import asyncio
 
-    calls = [_screener_for_sector(clients.market_data, sector) for sector in GICS_SECTORS]
+    calls = [_screener_for_sector(clients.market_data, sector, headers=headers) for sector in GICS_SECTORS]
     results = await asyncio.gather(*calls, return_exceptions=True)
 
     sectors = []
@@ -211,11 +258,16 @@ async def get_top_movers(
     clients: ServiceClients,
     mover_type: str = "gainers",
     limit: int = 10,
+    *,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Get top gainers or losers from the screener.
 
     Composes a single S3 screener call with sort_by=daily_return and the appropriate
     sort order (desc for gainers, asc for losers).
+
+    ``headers`` are forwarded so ``X-Internal-JWT`` reaches S3's
+    InternalJWTMiddleware.
     """
     import json as _json
 
@@ -231,7 +283,7 @@ async def get_top_movers(
     resp = await clients.market_data.post(
         "/api/v1/fundamentals/screen",
         content=body.encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     if resp.status_code >= 400:
         raise DownstreamError("market-data", resp.status_code, resp.text)

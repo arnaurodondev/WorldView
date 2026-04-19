@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from api_gateway.app import RequestIdMiddleware, create_app
 from httpx import ASGITransport, AsyncClient
@@ -12,7 +14,14 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def obs_app(settings):
-    return create_app(settings)
+    app = create_app(settings)
+    # F-CRIT-003: RateLimitMiddleware requires a Valkey mock to pass requests through.
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock(return_value=True)
+    mock_valkey.ping = AsyncMock(return_value=True)
+    app.state.valkey = mock_valkey
+    return app
 
 
 @pytest.fixture

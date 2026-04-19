@@ -161,6 +161,7 @@ class OutboxEvent:
     event_id: UUID = field(default_factory=new_uuid7)
     topic: str = ""
     partition_key: str = ""
+    # b"" sentinel: serialization failed; original message payload is lost. See BP-040.
     payload_avro: bytes = b""
     status: OutboxStatus = OutboxStatus.PENDING
     created_at: datetime = field(default_factory=utc_now)
@@ -181,6 +182,7 @@ class DeadLetterEntry:
     dlq_id: UUID = field(default_factory=new_uuid7)
     original_event_id: UUID = field(default_factory=new_uuid7)
     topic: str = ""
+    # b"" sentinel: serialization failed; original message payload is lost. See BP-040.
     payload_avro: bytes = b""
     error_detail: str | None = None
     status: DLQStatus = DLQStatus.FAILED

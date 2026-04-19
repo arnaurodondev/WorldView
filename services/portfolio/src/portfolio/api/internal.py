@@ -3,13 +3,16 @@
 These endpoints are NOT exposed through S9 API Gateway.
 Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) on every request.
 PRD reference: §6.2.7; auth updated by PRD-0025 Wave C.
+
+F-CRIT-002: tenant_id and user_id are now read from request.state set by
+InternalJWTMiddleware, not from query strings or headers.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
@@ -81,16 +84,23 @@ async def get_watchlist_entities(
 async def get_portfolio_context(
     user_id: UUID,
     uow: ReadUoWDep,
-    tenant_id: UUID,
-    x_user_id: UUID | None = Header(None),
+    request: Request,
 ) -> PortfolioContextResponse:
     """Return portfolio context (holdings + watchlist) for S8 PORTFOLIO-intent queries.
 
-    Auth: InternalJWTMiddleware (RS256).
-    Ownership: X-User-Id header must match the path user_id.
+    Auth: InternalJWTMiddleware (RS256) sets request.state.user_id / tenant_id.
+    Ownership: JWT user_id must match the path user_id (F-CRIT-002).
     """
-    if x_user_id is None or x_user_id != user_id:
-        raise HTTPException(status_code=403, detail="X-User-Id must match path user_id")
+    jwt_user_id = getattr(request.state, "user_id", None)
+    jwt_tenant_id = getattr(request.state, "tenant_id", None)
+
+    if jwt_user_id is None or str(jwt_user_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="JWT user_id must match path user_id")
+
+    if not jwt_tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+
+    tenant_id = UUID(str(jwt_tenant_id))
 
     uc = PortfolioContextUseCase()
     try:
@@ -127,17 +137,22 @@ async def get_portfolio_context(
 async def get_user_for_digest(
     user_id: UUID,
     uow: ReadUoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> UserInternalResponse:
     """Return user email for S10 email digest delivery (PRD-0016 §6.2).
 
     Used by S10 EmailScheduler when ``email_preferences.email_address`` is null.
-    Auth: InternalJWTMiddleware (RS256).
+    Auth: InternalJWTMiddleware (RS256) sets request.state.tenant_id (F-CRIT-002).
     Returns 404 if the user is not found in the tenant.
     """
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    if not raw_tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    tenant_id = UUID(str(raw_tenant_id))
+
     uc = GetUserUseCase()
     try:
-        user = await uc.execute(user_id, x_tenant_id, uow)
+        user = await uc.execute(user_id, tenant_id, uow)
     except EntityNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

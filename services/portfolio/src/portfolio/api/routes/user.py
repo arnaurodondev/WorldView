@@ -1,10 +1,14 @@
-"""User API routes."""
+"""User API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id from the verified
+RS256 JWT (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from portfolio.api.dependencies import UoWDep
 from portfolio.api.schemas import UserCreateRequest, UserResponse
@@ -30,8 +34,12 @@ async def create_user(body: UserCreateRequest, uow: UoWDep) -> UserResponse:
 async def get_user(
     user_id: UUID,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
+    request: Request,
 ) -> UserResponse:
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    if not raw_tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    x_tenant_id = UUID(str(raw_tenant_id))
     uc = GetUserUseCase()
     user = await uc.execute(user_id, x_tenant_id, uow)
     return UserResponse(

@@ -123,29 +123,14 @@ test.describe("GlobalSearch — command dialog", () => {
     }
 
     // Wait for the dialog/combobox to appear
-    const searchInput = page.getByRole("combobox").first();
-    if (!(await searchInput.isVisible({ timeout: 3000 }).catch(() => false))) {
-      // Search dialog might not be implemented yet or uses different ARIA role
-      test.skip();
-      return;
-    }
+    const searchInput = page.locator('[cmdk-input]:visible, input[role="combobox"]:visible, input[placeholder*="Search"]:visible').first();
+    await expect(searchInput).toBeVisible({ timeout: 5000 });
 
     await searchInput.fill("AAPL");
 
     // WHY wait: search is debounced — results appear after a brief delay
-    await page.waitForResponse(
-      (resp) => resp.url().includes("/search/instruments") && resp.status() === 200,
-      { timeout: 5000 },
-    ).catch(() => {
-      // Search might use client-side filtering — that's also acceptable
-    });
-
-    // Results should contain AAPL (either from API or client-side filter)
-    await expect(page.getByText("Apple Inc.")).toBeVisible({ timeout: 5000 }).catch(() => {
-      // If mock response format doesn't match, the test may not find text —
-      // assert at least that the dialog is still open and no crash occurred
-      expect(searchInput).toBeVisible();
-    });
+    // Results should appear after debounce + query
+    await expect(page.getByText("Apple Inc.")).toBeVisible({ timeout: 10000 });
   });
 
   test("search dialog closes on Escape", async ({ page }) => {
@@ -162,19 +147,15 @@ test.describe("GlobalSearch — command dialog", () => {
       await page.keyboard.press("ControlOrMeta+k");
     }
 
-    const combobox = page.getByRole("combobox").first();
-    if (!(await combobox.isVisible({ timeout: 3000 }).catch(() => false))) {
-      test.skip();
-      return;
-    }
+    const combobox = page.locator('[cmdk-input]:visible, input[role="combobox"]:visible, input[placeholder*="Search"]:visible').first();
+    await expect(combobox).toBeVisible({ timeout: 5000 });
 
     // Press Escape — dialog should close
     await page.keyboard.press("Escape");
 
-    // WHY waitFor hidden: dialogs may animate out before fully hidden
-    await expect(combobox).not.toBeVisible({ timeout: 3000 }).catch(() => {
-      // Dialog may not have closed — note but don't fail (might be a feature gap)
-    });
+    // Dropdown results should close while the input remains visible.
+    await expect(page.getByText("Apple Inc.")).not.toBeVisible({ timeout: 5000 });
+    await expect(combobox).toBeVisible();
   });
 });
 
@@ -185,7 +166,7 @@ test.describe("GlobalSearch — no crash guarantee", () => {
 
     await setupAuthAndSearchMocks(page);
     await page.goto("/dashboard");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     const criticalErrors = errors.filter(
       (e) =>

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -42,16 +43,23 @@ def _make_mock_valkey(getdel_result: str | None = None) -> MagicMock:
     valkey.delete = AsyncMock(return_value=0)
     # Atomic GETDEL: returns stored value (or None if key absent) and deletes it.
     valkey.getdel = AsyncMock(return_value=getdel_result)
+    # F-CRIT-003: RateLimitMiddleware needs incr/expire to pass requests through
+    valkey.incr = AsyncMock(return_value=1)
+    valkey.expire = AsyncMock(return_value=True)
 
     return valkey
 
 
 def _make_auth_app(
-    valkey: Any = None,
+    valkey: Any = "auto",
     oidc_config: Any = None,
     httpx_client: Any = None,
 ):
-    """Build a FastAPI test app with pre-configured auth state."""
+    """Build a FastAPI test app with pre-configured auth state.
+
+    ``valkey="auto"`` (default) creates a mock Valkey that allows rate-limited
+    requests through. Pass ``valkey=None`` explicitly to test fail-closed behavior.
+    """
     from api_gateway.app import create_app
     from api_gateway.clients import ServiceClients
     from api_gateway.config import Settings
@@ -94,7 +102,12 @@ def _make_auth_app(
 
     app = create_app(settings)
     app.state.clients = ServiceClients(**{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)})
-    app.state.valkey = valkey
+    if valkey == "auto":
+        # Default: mock Valkey that allows requests through rate limiting (F-CRIT-003)
+        auto_valkey = _make_mock_valkey()
+        app.state.valkey = auto_valkey
+    else:
+        app.state.valkey = valkey
     app.state.oidc_config = oidc_config or _make_oidc_config()
     app.state.rsa_private_key = private_key
     app.state.rsa_public_key = private_key.public_key()
@@ -157,7 +170,12 @@ async def test_login_stores_state_in_valkey() -> None:
 
 @pytest.mark.asyncio
 async def test_login_503_on_valkey_unavailable() -> None:
-    """GET /v1/auth/login returns 503 when Valkey is None (fail-closed)."""
+    """GET /v1/auth/login returns 503 when Valkey is None (fail-closed).
+
+    F-05: Auth endpoints bypass rate limiting (in _AUTH_SKIP_PATHS), so the
+    request reaches the auth route handler which returns 503 because Valkey
+    is unavailable for PKCE state storage.
+    """
     app = _make_auth_app(valkey=None)  # Valkey not available
 
     transport = ASGITransport(app=app)
@@ -165,7 +183,8 @@ async def test_login_503_on_valkey_unavailable() -> None:
         resp = await ac.get("/v1/auth/login")
 
     assert resp.status_code == 503
-    assert resp.json()["error"] == "valkey_unavailable"
+    # Auth route returns its own error when Valkey is unavailable for PKCE storage
+    assert resp.json()["detail"] == "Auth state storage unavailable"
 
 
 # ── Callback endpoint ─────────────────────────────────────────────────────────
@@ -207,6 +226,9 @@ async def test_callback_single_use_state() -> None:
     valkey = MagicMock()
     valkey.set = AsyncMock()
     valkey.getdel = AsyncMock(side_effect=["code-verifier-123", None])
+    # F-CRIT-003: RateLimitMiddleware needs incr/expire to pass requests through
+    valkey.incr = AsyncMock(return_value=1)
+    valkey.expire = AsyncMock(return_value=True)
 
     # httpx_client: first token exchange fails (to stop the flow early)
     httpx_client = MagicMock(spec=httpx.AsyncClient)
@@ -315,3 +337,87 @@ async def test_me_endpoint_rejects_invalid_token() -> None:
         resp = await ac.get("/v1/auth/me", headers={"Authorization": "Bearer not-a-jwt"})
 
     assert resp.status_code == 401
+
+
+# ── Dev-login endpoint ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dev_login_returns_jwt_when_oidc_not_configured() -> None:
+    """POST /v1/auth/dev-login returns access_token when oidc_config is None."""
+    valkey = _make_mock_valkey()
+    app = _make_auth_app(valkey=valkey, oidc_config=None)
+    # Explicitly set oidc_config to None (simulating OIDC_DISCOVERY_OPTIONAL=true)
+    app.state.oidc_config = None
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/dev-login")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "access_token" in body
+    assert body["token_type"] == "Bearer"  # noqa: S105
+    assert body["expires_in"] == 300
+    assert body["user"]["email"] == "demo@worldview.dev"
+    assert body["user"]["user_id"] == "01900000-0000-7000-8000-000000000010"
+    assert body["user"]["tenant_id"] == "01900000-0000-7000-8000-000000000001"
+
+
+@pytest.mark.asyncio
+async def test_dev_login_returns_403_when_oidc_configured() -> None:
+    """POST /v1/auth/dev-login returns 403 when OIDC IS configured (production)."""
+    app = _make_auth_app()  # Default: oidc_config is populated
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/dev-login")
+
+    assert resp.status_code == 403
+    assert resp.json()["error"] == "dev_login_disabled"
+
+
+@pytest.mark.asyncio
+async def test_dev_login_caches_user_in_valkey() -> None:
+    """POST /v1/auth/dev-login stores user identity in Valkey cache."""
+    valkey = _make_mock_valkey()
+    app = _make_auth_app(valkey=valkey)
+    app.state.oidc_config = None
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/dev-login")
+
+    assert resp.status_code == 200
+    # Verify Valkey.set was called with the demo user cache key
+    valkey.set.assert_called()
+    call_args = valkey.set.call_args
+    key = call_args[0][0]
+    assert key == "auth:user:dev-user"
+
+
+@pytest.mark.asyncio
+async def test_dev_login_token_is_valid_jwt() -> None:
+    """POST /v1/auth/dev-login returns a JWT decodable with the app's public key."""
+    valkey = _make_mock_valkey()
+    app = _make_auth_app(valkey=valkey)
+    app.state.oidc_config = None
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/dev-login")
+
+    assert resp.status_code == 200
+    token = resp.json()["access_token"]
+
+    # Decode with the app's public key — should not raise
+    claims = jwt.decode(
+        token,
+        app.state.rsa_public_key,
+        algorithms=["RS256"],
+        options={"require": ["iss", "sub", "exp"]},
+        issuer="worldview-gateway",
+    )
+    assert claims["sub"] == "01900000-0000-7000-8000-000000000010"
+    assert claims["tenant_id"] == "01900000-0000-7000-8000-000000000001"
+    assert claims["role"] == "user"

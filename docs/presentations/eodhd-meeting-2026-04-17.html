@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worldview — Financial Intelligence Platform</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
+  /* ─── Reset & base ─────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:         #131722;
+    --card:       #1E2329;
+    --muted:      #2B3139;
+    --border:     #2B3139;
+    --fg:         #D1D4DC;
+    --fg-muted:   #787B86;
+    --accent:     #0EA5E9;
+    --positive:   #26A69A;
+    --negative:   #EF5350;
+    --warning:    #F59E0B;
+    --sans:       'IBM Plex Sans', system-ui, sans-serif;
+    --mono:       'IBM Plex Mono', 'Courier New', monospace;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* ─── Slide engine ──────────────────────────────────────────────────── */
+  .deck { width: 100vw; height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 56px 72px;
+    overflow: hidden;
+  }
+  .slide.active { display: flex; }
+
+  /* ─── Navigation ────────────────────────────────────────────────────── */
+  .nav {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    z-index: 100;
+    font-size: 13px;
+    color: var(--fg-muted);
+    font-family: var(--mono);
+  }
+  .nav button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 13px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .nav button:hover { border-color: var(--accent); color: var(--accent); }
+  #slide-counter { min-width: 60px; text-align: center; }
+
+  /* ─── Typography helpers ────────────────────────────────────────────── */
+  .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  h1 {
+    font-size: 52px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+  }
+  h2 {
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin-bottom: 32px;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 8px;
+  }
+  p { font-size: 16px; line-height: 1.65; color: var(--fg-muted); }
+  .lead { font-size: 20px; line-height: 1.6; color: var(--fg); font-weight: 300; }
+  .mono { font-family: var(--mono); }
+
+  /* ─── Layout helpers ────────────────────────────────────────────────── */
+  .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .cols-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+  .spacer-sm { height: 16px; }
+  .spacer { height: 32px; }
+  .fill { flex: 1; }
+
+  /* ─── Cards ─────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+  }
+  .card-accent { border-left: 3px solid var(--accent); }
+  .card-positive { border-left: 3px solid var(--positive); }
+  .card-warning { border-left: 3px solid var(--warning); }
+
+  /* ─── Chips / tags ───────────────────────────────────────────────────── */
+  .chip {
+    display: inline-block;
+    background: var(--muted);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin: 3px 3px 3px 0;
+  }
+  .chip-positive { color: var(--positive); }
+  .chip-warning  { color: var(--warning); }
+  .chip-muted    { color: var(--fg-muted); }
+
+  /* ─── Divider ────────────────────────────────────────────────────────── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+  /* ─── Image placeholder ──────────────────────────────────────────────── */
+  .img-placeholder {
+    background: var(--card);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    gap: 8px;
+    min-height: 200px;
+  }
+  .img-placeholder svg { opacity: 0.4; }
+  .img-placeholder img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 7px;
+  }
+
+  /* ─── Stat box ───────────────────────────────────────────────────────── */
+  .stat { text-align: center; padding: 24px 16px; }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 36px;
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .stat-label { font-size: 13px; color: var(--fg-muted); }
+
+  /* ─── List ───────────────────────────────────────────────────────────── */
+  ul.clean { list-style: none; }
+  ul.clean li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    font-size: 15px;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  ul.clean li:last-child { border-bottom: none; }
+  ul.clean li::before {
+    content: '→';
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 13px;
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+  ul.clean li strong { color: var(--fg); font-weight: 500; }
+
+  /* ─── Flow nodes ──────────────────────────────────────────────────────── */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+  }
+  .flow-node {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-family: var(--mono);
+    color: var(--fg);
+    white-space: nowrap;
+  }
+  .flow-node.accent { border-color: var(--accent); color: var(--accent); }
+  .flow-node.positive { border-color: var(--positive); color: var(--positive); }
+  .flow-arrow {
+    color: var(--fg-muted);
+    font-size: 18px;
+    margin: 0 8px;
+    font-family: var(--mono);
+  }
+
+  /* ─── Graph viz placeholder ──────────────────────────────────────────── */
+  .graph-demo {
+    position: relative;
+    width: 100%;
+    height: 220px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .graph-demo svg { width: 100%; height: 100%; }
+
+  /* ─── Slide: Title ───────────────────────────────────────────────────── */
+  #s1 { justify-content: center; }
+  #s1 .subtitle {
+    font-size: 18px;
+    color: var(--fg-muted);
+    font-weight: 300;
+    margin-top: 16px;
+    margin-bottom: 48px;
+  }
+  #s1 .meta {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg-muted);
+    display: flex;
+    gap: 32px;
+  }
+  #s1 .meta span { color: var(--fg); }
+  #s1 .wordmark {
+    font-size: 72px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    background: linear-gradient(135deg, #D1D4DC 0%, #0EA5E9 60%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 8px;
+  }
+  #s1 .tagline {
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--fg-muted);
+    letter-spacing: 0.01em;
+  }
+  .accent-bar {
+    width: 48px;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+    margin: 24px 0;
+  }
+
+  /* ─── Slide: section marker ──────────────────────────────────────────── */
+  .section-marker {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    margin-bottom: 4px;
+  }
+
+  /* ─── KG edge SVG ────────────────────────────────────────────────────── */
+  .kg-svg { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 1 — Title                                                     -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide active" id="s1">
+    <div class="wordmark">Worldview</div>
+    <div class="tagline">Financial Intelligence Platform</div>
+    <div class="accent-bar"></div>
+    <p class="lead" style="max-width:540px;">
+      Giving individual investors the same information layer
+      that institutional desks take for granted.
+    </p>
+    <div class="spacer"></div>
+    <div class="meta">
+      Author — <span>Arnau Rodon</span> &nbsp;·&nbsp;
+      Institution — <span>Universitat Pompeu Fabra</span> &nbsp;·&nbsp;
+      Year — <span>2026</span>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 2 — The Problem                                               -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s2">
+    <div class="label">Motivation</div>
+    <h2>The information gap</h2>
+    <div class="cols-2" style="flex:1; align-items:start;">
+      <div>
+        <div class="card card-accent" style="margin-bottom:16px;">
+          <h3 style="color:var(--accent); margin-bottom:8px;">Institutional desk</h3>
+          <ul class="clean">
+            <li><strong>Bloomberg Terminal</strong> — unified data + news + analytics</li>
+            <li><strong>NLP pipelines</strong> — articles scored by market relevance the moment they publish</li>
+            <li><strong>Knowledge graphs</strong> — entities linked across filings, news, and price events</li>
+            <li><strong>RAG-powered research</strong> — ask questions, get answers grounded in data</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="color:var(--fg-muted); margin-bottom:8px;">Individual investor</h3>
+          <ul class="clean">
+            <li><strong>Scattered tabs</strong> — Yahoo Finance, Seeking Alpha, Twitter, SEC EDGAR</li>
+            <li><strong>No scoring</strong> — every headline looks equally important</li>
+            <li><strong>No context</strong> — can't see how entities relate across events</li>
+            <li><strong>$24k/year</strong> — Bloomberg entry price; effectively zero access</li>
+          </ul>
+        </div>
+        <div class="card card-warning">
+          <p style="font-size:14px; color:var(--warning);">
+            The tooling gap isn't about data availability — EODHD, Polymarket,
+            and public filings make data cheap. It's about <strong style="color:var(--fg);">the intelligence layer on top of it</strong>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 3 — What Worldview Does                                       -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s3">
+    <div class="label">Platform overview</div>
+    <h2>What Worldview does</h2>
+    <div class="cols-3" style="flex:1; align-items:start;">
+      <div class="card card-accent">
+        <div class="label" style="margin-bottom:12px;">01</div>
+        <h3>Ingest &amp; Score</h3>
+        <div class="spacer-sm"></div>
+        <p style="font-size:14px;">
+          Continuously pulls news, fundamentals, OHLCV, insider transactions,
+          and prediction market odds. Every article is scored for market
+          relevance and impact window (T+0 to T+5 days).
+        </p>
+        <div class="spacer-sm"></div>
+        <span class="chip">EODHD</span>
+        <span class="chip">Polymarket</span>
+        <span class="chip">SEC EDGAR</span>
+      </div>
+      <div class="card card-accent">
+        <div class="label" style="margin-bottom:12px;">02</div>
+        <h3>Build Context</h3>
+        <div class="spacer-sm"></div>
+        <p style="font-size:14px;">
+          NLP pipeline extracts named entities (companies, people, locations,
+          products) and links them in a knowledge graph. Every entity accumulates
+          a timeline of events, articles, and price movements.
+        </p>
+        <div class="spacer-sm"></div>
+        <span class="chip">NER</span>
+        <span class="chip">Knowledge Graph</span>
+        <span class="chip">Embeddings</span>
+      </div>
+      <div class="card card-accent">
+        <div class="label" style="margin-bottom:12px;">03</div>
+        <h3>Surface Intelligence</h3>
+        <div class="spacer-sm"></div>
+        <p style="font-size:14px;">
+          Scored news feed, entity explorer with relationship graph,
+          portfolio analytics with intelligence overlay, flash alerts,
+          and a RAG-powered chat interface grounded in real market data.
+        </p>
+        <div class="spacer-sm"></div>
+        <span class="chip">RAG Chat</span>
+        <span class="chip">Flash Alerts</span>
+        <span class="chip">Portfolio</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 4 — EODHD Integration                                        -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s4">
+    <div class="label">Data layer</div>
+    <h2>How Worldview uses EODHD</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <ul class="clean">
+          <li>
+            <div>
+              <strong>End-of-day prices + OHLCV</strong>
+              <div style="font-size:13px; margin-top:2px; color:var(--fg-muted);">
+                Core time-series for every tracked instrument. Used to compute
+                article impact windows (price Δ at T+0/1/2/5 days).
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Fundamental data</strong>
+              <div style="font-size:13px; margin-top:2px; color:var(--fg-muted);">
+                Income statement, balance sheet, cash flows per entity.
+                Drives the Fundamentals tab in the entity detail panel.
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>News API</strong>
+              <div style="font-size:13px; margin-top:2px; color:var(--fg-muted);">
+                Primary article source. Every article enters the NLP pipeline
+                for entity extraction, embedding, and relevance scoring.
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Insider transactions</strong>
+              <div style="font-size:13px; margin-top:2px; color:var(--fg-muted);">
+                Form 4 filings. Surfaced as timeline events in the knowledge
+                graph and flagged as high-signal inputs for alert scoring.
+              </div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Economic indicators + calendar</strong>
+              <div style="font-size:13px; margin-top:2px; color:var(--fg-muted);">
+                Macro events (CPI, FOMC, NFP) ingested as temporal nodes in
+                the knowledge graph. Regional filtering supported.
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+      <div>
+        <div class="card card-positive" style="margin-bottom:16px;">
+          <h3 style="color:var(--positive); margin-bottom:8px;">Why EODHD specifically</h3>
+          <p style="font-size:14px;">
+            Breadth across fundamentals, news, and historical prices from a
+            single provider — without the five-figure enterprise contract.
+            At thesis scale, that's what made a production-grade multi-source
+            architecture actually feasible.
+          </p>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 style="margin-bottom:8px;">Data flow</h3>
+          <div class="flow" style="flex-wrap:wrap; gap:6px;">
+            <div class="flow-node accent">EODHD API</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-node">S2 Market Ingestion</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-node">Kafka topic</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-node">S6 NLP Pipeline</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-node positive">Knowledge Graph</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:8px;">Observed limitations (feedback)</h3>
+          <ul class="clean" style="font-size:13px;">
+            <li>Officers/management data absent from fundamentals endpoint</li>
+            <li>Insider transactions require a separate API call per ticker</li>
+            <li>News deduplication needed — same story syndicated 3–5×</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 5 — Architecture                                              -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s5">
+    <div class="label">Technical design</div>
+    <h2>System architecture</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <p style="font-size:14px; margin-bottom:20px;">
+          Worldview is a <strong>10-service event-driven monorepo</strong>.
+          Each service owns its domain completely — no cross-service database access.
+          All inter-service communication goes through Kafka or REST.
+        </p>
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:10px; font-size:14px; color:var(--fg-muted); text-transform:uppercase; letter-spacing:0.06em;">Services</h3>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:13px; font-family:var(--mono);">
+            <span style="color:var(--accent);">S1</span><span style="color:var(--fg-muted);">User &amp; Auth</span>
+            <span style="color:var(--accent);">S2</span><span style="color:var(--fg-muted);">Market Ingestion</span>
+            <span style="color:var(--accent);">S3</span><span style="color:var(--fg-muted);">Market Data API</span>
+            <span style="color:var(--accent);">S4</span><span style="color:var(--fg-muted);">Content Ingestion</span>
+            <span style="color:var(--accent);">S5</span><span style="color:var(--fg-muted);">Content Store</span>
+            <span style="color:var(--accent);">S6</span><span style="color:var(--fg-muted);">NLP Pipeline</span>
+            <span style="color:var(--accent);">S7</span><span style="color:var(--fg-muted);">Knowledge Graph</span>
+            <span style="color:var(--accent);">S8</span><span style="color:var(--fg-muted);">RAG Chat</span>
+            <span style="color:var(--accent);">S9</span><span style="color:var(--fg-muted);">API Gateway</span>
+            <span style="color:var(--accent);">S10</span><span style="color:var(--fg-muted);">Alert Engine</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:10px; font-size:14px; color:var(--fg-muted); text-transform:uppercase; letter-spacing:0.06em;">Shared libraries</h3>
+          <div>
+            <span class="chip">common</span>
+            <span class="chip">contracts</span>
+            <span class="chip">messaging</span>
+            <span class="chip">storage</span>
+            <span class="chip">observability</span>
+            <span class="chip">ml-clients</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card card-accent" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:8px;">Stack</h3>
+          <div style="display:grid; grid-template-columns:auto 1fr; gap:4px 16px; font-size:13px;">
+            <span style="color:var(--fg-muted);">Backend</span><span>Python 3.12 + FastAPI (hexagonal architecture)</span>
+            <span style="color:var(--fg-muted);">Frontend</span><span>Next.js 15 App Router + shadcn/ui</span>
+            <span style="color:var(--fg-muted);">Messaging</span><span>Kafka + Avro schemas (schema registry)</span>
+            <span style="color:var(--fg-muted);">Storage</span><span>PostgreSQL + pgvector + MinIO (S3)</span>
+            <span style="color:var(--fg-muted);">Cache</span><span>Valkey (Redis-compatible)</span>
+            <span style="color:var(--fg-muted);">Auth</span><span>Zitadel OIDC + RS256 internal JWT</span>
+            <span style="color:var(--fg-muted);">ML models</span><span>Ollama local + DeepInfra (DeepSeek R1 32B)</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:8px;">By the numbers</h3>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border);">
+            <div class="stat" style="background:var(--card);">
+              <div class="stat-value">10</div>
+              <div class="stat-label">Microservices</div>
+            </div>
+            <div class="stat" style="background:var(--card);">
+              <div class="stat-value">6</div>
+              <div class="stat-label">Shared libs</div>
+            </div>
+            <div class="stat" style="background:var(--card);">
+              <div class="stat-value">3,200+</div>
+              <div class="stat-label">Tests passing</div>
+            </div>
+            <div class="stat" style="background:var(--card);">
+              <div class="stat-value">20+</div>
+              <div class="stat-label">Kafka topics</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 6 — Knowledge Graph                                           -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s6">
+    <div class="label">Core feature</div>
+    <h2>The Knowledge Graph</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <p style="font-size:15px; margin-bottom:20px; color:var(--fg);">
+          The knowledge graph is the connective tissue of the platform —
+          it turns isolated data points into a navigable web of context.
+        </p>
+        <div class="card card-accent" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:10px;">What nodes represent</h3>
+          <ul class="clean" style="font-size:14px;">
+            <li><strong>Financial instruments</strong> — stocks, ETFs, bonds</li>
+            <li><strong>Companies &amp; organisations</strong> — the legal entities behind instruments</li>
+            <li><strong>People</strong> — executives, analysts, regulators (extracted from news &amp; filings)</li>
+            <li><strong>Events</strong> — earnings, M&amp;A, macro announcements, insider trades</li>
+            <li><strong>Topics</strong> — macro themes (inflation, rate cuts, AI capex)</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:10px;">What edges represent</h3>
+          <ul class="clean" style="font-size:14px;">
+            <li><strong>MENTIONED_IN</strong> — entity ↔ article co-occurrence</li>
+            <li><strong>CORRELATED_WITH</strong> — price correlation across instruments</li>
+            <li><strong>EMPLOYS / EMPLOYED_BY</strong> — company ↔ person relationships</li>
+            <li><strong>IMPACTED_BY</strong> — instrument ↔ macro event with price delta</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:10px;">How it is built</h3>
+          <div class="flow" style="flex-direction:column; align-items:flex-start; gap:8px;">
+            <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+              <div class="flow-node accent" style="min-width:120px; text-align:center;">Article ingested</div>
+              <div class="flow-arrow">→</div>
+              <span style="color:var(--fg-muted);">S6 NLP pipeline runs GLiNER NER</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:13px; padding-left:32px;">
+              <div class="flow-arrow">↓</div>
+              <span style="color:var(--fg-muted);">Entities resolved to canonical IDs</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:13px; padding-left:32px;">
+              <div class="flow-arrow">↓</div>
+              <span style="color:var(--fg-muted);">BGE embeddings stored in pgvector</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:13px; padding-left:32px;">
+              <div class="flow-arrow">↓</div>
+              <span style="color:var(--fg-muted);">Edges created/updated in S7 graph DB</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:13px; padding-left:32px;">
+              <div class="flow-arrow">↓</div>
+              <div class="flow-node positive" style="min-width:120px; text-align:center;">Graph queryable via S9</div>
+            </div>
+          </div>
+        </div>
+        <div class="card card-positive">
+          <h3 style="margin-bottom:8px; color:var(--positive);">Why this matters</h3>
+          <p style="font-size:14px;">
+            When Apple reports earnings, the graph already knows which suppliers
+            are mentioned in analyst coverage, which executives filed recent
+            insider trades, and which macro events historically correlated
+            with its price movement. That context surfaces automatically —
+            no manual curation required.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 7 — Knowledge Graph screenshot                                -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s7">
+    <div class="label">Knowledge Graph — Design</div>
+    <h2>Entity graph visualisation</h2>
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px;">
+      <div class="img-placeholder" style="flex:1;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+        </svg>
+        <span>[ screenshot — State C entity graph canvas ]</span>
+      </div>
+      <div class="cols-3">
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Layout engine</h3>
+          <p style="font-size:13px; color:var(--accent);">Cytoscape.js + COSE-Bilkent</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Node types</h3>
+          <p style="font-size:13px;">Instrument · Company · Person · Event · Topic</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Interaction</h3>
+          <p style="font-size:13px;">Click to expand · Hover for edge weight · Filter by type</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 8 — News Intelligence                                         -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s8">
+    <div class="label">Intelligence layer</div>
+    <h2>News Intelligence feed</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <div class="img-placeholder" style="min-height:260px; flex:1;">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 6h16M4 12h16M4 18h10"/>
+          </svg>
+          <span>[ screenshot — news feed / State B ]</span>
+        </div>
+      </div>
+      <div>
+        <div class="card card-accent" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:10px;">Relevance scoring pipeline</h3>
+          <div style="font-size:13px; color:var(--fg-muted);">
+            Every article receives a composite score:
+          </div>
+          <div style="font-family:var(--mono); font-size:13px; margin-top:12px; padding:12px; background:var(--muted); border-radius:4px;">
+            display_score =<br>
+            &nbsp;&nbsp;<span style="color:var(--accent);">0.5</span> × market_relevance<br>
+            &nbsp;&nbsp;+ <span style="color:var(--positive);">0.4</span> × llm_relevance<br>
+            &nbsp;&nbsp;+ <span style="color:var(--warning);">0.1</span> × routing_score
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:8px;">Impact windows</h3>
+          <p style="font-size:14px;">
+            For each article, price impact is measured at T+0, T+1, T+2, and T+5 days
+            across all mentioned instruments. This creates a labelled dataset linking
+            news events to verifiable market outcomes.
+          </p>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:8px;">LLM scoring model</h3>
+          <p style="font-size:14px; color:var(--fg-muted);">
+            <span style="color:var(--fg);">Qwen2.5:3b</span> running locally — title-only prompt,
+            zero latency cost. Output: 0–1 relevance score per entity–article pair.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 9 — Dashboard & Screener                                      -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s9">
+    <div class="label">Interface — State A</div>
+    <h2>Dashboard &amp; Screener</h2>
+    <div style="flex:1; display:flex; flex-direction:column; gap:16px;">
+      <div class="img-placeholder" style="flex:1;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+        </svg>
+        <span>[ screenshot — dashboard / screener canvas ]</span>
+      </div>
+      <div class="cols-4">
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Market heatmap</h3>
+          <p style="font-size:13px;">7-step colour scale by daily return</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Screener</h3>
+          <p style="font-size:13px;">Filter by sector, market cap, signal score</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Watchlist</h3>
+          <p style="font-size:13px;">Live P&amp;L + intelligence score per instrument</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size:13px; color:var(--fg-muted); margin-bottom:4px;">Flash alerts</h3>
+          <p style="font-size:13px;">LOW / MEDIUM / HIGH / CRITICAL severity</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 10 — RAG Chat                                                 -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s10">
+    <div class="label">Interface — State F</div>
+    <h2>RAG-powered intelligence chat</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <div class="img-placeholder" style="min-height:280px;">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>[ screenshot — RAG chat interface ]</span>
+        </div>
+      </div>
+      <div>
+        <div class="card card-accent" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:8px;">How it works</h3>
+          <ul class="clean" style="font-size:14px;">
+            <li>User submits natural-language question</li>
+            <li><strong>nomic-embed-text</strong> encodes the query</li>
+            <li>pgvector HNSW index retrieves top-k article chunks</li>
+            <li><strong>bge-reranker-v2-m3</strong> re-ranks results</li>
+            <li><strong>DeepSeek R1 Distill 32B</strong> generates grounded answer</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-bottom:12px;">
+          <h3 style="margin-bottom:8px;">Example queries</h3>
+          <div style="font-family:var(--mono); font-size:13px; color:var(--fg-muted);">
+            <div style="padding:6px 0; border-bottom:1px solid var(--border);">"Why did NVDA drop 4% on Tuesday?"</div>
+            <div style="padding:6px 0; border-bottom:1px solid var(--border);">"What are analysts saying about Apple's supply chain?"</div>
+            <div style="padding:6px 0;">"Which companies have high insider selling this month?"</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:4px; font-size:13px; color:var(--fg-muted);">Chat model</h3>
+          <p style="font-size:13px; color:var(--fg);">DeepSeek R1 Distill 32B via DeepInfra<br><span style="color:var(--fg-muted);">Fallback chain: OpenRouter → Groq → Ollama local</span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 11 — Status & Roadmap                                         -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s11">
+    <div class="label">Project status</div>
+    <h2>Where things stand</h2>
+    <div class="cols-2" style="flex:1; align-items:start; gap:40px;">
+      <div>
+        <h3 style="margin-bottom:12px; color:var(--positive);">Done</h3>
+        <ul class="clean" style="font-size:14px;">
+          <li><strong>All 10 backend services</strong> implemented and tested (3,200+ tests)</li>
+          <li><strong>NLP pipeline</strong> — NER, embeddings, scoring, impact windows</li>
+          <li><strong>Knowledge graph</strong> — entity resolution, edge creation, vector search</li>
+          <li><strong>Auth foundation</strong> — Zitadel OIDC, RS256 internal JWT, all services secured</li>
+          <li><strong>Prediction markets</strong> — Polymarket integration (S4 + S3)</li>
+          <li><strong>Flash alerts</strong> — alert engine with severity scoring (S10)</li>
+          <li><strong>RAG Chat</strong> — end-to-end pipeline live (S8)</li>
+          <li><strong>Full design system</strong> — Bloomberg-grade dark UI, all 9 canvas states complete</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="margin-bottom:12px; color:var(--warning);">In progress</h3>
+        <ul class="clean" style="font-size:14px;">
+          <li><strong>Frontend implementation</strong> — scaffolding the Next.js 15 app from canvas designs</li>
+          <li><strong>Content ingestion wave</strong> — S4 news pipeline robustness pass</li>
+        </ul>
+        <div class="spacer"></div>
+        <h3 style="margin-bottom:12px; color:var(--fg-muted);">Thesis context</h3>
+        <div class="card">
+          <p style="font-size:14px;">
+            Worldview is a thesis project at UPF Barcelona — built to production-grade
+            engineering standards rather than as a toy prototype. The academic
+            contribution is the end-to-end architecture for retail-accessible
+            financial intelligence, validated through the platform itself.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <!-- SLIDE 12 — Closing                                                  -->
+  <!-- ─────────────────────────────────────────────────────────────────── -->
+  <div class="slide" id="s12">
+    <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+      <div class="label">Thank you</div>
+      <div class="wordmark" style="font-size:52px; font-weight:700; letter-spacing:-0.02em; line-height:1;
+           background:linear-gradient(135deg,#D1D4DC 0%,#0EA5E9 60%);
+           -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; margin-bottom:16px;">
+        Worldview
+      </div>
+      <div class="accent-bar"></div>
+      <p class="lead" style="max-width:500px; margin-bottom:40px;">
+        Happy to go deeper on any part —<br>
+        architecture, data pipeline, design, or the research angle.
+      </p>
+      <div class="cols-3" style="max-width:600px;">
+        <div class="card">
+          <div style="font-family:var(--mono); font-size:11px; color:var(--fg-muted); margin-bottom:4px;">Author</div>
+          <div style="font-size:14px; font-weight:500;">Arnau Rodon</div>
+        </div>
+        <div class="card">
+          <div style="font-family:var(--mono); font-size:11px; color:var(--fg-muted); margin-bottom:4px;">Institution</div>
+          <div style="font-size:14px; font-weight:500;">UPF Barcelona</div>
+        </div>
+        <div class="card">
+          <div style="font-family:var(--mono); font-size:11px; color:var(--fg-muted); margin-bottom:4px;">Date</div>
+          <div style="font-size:14px; font-weight:500; font-family:var(--mono);">2026-04-17</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /deck -->
+
+<!-- ─── Navigation bar ──────────────────────────────────────────────────── -->
+<div class="nav">
+  <button onclick="go(-1)">← prev</button>
+  <span id="slide-counter">1 / 12</span>
+  <button onclick="go(+1)">next →</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let cur = 0;
+
+  function show(n) {
+    slides[cur].classList.remove('active');
+    cur = (n + slides.length) % slides.length;
+    slides[cur].classList.add('active');
+    document.getElementById('slide-counter').textContent = `${cur + 1} / ${slides.length}`;
+  }
+
+  function go(delta) { show(cur + delta); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') go(+1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                     go(-1);
+  });
+</script>
+</body>
+</html>

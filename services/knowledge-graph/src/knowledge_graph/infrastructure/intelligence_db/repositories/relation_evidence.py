@@ -204,6 +204,51 @@ LIMIT :limit
             for r in rows
         ]
 
+    async def get_all_for_relation(
+        self,
+        relation_id: UUID,
+        limit: int = 10,
+    ) -> list[dict[str, object]]:
+        """Fetch immutable evidence rows for a given relation (Worker 13C summary).
+
+        Orders by ``source_weight DESC, evidence_date DESC`` to surface the
+        highest-quality, most-recent evidence first.
+
+        Note: ``relation_evidence`` has a composite PK ``(evidence_id, evidence_date)``
+        due to RANGE partitioning.  This query uses ``idx_rel_evidence_relation``
+        which includes ``evidence_date``, enabling partition pruning.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT evidence_id, relation_id, doc_id, chunk_id,
+       evidence_text, canonicalized_evidence_text,
+       extraction_confidence, source_weight, evidence_date,
+       claim_id, created_at
+FROM relation_evidence
+WHERE relation_id = :relation_id
+ORDER BY source_weight DESC, evidence_date DESC
+LIMIT :limit
+"""),
+            {"relation_id": str(relation_id), "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "evidence_id": UUID(str(r[0])),
+                "relation_id": UUID(str(r[1])),
+                "doc_id": UUID(str(r[2])),
+                "chunk_id": UUID(str(r[3])) if r[3] else None,
+                "evidence_text": r[4],
+                "canonicalized_evidence_text": r[5],
+                "extraction_confidence": float(r[6]),
+                "source_weight": float(r[7]),
+                "evidence_date": r[8],
+                "claim_id": UUID(str(r[9])) if r[9] else None,
+                "created_at": r[10],
+            }
+            for r in rows
+        ]
+
     async def mark_processed(self, raw_ids: list[UUID], processed_at: datetime) -> None:
         """Mark a batch of raw evidence rows as processed."""
         if not raw_ids:

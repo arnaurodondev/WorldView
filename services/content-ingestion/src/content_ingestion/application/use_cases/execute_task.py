@@ -119,13 +119,31 @@ class ExecuteContentTaskUseCase:
             # Fatal: exhaust attempts immediately
             task.attempt_count = task.max_attempts
             task.fail(str(exc))
-            await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            try:
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            except Exception as db_err:
+                logger.error(
+                    "task_status_update_failed",
+                    task_id=str(task.id),
+                    original_error=str(exc),
+                    db_error=str(db_err),
+                )
+                raise db_err from exc
             logger.error("task_fatal_error", task_id=str(task.id), error=str(exc))
             return None
         except Exception as exc:
             # Retryable
             task.fail(str(exc))
-            await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            try:
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            except Exception as db_err:
+                logger.error(
+                    "task_status_update_failed",
+                    task_id=str(task.id),
+                    original_error=str(exc),
+                    db_error=str(db_err),
+                )
+                raise db_err from exc
             logger.warning("task_retryable_error", task_id=str(task.id), error=str(exc))
             return None
 
@@ -159,17 +177,20 @@ class ExecuteContentTaskUseCase:
             pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
         ):
             if not acquired:
-                # Another worker holds the lock — treat as success (no duplicates written).
-                # Write the status to DB before mutating domain object (same pattern as below).
+                # Another worker holds the lock — mark RETRY so the task is
+                # re-attempted later (D-003).  We must NOT mark SUCCEEDED because
+                # the data write did not happen in *this* worker.
                 from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
 
                 if self._task_factory is not None:
+                    # F-CRIT-004: always use task_factory(session) inside the
+                    # write_factory session — never the outer task_repo.
                     inner_task_repo = self._task_factory(session)
-                    await inner_task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                    await inner_task_repo.update_status(task.id, IngestionTaskStatus.RETRY)
                     await session.commit()
                 else:
-                    await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
-                task.succeed()  # Domain object updated after DB write
+                    await task_repo.update_status(task.id, IngestionTaskStatus.RETRY)
+                task.retry("advisory_lock_held_by_another_worker")
                 return None
 
             fetch_log_repo = self._fetch_log_factory(session)

@@ -60,12 +60,18 @@ def _make_mock_object_store():
 
 @pytest.fixture
 def app_with_overrides():
-    """Create the app with all external dependencies replaced by mocks."""
+    """Create the app with all external dependencies replaced by mocks.
+
+    F-001: internal_jwt_skip_verification=True allows unit tests (without lifespan /
+    JWKS server) to pass JWTs through the middleware without signature verification.
+    In production this defaults to False (fail-closed).
+    """
     from market_ingestion.config import Settings
 
-    app = create_app()
+    # F-001: skip_verification=True so the middleware decodes JWTs without a public key
+    test_settings = Settings(internal_jwt_skip_verification=True)  # type: ignore[call-arg]
+    app = create_app(test_settings)
     mock_uow = _make_mock_uow()
-    test_settings = Settings()  # type: ignore[call-arg]
 
     def override_get_settings() -> Settings:
         return test_settings
@@ -76,8 +82,11 @@ def app_with_overrides():
     app.dependency_overrides[get_settings] = override_get_settings
     app.dependency_overrides[get_uow] = override_get_uow
     app.dependency_overrides[get_object_store] = _make_mock_object_store
-    yield app, mock_uow
-    app.dependency_overrides.clear()
+    try:
+        yield app, mock_uow
+    finally:
+        # F-MIN-003: ensure overrides are always cleared, even if the test raises.
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -383,10 +392,10 @@ async def test_trigger_without_jwt_returns_401(app_with_overrides):
 
 
 @pytest.mark.asyncio
-async def test_trigger_with_malformed_jwt_passes_through(app_with_overrides):
-    """POST /trigger with a malformed X-Internal-JWT is decoded without verification
-    when no public key is loaded (unit test without lifespan) — DecodeError path sets
-    empty state and passes to the route handler.
+async def test_ingest_trigger_with_malformed_jwt_unit_mode(app_with_overrides):
+    """D-005: Unit mode (skip_verification=True) — malformed JWT decoded without
+    signature verification. DecodeError path sets empty state but the request
+    reaches the route handler, which accepts it (202).
     """
     app, _ = app_with_overrides
     transport = ASGITransport(app=app)
@@ -399,8 +408,36 @@ async def test_trigger_with_malformed_jwt_passes_through(app_with_overrides):
             "/api/v1/ingest/trigger",
             json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
         )
-    # DecodeError path → empty state → request passes to route → 202 (UoW mocked)
-    assert resp.status_code in (202, 401, 422)
+    # skip_verification=True → DecodeError path → empty state → route handler → 202
+    assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_ingest_trigger_with_malformed_jwt_rejects_with_real_verification():
+    """D-005: Integration mode (skip_verification=False, no JWKS) — malformed JWT
+    is rejected because the middleware has no public key and fail-closed is active.
+    """
+    from market_ingestion.config import Settings
+
+    # Real verification mode: skip_verification defaults to False
+    test_settings = Settings(internal_jwt_skip_verification=False)  # type: ignore[call-arg]
+    app = create_app(test_settings)
+
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            headers={"X-Internal-JWT": "not.a.jwt"},
+        ) as ac:
+            resp = await ac.post(
+                "/api/v1/ingest/trigger",
+                json={"provider": "eodhd", "symbols": ["AAPL"], "dataset_type": "ohlcv"},
+            )
+        # F-001: no public key + skip_verification=False → 503 (fail-closed)
+        assert resp.status_code in (401, 503)
+    finally:
+        app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -514,11 +551,11 @@ async def test_policies_requires_jwt(app_with_overrides):
 
 
 @pytest.mark.asyncio
-async def test_metrics_requires_jwt(app_with_overrides):
-    """GET /metrics must be protected by InternalJWTMiddleware (PRD-0025).
+async def test_metrics_accessible_without_jwt(app_with_overrides):
+    """GET /metrics is in _SKIP_PREFIXES — middleware skips auth (PRD-0025).
 
-    The /metrics path starts with /metrics which is in _SKIP_PREFIXES, so it
-    passes through the middleware without auth. This verifies the skip behavior.
+    F-NIT-004: renamed from test_metrics_requires_jwt because the assertion
+    is ``== 200`` (accessible without JWT), not 401.
     """
     app, _ = app_with_overrides
     transport = ASGITransport(app=app)

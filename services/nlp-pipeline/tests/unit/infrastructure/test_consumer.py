@@ -89,6 +89,57 @@ class TestArticleConsumerIdempotency:
 
 
 @pytest.mark.unit
+class TestBackpressureSemaphoreIdempotency:
+    """F-MAJOR-001: backpressure slot must NOT be acquired when the message is a duplicate."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_message_does_not_acquire_semaphore(self) -> None:
+        """When a duplicate message is received (routing_decision exists), the
+        backpressure semaphore count must not decrease — the slot is never acquired.
+        """
+        from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
+
+        bp = BackpressureController(max_depth=2, resume_depth=1)
+        assert bp.current_depth == 0
+
+        # Build a mock session factory where the routing check returns an
+        # existing routing_decision (i.e. duplicate doc_id).
+        mock_routing_decision = MagicMock()  # non-None → duplicate
+        _exec_result = MagicMock()
+        _exec_result.scalar_one_or_none = MagicMock(return_value=mock_routing_decision)
+
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=_exec_result)
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        nlp_sf = MagicMock(return_value=mock_cm)
+
+        consumer = _make_consumer(nlp_session_factory=nlp_sf, backpressure=bp)
+
+        doc_id = uuid.uuid4()
+        value = {
+            "doc_id": str(doc_id),
+            "minio_silver_key": "bucket/key",
+            "source_type": "eodhd",
+            "event_id": str(uuid.uuid4()),
+        }
+        with patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.RoutingDecisionRepository"
+        ) as mock_repo_cls:
+            mock_repo = AsyncMock()
+            mock_repo.get_by_doc = AsyncMock(return_value=mock_routing_decision)
+            mock_repo_cls.return_value = mock_repo
+
+            await consumer.process_message(key=None, value=value, headers={})
+
+        # Semaphore depth must remain at 0 — no slot was acquired for a duplicate.
+        assert (
+            bp.current_depth == 0
+        ), f"Expected semaphore depth to remain 0 for duplicate message, got {bp.current_depth}"
+
+
+@pytest.mark.unit
 class TestArticleConsumerSerialization:
     def test_extract_event_id(self) -> None:
         consumer = _make_consumer()

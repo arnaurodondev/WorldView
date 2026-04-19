@@ -1,10 +1,15 @@
-"""Unit tests for GET /internal/v1/users/{user_id}/portfolio/context endpoint (S8 → S1)."""
+"""Unit tests for GET /internal/v1/users/{user_id}/portfolio/context endpoint (S8 -> S1).
+
+F-CRIT-002: Routes read tenant_id/user_id from request.state set by InternalJWTMiddleware,
+not from query strings or headers. Test middleware simulates this.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -18,13 +23,35 @@ from portfolio.domain.entities.user import User
 from portfolio.domain.entities.watchlist import Watchlist
 from portfolio.domain.entities.watchlist_member import WatchlistMember
 from portfolio.domain.enums import WatchlistStatus
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from tests.unit.fakes import FakeUnitOfWork
 
 pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 
 
-def _make_app(uow: FakeUnitOfWork) -> FastAPI:
+class _InjectStateMiddleware(BaseHTTPMiddleware):
+    """Test-only middleware that sets request.state.tenant_id and user_id."""
+
+    def __init__(self, app: Any, tenant_id: UUID | None = None, user_id: UUID | None = None) -> None:
+        super().__init__(app)
+        self._tenant_id = tenant_id
+        self._user_id = user_id
+
+    async def dispatch(self, request: Any, call_next: Any) -> Any:
+        if self._tenant_id is not None:
+            request.state.tenant_id = str(self._tenant_id)
+        if self._user_id is not None:
+            request.state.user_id = str(self._user_id)
+        return await call_next(request)
+
+
+def _make_app(
+    uow: FakeUnitOfWork,
+    *,
+    tenant_id: UUID | None = None,
+    user_id: UUID | None = None,
+) -> FastAPI:
     app = FastAPI()
 
     async def override_uow():
@@ -32,6 +59,10 @@ def _make_app(uow: FakeUnitOfWork) -> FastAPI:
 
     app.dependency_overrides[get_read_uow] = override_uow
     app.include_router(internal_router)
+
+    if tenant_id is not None or user_id is not None:
+        app.add_middleware(_InjectStateMiddleware, tenant_id=tenant_id, user_id=user_id)
+
     return app
 
 
@@ -93,17 +124,13 @@ def _seed_full_context(uow: FakeUnitOfWork) -> tuple:
 
 
 async def test_portfolio_context_endpoint_success() -> None:
-    """Valid token + matching X-User-Id → 200 with holdings and watchlist."""
+    """Valid JWT state (matching user_id) -> 200 with holdings and watchlist."""
     uow = FakeUnitOfWork()
     tenant_id, user_id, _instrument, _holding, member = _seed_full_context(uow)
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=tenant_id, user_id=user_id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-            headers={"X-User-Id": str(user_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -118,68 +145,55 @@ async def test_portfolio_context_endpoint_success() -> None:
 
 
 async def test_portfolio_context_wrong_user() -> None:
-    """X-User-Id != path user_id → 403."""
+    """JWT user_id != path user_id -> 403."""
     uow = FakeUnitOfWork()
     tenant_id, user_id, *_ = _seed_full_context(uow)
-    app = _make_app(uow)
     other_user_id = uuid4()
+    # Middleware injects other_user_id, but path has user_id -> mismatch
+    app = _make_app(uow, tenant_id=tenant_id, user_id=other_user_id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-            headers={"X-User-Id": str(other_user_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
 
     assert resp.status_code == 403
 
 
-async def test_portfolio_context_missing_user_id_header() -> None:
-    """Missing X-User-Id header → 403."""
+async def test_portfolio_context_missing_user_id_in_state() -> None:
+    """Missing user_id in request.state -> 403."""
     uow = FakeUnitOfWork()
     tenant_id, user_id, *_ = _seed_full_context(uow)
-    app = _make_app(uow)
+    # Only tenant_id in state, no user_id
+    app = _make_app(uow, tenant_id=tenant_id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
 
     assert resp.status_code == 403
 
 
 async def test_portfolio_context_user_not_found() -> None:
-    """Authenticated call for non-existent user → 404."""
+    """Authenticated call for non-existent user -> 404."""
     uow = FakeUnitOfWork()
-    app = _make_app(uow)
     user_id = uuid4()
     tenant_id = uuid4()
+    app = _make_app(uow, tenant_id=tenant_id, user_id=user_id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user_id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-            headers={"X-User-Id": str(user_id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
 
     assert resp.status_code == 404
 
 
 async def test_portfolio_context_empty_portfolio() -> None:
-    """User with no holdings or watchlist → 200 with empty lists."""
+    """User with no holdings or watchlist -> 200 with empty lists."""
     uow = FakeUnitOfWork()
     tenant_id = uuid4()
     user = User(id=uuid4(), tenant_id=tenant_id, email="empty@example.com")
     uow.seed_user(user)
-    app = _make_app(uow)
+    app = _make_app(uow, tenant_id=tenant_id, user_id=user.id)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(
-            f"/internal/v1/users/{user.id}/portfolio/context",
-            params={"tenant_id": str(tenant_id)},
-            headers={"X-User-Id": str(user.id)},
-        )
+        resp = await client.get(f"/internal/v1/users/{user.id}/portfolio/context")
 
     assert resp.status_code == 200
     data = resp.json()

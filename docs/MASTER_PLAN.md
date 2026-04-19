@@ -378,8 +378,8 @@ Pages: Landing · Login/Register · Dashboard (9 widgets) · Instrument Detail (
 | Contract | Avro schema compat | pytest `-m contract` | `tests/contract/` |
 | Architecture | Layer deps, import guards, structure | CI jobs | Repo-wide |
 | E2E | Multi-service | pytest + docker compose | `docker-compose.test.yml` |
-| Frontend unit | Components, hooks | Vitest | `apps/frontend/` |
-| Frontend E2E | User flows | Playwright | `apps/frontend/` |
+| Frontend unit | Components, hooks | Vitest | `apps/worldview-web/` |
+| Frontend E2E | User flows | Playwright | `apps/worldview-web/` |
 
 ---
 

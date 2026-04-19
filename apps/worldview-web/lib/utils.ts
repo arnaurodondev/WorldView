@@ -251,3 +251,48 @@ export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - 3) + "...";
 }
+
+/**
+ * safeExternalUrl — allowlist only http/https URLs before using them in href attributes
+ *
+ * WHY THIS EXISTS: API responses may include URLs from external content pipelines
+ * (news articles, prediction markets, RAG citations). Without validation, a malicious
+ * or compromised backend response containing a "javascript:" or "data:" URL would
+ * execute code when the user clicks the link — a stored XSS vector.
+ *
+ * SECURITY: Only "http:" and "https:" schemes are allowed. Anything else (javascript:,
+ * data:, vbscript:, blob:, etc.) returns "#" (a safe no-op href).
+ *
+ * USAGE: href={safeExternalUrl(article.url)}
+ */
+export function safeExternalUrl(url: string | null | undefined): string {
+  if (!url) return "#";
+  try {
+    const parsed = new URL(url);
+    // Only allow safe web protocols — block javascript:, data:, vbscript:, blob:, etc.
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") return url;
+  } catch {
+    // URL parsing failed (relative path or malformed) — return safe fallback
+  }
+  return "#";
+}
+
+/**
+ * sanitizeRedirect — validate a redirect destination is a safe same-origin relative path
+ *
+ * WHY THIS EXISTS: Post-login redirect targets come from URL query params and
+ * sessionStorage, both of which can be attacker-controlled. Without validation,
+ * `/login?redirect_to=https://evil.com` causes an open redirect after successful
+ * authentication — the user is logged in but redirected to a phishing site.
+ *
+ * ALLOWED: Relative paths starting with "/" that are not protocol-relative ("//").
+ * BLOCKED: Absolute URLs (https://...), protocol-relative (//...), and empty strings.
+ *
+ * USAGE: const safePath = sanitizeRedirect(searchParams.get("redirect_to"));
+ */
+export function sanitizeRedirect(value: string | null | undefined): string {
+  if (!value) return "/dashboard";
+  // Must start with "/" but not "//" (protocol-relative redirects follow absolute URLs)
+  if (value.startsWith("/") && !value.startsWith("//")) return value;
+  return "/dashboard";
+}

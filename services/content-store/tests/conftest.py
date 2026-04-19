@@ -48,6 +48,7 @@ def app():
     test_app.include_router(documents_router)
 
     # InternalJWTMiddleware (PRD-0025) — public_key is None in tests (no JWKS at startup).
+    # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
     # F-001: skip_verification=True allows unverified decode in unit tests only.
     test_app.add_middleware(
         InternalJWTMiddleware,

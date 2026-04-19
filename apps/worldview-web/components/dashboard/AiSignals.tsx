@@ -55,9 +55,12 @@ export function AiSignals() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────────
+  // WHY muted (not destructive red): NLP pipeline offline is not a user error.
   if (isError) {
     return (
-      <p className="text-sm text-destructive">Signals unavailable</p>
+      <p className="text-sm text-muted-foreground">
+        AI signals unavailable — scores will appear once the NLP pipeline processes articles.
+      </p>
     );
   }
 

@@ -35,6 +35,7 @@ _SYSTEM_JWT = _make_system_jwt()
 def app():
     from content_ingestion.config import Settings
 
+    # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
     settings = Settings(internal_jwt_skip_verification=True)  # type: ignore[call-arg]
     return create_app(settings)
 

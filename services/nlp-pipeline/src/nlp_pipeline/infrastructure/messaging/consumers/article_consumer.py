@@ -190,6 +190,18 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
 
         extracted_at: datetime = common.time.utc_now()
 
+        # F-MAJOR-001: Idempotency check BEFORE acquiring the backpressure
+        # semaphore.  On re-delivery of an already-processed message the slot
+        # would otherwise be wasted, reducing throughput for real work.
+        async with self._nlp_sf() as check_session:
+            check_routing_repo = RoutingDecisionRepository(check_session)
+            if await check_routing_repo.get_by_doc(doc_id) is not None:
+                logger.info(  # type: ignore[no-any-return]
+                    "article_consumer.skip_already_processed",
+                    doc_id=str(doc_id),
+                )
+                return
+
         async with self._bp:
             await self._run_pipeline(
                 doc_id=doc_id,
@@ -224,22 +236,12 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         is_backfill: bool,
         correlation_id: str | None,
     ) -> None:
-        """Download text and run Blocks 3-10 in one atomic nlp_db transaction."""
+        """Download text and run Blocks 3-10 in one atomic nlp_db transaction.
 
-        # ── Idempotency guard ─────────────────────────────────────────────────
-        # Re-delivery window: DB commit succeeded but Kafka offset not yet
-        # committed.  Sections/chunks use new_uuid7() IDs so ON CONFLICT on the
-        # primary key never fires on re-delivery.  A routing_decision row is the
-        # reliable "pipeline completed" sentinel — if one exists for this doc_id
-        # we skip the entire pipeline to prevent duplicate artifacts.
-        async with self._nlp_sf() as check_session:
-            check_routing_repo = RoutingDecisionRepository(check_session)
-            if await check_routing_repo.get_by_doc(doc_id) is not None:
-                logger.info(  # type: ignore[no-any-return]
-                    "article_consumer.skip_already_processed",
-                    doc_id=str(doc_id),
-                )
-                return
+        NOTE: The idempotency check (routing_decision exists?) is performed in
+        ``process_message`` BEFORE the backpressure semaphore is acquired so
+        that re-delivered messages do not waste a concurrency slot.
+        """
 
         # ── Block 3: Sectioning (pure) ────────────────────────────────────────
         text = await self._download_article(minio_key)

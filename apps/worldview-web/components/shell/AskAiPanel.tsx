@@ -136,7 +136,27 @@ export function AskAiPanel({ onClose }: AskAiPanelProps) {
       // Parse SSE format: "data: <token>\n\n"
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // DS-007 fix: after the stream ends, the buffer may still contain a final
+          // partial line (e.g., "data: {\"token\":\"last\"}" without a trailing \n).
+          // Without this block, the final token would be silently discarded because
+          // lines.pop() always moves the last (potentially incomplete) line back into
+          // the buffer, and the outer loop exits before we process it.
+          if (buffer.startsWith("data: ")) {
+            const data = buffer.slice(6);
+            if (data !== "[DONE]") {
+              try {
+                const parsed = JSON.parse(data) as { token?: string };
+                if (parsed.token) {
+                  setResponse((prev) => prev + parsed.token);
+                }
+              } catch {
+                // Partial/malformed line at stream boundary — skip
+              }
+            }
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
 

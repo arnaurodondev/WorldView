@@ -1,10 +1,14 @@
-"""Transaction API routes."""
+"""Transaction API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 from portfolio.api.dependencies import UoWDep
 from portfolio.api.schemas import (
@@ -19,6 +23,22 @@ from portfolio.application.use_cases.record_transaction import RecordTransaction
 router = APIRouter(tags=["transactions"])
 
 
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
+
+
 @router.post(
     "/transactions",
     response_model=RecordTransactionResponse,
@@ -27,10 +47,11 @@ router = APIRouter(tags=["transactions"])
 async def record_transaction(
     body: RecordTransactionRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> RecordTransactionResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     from portfolio.domain.enums import TransactionDirection, TransactionType
 
     uc = RecordTransactionUseCase()
@@ -71,12 +92,13 @@ async def record_transaction(
 @router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
 async def list_transactions(
     uow: UoWDep,
+    request: Request,
     portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> PaginatedResponse[TransactionListItem]:
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = ListTransactionsUseCase()
     transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
     return PaginatedResponse(

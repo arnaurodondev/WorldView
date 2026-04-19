@@ -2,6 +2,10 @@
 
 R27: read-only UoW (read_factory) used for GET endpoints;
      write UoW (write_factory) used for POST/DELETE endpoints.
+
+Auth: tenant_id and user_id are read from ``request.state`` set by
+InternalJWTMiddleware (PRD-0025). Legacy X-Tenant-Id / X-User-Id headers
+are no longer used (F-CRIT-001 remediation).
 """
 
 from __future__ import annotations
@@ -9,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -33,24 +37,25 @@ async def get_read_uow(request: Request) -> AsyncGenerator[RagUnitOfWork, None]:
         yield uow
 
 
-async def get_auth_context(
-    x_tenant_id: str | None = Header(None, alias="X-Tenant-Id"),
-    x_user_id: str | None = Header(None, alias="X-User-Id"),
-) -> tuple[UUID, UUID]:
-    """Extract and validate X-Tenant-Id / X-User-Id headers injected by S9.
+async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
+    """Extract tenant_id and user_id from request.state set by InternalJWTMiddleware.
 
-    Returns ``(tenant_id, user_id)`` or raises 401 if either header is missing
-    or not a valid UUID.
+    Returns ``(tenant_id, user_id)`` or raises 401 if either value is missing
+    or not a valid UUID. PRD-0025: backends MUST use the JWT-derived state,
+    never raw headers (F-CRIT-001 remediation).
     """
-    if not x_tenant_id or not x_user_id:
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    raw_user_id = getattr(request.state, "user_id", None)
+
+    if not raw_tenant_id or not raw_user_id:
         raise HTTPException(
             status_code=401,
-            detail="Missing required auth headers: X-Tenant-Id and X-User-Id",
+            detail="Missing required auth context (tenant_id / user_id not set by JWT middleware)",
         )
     try:
-        return UUID(x_tenant_id), UUID(x_user_id)
+        return UUID(str(raw_tenant_id)), UUID(str(raw_user_id))
     except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Invalid UUID in auth headers") from exc
+        raise HTTPException(status_code=401, detail="Invalid UUID in JWT auth context") from exc
 
 
 # D-1 / D-4: RagUnitOfWork is a concrete infra class; a proper application-layer

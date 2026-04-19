@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-161](#bp-161) | FastAPI / security | Unannotated `UUID` path function parameter silently maps to **query string** — allows callers to pass arbitrary `?tenant_id=<uuid>` and impersonate any tenant | Any FastAPI endpoint with `tenant_id: UUID` or `user_id: UUID` without `Header()`, `Path()`, or `Depends()` annotation; fix: read from `request.state.tenant_id` (set by InternalJWTMiddleware) |
+| [BP-160](#bp-160) | Frontend / Testing | `TypeError: localStorage.clear is not a function` in Vitest under Node.js 22+ | Any Vitest test that calls `localStorage.clear()` in `beforeEach` |
 | [BP-159](#bp-159) | FastAPI middleware / Starlette | `app.add_middleware()` creates a DIFFERENT instance than `MiddlewareClass(app, ...)` — `startup()` on the stored instance never populates `self._public_key` on the serving instance | Any middleware that calls startup() to load external keys/config and stores them in `self.*` |
 | [BP-149](#bp-149) | Kafka consumer / idempotency | Silent duplicate artifacts (sections, chunks, mentions) accumulate when entity PKs are non-deterministic UUIDs — ON CONFLICT on PK never fires on re-delivery | S6 `ArticleProcessingConsumer`, any consumer where domain entity IDs are generated with `new_uuid7()` |
 | [BP-150](#bp-150) | Kafka / message retention | Services down >7 days silently lose the backlog — Kafka default 7-day retention causes consumer group to start from oldest *remaining* message after extended downtime | All pipeline-critical topics: `content.article.stored.v1`, `market.dataset.fetched`, `nlp.article.enriched.v1` |
@@ -5355,6 +5357,8 @@ In tests, pre-populate `app.state._internal_jwt_public_key = test_key` before th
 
 Never read security-critical state from `self.*` in a `BaseHTTPMiddleware` that is added via `app.add_middleware()`. Always route through `app.state` (readable via `request.app.state` in dispatch).
 
+> **Confirmed 2026-04-18**: api-gateway lifespan correctly calls `startup()` via ASGI lifespan, NOT on a throw-away instance. Test gap remains (F-MAJOR-009).
+
 ---
 
 ## BP-160 — jsdom localStorage.clear() Not a Function in Vitest + Node.js
@@ -5415,3 +5419,142 @@ to `vi.fn<FunctionSignature>()`. Using the old 2-arg form causes TS2558. Use sin
 Never call `localStorage.clear()` directly in test setup. Always stub localStorage explicitly.
 Do NOT type the mock object as `Storage` — this strips Vitest's `Mock<...>` methods like
 `mockReturnValue`. Keep the inferred type and cast with `as unknown as Storage` only where needed.
+
+---
+
+## BP-161 — Query-String Identity Injection
+
+**Category**: Security
+**Severity**: CRITICAL
+**First seen**: 2026-04-18 QA audit (F-CRIT-002)
+
+### Symptom
+
+FastAPI unannotated `UUID` parameter silently maps to query string, allowing unauthenticated callers to pass arbitrary tenant/user IDs via `?tenant_id=<uuid>`.
+
+### Root Cause
+
+FastAPI treats non-path, non-body, unannotated scalar parameters as query parameters by default. An endpoint signature like `def handler(tenant_id: UUID)` where `tenant_id` is not in the path template and has no `Header()`, `Path()`, or `Depends()` annotation will accept `?tenant_id=<any-uuid>` from any caller — enabling tenant impersonation.
+
+### Affected
+
+Any FastAPI endpoint with `tenant_id: UUID` or `user_id: UUID` parameters that lack `Header()`, `Path()`, or `Depends()` annotations.
+
+### Fix
+
+Always annotate identity parameters. Use `request.state.tenant_id` from `InternalJWTMiddleware`, not headers or query params:
+
+```python
+# WRONG — silently becomes a query parameter
+async def handler(tenant_id: UUID):
+    ...
+
+# RIGHT — read from middleware-validated JWT
+async def handler(request: Request):
+    tenant_id = request.state.tenant_id
+    ...
+```
+
+### Prevention
+
+Architecture test that greps for unannotated `tenant_id`/`user_id` function parameters in API routers. All identity values MUST come from `request.state` (populated by `InternalJWTMiddleware` from the verified `X-Internal-JWT`).
+
+---
+
+## BP-162 — S9 Composed Endpoints Missing `headers` Kwarg (JWT Never Forwarded)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Severity** | CRITICAL |
+| **Affected areas** | S9 api-gateway composed endpoints (`clients.py`) |
+| **Root cause** | Composed functions (`get_top_movers`, `get_company_overview`, `get_market_heatmap`, `_screener_for_sector`) lacked a `headers` keyword parameter. The `X-Internal-JWT` from `_auth_headers(request)` was extracted correctly by the route handler but had nowhere to go — the composed function's httpx call hardcoded `headers={"Content-Type": "application/json"}` with no JWT. |
+| **Symptom** | All composed S9→S3 endpoints return 401 "Missing X-Internal-JWT header" while simple proxy-through routes (e.g. portfolios → S1) work fine. |
+| **Why hard to find** | Simple proxy routes worked; only composed endpoints failed. The middleware correctly added the JWT to the request scope. The `except Exception: pass` in InternalJWTIssuerMiddleware was a red herring. |
+| **Fix** | Add `*, headers: dict[str, str] | None = None` to all composed functions in `clients.py`; pass `headers=_auth_headers(request)` from proxy routes. |
+
+### Prevention
+
+Every composed endpoint function in `clients.py` MUST accept `*, headers: dict[str, str] | None = None` and forward it to all downstream httpx calls. Unit tests MUST assert `"X-Internal-JWT" in call_kwargs["headers"]` for every downstream call.
+
+---
+
+## BP-163 — Frontend Gateway Response Shape Mismatch (API Returns Different Field Names)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Severity** | CRITICAL |
+| **Affected areas** | Frontend `lib/gateway.ts`, all pages using S1/S3 data |
+| **Root cause** | S1 Portfolio service returns `{items: [{id, owner_id, ...}]}` paginated envelopes with `id` field. Frontend types expect `Portfolio[]` (bare array) with `portfolio_id` field. Same pattern for watchlists (`id` vs `watchlist_id`), holdings (bare array vs wrapped object), search (`symbol` vs `ticker`), prediction markets (`items` vs `markets`). |
+| **Symptom** | Portfolio page crashes with error boundary. Dashboard portfolio widget shows "No portfolio" even though data exists. Search returns wrong field names. |
+| **Fix** | Add response transformation layer in `gateway.ts` — unwrap envelopes, map field names. |
+
+### Prevention
+
+When adding a new S9 proxy route, always test the ACTUAL API response shape with `curl` and compare to the frontend TypeScript type. Never assume backend field names match frontend types — S1/S3 use ORM-generated names (`id`, `user_id`) while frontend uses domain names (`portfolio_id`, `owner_id`).
+
+---
+
+## BP-164 — Docker Compose Missing `depends_on` Causes JWKS Startup Race
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Affected areas** | S8 rag-chat (and potentially any service with InternalJWTMiddleware) |
+| **Root cause** | S8's `depends_on` lists `rag-chat-migrate`, `valkey`, `ollama` but NOT `api-gateway`. S8 starts before S9, JWKS fetch fails (3 retries × 3s = 9s window), then ALL authenticated requests return 503 permanently. |
+| **Fix** | Add `api-gateway: condition: service_healthy` to S8's `depends_on` in `docker-compose.yml`. |
+
+### Prevention
+
+Every backend service that uses `InternalJWTMiddleware` MUST declare `depends_on: api-gateway: condition: service_healthy` in docker-compose.yml. The InternalJWTMiddleware should also support on-demand JWKS retry when `_public_key is None` at request time (not just at startup).
+
+---
+
+## BP-165 — Open Redirect via Unvalidated `redirect_to` Query Parameter
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Severity** | CRITICAL |
+| **Affected areas** | Frontend auth flow: `app/login/page.tsx`, `app/callback/page.tsx` |
+| **Root cause** | `searchParams.get("redirect_to")` stored in sessionStorage and passed directly to `router.replace()`. Next.js `router.replace()` follows absolute URLs. An attacker crafting `/login?redirect_to=https://evil.com` redirects an authenticated user to an external phishing site. |
+| **Symptom** | After successful OIDC login, user is redirected to attacker-controlled domain. |
+| **Fix** | Added `sanitizeRedirect()` to `lib/utils.ts`; validates the value starts with `/` and not `//` before use. Applied at both reading sites. |
+
+### Prevention
+
+ANY URL, path, or redirect target that originates from a URL query parameter, sessionStorage, localStorage, or an external API MUST be validated before use in navigation. Use `sanitizeRedirect()` from `lib/utils.ts` for post-auth navigation. Never pass raw query param values to `router.push()`, `router.replace()`, `window.location.href`, or any `href` attribute.
+
+---
+
+## BP-166 — `javascript:` URL XSS via API-Supplied `href` Values
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Severity** | MAJOR |
+| **Affected areas** | Any component that renders `<a href={apiValue}>` from external content (news articles, prediction markets, RAG citations) |
+| **Root cause** | URLs from external APIs (news feeds, prediction markets) are placed directly in `href` attributes without scheme validation. A malicious or compromised content pipeline can return `javascript:alert(1)` as a URL, which executes when the user clicks the link. `rel="noopener noreferrer"` does NOT prevent `javascript:` execution. |
+| **Symptom** | Clicking a "news article" or "prediction market" link executes JavaScript in the user's browser — stored XSS. |
+| **Fix** | Added `safeExternalUrl()` to `lib/utils.ts`; allowlists only `http:` and `https:` protocols. Returns `"#"` for all other values. Applied to `ArticleCard.tsx`, `WatchlistNews.tsx`, `TopBets.tsx`, `chat/page.tsx`. |
+
+### Prevention
+
+ALL `<a href>` attributes populated from API data MUST use `safeExternalUrl()` from `lib/utils.ts`. Never place raw API string values in `href`. This applies to news article URLs, prediction market URLs, RAG citation URLs, and any other external link rendered in the frontend.
+
+---
+
+## BP-167 — Floating Docker Image Tags Create Non-Reproducible Builds
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-19 |
+| **Severity** | MAJOR |
+| **Affected areas** | `infra/compose/docker-compose.yml`, `infra/compose/docker-compose.test.yml` |
+| **Root cause** | `minio/mc:latest`, `timescale/timescaledb:latest-pg16`, `provectuslabs/kafka-ui:latest` used in compose files. Floating tags are updated by image publishers and can change behaviour silently between runs. Test and production compose used divergent TimescaleDB versions. |
+| **Fix** | Pinned all three images to specific version tags (`2.17.2-pg16`, `RELEASE.2024-01-16T16-07-38Z`, `v0.7.2`). |
+
+### Prevention
+
+NEVER use `:latest` tags in any Docker Compose file (dev, test, or production). Always use an explicit version tag. The test compose file MUST use the same database image versions as the production compose file to prevent "passes in test, breaks in prod" failures.

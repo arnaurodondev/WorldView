@@ -193,9 +193,8 @@ pnpm test:e2e --debug                # Debug mode with step-through
 | File | Purpose | When to use |
 |------|---------|-------------|
 | `infra/compose/docker-compose.test.yml` | **CANONICAL test compose** — ephemeral tmpfs volumes, offset ports (55433, 59092), per-service profiles | All automated testing |
-| `infra/compose/docker-compose.yml` | Dev/production compose — persistent volumes, standard ports | Local development, not testing |
+| `infra/compose/docker-compose.yml` | Dev/production compose — persistent volumes, standard ports, includes worldview-web frontend | Local development, not testing |
 | `infra/compose/docker-compose.zitadel.yml` | Zitadel OIDC stack for auth development | Auth development only |
-| `docker-compose.yml` (root) | **DEPRECATED** — legacy compose with old Kafka image | Do not use |
 
 ### Test Compose Profiles
 

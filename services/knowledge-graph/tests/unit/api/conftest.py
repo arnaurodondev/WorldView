@@ -38,6 +38,7 @@ _INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _SYSTEM_JWT}
 @pytest.fixture
 def api_app():
     """FastAPI app with readonly session dependency overridden."""
+    # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
     app = create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
 
     async def _mock_readonly_session():

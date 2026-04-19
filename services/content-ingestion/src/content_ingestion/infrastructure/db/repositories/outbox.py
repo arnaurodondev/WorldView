@@ -94,7 +94,9 @@ class OutboxRepository:
                     dlq_id=common.ids.new_uuid7(),
                     original_event_id=record.id,
                     topic=record.topic,
-                    payload_avro=b"",  # Avro serialization may have failed
+                    # b"" sentinel: serialization failed; original message payload is lost.
+                    # See BP-040.  The canonical payload is preserved in payload_json.
+                    payload_avro=b"",
                     payload_json=record.payload,
                     error_detail=error_detail or None,
                 ),

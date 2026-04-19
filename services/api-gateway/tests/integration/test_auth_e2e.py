@@ -30,8 +30,14 @@ def _gen_rsa_pair():
 _S9_PRIVATE, _S9_PUBLIC = _gen_rsa_pair()
 
 
-def _make_app(*, valkey: object = None):
-    """Build a test app with RSA keys and optional Valkey."""
+def _make_app(*, valkey: object | None = "auto"):
+    """Build a test app with RSA keys and optional Valkey.
+
+    ``valkey="auto"`` (default) creates a mock Valkey that always allows
+    requests through rate limiting. Pass ``valkey=None`` explicitly to test
+    the fail-closed (503) path, or a mock with specific return values for
+    rate limit threshold tests.
+    """
     from api_gateway.app import create_app
     from api_gateway.clients import ServiceClients
     from api_gateway.config import Settings
@@ -70,7 +76,14 @@ def _make_app(*, valkey: object = None):
     app.state.rsa_public_key = _S9_PUBLIC
     app.state.rsa_kid = kid
     app.state.internal_jwks = build_jwks_response(_S9_PUBLIC, kid)
-    app.state.valkey = valkey
+    if valkey == "auto":
+        # Default: mock Valkey that always allows requests through rate limiting
+        mock_valkey = MagicMock()
+        mock_valkey.incr = AsyncMock(return_value=1)
+        mock_valkey.expire = AsyncMock(return_value=True)
+        app.state.valkey = mock_valkey
+    else:
+        app.state.valkey = valkey
     app.state.httpx_client = MagicMock(spec=httpx.AsyncClient)
     return app
 
@@ -135,6 +148,20 @@ async def test_rate_limit_429_after_threshold() -> None:
     assert resp.status_code == 429
     body = resp.json()
     assert "detail" in body
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_503_when_valkey_unavailable() -> None:
+    """D-001: When Valkey is None (unavailable), return 503 (fail-closed)."""
+    app = _make_app(valkey=None)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/health")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["detail"] == "Service temporarily unavailable"
 
 
 @pytest.mark.asyncio

@@ -109,6 +109,23 @@ def test_issue_system_jwt_claims(rsa_keypair, kid) -> None:
     assert payload["exp"] - payload["iat"] == 60
 
 
+def test_issue_public_jwt_claims(rsa_keypair, kid) -> None:
+    """Public JWT has sub=system:api-gateway, nil UUIDs, role=system, exp=iat+60."""
+    from api_gateway.jwt_utils import decode_internal_jwt, issue_public_jwt
+
+    private_key, public_key = rsa_keypair
+    token = issue_public_jwt(private_key, kid)
+    payload = decode_internal_jwt(token, public_key)
+
+    assert payload["iss"] == "worldview-gateway"
+    assert payload["sub"] == "system:api-gateway"
+    assert payload["user_id"] == "00000000-0000-0000-0000-000000000000"
+    assert payload["tenant_id"] == "00000000-0000-0000-0000-000000000000"
+    assert payload["role"] == "system"
+    assert "jti" in payload
+    assert payload["exp"] - payload["iat"] == 60
+
+
 def test_decode_jwt_wrong_issuer(rsa_keypair, kid) -> None:
     """JWT with wrong iss raises InvalidTokenError."""
     import jwt as pyjwt

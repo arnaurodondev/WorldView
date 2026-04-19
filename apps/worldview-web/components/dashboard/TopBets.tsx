@@ -21,6 +21,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { safeExternalUrl } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -52,9 +53,12 @@ export function TopBets() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────────
+  // WHY muted (not destructive red): prediction market service offline is not a user error.
   if (isError) {
     return (
-      <p className="text-sm text-destructive">Markets unavailable</p>
+      <p className="text-sm text-muted-foreground">
+        Prediction markets unavailable — odds will appear once Polymarket data syncs.
+      </p>
     );
   }
 
@@ -77,7 +81,7 @@ export function TopBets() {
         return (
           <a
             key={market.market_id}
-            href={market.url}
+            href={safeExternalUrl(market.url)}
             target="_blank"
             rel="noopener noreferrer"
             className="block hover:opacity-80"

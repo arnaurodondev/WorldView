@@ -22,6 +22,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { safeExternalUrl } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -53,9 +54,13 @@ export function WatchlistNews() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────────
+  // WHY muted (not destructive red): news service being offline is a backend
+  // issue, not a user error. Muted text is professional; red looks broken.
   if (isError) {
     return (
-      <p className="text-sm text-destructive">News unavailable</p>
+      <p className="text-sm text-muted-foreground">
+        News feed unavailable — articles will appear once the content pipeline runs.
+      </p>
     );
   }
 
@@ -73,7 +78,7 @@ export function WatchlistNews() {
       {articles.map((article) => (
         <a
           key={article.article_id}
-          href={article.url}
+          href={safeExternalUrl(article.url)}
           target="_blank"
           rel="noopener noreferrer"
           className="group block rounded border border-border/50 p-2 hover:border-border hover:bg-muted/30"

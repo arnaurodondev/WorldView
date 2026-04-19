@@ -165,7 +165,12 @@ class PredictionMarketFetchLogModel(Base):
     source_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True)
     market_id: Mapped[str] = mapped_column(Text, nullable=False)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    resolution_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'open'"))
+    resolution_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="open",
+        server_default=text("'open'"),
+    )
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

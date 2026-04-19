@@ -1,6 +1,4 @@
 # pnpm workspace — defines the worldview-web frontend as a managed package.
-# Only apps/worldview-web is included; apps/frontend is a standalone Vite app
-# that manages its own pnpm-lock.yaml (not part of this workspace).
 #
 # WHY a workspace: the `pnpm --filter worldview-web` validation commands in
 # PLAN-0028 require workspace resolution. The filter key matches the "name"

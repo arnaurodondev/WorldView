@@ -27,9 +27,9 @@ _INTERNAL_JWT = _jwt.encode(
     algorithm="HS256",
 )
 
+# F-CRIT-001: Only X-Internal-JWT is used; backends read tenant_id/user_id from
+# the JWT payload via InternalJWTMiddleware. Legacy headers removed.
 _AUTH_HEADERS = {
-    "X-Tenant-Id": str(_TENANT_ID),
-    "X-User-Id": str(_USER_ID),
     "X-Internal-JWT": _INTERNAL_JWT,
 }
 
@@ -216,8 +216,8 @@ class TestDeleteThreadEndpoint:
 
 
 class TestThreadsAuthHeaders:
-    async def test_threads_require_auth_headers(self, app_no_auth_override: object) -> None:
-        """POST /api/v1/threads without X-Tenant-Id/X-User-Id → 401."""
+    async def test_threads_require_auth_context(self, app_no_auth_override: object) -> None:
+        """POST /api/v1/threads without JWT auth context -> 401."""
         transport = ASGITransport(app=app_no_auth_override)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(

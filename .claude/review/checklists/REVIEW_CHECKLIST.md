@@ -106,6 +106,12 @@
 - [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
 - [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
 
+## 7b. Docker Compose Completeness
+
+- [ ] New consumer, worker, scheduler, or dispatcher entry points have corresponding entries in `infra/compose/docker-compose.yml` (profiles: `[infra, all]`) and `infra/compose/docker-compose.test.yml`
+- [ ] New services have a Dockerfile, `configs/docker.env`, correct `build.context: ../..`, and healthcheck
+- [ ] Build context is `../..` (repo root) — never the service directory alone (Dockerfiles COPY from `libs/`)
+
 ## 8. Test Coverage
 
 - [ ] New public functions/methods have unit tests

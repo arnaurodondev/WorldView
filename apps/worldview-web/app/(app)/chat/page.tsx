@@ -52,6 +52,7 @@ import { MessageSquare, Plus, Send, Trash2, Bot } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { safeExternalUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -118,7 +119,7 @@ function CitationList({ citations }: { citations: Citation[] }) {
       {citations.map((cite, i) => (
         <a
           key={cite.article_id}
-          href={cite.url}
+          href={safeExternalUrl(cite.url)}
           target="_blank"
           rel="noopener noreferrer"
           // WHY primary/10 border primary/30: subtle but distinguishable citation pills.

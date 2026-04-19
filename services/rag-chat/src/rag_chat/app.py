@@ -25,6 +25,7 @@ from observability.tracing import add_otel_middleware, configure_tracing  # type
 from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
+from rag_chat.api.routes import public_briefings as public_briefings_router
 from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
 from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
@@ -253,5 +254,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(threads_router.router)
     app.include_router(chat_router.router)
     app.include_router(briefings_router.router)
+    app.include_router(public_briefings_router.router)
 
     return app

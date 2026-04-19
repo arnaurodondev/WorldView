@@ -1,4 +1,9 @@
-"""Watchlist API routes."""
+"""Watchlist API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT. Routes read these values from request.state, never from
+raw headers (PRD-0025, F-CRIT-001 remediation).
+"""
 
 # NOTE(Q1): The reverse-index endpoint GET /watchlists/reverse/{entity_id} is intentionally
 # omitted. Per gap analysis open question Q1, Option C was selected: the alert service (S10)
@@ -10,7 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import UoWDep, WatchlistCacheDep
@@ -18,6 +23,7 @@ from portfolio.api.schemas import (
     WatchlistCreateRequest,
     WatchlistMemberCreateRequest,
     WatchlistMemberResponse,
+    WatchlistRenameRequest,
     WatchlistResponse,
 )
 from portfolio.application.use_cases.watchlist import (
@@ -31,18 +37,37 @@ from portfolio.application.use_cases.watchlist import (
     ListWatchlistsUseCase,
     RemoveWatchlistMemberCommand,
     RemoveWatchlistMemberUseCase,
+    RenameWatchlistCommand,
+    RenameWatchlistUseCase,
 )
 
 router = APIRouter(tags=["watchlists"])
+
+
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
 
 
 @router.post("", response_model=WatchlistResponse, status_code=status.HTTP_201_CREATED)
 async def create_watchlist(
     body: WatchlistCreateRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> WatchlistResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = CreateWatchlistUseCase()
     wl = await uc.execute(
         CreateWatchlistCommand(tenant_id=x_tenant_id, user_id=x_owner_id, name=body.name),
@@ -61,9 +86,10 @@ async def create_watchlist(
 @router.get("", response_model=list[WatchlistResponse])
 async def list_watchlists(
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> list[WatchlistResponse]:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = ListWatchlistsUseCase()
     watchlists = await uc.execute(x_owner_id, x_tenant_id, uow)
     return [
@@ -83,9 +109,10 @@ async def list_watchlists(
 async def get_watchlist(
     watchlist_id: UUID,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> WatchlistResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = GetWatchlistUseCase()
     wl = await uc.execute(watchlist_id, x_owner_id, x_tenant_id, uow)
     return WatchlistResponse(
@@ -102,13 +129,43 @@ async def get_watchlist(
 async def delete_watchlist(
     watchlist_id: UUID,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> None:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = DeleteWatchlistUseCase()
     await uc.execute(
         DeleteWatchlistCommand(watchlist_id=watchlist_id, owner_id=x_owner_id, tenant_id=x_tenant_id),
         uow,
+    )
+
+
+@router.patch("/{watchlist_id}", response_model=WatchlistResponse)
+async def rename_watchlist(
+    watchlist_id: UUID,
+    body: WatchlistRenameRequest,
+    uow: UoWDep,
+    request: Request,
+) -> WatchlistResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
+    uc = RenameWatchlistUseCase()
+    wl = await uc.execute(
+        RenameWatchlistCommand(
+            watchlist_id=watchlist_id,
+            owner_id=x_owner_id,
+            tenant_id=x_tenant_id,
+            new_name=body.name,
+        ),
+        uow,
+    )
+    return WatchlistResponse(
+        id=wl.id,
+        tenant_id=wl.tenant_id,
+        user_id=wl.user_id,
+        name=wl.name,
+        status=str(wl.status),
+        created_at=wl.created_at,
     )
 
 
@@ -122,9 +179,10 @@ async def add_member(
     body: WatchlistMemberCreateRequest,
     uow: UoWDep,
     cache: WatchlistCacheDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> WatchlistMemberResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = AddWatchlistMemberUseCase()
     member = await uc.execute(
         AddWatchlistMemberCommand(
@@ -157,9 +215,10 @@ async def remove_member(
     entity_id: UUID,
     uow: UoWDep,
     cache: WatchlistCacheDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> None:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = RemoveWatchlistMemberUseCase()
     await uc.execute(
         RemoveWatchlistMemberCommand(

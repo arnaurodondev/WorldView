@@ -1,0 +1,69 @@
+---
+# docker-compose.dev.yml — Development-only services
+#
+# Usage (extends the base compose):
+#   docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml --profile infra up -d
+#
+# Adds:
+#   - MailHog (email testing) — UI at http://localhost:8025
+#   - pgweb (database browser) — http://localhost:8091
+#   - kafka-ui (topic browser) — http://localhost:8092
+
+name: worldview
+
+services:
+  # ── MailHog — SMTP capture for email testing ────────────────────────────────
+  # Captures all outbound emails from S10 Alert service.
+  # SMTP: port 1025 (set ALERT_SMTP_HOST=mailhog, ALERT_SMTP_PORT=1025)
+  # Web UI: http://localhost:8025
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    profiles: [infra, all]
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8025"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── pgweb — PostgreSQL web browser ──────────────────────────────────────────
+  # Browse all databases at http://localhost:8091
+  pgweb:
+    image: sosedoff/pgweb:0.16.2
+    profiles: [infra, all]
+    ports:
+      - "8091:8081"
+    environment:
+      PGWEB_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8081 > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ── Kafka UI — topic & consumer group browser ──────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    profiles: [infra, all]
+    ports:
+      - "8092:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: worldview
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
