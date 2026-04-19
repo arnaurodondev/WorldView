@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import jwt as pyjwt
@@ -56,6 +56,9 @@ def _mock_settings():
         internal_jwt_private_key=_PRIVATE_PEM,
         internal_jwt_public_key=_PUBLIC_PEM,
         cors_origins="http://localhost:3000",
+        # F-013: default changed to True in production; keep False in tests so
+        # the SecurityHeadersMiddleware does not inject HSTS on HTTP test responses.
+        cookie_secure=False,
     )
 
 
@@ -69,7 +72,13 @@ def _build_app(settings, inject_user_from_bearer: bool = False):
     # Build mock clients
     mock_clients = ServiceClients(**{f.name: MagicMock(spec=httpx.AsyncClient) for f in fields(ServiceClients)})
     application.state.clients = mock_clients
-    application.state.valkey = None  # no rate limiting in tests
+    # F-CRIT-003: RateLimitMiddleware now returns 503 when Valkey is None (fail-closed).
+    # Provide a mock Valkey that always allows requests through rate limiting in tests.
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock(return_value=True)
+    mock_valkey.ping = AsyncMock(return_value=True)  # readyz probe
+    application.state.valkey = mock_valkey
     application.state.oidc_config = None  # no real OIDC; OIDCAuthMiddleware skips
     application.state.rsa_private_key = None
     application.state.rsa_public_key = None

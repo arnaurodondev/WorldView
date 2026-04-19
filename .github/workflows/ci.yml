@@ -38,10 +38,10 @@ jobs:
     name: Lint & Type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -85,10 +85,10 @@ jobs:
     name: Validate Avro Schemas
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -125,10 +125,10 @@ jobs:
     name: Validate Service Structure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload structure report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: structure-violation-report
           path: /tmp/structure-report.json
@@ -158,10 +158,10 @@ jobs:
     name: Import Guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload import guard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: import-guard-violation-report
           path: /tmp/import-guards-report.json
@@ -191,10 +191,10 @@ jobs:
     name: Architecture Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -213,10 +213,10 @@ jobs:
       matrix:
         lib: [common, contracts, messaging, storage, observability, ml-clients]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -255,10 +255,10 @@ jobs:
           - api-gateway
           - alert
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -282,29 +282,30 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/frontend
+        working-directory: apps/worldview-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
 
       - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@9 --activate
+        # WHY pnpm@10.33.0: Must match exact version in package.json "packageManager" field.
+        # Using a major-only pin (pnpm@10) allows silent drift that can change lockfile
+        # format and resolution behaviour between CI runs.
+        run: corepack enable && corepack prepare pnpm@10.33.0 --activate
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ~/.local/share/pnpm/store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/frontend/package.json') }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/worldview-web/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
 
-      # No pnpm-lock.yaml is committed; use a plain install.
-      # TODO: commit pnpm-lock.yaml and switch to --frozen-lockfile.
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
@@ -336,10 +337,10 @@ jobs:
         # market-ingestion: test_market_dataset_fetched_contract.py (Avro field coverage)
         service: [portfolio, alert, market-ingestion]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -396,10 +397,10 @@ jobs:
             # mocked, no testcontainers or external infra required.
             fix_alembic_venv: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -495,10 +496,10 @@ jobs:
             profile: alert-test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import SecretStr  # noqa: TCH002
+from pydantic import SecretStr  # noqa: TCH002 — pydantic inspects this at runtime
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     # Frontend
     frontend_url: str = "http://localhost:5173"
-    cookie_secure: bool = False  # True in production (Secure cookie flag)
+    cookie_secure: bool = True  # False only in local dev (override via API_GATEWAY_COOKIE_SECURE=false)
 
     # Downstream service URLs
     portfolio_url: str = "http://localhost:8001"

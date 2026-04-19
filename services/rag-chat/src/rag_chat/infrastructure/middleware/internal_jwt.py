@@ -12,6 +12,7 @@ PRD-0025 §6.5 (InternalJWTMiddleware spec).
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 import jwt
@@ -77,6 +78,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             try:
                 key = await self._fetch_public_key()
                 self._public_key = key
+                # BP-159: Store on app.state so the serving instance can access it
+                # (Starlette BaseHTTPMiddleware creates a separate instance for dispatch)
+                if hasattr(self, "app") and hasattr(self.app, "state"):
+                    self.app.state._internal_jwt_public_key = key
                 logger.info(  # type: ignore[no-any-return]
                     "internal_jwt_public_key_loaded",
                     jwks_url=self._jwks_url,
@@ -103,7 +108,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         while True:
             await asyncio.sleep(_JWKS_REFRESH_INTERVAL_SECONDS)
             try:
-                self._public_key = await self._fetch_public_key()
+                new_key = await self._fetch_public_key()
+                self._public_key = new_key
+                # BP-159: Also update app.state for the serving instance
+                if hasattr(self, "app") and hasattr(self.app, "state"):
+                    self.app.state._internal_jwt_public_key = new_key
                 logger.info("internal_jwt_public_key_refreshed")  # type: ignore[no-any-return]
             except Exception as exc:
                 logger.warning("internal_jwt_public_key_refresh_failed", error=str(exc))  # type: ignore[no-any-return]
@@ -145,7 +154,8 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        public_key = self._public_key
+        # BP-159: Read from app.state, not self — serving instance != startup instance
+        public_key = getattr(request.app.state, "_internal_jwt_public_key", None) or self._public_key
         if public_key is None:
             # F-001: Fail-closed by default when JWKS public key is unavailable.
             # Without the public key we cannot verify JWT signatures, so accepting
@@ -179,14 +189,43 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             return cast("Response", await call_next(request))
 
         try:
+            # F-015: pass issuer= to jwt.decode so PyJWT validates iss internally.
+            # This is more robust than a manual payload.get("iss") check because
+            # PyJWT raises InvalidIssuerError before we touch the payload at all.
             payload = jwt.decode(
                 token,
                 public_key,
                 algorithms=["RS256"],
+                issuer="worldview-gateway",
                 options={"require": ["sub", "tenant_id", "role", "exp", "iss"]},
             )
-            if payload.get("iss") != "worldview-gateway":
-                raise jwt.InvalidIssuerError("iss != worldview-gateway")
+
+            # F-012: JTI replay detection — prevent token reuse within TTL window.
+            # Valkey SET NX (set-if-not-exists) atomically records the JTI on first
+            # use. Any subsequent request with the same JTI within the TTL window is
+            # rejected. Fail-open: if Valkey is unavailable, the check is skipped
+            # (JWT signature + expiry remain validated, so security degrades gracefully).
+            jti = payload.get("jti")
+            exp = payload.get("exp", 0)
+            if jti:
+                valkey = getattr(request.app.state, "valkey", None)
+                if valkey is not None:
+                    # TTL = remaining token lifetime + 60 s buffer (handles clock skew).
+                    # max(1, ...) prevents a zero-or-negative TTL on an about-to-expire token.
+                    ttl = max(1, int(exp - time.time()) + 60)
+                    try:
+                        was_new = await valkey.set(f"jti:{jti}", "1", ex=ttl, nx=True)
+                        if not was_new:
+                            logger.warning("jti_replay_detected", jti=jti)  # type: ignore[no-any-return]
+                            return Response(
+                                content='{"detail":"Token replay detected"}',
+                                status_code=401,
+                                media_type="application/json",
+                            )
+                    except Exception:
+                        # Fail-open: Valkey unavailability should not block requests.
+                        # JWT signature + expiry remain validated. Log for ops visibility.
+                        logger.warning("jti_check_valkey_unavailable", jti=jti)  # type: ignore[no-any-return]
 
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")

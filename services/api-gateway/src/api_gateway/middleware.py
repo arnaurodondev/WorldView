@@ -21,15 +21,16 @@ if TYPE_CHECKING:
 
     from api_gateway.domain import OIDCProviderConfig
 
-# Paths that bypass OIDC auth entirely
+# Paths that bypass OIDC auth and rate limiting entirely.
+# F-01: /health and /ready removed — only /healthz and /readyz exist on the health router.
 _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
     [
         "/v1/auth/login",
         "/v1/auth/callback",
         "/v1/auth/refresh",
         "/v1/auth/logout",
-        "/health",
-        "/ready",
+        "/healthz",
+        "/readyz",
         "/metrics",
         "/internal/jwks",
     ]
@@ -51,11 +52,48 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         oidc_config: OIDCProviderConfig | None = getattr(request.app.state, "oidc_config", None)
 
-        # When oidc_config is not yet loaded (startup / tests), skip auth entirely and
-        # do NOT reset user state — allows outer test middleware to pre-set request.state.user.
+        # When oidc_config is not yet loaded (dev / tests without Zitadel), try to
+        # validate Bearer tokens as internal JWTs (issued by dev-login endpoint).
+        # This allows the dev-login flow to work without a running Zitadel instance.
         if oidc_config is None:
             if not hasattr(request.state, "user"):
                 request.state.user = None
+            # Dev-login support: if a Bearer token is present and OIDC is unavailable,
+            # try to validate it as a gateway-issued internal JWT.
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer ") and request.state.user is None:
+                token = auth[7:]
+                pub_key = getattr(request.app.state, "rsa_public_key", None)
+                if pub_key is not None:
+                    try:
+                        payload = jwt.decode(
+                            token,
+                            pub_key,
+                            algorithms=["RS256"],
+                            options={"require": ["iss", "sub", "exp"]},
+                        )
+                        if payload.get("iss") == "worldview-gateway":
+                            # Valid internal JWT — look up user from Valkey cache
+                            valkey = getattr(request.app.state, "valkey", None)
+                            sub = payload.get("sub", "")
+                            user_data = None
+                            if valkey and sub:
+                                import json as _json
+
+                                cached = await valkey.get(f"auth:user:{sub}")
+                                if cached:
+                                    user_data = _json.loads(cached)
+                            if user_data is None:
+                                user_data = {
+                                    "sub": payload.get("oidc_sub", sub),
+                                    "user_id": sub,
+                                    "tenant_id": payload.get("tenant_id", ""),
+                                    "email": "",
+                                    "email_verified": False,
+                                }
+                            request.state.user = user_data
+                    except (jwt.InvalidTokenError, Exception):  # noqa: S110
+                        pass  # Not a valid internal JWT — leave user as None
             return cast("Response", await call_next(request))
 
         # Real OIDC validation path — reset user first
@@ -103,20 +141,20 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             sub = payload.get("sub")
             # Try Valkey cache for full user profile
             valkey = getattr(request.app.state, "valkey", None)
-            user_data: dict[str, Any] | None = None
+            user_data_oidc: dict[str, Any] | None = None
             if valkey is not None and sub:
                 try:
                     import json
 
                     cached = await valkey.get(f"auth:user:{sub}")
                     if cached:
-                        user_data = json.loads(cached)
+                        user_data_oidc = json.loads(cached)
                 except Exception:  # noqa: S110 — fail-open: Valkey cache miss falls back to token claims
                     pass
 
-            if user_data is None:
+            if user_data_oidc is None:
                 # Fall back to token claims
-                user_data = {
+                user_data_oidc = {
                     "sub": sub,
                     "email": payload.get("email", ""),
                     "email_verified": payload.get("email_verified", False),
@@ -124,7 +162,7 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                     "tenant_id": payload.get("tenant_id", ""),
                 }
 
-            request.state.user = user_data
+            request.state.user = user_data_oidc
 
         except (jwt.InvalidTokenError, Exception):
             request.state.user = None
@@ -163,8 +201,13 @@ class InternalJWTIssuerMiddleware(BaseHTTPMiddleware):
                     headers_list: list = request.scope["headers"]
                     headers_list[:] = [(k, v) for k, v in headers_list if k.lower() != b"x-internal-jwt"]
                     headers_list.append((b"x-internal-jwt", token.encode()))
-                except Exception:  # noqa: S110 — fail-open: JWT issuance failure must not block proxy
-                    pass
+                except Exception:  # — fail-open: JWT issuance failure must not block proxy
+                    logger.error(
+                        "internal_jwt_issuance_failed",
+                        user_id=user.get("user_id", ""),
+                        path=str(request.url.path),
+                        exc_info=True,
+                    )
 
         return cast("Response", await call_next(request))
 
@@ -181,7 +224,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["X-XSS-Protection"] = "0"
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
 
         settings = getattr(request.app.state, "settings", None)
         if settings is not None and getattr(settings, "cookie_secure", False):
@@ -198,7 +241,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     Authenticated requests are keyed by user_id (100/min).
     Unauthenticated requests are keyed by sha256(IP)[:16] (20/min).
-    Fail-open if Valkey is unavailable.
+    Fail-closed (D-001): returns 503 if Valkey is unavailable.
     """
 
     def __init__(
@@ -214,15 +257,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = window_seconds
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
+        # These paths are high-frequency infrastructure calls (k8s probes, Prometheus scrape)
+        # that should never be throttled or cause a 503 when Valkey is unavailable.
+        if request.url.path in _AUTH_SKIP_PATHS or request.url.path.startswith("/internal/"):
+            return cast("Response", await call_next(request))
+
         # Read Valkey from app.state at request time (set during lifespan after startup).
-        # Fall back to self.valkey for test overrides; None means rate limiting is disabled.
+        # Fall back to self.valkey for test overrides; None means Valkey is unavailable.
         valkey = getattr(request.app.state, "valkey", None) or self.valkey
         if valkey is None:
-            logger.debug(  # type: ignore[no-any-return]
-                "rate_limiting_disabled",
+            # D-001: Fail-closed — return 503 when Valkey is unavailable.
+            logger.warning(  # type: ignore[no-any-return]
+                "rate_limiting_unavailable",
                 path=str(request.url.path),
             )
-            return cast("Response", await call_next(request))
+            return Response(
+                content='{"detail":"Service temporarily unavailable"}',
+                status_code=503,
+                media_type="application/json",
+            )
 
         user = getattr(request.state, "user", None)
         if user and user.get("user_id"):
@@ -245,7 +299,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     media_type="application/json",
                 )
         except Exception:
-            return cast("Response", await call_next(request))
+            # D-001: Fail-closed — Valkey operation failure returns 503.
+            logger.warning(  # type: ignore[no-any-return]
+                "rate_limiting_unavailable",
+                reason="valkey_operation_failed",
+                path=str(request.url.path),
+            )
+            return Response(
+                content='{"detail":"Service temporarily unavailable"}',
+                status_code=503,
+                media_type="application/json",
+            )
 
         return cast("Response", await call_next(request))
 
@@ -254,8 +318,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def add_cors(app: FastAPI, origins: str) -> None:
-    """Add CORS middleware with explicit method/header allowlist (SEC-003/004)."""
+    """Add CORS middleware with explicit method/header allowlist (SEC-003/004).
+
+    Raises ValueError if ``origins`` contains ``"*"`` — combining a wildcard
+    with ``allow_credentials=True`` is rejected by all modern browsers (F-016).
+    """
     origin_list = [o.strip() for o in origins.split(",") if o.strip()]
+    if "*" in origin_list:
+        raise ValueError(
+            "CORS misconfiguration: allow_origins=['*'] with allow_credentials=True "
+            "is rejected by browsers. Set explicit origins in API_GATEWAY_CORS_ORIGINS."
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origin_list,
