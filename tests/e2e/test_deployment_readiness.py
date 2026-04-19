@@ -179,7 +179,7 @@ async def test_api_gateway_rejects_unauthenticated_requests() -> None:
         pytest.skip("API Gateway not reachable at localhost:8000")
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-        resp = await client.get("http://localhost:8000/api/v1/portfolio/holdings")
+        resp = await client.get("http://localhost:8000/v1/alerts/pending")
 
     assert resp.status_code == 401, f"Expected 401 for unauthenticated request, got {resp.status_code}"
 
@@ -236,14 +236,12 @@ async def test_full_stack_api_gateway_proxies_to_market_data() -> None:
         pytest.skip("API Gateway or Market Data not reachable")
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        # The instruments list endpoint is public (no auth required)
+        # The instrument search endpoint is public (no auth required)
         resp = await client.get(
-            "http://localhost:8000/api/v1/instruments",
-            params={"page": 1, "page_size": 1},
+            "http://localhost:8000/v1/search/instruments",
+            params={"query": "AAPL", "limit": 1},
         )
 
-    # 200 = data returned; 404 = no instruments yet but service is reachable
-    assert resp.status_code in (
-        200,
-        404,
-    ), f"Expected 200 or 404 from instruments endpoint, got {resp.status_code}: {resp.text[:200]}"
+    assert (
+        resp.status_code == 200
+    ), f"Expected 200 from instrument search endpoint, got {resp.status_code}: {resp.text[:200]}"
