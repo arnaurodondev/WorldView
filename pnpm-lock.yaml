@@ -6,6 +6,8 @@ settings:
 
 importers:
 
+  .: {}
+
   apps/worldview-web:
     dependencies:
       '@radix-ui/react-accordion':

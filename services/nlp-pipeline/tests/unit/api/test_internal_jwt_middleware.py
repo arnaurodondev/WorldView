@@ -158,3 +158,135 @@ async def test_middleware_passes_through_when_no_public_key_skip_verification() 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get("/api/v1/signals", headers={"X-Internal-JWT": token})
     assert resp.status_code == 200
+
+
+async def test_jti_first_use_accepted() -> None:
+    """F-012: First request with a unique jti is accepted (Valkey SET NX returns True)."""
+    from unittest.mock import AsyncMock
+
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key, public_key = _generate_rsa_pair()
+    token_with_jti = jwt.encode(
+        {
+            "sub": "user-123",
+            "tenant_id": "tenant-abc",
+            "role": "user",
+            "iss": "worldview-gateway",
+            "jti": "nlp-jti-first-use",
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mock_valkey = AsyncMock()
+    mock_valkey.set = AsyncMock(return_value=True)  # SET NX succeeded → new key
+    mock_app.state.valkey = mock_valkey
+
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/signals",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_with_jti.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    assert result.status_code == 200
+    assert called
+
+
+async def test_jti_replay_rejected() -> None:
+    """F-012: Second request with same jti returns 401 (Valkey SET NX returns None = key existed)."""
+    from unittest.mock import AsyncMock
+
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key, public_key = _generate_rsa_pair()
+    token_with_jti = jwt.encode(
+        {
+            "sub": "user-123",
+            "tenant_id": "tenant-abc",
+            "role": "user",
+            "iss": "worldview-gateway",
+            "jti": "nlp-replayed-jti",
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mock_valkey = AsyncMock()
+    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → key already present
+    mock_app.state.valkey = mock_valkey
+
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/signals",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_with_jti.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    assert result.status_code == 401
+    assert b"replay" in result.body
+    assert not called
+
+
+async def test_internal_jwt_rejects_wrong_issuer() -> None:
+    """JWT with wrong issuer returns 401 (F-015).
+
+    PyJWT now validates the issuer claim natively via the ``issuer=`` parameter
+    in ``jwt.decode()``. A token signed with the correct RS256 key but carrying
+    ``iss=evil`` must be rejected with 401, not passed through to route handlers.
+    """
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    # Craft a token that is properly signed but carries the wrong issuer.
+    evil_token = jwt.encode(
+        {
+            "sub": "user-123",
+            "tenant_id": "tenant-abc",
+            "role": "user",
+            "iss": "evil",  # <-- wrong issuer; should be "worldview-gateway"
+            "exp": int(time.time()) + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/signals", headers={"X-Internal-JWT": evil_token})
+
+    # Wrong issuer → PyJWT raises InvalidIssuerError → middleware returns 401
+    assert resp.status_code == 401

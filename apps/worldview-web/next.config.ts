@@ -14,9 +14,23 @@
 
 import type { NextConfig } from "next";
 
+// Warn if WS is insecure in production — JWT token travels in query param
+const wsBaseUrl = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8010";
+if (process.env.NODE_ENV === "production" && wsBaseUrl.startsWith("ws://")) {
+  console.warn(
+    "[SECURITY] NEXT_PUBLIC_WS_BASE_URL uses ws:// (plaintext). " +
+    "In production, use wss:// to encrypt WebSocket JWT tokens in transit."
+  );
+}
+
 const nextConfig: NextConfig = {
   // Enable React strict mode for better dev-time error detection
   reactStrictMode: true,
+
+  // Standalone output: produces a self-contained server.js + minimal node_modules.
+  // Required for the Docker multi-stage build (see Dockerfile).
+  // The standalone output is ~120 MB vs ~500 MB with full node_modules.
+  output: "standalone",
 
   // API gateway proxy rewrite:
   // /api/v1/* → API_GATEWAY_URL/v1/*
@@ -30,6 +44,31 @@ const nextConfig: NextConfig = {
       {
         source: "/api/:path*",
         destination: `${apiGatewayUrl}/:path*`,
+      },
+    ];
+  },
+
+  // Security headers applied to every response (all routes, all methods).
+  // These headers harden the browser environment and protect against common
+  // web vulnerabilities without requiring any application-level changes.
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          // Prevent clickjacking — no page should ever be framed
+          { key: "X-Frame-Options", value: "DENY" },
+          // Prevent MIME-type sniffing (e.g., serving JS as text/html)
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          // Control referrer information leaked to external sites (news article links)
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Disable browser features we never use
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          // HSTS only in production — localhost breaks with HSTS preload
+          ...(process.env.NODE_ENV === "production"
+            ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }]
+            : []),
+        ],
       },
     ];
   },
