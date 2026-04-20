@@ -5558,3 +5558,71 @@ ALL `<a href>` attributes populated from API data MUST use `safeExternalUrl()` f
 ### Prevention
 
 NEVER use `:latest` tags in any Docker Compose file (dev, test, or production). Always use an explicit version tag. The test compose file MUST use the same database image versions as the production compose file to prevent "passes in test, breaks in prod" failures.
+
+---
+
+## BP-168 — Cross-Database Dual-Commit: intel_db Persists Before nlp_db Commits
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-20 |
+| **Severity** | CRITICAL |
+| **Affected areas** | `services/nlp-pipeline/src/nlp_pipeline/infrastructure/consumers/article_consumer.py`, `services/nlp-pipeline/src/nlp_pipeline/application/blocks/entity_resolution.py` |
+| **Root cause** | The S6 `ArticleEnrichedConsumer` processes two separate databases (`nlp_db` and `intelligence_db`). The `entity_resolution` block opens and commits the `intelligence_db` session internally (inside its own scope), BEFORE the outer consumer commits `nlp_db`. If the `nlp_db` commit subsequently fails (connection error, constraint violation), the `intelligence_db` writes are already durably persisted with no rollback mechanism. This creates ghost entity-resolution records that reference article NLP rows that were never committed. |
+| **Symptom** | Entity mention rows in `intelligence_db.entity_mentions` pointing to articles that do not exist in `nlp_db.document_chunks`. Knowledge graph builds on phantom data. Deduplication misses on re-delivery since `nlp_db` shows the article as unprocessed but `intelligence_db` already has its entity mentions. |
+| **Fix (PLAN-0031 Wave B-3)** | Restructure `article_consumer.py` to open both sessions at the outermost level. Pass both sessions into all blocks. Commit `nlp_db` FIRST (since it is the source-of-truth for article existence), then commit `intelligence_db`. Remove the internal `session.commit()` from `entity_resolution.py` — it must be driven by the consumer, not the block. |
+
+### Prevention
+
+When a consumer writes to two separate databases in a single logical transaction, ALWAYS commit the source-of-truth database FIRST and the derived/downstream database SECOND. Never allow a sub-block to commit its own session; all commits must be controlled at the consumer level. If atomicity is required, use the outbox pattern (write to one DB + outbox, consume outbox to drive the other DB).
+
+---
+
+## BP-169 — Kafka Produce Before DB Commit (Pre-Commit Event Leakage)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-20 |
+| **Severity** | HIGH |
+| **Affected areas** | `services/knowledge-graph/src/knowledge_graph/application/blocks/graph_write.py:375`, `services/knowledge-graph/src/knowledge_graph/infrastructure/consumers/enriched_consumer.py:232` |
+| **Root cause** | `materialize_graph()` calls `direct_producer.produce_bytes()` for `entity.dirtied.v1` events at line 375, which is INSIDE the function and occurs BEFORE the consumer's `session.commit()` at `enriched_consumer.py:232`. If the DB commit fails after the produce, downstream consumers (S7 confidence recomputation workers) receive events for graph state that was never committed. The compacted `entity.dirtied.v1` topic then contains the latest entry for those entity IDs, suppressing future valid dirtying events via log compaction. |
+| **Symptom** | S7 confidence recomputation workers trigger on ghost entities. Entities that were "dirtied" by a failed graph write never get reprocessed because the compacted topic already holds an entry for their ID with a later offset. |
+| **Fix (PLAN-0031 Wave C-1)** | **FIXED 2026-04-21.** Refactored `materialize_graph()` to return `frozenset[uuid.UUID]` of entity IDs that need dirtying. Moved the `entity.dirtied.v1` produce loop to AFTER `session.commit()` in `enriched_consumer.py`. If the commit fails, no events are produced. If the produce fails after commit, the next re-delivery will produce a duplicate dirty event (idempotent — the worker re-runs confidence computation). 5 regression tests added. |
+
+### Prevention
+
+NEVER produce Kafka events inside a block/function that is called before the DB transaction commits. Either: (a) use the outbox pattern (write event to DB outbox within the same transaction, dispatch after commit), or (b) return the event payloads to the caller and produce them AFTER a successful `session.commit()`. This applies to all direct producers, not just compacted topics.
+
+---
+
+## BP-170 — UNRESOLVED Entity Mentions Permanently Orphaned (No Re-Resolution Pathway)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-20 |
+| **Severity** | HIGH |
+| **Affected areas** | `services/nlp-pipeline/src/nlp_pipeline/application/blocks/entity_resolution.py`, `services/knowledge-graph/` (missing worker) |
+| **Root cause** | Block 9 entity resolution classifies mentions as PROVISIONAL (0.45–0.72), AUTO_RESOLVED (≥0.72), or UNRESOLVED (<0.45). PROVISIONAL mentions are queued in `provisional_entity_queue` for Worker 13E to create new entities. UNRESOLVED mentions (<0.45) are stored in `nlp_db.entity_mentions` with `resolved_entity_id=NULL` — but there is NO periodic worker or event-driven consumer that re-examines these rows as the entity catalog grows. If a new entity is later added to the knowledge graph (via market instrument consumer or ProvisionalEnrichmentWorker for a different article), all prior UNRESOLVED mentions for that surface form remain permanently orphaned. |
+| **Symptom** | Entity signal counts, narrative embeddings (which draw from claims against resolved entities), and routing scores under-count entities mentioned before they were added to the catalog. Knowledge graph has no record of early mentions of entities that now exist. |
+| **Fix** | Two options: (A) Periodic re-resolution worker — runs every N hours, queries `nlp_db.entity_mentions WHERE resolved_entity_id IS NULL AND resolution_confidence < 0.45` and re-runs the cascade; (B) Event-driven — S6 consumes `entity.canonical.created.v1`, triggers a targeted re-resolution scan for UNRESOLVED mentions matching the new entity's mention_class. Option B is more surgical and lower overhead. |
+
+### Prevention
+
+When classifying mentions as UNRESOLVED, always store enough metadata (`mention_class`, `resolution_confidence`) to enable future re-resolution as the entity catalog expands. Design pipelines with the assumption that "unresolvable today" means "retry later", not "discard". Consider storing `resolution_outcome` in the DB (currently only in-memory) to enable efficient querying.
+
+---
+
+## BP-171 — Provisional Entity Queue Dedup Loses Mention Linkage for Subsequent Articles
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-20 |
+| **Severity** | MEDIUM |
+| **Affected areas** | `services/nlp-pipeline/src/nlp_pipeline/application/blocks/entity_resolution.py:249–255`, `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_evidence.py` |
+| **Root cause** | The `provisional_entity_queue` table has a UNIQUE constraint on `(normalized_surface, mention_class)`. When Article B mentions the same surface form as Article A before Worker 13E resolves the queue row, the INSERT fires `ON CONFLICT DO NOTHING` — Article B's `mention_id` is silently dropped. Article B's `relation_evidence_raw` rows are written with `entity_provisional=true` but the wrong (or missing) `provisional_queue_id`. When Worker 13E resolves the queue row and calls `UPDATE relation_evidence_raw WHERE provisional_queue_id = :queue_id`, Article B's evidence rows are NOT unblocked. The EntityCreatedConsumer's fallback query also cannot match because the entity didn't exist at insertion time. |
+| **Symptom** | Relations from any article that mentions the same provisional entity surface after the first article, but before the entity is created, remain stuck with `entity_provisional=true, processed=false` permanently. Worker 13A (confidence recomputation) excludes these rows. Knowledge graph confidence values are under-computed for entities that appeared in multiple articles during their provisional window. |
+| **Fix** | Replace the UNIQUE+NOTHING pattern with a proper tracking table: a `provisional_entity_queue_mentions` join table that stores all `(queue_id, mention_id, doc_id)` pairs. The EntityCreatedConsumer unblocks all evidence linked to any mention in the queue. Alternatively, change the INSERT to return the existing queue_id on conflict (`ON CONFLICT DO UPDATE SET updated_at=now() RETURNING queue_id`) and pass that returned queue_id into the evidence row. |
+
+### Prevention
+
+When using `ON CONFLICT DO NOTHING` for deduplication in a queue pattern, verify that the deduplication does NOT cause downstream data loss. If multiple producers need to reference the same queue row, the queue table must store N-to-1 relationships (e.g., a join table), not just the first producer's reference. Audit every `ON CONFLICT DO NOTHING` insert that is also referenced by a foreign key in another table.

@@ -4,7 +4,7 @@ source: docs/audits/2026-04-20-unstructured-data-pipeline-deep-dive.md
 title: "Pipeline Reliability & Intelligence Hardening"
 status: in-progress
 created: 2026-04-20
-updated: 2026-04-20
+updated: 2026-04-21
 plans: 5
 waves: 8
 tasks: 30
@@ -584,11 +584,12 @@ async with nlp_sf() as nlp_session, intel_sf() as intel_session:
 
 ## Sub-Plan C — S7 Knowledge Graph
 
-### Wave C-1: entity.dirtied.v1 Post-Commit Ordering Fix
+### Wave C-1: entity.dirtied.v1 Post-Commit Ordering Fix ✅
 
 **Goal**: Move `entity.dirtied.v1` Kafka produce from inside `materialize_graph()` to AFTER `session.commit()` in the consumer, so no Kafka messages are produced for writes that haven't been committed.
 **Depends on**: none (independent of Sub-Plan B)
 **Estimated effort**: 45–60 min
+**Status**: **DONE** — 2026-04-21 · 588 tests pass · ruff + mypy clean
 **Architecture layer**: application (blocks + consumer)
 
 #### Pre-read
@@ -678,9 +679,9 @@ Add `_direct_producer` and `_entity_dirtied_topic` to the consumer's `__init__` 
 ---
 
 #### Validation Gate — Wave C-1
-- [ ] All S7 unit tests pass (≥ 5 new tests)
-- [ ] `grep -n "produce_bytes" services/knowledge-graph/src/knowledge_graph/application/blocks/graph_write.py` returns 0 results
-- [ ] `ruff` + `mypy` clean
+- [x] All S7 unit tests pass (588 pass, 5 new tests)
+- [x] `grep -n "produce_bytes" services/knowledge-graph/src/knowledge_graph/application/blocks/graph_write.py` returns 0 calls (only protocol def)
+- [x] `ruff` + `mypy` clean
 
 #### Break Impact
 | Broken File | Why | Fix |

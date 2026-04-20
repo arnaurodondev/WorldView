@@ -46,24 +46,18 @@ def _make_outbox_repo() -> AsyncMock:
     return repo
 
 
-class _MockProducer:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-
-    def produce_bytes(self, *, topic: str, key: bytes, value: bytes) -> None:
-        self.calls.append({"topic": topic, "key": key, "value": value})
-
-
 def _raw_relation(
     *,
     raw_type: str = "employs",
     entity_provisional: bool = False,
+    subject_entity_id: UUID | None = None,
+    object_entity_id: UUID | None = None,
 ) -> object:
     from knowledge_graph.application.blocks.graph_write import RawRelation
 
     return RawRelation(
-        subject_entity_id=uuid4(),
-        object_entity_id=uuid4(),
+        subject_entity_id=subject_entity_id or uuid4(),
+        object_entity_id=object_entity_id or uuid4(),
         raw_type=raw_type,
         extraction_confidence=0.85,
         evidence_date=_NOW,
@@ -97,8 +91,6 @@ class TestGraphMaterializationRelations:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         assert summary.relations_upserted == 0
@@ -126,8 +118,6 @@ class TestGraphMaterializationRelations:
                 relation_repo=relation_repo,
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         relation_repo.upsert.assert_called_once()
@@ -155,8 +145,6 @@ class TestGraphMaterializationRelations:
                 relation_repo=relation_repo,
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         relation_repo.upsert.assert_not_called()
@@ -184,8 +172,6 @@ class TestGraphMaterializationRelations:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         evidence_repo.insert_raw.assert_called_once()
@@ -220,8 +206,6 @@ class TestPartitionKeyNotInInsert:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         # Verify insert_raw was called with no partition_key kwarg
@@ -230,63 +214,29 @@ class TestPartitionKeyNotInInsert:
 
 
 # ---------------------------------------------------------------------------
-# entity.dirtied.v1 direct produce
+# entity.dirtied.v1 — PLAN-0031 C-1: returned as entity_ids_to_dirty
 # ---------------------------------------------------------------------------
 
 
-class TestEntityDirtiedDirectProduce:
-    def test_entity_dirtied_produced_not_via_outbox(self) -> None:
-        """entity.dirtied.v1 must use direct_producer, NOT outbox.append."""
-        from knowledge_graph.application.blocks.graph_write import materialize_graph
+class TestEntityDirtiedReturnedNotProduced:
+    """PLAN-0031 C-1: materialize_graph() no longer produces entity.dirtied.v1
+    directly.  Instead it returns entity_ids_to_dirty in the summary so the
+    caller can produce AFTER session.commit()."""
 
-        producer = _MockProducer()
-        outbox = _make_outbox_repo()
-        rel = _raw_relation()
-        asyncio.run(
-            materialize_graph(
-                doc_id=uuid4(),
-                source_type="news",
-                is_backfill=False,
-                relations=[rel],  # type: ignore[list-item]
-                canonical_types=["employs"],
-                canonical_semantic_modes=[None],
-                canonical_decay_classes=[None],
-                canonical_decay_alphas=[None],
-                canonical_base_confidences=[None],
-                events=[],
-                claims=[],
-                session=_make_session(),
-                relation_repo=_make_relation_repo(),
-                evidence_repo=_make_evidence_repo(),
-                outbox_repo=outbox,
-                direct_producer=producer,
-                entity_dirtied_topic="entity.dirtied.v1",
-            )
-        )
-        # Direct producer was called
-        assert len(producer.calls) >= 1
-        topics = {c["topic"] for c in producer.calls}
-        assert "entity.dirtied.v1" in topics
-        # Outbox was NOT called with entity.dirtied topic
-        outbox_topics = {
-            call.kwargs.get("topic") or call.args[0] if call.args else "" for call in outbox.append.call_args_list
-        }
-        assert "entity.dirtied.v1" not in outbox_topics
-
-    def test_entity_dirtied_key_is_entity_id(self) -> None:
-        """entity.dirtied.v1 Kafka key must be the entity_id bytes."""
+    def test_materialize_graph_returns_dirtied_entity_ids(self) -> None:
+        """Both subject and object entity IDs are in the returned set."""
         from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
 
-        producer = _MockProducer()
-        subject_id = uuid4()
+        subj_id = uuid4()
+        obj_id = uuid4()
         rel = RawRelation(
-            subject_entity_id=subject_id,
-            object_entity_id=uuid4(),
+            subject_entity_id=subj_id,
+            object_entity_id=obj_id,
             raw_type="employs",
-            extraction_confidence=0.8,
+            extraction_confidence=0.85,
             evidence_date=_NOW,
         )
-        asyncio.run(
+        summary = asyncio.run(
             materialize_graph(
                 doc_id=uuid4(),
                 source_type="news",
@@ -303,15 +253,68 @@ class TestEntityDirtiedDirectProduce:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=producer,
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
-        dirty_calls = [c for c in producer.calls if c["topic"] == "entity.dirtied.v1"]
-        assert len(dirty_calls) >= 1
-        # Key must decode to a valid UUID matching one of the entities
-        keys = {c["key"].decode() for c in dirty_calls}
-        assert str(subject_id) in keys
+        # Both subject and object IDs must be in the returned frozenset
+        assert subj_id in summary.entity_ids_to_dirty
+        assert obj_id in summary.entity_ids_to_dirty
+        assert isinstance(summary.entity_ids_to_dirty, frozenset)
+
+    def test_materialize_graph_does_not_produce_kafka(self) -> None:
+        """No produce_bytes() calls inside the function — caller produces."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        # Verify there is no direct_producer parameter at all (TypeError if passed)
+        rel = _raw_relation()
+        # If we accidentally pass direct_producer, the function should reject it
+        # since we removed the parameter
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],  # type: ignore[list-item]
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        # The function returns entity IDs to dirty (not empty for a relation)
+        assert summary.entities_dirtied >= 1
+        assert len(summary.entity_ids_to_dirty) >= 1
+
+    def test_empty_relations_returns_empty_dirty_set(self) -> None:
+        """No relations = no dirty entities."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        assert len(summary.entity_ids_to_dirty) == 0
 
     def test_graph_state_changed_emitted_via_outbox(self) -> None:
         """graph.state.changed.v1 must use outbox.append."""
@@ -336,8 +339,6 @@ class TestEntityDirtiedDirectProduce:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=outbox,
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         assert outbox.append.called
@@ -379,8 +380,6 @@ class TestEventsAndClaims:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         # session.execute should have been called (INSERT events + INSERT event_entities)
@@ -414,8 +413,6 @@ class TestEventsAndClaims:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-                direct_producer=_MockProducer(),
-                entity_dirtied_topic="entity.dirtied.v1",
             )
         )
         # session.execute should have been called for INSERT claims

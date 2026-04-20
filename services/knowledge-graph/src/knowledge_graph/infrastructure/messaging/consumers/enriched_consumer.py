@@ -37,6 +37,7 @@ from knowledge_graph.application.blocks.graph_write import (
     RawClaim,
     RawEvent,
     RawRelation,
+    _build_entity_dirtied_payload,
     materialize_graph,
 )
 from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
@@ -204,8 +205,6 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                 relation_repo=relation_repo,
                 evidence_repo=evidence_repo,
                 outbox_repo=outbox_repo,
-                direct_producer=self._direct_producer,
-                entity_dirtied_topic=self._entity_dirtied_topic,
                 correlation_id=correlation_id,
                 extraction_model_id=extraction_model_id,
             )
@@ -233,6 +232,33 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                 )
 
             await session.commit()
+
+        # ----------------------------------------------------------
+        # PLAN-0031 C-1: Produce entity.dirtied.v1 AFTER session.commit()
+        # so that Kafka messages are never emitted for rolled-back writes.
+        # On rare Kafka unavailability the dirty signal is lost — acceptable
+        # because the compacted topic is superseded by the next write for
+        # the same entity_id.
+        # ----------------------------------------------------------
+        for entity_id in summary.entity_ids_to_dirty:
+            try:
+                payload_bytes = _build_entity_dirtied_payload(
+                    entity_id,
+                    doc_id,
+                    correlation_id,
+                )
+                self._direct_producer.produce_bytes(
+                    topic=self._entity_dirtied_topic,
+                    key=str(entity_id).encode(),
+                    value=payload_bytes,
+                )
+            except Exception:
+                logger.warning(
+                    "entity_dirtied_produce_failed",
+                    entity_id=str(entity_id),
+                    doc_id=str(doc_id),
+                    exc_info=True,
+                )
 
         logger.info(  # type: ignore[no-any-return]
             "enriched_article_processed",
