@@ -5,7 +5,8 @@ Per enriched message:
   2. INSERT ``relation_evidence_raw`` (append-only; partition_key STORED — never in INSERT).
   3. INSERT ``events`` + ``event_entities`` (ON CONFLICT DO NOTHING).
   4. INSERT ``claims`` (ON CONFLICT DO NOTHING).
-  5. Produce ``entity.dirtied.v1`` DIRECTLY to Kafka (compacted topic; bypasses outbox).
+  5. Return ``entity_ids_to_dirty`` for caller to produce ``entity.dirtied.v1``
+     AFTER session.commit() (PLAN-0031 C-1 post-commit ordering fix).
   6. Emit ``graph.state.changed.v1`` via outbox.
 
 Aggregation worker (Wave D-3) skips rows where ``entity_provisional = true``.
@@ -124,6 +125,10 @@ class MaterializationSummary:
     events_inserted: int
     claims_inserted: int
     entities_dirtied: int
+    # PLAN-0031 C-1: entity IDs that need a ``entity.dirtied.v1`` Kafka produce.
+    # The CALLER is responsible for producing AFTER session.commit() so that
+    # Kafka messages are never emitted for rolled-back writes.
+    entity_ids_to_dirty: frozenset[UUID] = dataclasses.field(default_factory=frozenset)
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +261,6 @@ async def materialize_graph(
     relation_repo: RelationRepository,
     evidence_repo: RelationEvidenceRepository,
     outbox_repo: OutboxRepository,
-    direct_producer: DirectKafkaProducerProtocol,
-    entity_dirtied_topic: str,
     correlation_id: str | None = None,
     extraction_model_id: str | None = None,
 ) -> MaterializationSummary:
@@ -272,6 +275,12 @@ async def materialize_graph(
 
     Advisory lock + upsert + evidence are written atomically within the
     caller-managed *session* transaction.  The caller must commit/rollback.
+
+    .. note:: PLAN-0031 C-1 — this function does NOT produce
+       ``entity.dirtied.v1`` Kafka messages.  It returns the set of entity
+       IDs that need dirtying via ``MaterializationSummary.entity_ids_to_dirty``.
+       The **caller** must produce those messages AFTER ``session.commit()``
+       to prevent orphaned Kafka events for rolled-back writes.
 
     Args:
         doc_id: Source document ID.
@@ -289,15 +298,13 @@ async def materialize_graph(
         relation_repo: For advisory lock + upsert.
         evidence_repo: For insert_raw.
         outbox_repo: For graph.state.changed.v1 outbox append.
-        direct_producer: For entity.dirtied.v1 direct Kafka produce.
-        entity_dirtied_topic: Kafka topic name for entity.dirtied.v1.
         correlation_id: Propagated correlation ID.
         extraction_model_id: LLM model ID that produced the extraction
             (PLAN-0031 B-2).  Stored on each ``claims`` row so downstream
             consumers know which model version produced the claim.
 
     Returns:
-        :class:`MaterializationSummary` with counts.
+        :class:`MaterializationSummary` with counts and ``entity_ids_to_dirty``.
     """
     now = utc_now()
     dirtied_entities: set[UUID] = set()
@@ -384,15 +391,11 @@ async def materialize_graph(
         affected_entity_ids.add(raw_claim.subject_entity_id)
 
     # ------------------------------------------------------------------
-    # 5 — entity.dirtied.v1 direct produce (compacted topic, key=entity_id)
+    # 5 — entity.dirtied.v1: accumulate IDs for post-commit produce
     # ------------------------------------------------------------------
-    for entity_id in dirtied_entities:
-        payload_bytes = _build_entity_dirtied_payload(entity_id, doc_id, correlation_id)
-        direct_producer.produce_bytes(
-            topic=entity_dirtied_topic,
-            key=str(entity_id).encode(),
-            value=payload_bytes,
-        )
+    # PLAN-0031 C-1: Previously produced here INSIDE the transaction.
+    # Now returned to the caller who produces AFTER session.commit().
+    # See _build_entity_dirtied_payload() for the message builder.
 
     # ------------------------------------------------------------------
     # 6 — graph.state.changed.v1 via outbox
@@ -425,4 +428,5 @@ async def materialize_graph(
         events_inserted=event_count,
         claims_inserted=claim_count,
         entities_dirtied=len(dirtied_entities),
+        entity_ids_to_dirty=frozenset(dirtied_entities),
     )

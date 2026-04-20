@@ -228,7 +228,7 @@ Per enriched message:
 2. INSERT `relation_evidence_raw` — **`partition_key` is STORED; never in INSERT**
 3. INSERT `events` + `event_entities` (ON CONFLICT DO NOTHING)
 4. INSERT `claims` (ON CONFLICT DO NOTHING)
-5. Produce `entity.dirtied.v1` **directly** (compacted topic, key=entity_id bytes)
+5. Return `entity_ids_to_dirty` — caller produces `entity.dirtied.v1` **AFTER session.commit()** (PLAN-0031 C-1)
 6. Emit `graph.state.changed.v1` via outbox
 
 Rows with `entity_provisional=true` are staged but skipped by aggregation worker until resolved.
