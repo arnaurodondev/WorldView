@@ -77,9 +77,15 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         if parts:
             columns.add(parts[0].strip('"'))
 
-    # Also collect columns added via ALTER TABLE ... ADD COLUMN
+    # Also collect columns added via ALTER TABLE ... ADD COLUMN (raw SQL)
     alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(\w+)"
     for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+        columns.add(m.group(1))
+
+    # Also collect columns added via Alembic op.add_column() calls
+    # Pattern: op.add_column("table_name", sa.Column("col_name", ...))
+    alembic_pattern = rf'op\.add_column\(\s*"{table_name}"\s*,\s*sa\.Column\(\s*"(\w+)"'
+    for m in re.finditer(alembic_pattern, migration_text):
         columns.add(m.group(1))
 
     return columns

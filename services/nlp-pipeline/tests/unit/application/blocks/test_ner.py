@@ -227,6 +227,40 @@ class TestRunNERBlock:
         assert len(mentions) == 1
         assert mentions[0].mention_text == "Apple Inc."
 
+    @pytest.mark.asyncio
+    async def test_ner_block_sets_model_id(self) -> None:
+        """When ner_model_id is passed, all EntityMention objects carry that value (PLAN-0031 B-1)."""
+        client = _make_ner_client(
+            [
+                {"text": "Apple", "label": "organization", "score": 0.92, "start": 0, "end": 5},
+                {"text": "AAPL", "label": "financial_instrument", "score": 0.88, "start": 10, "end": 14},
+            ]
+        )
+        doc_id = uuid.uuid4()
+        section = _make_section("Apple AAPL earnings today")
+
+        mentions, _ = await run_ner_block(doc_id, [section], client, ner_model_id="test-ner-v1")
+
+        assert len(mentions) == 2
+        for m in mentions:
+            assert m.ner_model_id == "test-ner-v1"
+
+    @pytest.mark.asyncio
+    async def test_ner_block_none_model_id_fallback(self) -> None:
+        """When ner_model_id is not passed (defaults to None), mentions have ner_model_id=None."""
+        client = _make_ner_client(
+            [
+                {"text": "Tesla", "label": "organization", "score": 0.90, "start": 0, "end": 5},
+            ]
+        )
+        doc_id = uuid.uuid4()
+        section = _make_section("Tesla reported quarterly earnings")
+
+        mentions, _ = await run_ner_block(doc_id, [section], client)
+
+        assert len(mentions) == 1
+        assert mentions[0].ner_model_id is None
+
 
 @pytest.mark.unit
 class TestComputeStats:

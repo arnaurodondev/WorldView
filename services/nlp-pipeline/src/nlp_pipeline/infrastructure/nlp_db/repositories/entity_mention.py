@@ -33,6 +33,7 @@ class EntityMentionRepository:
             resolved_entity_id=mention.resolved_entity_id,
             resolution_confidence=mention.resolution_confidence,
             resolution_stage=mention.resolution_stage,
+            ner_model_id=mention.ner_model_id,
         )
         self._session.add(row)
 

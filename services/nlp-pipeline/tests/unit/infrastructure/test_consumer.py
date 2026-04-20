@@ -43,6 +43,24 @@ def _make_settings() -> MagicMock:
     return s
 
 
+def _make_async_cm_session_factory() -> MagicMock:
+    """Build a session factory that returns a proper async context manager.
+
+    D-004: _run_pipeline opens both nlp_session and intel_session via
+    ``async with self._nlp_sf() as nlp_session, self._intel_sf() as intel_session``
+    so every session factory used in tests must support __aenter__/__aexit__.
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    sf = MagicMock()
+    sf.return_value = cm
+    return sf
+
+
 def _make_consumer(**kwargs: Any) -> ArticleProcessingConsumer:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
@@ -55,7 +73,7 @@ def _make_consumer(**kwargs: Any) -> ArticleProcessingConsumer:
         "config": config,
         "settings": _make_settings(),
         "nlp_session_factory": MagicMock(),
-        "intelligence_session_factory": MagicMock(),
+        "intelligence_session_factory": _make_async_cm_session_factory(),
         "storage": MagicMock(),
         "watchlist_cache": MagicMock(),
         "ner_client": MagicMock(),
@@ -367,6 +385,26 @@ class TestEnqueueEnriched:
 # ── D-004: nlp commit failure logging (T-A-2-04) ─────────────────────────────
 
 
+def _make_intel_session_factory() -> tuple[AsyncMock, MagicMock]:
+    """Build (intel_session, session_factory) that returns a proper async context manager.
+
+    D-004: _run_pipeline now opens intel_session at the top level via
+    ``async with self._intel_sf() as intel_session``, so the factory must
+    return an object that supports ``__aenter__``/``__aexit__``.
+    """
+    intel_session = AsyncMock()
+    intel_session.add = MagicMock()
+    intel_session.commit = AsyncMock()
+
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=intel_session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    sf = MagicMock()
+    sf.return_value = cm
+    return intel_session, sf
+
+
 def _make_failing_nlp_session_factory() -> tuple[AsyncMock, MagicMock]:
     """Build (session, session_factory) where session.commit raises RuntimeError."""
     session = AsyncMock()
@@ -415,13 +453,14 @@ class TestNlpCommitFailure:
 
     @pytest.mark.asyncio
     async def test_nlp_commit_failure_logs_warning(self) -> None:
-        """When session.commit() raises, nlp_commit_failed_intel_writes_may_be_orphaned is logged."""
+        """When session.commit() raises, nlp_commit_failed_intel_writes_rolled_back is logged."""
         doc_id = uuid.uuid4()
         _session, nlp_sf = _make_failing_nlp_session_factory()
+        _intel_session, intel_sf = _make_intel_session_factory()
 
         consumer = _make_consumer(
             nlp_session_factory=nlp_sf,
-            intelligence_session_factory=MagicMock(),
+            intelligence_session_factory=intel_sf,
         )
         consumer._watchlist = MagicMock()
         consumer._watchlist.get_all_watched = AsyncMock(return_value=set())
@@ -446,8 +485,7 @@ class TestNlpCommitFailure:
                         p.stop()
 
         assert any(
-            e.get("event") == "nlp_commit_failed_intel_writes_may_be_orphaned"
-            and str(doc_id) in str(e.get("doc_id", ""))
+            e.get("event") == "nlp_commit_failed_intel_writes_rolled_back" and str(doc_id) in str(e.get("doc_id", ""))
             for e in cap
         ), f"Expected warning not found in: {cap}"
 
@@ -456,10 +494,11 @@ class TestNlpCommitFailure:
         """The RuntimeError from session.commit() is re-raised after the warning log."""
         doc_id = uuid.uuid4()
         _session, nlp_sf = _make_failing_nlp_session_factory()
+        _intel_session, intel_sf = _make_intel_session_factory()
 
         consumer = _make_consumer(
             nlp_session_factory=nlp_sf,
-            intelligence_session_factory=MagicMock(),
+            intelligence_session_factory=intel_sf,
         )
         consumer._watchlist = MagicMock()
         consumer._watchlist.get_all_watched = AsyncMock(return_value=set())

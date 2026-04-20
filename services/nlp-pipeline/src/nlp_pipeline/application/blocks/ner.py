@@ -110,6 +110,7 @@ async def run_ner_block(
     ner_client: NERClient,
     threshold: float = GLINER_THRESHOLD,
     batch_size: int = 32,
+    ner_model_id: str | None = None,
 ) -> tuple[list[EntityMention], DocumentEntityStats]:
     """Run GLiNER NER on all sections of a document.
 
@@ -188,6 +189,7 @@ async def run_ner_block(
                         confidence=ml_mention.score,
                         char_start=ml_mention.start,
                         char_end=ml_mention.end,
+                        ner_model_id=ner_model_id,
                     ),
                 )
 

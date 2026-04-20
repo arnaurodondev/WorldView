@@ -138,6 +138,12 @@ echo "Setting 30-day retention on nlp.article.enriched.v1"
     --entity-name nlp.article.enriched.v1 \
     --add-config retention.ms=2592000000
 
+echo "Setting 30-day retention on content.article.raw.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name content.article.raw.v1 \
+    --add-config retention.ms=2592000000
+
 # ── Verification ──────────────────────────────────────────────────────────────
 echo "All topics created. Current topic list:"
 "$KAFKA_TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --list

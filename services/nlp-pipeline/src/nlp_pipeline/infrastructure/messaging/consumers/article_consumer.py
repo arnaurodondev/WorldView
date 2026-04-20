@@ -236,7 +236,16 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         is_backfill: bool,
         correlation_id: str | None,
     ) -> None:
-        """Download text and run Blocks 3-10 in one atomic nlp_db transaction.
+        """Download text and run Blocks 3-10 with D-004 dual-DB commit ordering.
+
+        D-004 session lifecycle invariant:
+          Both nlp_session and intel_session are opened at the top of the DB
+          write phase.  nlp_session is committed FIRST.  If that commit fails,
+          intel_session rolls back automatically via its context manager
+          __aexit__.  If intel_session commit fails AFTER nlp_session committed,
+          the error is logged but NOT re-raised — intel writes (provisional
+          entity queue inserts) are idempotent on retry thanks to the UNIQUE
+          constraint on (normalized_surface, mention_class).
 
         NOTE: The idempotency check (routing_decision exists?) is performed in
         ``process_message`` BEFORE the backpressure semaphore is acquired so
@@ -254,6 +263,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             ner_client=self._ner,
             threshold=self._settings.gliner_threshold,
             batch_size=self._settings.gliner_batch_size,
+            ner_model_id=self._settings.ner_model_id,
         )
 
         # ── Block 5: Routing score (initial, novelty_score=0.0 provisional) ───
@@ -307,10 +317,18 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             chunk_text_store=self._chunk_text_store,
         )
 
-        # ── Block 8: Novelty gate (skip for HALT — can't downgrade further) ──
-        final_path = initial_path
-        if initial_path != ProcessingPath.HALT:
-            async with self._intel_sf() as intel_session:
+        # ── D-004: Open BOTH sessions at the top level ───────────────────────
+        # intel_session is used by Block 8 (novelty gate reads) and Block 9
+        # (entity resolution reads + provisional queue writes).
+        # nlp_session owns all NLP artifact writes + outbox.
+        # Commit order: nlp_session FIRST, then intel_session (best-effort).
+        async with self._nlp_sf() as nlp_session, self._intel_sf() as intel_session:
+            # ── Block 8: Novelty gate (skip for HALT — can't downgrade further)
+            final_path = initial_path
+            if initial_path != ProcessingPath.HALT:
+                # D-004: use the top-level intel_session — no nested context
+                # manager, so the session stays open until the coordinated
+                # commit sequence below.
                 ep_repo = EntityProfileEmbeddingRepository(intel_session)
                 routing_decision, _novelty_score = await run_novelty_gate(
                     doc_id=doc_id,
@@ -320,40 +338,40 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     resolved_entity_ids=[],
                     entity_embeddings={},
                 )
-            final_path = apply_suppression_gate(routing_decision)
+                final_path = apply_suppression_gate(routing_decision)
 
-        # ── Blocks 9+10 and atomic DB write ───────────────────────────────────
-        async with self._nlp_sf() as session:
+            # ── Blocks 9+10 and atomic DB write ──────────────────────────────
             extraction_result: dict[str, Any] = {"events": [], "claims": [], "relations": []}
             final_mentions = list(mentions)
 
             # Block 9: Entity resolution (reads intel_db, writes audit to nlp_session)
+            # D-004: use the top-level intel_session — no nested context manager.
             if should_run_entity_resolution(final_path):
-                async with self._intel_sf() as intel_session:
-                    alias_repo = EntityAliasRepository(intel_session)
-                    ep_repo2 = EntityProfileEmbeddingRepository(intel_session)
-                    canon_repo = CanonicalEntityRepository(intel_session)
-                    mr_repo = MentionResolutionRepository(session)
+                alias_repo = EntityAliasRepository(intel_session)
+                ep_repo2 = EntityProfileEmbeddingRepository(intel_session)
+                canon_repo = CanonicalEntityRepository(intel_session)
+                # MentionResolutionRepository writes audit trail to nlp_db.
+                mr_repo = MentionResolutionRepository(nlp_session)
 
-                    resolved_mentions, _audit = await run_entity_resolution_block(
-                        mentions=mentions,
-                        alias_repo=alias_repo,
-                        embedding_repo=ep_repo2,
-                        canonical_entity_repo=canon_repo,
-                        resolution_audit_repo=mr_repo,
-                        embedding_client=self._emb,
-                        intelligence_session=intel_session,
-                        model_id=self._settings.embedding_model_id,
-                        instruction_prefix=self._settings.embedding_instruction_prefix,
-                    )
-                    final_mentions = resolved_mentions
+                resolved_mentions, _audit = await run_entity_resolution_block(
+                    mentions=mentions,
+                    alias_repo=alias_repo,
+                    embedding_repo=ep_repo2,
+                    canonical_entity_repo=canon_repo,
+                    resolution_audit_repo=mr_repo,
+                    embedding_client=self._emb,
+                    intelligence_session=intel_session,
+                    model_id=self._settings.embedding_model_id,
+                    instruction_prefix=self._settings.embedding_instruction_prefix,
+                )
+                final_mentions = resolved_mentions
 
             # Block 10: Deep LLM extraction (writes claims to outbox via nlp_session)
             from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import (
                 ClaimsRepository,
             )
 
-            claims_repo = ClaimsRepository(session)
+            claims_repo = ClaimsRepository(nlp_session)
             signals: list = []
             if should_run_deep_extraction(final_path):
                 extraction_result, signals = await run_deep_extraction_block(
@@ -370,13 +388,13 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 )
 
             # Write all artifacts to nlp_db
-            section_repo = SectionRepository(session)
-            chunk_repo = ChunkRepository(session)
-            mention_repo = EntityMentionRepository(session)
-            stats_repo = DocumentEntityStatsRepository(session)
-            routing_repo = RoutingDecisionRepository(session)
-            cem_repo = ChunkEntityMentionRepository(session)
-            outbox_repo = OutboxRepository(session)
+            section_repo = SectionRepository(nlp_session)
+            chunk_repo = ChunkRepository(nlp_session)
+            mention_repo = EntityMentionRepository(nlp_session)
+            stats_repo = DocumentEntityStatsRepository(nlp_session)
+            routing_repo = RoutingDecisionRepository(nlp_session)
+            cem_repo = ChunkEntityMentionRepository(nlp_session)
+            outbox_repo = OutboxRepository(nlp_session)
 
             await section_repo.add_batch(sections)
             await chunk_repo.add_batch(chunks)
@@ -385,8 +403,8 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             await routing_repo.add(routing_decision)
 
             # Write embeddings directly (no dedicated repo)
-            _write_section_embeddings(session, section_embs, model_id=self._settings.embedding_model_id)
-            _write_chunk_embeddings(session, chunk_embs, model_id=self._settings.embedding_model_id)
+            _write_section_embeddings(nlp_session, section_embs, model_id=self._settings.embedding_model_id)
+            _write_chunk_embeddings(nlp_session, chunk_embs, model_id=self._settings.embedding_model_id)
 
             # Persist failed embeddings for retry by EmbeddingRetryWorker
             if pending:
@@ -394,7 +412,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     EmbeddingPendingRepository,
                 )
 
-                pending_repo = EmbeddingPendingRepository(session)
+                pending_repo = EmbeddingPendingRepository(nlp_session)
                 await pending_repo.save_batch(pending)
 
             # Link chunk↔mention by char offset overlap
@@ -416,6 +434,9 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 mentions=final_mentions,
                 extraction_result=extraction_result,
                 correlation_id=correlation_id,
+                extraction_model_id=(
+                    self._settings.extraction_model_id if should_run_deep_extraction(final_path) else None
+                ),
             )
 
             # Enqueue signal events (nlp.signal.detected.v1) — must be inside the
@@ -430,15 +451,34 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     correlation_id=correlation_id,
                 )
 
+            # ── D-004: Commit NLP FIRST, then intel ──────────────────────────
+            # If nlp_session.commit() fails, intel_session rolls back
+            # automatically via its context manager __aexit__ (no orphaned
+            # intel writes).  The exception propagates up for Kafka retry.
             try:
-                await session.commit()
+                await nlp_session.commit()
             except Exception:
                 logger.warning(  # type: ignore[no-any-return]
-                    "nlp_commit_failed_intel_writes_may_be_orphaned",
+                    "nlp_commit_failed_intel_writes_rolled_back",
                     doc_id=str(doc_id),
                     exc_info=True,
                 )
                 raise
+
+            # Intel commit (best-effort — idempotent on retry).
+            # NLP is already committed; if intel fails the provisional queue
+            # inserts will be retried on next article re-delivery.
+            try:
+                await intel_session.commit()
+            except Exception:
+                logger.warning(  # type: ignore[no-any-return]
+                    "d004_intel_commit_failed",
+                    doc_id=str(doc_id),
+                    exc_info=True,
+                )
+                # DON'T re-raise — NLP is committed; intel writes are
+                # idempotent on retry (provisional_entity_queue has
+                # UNIQUE constraint on (normalized_surface, mention_class)).
 
         logger.info(  # type: ignore[no-any-return]
             "article_processed",
@@ -661,6 +701,7 @@ async def _enqueue_enriched(
     mentions: list[EntityMention],
     extraction_result: dict[str, Any],
     correlation_id: str | None,
+    extraction_model_id: str | None = None,
 ) -> None:
     effective_tier = routing_decision.final_routing_tier or routing_decision.routing_tier
     resolved_ids = [str(m.resolved_entity_id) for m in mentions if m.resolved_entity_id is not None]
@@ -683,6 +724,7 @@ async def _enqueue_enriched(
         "claim_count": len(list(extraction_result.get("claims", []))),
         "event_count": len(list(extraction_result.get("events", []))),
         "provisional_entity_count": sum(1 for m in mentions if m.resolved_entity_id is None),
+        "extraction_model_id": extraction_model_id,
         "correlation_id": correlation_id,
     }
     await outbox_repo.add(
