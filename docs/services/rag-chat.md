@@ -273,6 +273,53 @@ services/rag-chat/src/rag_chat/
 
 ---
 
+## Tenant Isolation
+
+S8 enforces tenant isolation at the **application layer** via `tenant_id` scoping
+on all thread and message operations. The boundary is documented here as a formal
+contract; regression tests exist in `tests/unit/api/test_tenant_isolation.py`.
+
+### Thread Ownership
+
+Every `ConversationThread` carries a `tenant_id` (UUID, NOT NULL). All read and
+write operations pass `tenant_id` from the JWT auth context to the repository,
+which filters `WHERE tenant_id = :tid`:
+
+- **`GetThreadUseCase`**: `threads.get(thread_id, user_id, tenant_id=tenant_id)` —
+  returns `None` when tenant_id does not match → `ThreadNotFoundError` → HTTP 404.
+- **`DeleteThreadUseCase`**: `threads.soft_delete(thread_id, user_id, tenant_id)` —
+  same ownership check (single UPDATE with tenant_id filter, no TOCTOU window).
+- **`ListThreadsUseCase`**: `threads.list_active(user_id, tenant_id, ...)` —
+  returns only threads owned by the requesting tenant.
+- **`CreateThreadUseCase`**: Thread is created with the requesting tenant's
+  `tenant_id` — no cross-tenant creation is possible.
+
+### Message Ownership
+
+Messages inherit tenant isolation from their parent thread: `messages.thread_id`
+FK → `threads.thread_id`. Since thread reads are tenant-scoped, messages are
+transitively isolated.
+
+### RAG Retrieval Scoping
+
+RAG retrieval (Steps 5A–5I) queries globally shared data (articles, entities,
+relations, claims, events from S3/S5/S6/S7). This is by design — news and
+market intelligence are not tenant-specific. Tenant isolation applies only to:
+
+- **Chat thread context**: which thread the response is persisted to (tenant-scoped)
+- **Portfolio context (Step 5H)**: scoped by S1's `user_id` check on portfolio data
+- **Conversation history**: loaded from the tenant-scoped thread
+
+### Security Notes
+
+- **404 (not 403)** on cross-tenant access prevents thread ID enumeration attacks.
+- `tenant_id` is extracted from the RS256 internal JWT set by `InternalJWTMiddleware`
+  (PRD-0025). It is never read from raw request headers.
+- Defense-in-depth: ownership is checked in the **use case layer** (not just the
+  route), so any new routes that touch threads inherit the same protection.
+
+---
+
 ## Local Run
 
 ```bash
