@@ -886,11 +886,12 @@ cb_enabled: bool = True  # feature flag
 
 ## Sub-Plan E — Documentation + Tenant Isolation Tests
 
-### Wave E-1: Tenant Isolation Formal Documentation + Regression Tests
+### Wave E-1: Tenant Isolation Formal Documentation + Regression Tests ✅
 
 **Goal**: Formally document the tenant isolation boundary (global content, tenant-scoped chat); add regression tests that prevent cross-tenant data leakage via S8 threads.
 **Depends on**: none
 **Estimated effort**: 30–40 min
+**Status**: **DONE** — 2026-04-21 · 345 S8 unit tests pass (3 new) · ruff + mypy clean
 **Architecture layer**: testing + documentation
 
 #### T-E-1-01: Add cross-tenant thread access regression test (S8)
@@ -956,8 +957,8 @@ no defense-in-depth for tenant isolation.
 ---
 
 #### Validation Gate — Wave E-1
-- [ ] 3 new regression tests pass
-- [ ] No docs content contradicts current code behavior
+- [x] 3 new regression tests pass
+- [x] No docs content contradicts current code behavior
 
 ---
 

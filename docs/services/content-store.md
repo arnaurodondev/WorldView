@@ -309,6 +309,30 @@ Normalization: NFC Unicode → strip zero-width chars → collapse whitespace.
 
 ---
 
+## Tenant Isolation
+
+Content Store has **no `tenant_id` column** in any table. Articles, sections,
+MinHash signatures, and dedup hashes are globally shared across all tenants by
+design — news content is not per-tenant.
+
+Multi-tenancy is enforced exclusively at upstream layers:
+
+- **API Gateway (S9)**: RS256 internal JWT validation gates all external access;
+  Content Store endpoints are only reachable via S9 proxy routes.
+- **RAG Chat (S8)**: Thread ownership checks (`thread.tenant_id`) ensure that
+  RAG retrieval results are served only within a tenant-scoped conversation context.
+- **Content Store API**: The `GET /api/v1/articles` and `GET /api/v1/articles/{id}`
+  endpoints are read-only and return globally available content — there is no
+  per-tenant filtering at this layer.
+
+**Security implication**: A bug in S9 auth or S8 thread ownership checks could
+expose article metadata to unauthorized callers. Content Store itself provides
+no defense-in-depth for tenant isolation because the data is architecturally
+global. This is a deliberate trade-off: news articles are public information
+and do not contain tenant-specific PII.
+
+---
+
 ## Local Run
 
 ```bash
