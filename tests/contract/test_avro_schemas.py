@@ -22,14 +22,14 @@ ENVELOPE_FIELDS = {"event_id", "event_type", "schema_version", "occurred_at"}
 EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "content.article.raw.v1": 14,
     "content.article.stored.v1": 15,
-    "nlp.article.enriched.v1": 19,
-    "nlp.signal.detected.v1": 13,
+    "nlp.article.enriched.v1": 20,
+    "nlp.signal.detected.v1": 14,
     "graph.state.changed.v1": 12,
     "intelligence.contradiction.v1": 12,
     "entity.dirtied.v1": 8,
     "entity.canonical.created.v1": 10,
     "relation.type.proposed.v1": 12,  # Existing: 12 fields (richer than PRD minimum)
-    "alert.delivered.v1": 10,
+    "alert.delivered.v1": 11,
     "market.instrument.created": 15,  # Enhanced with name, description, isin, security_id, entity_id, causation_id
     "market.instrument.updated": 14,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
@@ -204,6 +204,7 @@ class TestConfluentWireFormatRoundtrip:
             "claim_count": 0,
             "event_count": 0,
             "provisional_entity_count": 2,
+            "extraction_model_id": None,
             "correlation_id": None,
         },
     }

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog.contextvars
 from fastapi import FastAPI, Request, Response
@@ -60,6 +60,40 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+async def _expire_stale_embeddings(
+    session_factory: Any,
+    config: Settings,
+) -> None:
+    """On startup, if current embedding model differs from stored, bulk-expire stale rows (PLAN-0031 B-2).
+
+    Sets ``expires_at = now()`` on any ``chunk_embeddings`` / ``section_embeddings``
+    rows whose ``model_id`` does not match ``config.embedding_model_id``.
+    The EmbeddingRetryWorker will re-generate them on its next cycle.
+    """
+    import structlog
+    from sqlalchemy import text
+
+    _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+    async with session_factory() as session:
+        r1 = await session.execute(
+            text("UPDATE chunk_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
+            {"current": config.embedding_model_id},
+        )
+        r2 = await session.execute(
+            text("UPDATE section_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
+            {"current": config.embedding_model_id},
+        )
+        if r1.rowcount > 0 or r2.rowcount > 0:
+            _log.warning(
+                "embedding_model_changed",
+                stale_chunk_count=r1.rowcount,
+                stale_section_count=r2.rowcount,
+                current_model=config.embedding_model_id,
+            )
+        await session.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — sets up database and Valkey for API endpoints.
@@ -102,6 +136,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.intelligence_session_factory = intel_sf
     app.state.intel_write_factory = intel_sf
     app.state.intel_read_factory = intel_read_sf
+
+    # 4b. Expire stale embeddings if embedding model changed (PLAN-0031 B-2)
+    try:
+        await _expire_stale_embeddings(nlp_sf, settings)
+    except Exception:
+        log.warning("expire_stale_embeddings_failed", exc_info=True)
 
     # 5. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]

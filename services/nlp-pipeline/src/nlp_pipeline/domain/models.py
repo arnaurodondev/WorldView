@@ -71,6 +71,7 @@ class EntityMention:
     resolution_confidence: float | None = None
     resolution_stage: int | None = None  # 1=exact, 2=ticker, 3=fuzzy, 4=ANN
     resolution_outcome: ResolutionOutcome | None = None
+    ner_model_id: str | None = None
 
 
 @dataclass

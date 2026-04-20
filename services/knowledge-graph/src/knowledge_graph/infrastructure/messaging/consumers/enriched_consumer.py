@@ -141,6 +141,8 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         doc_id = UUID(value["doc_id"])
         is_backfill: bool = value.get("is_backfill", False)
         correlation_id: str | None = value.get("correlation_id")
+        # PLAN-0031 B-2: extraction_model_id from S6 enriched event payload
+        extraction_model_id: str | None = value.get("extraction_model_id")
 
         raw_relations_data: list[dict[str, Any]] = value.get("raw_relations", [])
         raw_events_data: list[dict[str, Any]] = value.get("raw_events", [])
@@ -205,6 +207,7 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
                 direct_producer=self._direct_producer,
                 entity_dirtied_topic=self._entity_dirtied_topic,
                 correlation_id=correlation_id,
+                extraction_model_id=extraction_model_id,
             )
 
             # ----------------------------------------------------------

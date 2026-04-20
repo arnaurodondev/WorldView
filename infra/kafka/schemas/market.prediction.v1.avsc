@@ -7,7 +7,7 @@
     {"name": "event_id",          "type": "string",                  "doc": "UUIDv7 event identifier"},
     {"name": "event_type",        "type": "string",                  "default": "market.prediction.snapshot", "doc": "Event type discriminator"},
     {"name": "schema_version",    "type": "int",                     "default": 1},
-    {"name": "occurred_at",       "type": "string",                                 "doc": "ISO-8601 UTC timestamp — required, no default"},
+    {"name": "occurred_at",       "type": "string",    "default": "1970-01-01T00:00:00Z",  "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
     {"name": "market_id",         "type": "string",                  "doc": "Polymarket conditionId"},
     {"name": "source",            "type": "string",                  "default": "polymarket", "doc": "polymarket"},
     {"name": "question",          "type": "string",                  "doc": "The market question text"},

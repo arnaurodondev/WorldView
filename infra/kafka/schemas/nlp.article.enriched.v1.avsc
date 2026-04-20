@@ -22,6 +22,7 @@
     {"name": "claim_count",       "type": "int",                   "default": 0, "doc": "Claims extracted by LLM"},
     {"name": "event_count",       "type": "int",                   "default": 0, "doc": "Events extracted by LLM"},
     {"name": "provisional_entity_count", "type": "int",            "default": 0, "doc": "New provisional entities queued"},
+    {"name": "extraction_model_id", "type": ["null", "string"],    "default": null, "doc": "Qwen/LLM model ID used for Block 10 deep extraction. Null if extraction was skipped (routing_tier=light or suppress)."},
     {"name": "correlation_id",    "type": ["null", "string"],      "default": null}
   ]
 }

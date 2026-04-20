@@ -12,7 +12,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
-from sqlalchemy import VARCHAR, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
+from sqlalchemy import VARCHAR, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -108,6 +108,7 @@ class EntityMentionModel(Base):
     resolved_entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     resolution_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolution_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ner_model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

@@ -176,8 +176,13 @@ async def _insert_claim(
     session: AsyncSession,
     doc_id: UUID,
     raw_claim: RawClaim,
+    extraction_model_id: str | None = None,
 ) -> UUID:
-    """INSERT a claim record.  Returns the new claim_id."""
+    """INSERT a claim record.  Returns the new claim_id.
+
+    ``extraction_model_id`` is the LLM model that produced this claim
+    (PLAN-0031 B-2).  When None the DB server_default='unknown' applies.
+    """
     from sqlalchemy import text
 
     claim_id = new_uuid7()
@@ -185,10 +190,12 @@ async def _insert_claim(
         text("""
 INSERT INTO claims
     (claim_id, doc_id, chunk_id, claimer_entity_id, subject_entity_id,
-     claim_type, polarity, claim_text, extraction_confidence, is_backfill)
+     claim_type, polarity, claim_text, extraction_confidence, is_backfill,
+     extraction_model_id)
 VALUES
     (:claim_id, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
-     :claim_type, :polarity, :claim_text, :extraction_confidence, :is_backfill)
+     :claim_type, :polarity, :claim_text, :extraction_confidence, :is_backfill,
+     :extraction_model_id)
 ON CONFLICT (claim_id) DO NOTHING
 """),
         {
@@ -202,6 +209,7 @@ ON CONFLICT (claim_id) DO NOTHING
             "claim_text": raw_claim.claim_text,
             "extraction_confidence": raw_claim.extraction_confidence,
             "is_backfill": raw_claim.is_backfill,
+            "extraction_model_id": extraction_model_id,
         },
     )
     return claim_id  # type: ignore[return-value]
@@ -251,6 +259,7 @@ async def materialize_graph(
     direct_producer: DirectKafkaProducerProtocol,
     entity_dirtied_topic: str,
     correlation_id: str | None = None,
+    extraction_model_id: str | None = None,
 ) -> MaterializationSummary:
     """Materialize graph from a single enriched article message.
 
@@ -283,6 +292,9 @@ async def materialize_graph(
         direct_producer: For entity.dirtied.v1 direct Kafka produce.
         entity_dirtied_topic: Kafka topic name for entity.dirtied.v1.
         correlation_id: Propagated correlation ID.
+        extraction_model_id: LLM model ID that produced the extraction
+            (PLAN-0031 B-2).  Stored on each ``claims`` row so downstream
+            consumers know which model version produced the claim.
 
     Returns:
         :class:`MaterializationSummary` with counts.
@@ -367,7 +379,7 @@ async def materialize_graph(
     # 4 — Claims (ON CONFLICT DO NOTHING)
     # ------------------------------------------------------------------
     for raw_claim in claims:
-        await _insert_claim(session, doc_id, raw_claim)
+        await _insert_claim(session, doc_id, raw_claim, extraction_model_id=extraction_model_id)
         claim_count += 1
         affected_entity_ids.add(raw_claim.subject_entity_id)
 

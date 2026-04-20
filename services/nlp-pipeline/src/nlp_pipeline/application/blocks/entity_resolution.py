@@ -300,6 +300,10 @@ async def run_entity_resolution_block(
       - AUTO_RESOLVE and PROVISIONAL outcomes write audit trail entries.
       - Provisional mentions are queued in provisional_entity_queue (UNIQUE guard).
 
+    NOTE: This function does NOT commit intelligence_session.
+    The caller (article_consumer._run_pipeline) is responsible for committing
+    intel_session AFTER nlp_session.commit() to maintain D-004 ordering invariant.
+
     Args:
         mentions: All EntityMention objects from Block 4.
         alias_repo: Stage 1+2+3 queries against intelligence_db.entity_aliases.
