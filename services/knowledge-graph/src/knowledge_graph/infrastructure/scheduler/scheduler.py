@@ -280,7 +280,7 @@ def build_workers(
         )
 
     if llm_client is not None:
-        description_client = _build_description_client(settings)
+        description_client = _build_description_client(settings, valkey_client)
         def_worker = DefinitionRefreshWorker(session_factory, llm_client, description_client)
         workers.update(
             {
@@ -301,11 +301,16 @@ def build_workers(
     return workers
 
 
-def _build_description_client(settings: Settings) -> Any:
+def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
     """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
 
     - ``"gemini"`` → ``GeminiDescriptionAdapter`` with the configured API key and cost cap.
     - anything else → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
+
+    Args:
+        settings:      Service configuration.
+        valkey_client:  ValkeyClient for atomic cost tracking (G-005 fix).
+                        Passed as ``cost_tracker`` to ``GeminiDescriptionAdapter``.
     """
     import asyncio
 
@@ -328,5 +333,6 @@ def _build_description_client(settings: Settings) -> Any:
     return GeminiDescriptionAdapter(
         api_key=api_key,
         semaphore=semaphore,
+        cost_tracker=valkey_client,
         max_monthly_usd=settings.description_max_monthly_usd,
     )

@@ -158,6 +158,10 @@ class ValkeyClient:
         """Atomically increment *key* by *amount*.  Returns the new value."""
         return await self._redis.incr(key, amount)  # type: ignore[no-any-return]
 
+    async def incrbyfloat(self, name: str, amount: float) -> float:
+        """Atomically increment *name* by float *amount*.  Returns the new value."""
+        return await self._redis.incrbyfloat(name, amount)  # type: ignore[no-any-return]
+
     async def expire(self, key: str, seconds: int) -> bool:
         """Set a TTL of *seconds* on *key*.  Returns ``True`` on success."""
         return bool(await self._redis.expire(key, seconds))

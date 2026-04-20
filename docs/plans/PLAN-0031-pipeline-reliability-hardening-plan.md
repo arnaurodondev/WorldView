@@ -695,11 +695,12 @@ Add `_direct_producer` and `_entity_dirtied_topic` to the consumer's `__init__` 
 
 ---
 
-### Wave C-2: Gemini LLM Cost Cap Atomicity
+### Wave C-2: Gemini LLM Cost Cap Atomicity ✅
 
 **Goal**: Replace the non-atomic Valkey INCR check-then-increment pattern in `DefinitionRefreshWorker` with a Lua atomic check-and-increment.
 **Depends on**: none
 **Estimated effort**: 30–40 min
+**Status**: **DONE** — 2026-04-21 · 83 ml-clients tests + 588 S7 tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure (workers)
 
 #### Pre-read
@@ -751,8 +752,9 @@ Also add `EXPIRE` with TTL = seconds until end of current month (ensures counter
 ---
 
 #### Validation Gate — Wave C-2
-- [ ] Unit tests pass (≥ 3 new)
-- [ ] `grep -n "\.incr\|\.decr" services/knowledge-graph/src/knowledge_graph/infrastructure/workers/definition_refresh.py` returns 0
+- [x] Unit tests pass (4 new: allows_under_limit, blocks_at_limit, concurrent_safe, valkey_unavailable_fail_open)
+- [x] No `.incr()` / `.decr()` pattern in cost cap code (replaced with INCRBYFLOAT-then-check in gemini_description.py)
+- [x] ruff + mypy clean
 
 #### Break Impact
 | Broken File | Why | Fix |

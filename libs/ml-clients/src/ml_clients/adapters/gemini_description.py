@@ -2,6 +2,14 @@
 
 Uses gemini-3.1-flash-lite via Google AI Studio.  Checks a Valkey monthly cost
 counter before each call; skips API call and returns None if cap is exceeded.
+
+**Atomicity (G-005 / PLAN-0031 C-2)**: Cost cap enforcement uses an atomic
+INCRBYFLOAT-then-check pattern.  The estimated call cost is *reserved* (atomically
+incremented) BEFORE the API call.  If the post-increment total meets or exceeds
+the cap, the reservation is immediately undone.  After the API call completes,
+the reserved amount is adjusted to the actual cost.  This prevents the race
+condition where two concurrent callers both pass a non-atomic GET check and
+both proceed past the cap.
 """
 
 from __future__ import annotations
@@ -41,6 +49,9 @@ _RETRYABLE_GEMINI_ERRORS = frozenset(
         "TooManyRequests",
     }
 )
+
+# Default output token estimate for pre-reservation cost calculation
+_DEFAULT_ESTIMATED_OUTPUT_TOKENS = 150
 
 
 def _month_key() -> str:
@@ -91,9 +102,18 @@ class GeminiDescriptionAdapter:
         """Generate a world-knowledge description for a non-company entity.
 
         Returns None (without calling the API) if the monthly cost cap is exceeded.
+
+        Cost cap uses an atomic reserve-then-check pattern (G-005 fix):
+        1. INCRBYFLOAT atomically reserves estimated cost
+        2. If post-increment total >= cap → undo reservation, return None
+        3. After API call → adjust reservation to actual cost
         """
-        # ---- Cost-cap guard ----
-        if self._cost_tracker is not None and await self._is_cap_exceeded():
+        # Build prompt first — needed for cost estimation
+        prompt = self._build_prompt(canonical_name, entity_type, context_hints)
+
+        # ---- Atomic cost-cap reserve ----
+        reserved, estimated_cost = await self._reserve_cost(prompt)
+        if not reserved:
             logger.warning(
                 "gemini_description_cost_cap_exceeded",
                 entity_id=entity_id,
@@ -105,10 +125,10 @@ class GeminiDescriptionAdapter:
             try:
                 from google import genai
             except ImportError as exc:
+                # Undo reservation on fatal init error
+                await self._undo_reservation(estimated_cost)
                 raise FatalError("google-genai package not installed; install ml-clients[gemini]") from exc
             self._genai_client = genai.Client(api_key=self._api_key)
-
-        prompt = self._build_prompt(canonical_name, entity_type, context_hints)
 
         async with self._semaphore:
             try:
@@ -118,8 +138,8 @@ class GeminiDescriptionAdapter:
                 )
                 description: str = response.text.strip()
 
-                # ---- Record cost ----
-                await self._record_cost(response, prompt)
+                # ---- Adjust reservation to actual cost ----
+                await self._adjust_cost(estimated_cost, response, prompt)
 
                 logger.info(
                     "gemini_description_generated",
@@ -130,50 +150,84 @@ class GeminiDescriptionAdapter:
                 return description or None
 
             except (RetryableError, FatalError):
+                # Undo reservation — the API call failed, no cost incurred
+                await self._undo_reservation(estimated_cost)
                 raise
             except Exception as exc:
+                # Undo reservation — the API call failed
+                await self._undo_reservation(estimated_cost)
                 if type(exc).__name__ in _RETRYABLE_GEMINI_ERRORS:
                     raise RetryableError(f"Gemini transient error: {exc}") from exc
                 raise FatalError(f"Gemini error: {exc}") from exc
 
     # ------------------------------------------------------------------
-    # Internals
+    # Internals — atomic cost cap (G-005 / PLAN-0031 C-2)
     # ------------------------------------------------------------------
 
-    async def _is_cap_exceeded(self) -> bool:
-        """Return True if the monthly cost counter meets or exceeds the cap."""
-        if self._cost_tracker is None:
-            return False
-        raw = await self._cost_tracker.get(_month_key())
-        if raw is None:
-            return False
-        try:
-            current = float(raw)
-        except (ValueError, TypeError):
-            return False
-        # Guard with 5% margin so inflight API calls do not silently exceed the cap.
-        return current >= self._max_monthly_usd * 0.95
+    async def _reserve_cost(self, prompt: str) -> tuple[bool, float]:
+        """Atomically reserve estimated call cost via INCRBYFLOAT.
 
-    async def _record_cost(self, response: object, prompt: str) -> None:
-        """Increment the Valkey monthly cost counter by the estimated call cost."""
+        Returns ``(allowed, estimated_cost)``.  If the post-increment total
+        meets or exceeds the cap (with 5 % safety margin), the reservation
+        is immediately undone and ``allowed`` is False.
+
+        INCRBYFLOAT is atomic in Redis/Valkey — the returned value reflects
+        the exact post-increment state, so concurrent callers each see their
+        own incremented total and make correct cap decisions.
+        """
         if self._cost_tracker is None:
+            return True, 0.0
+
+        estimated = _estimate_cost(len(prompt) // 4, _DEFAULT_ESTIMATED_OUTPUT_TOKENS)
+        key = _month_key()
+        cap_threshold = self._max_monthly_usd * 0.95  # 5 % safety margin
+
+        try:
+            new_total = await self._cost_tracker.incrbyfloat(key, estimated)
+            if new_total >= cap_threshold:
+                # Over cap — undo the reservation atomically
+                await self._cost_tracker.incrbyfloat(key, -estimated)
+                return False, estimated
+            return True, estimated
+        except Exception as exc:
+            # Valkey unavailable — fail-open (allow the call)
+            logger.warning("gemini_cost_reserve_failed", error=str(exc))
+            return True, 0.0
+
+    async def _adjust_cost(self, estimated: float, response: object, prompt: str) -> None:
+        """Adjust the reserved amount to reflect actual API cost.
+
+        If the actual cost differs from the pre-reserved estimate, a
+        corrective INCRBYFLOAT is applied (positive or negative delta).
+        """
+        if self._cost_tracker is None or estimated == 0.0:
             return
 
-        # Attempt to read token usage from the response object if available
         try:
             usage = getattr(response, "usage_metadata", None)
             input_tokens: int = getattr(usage, "prompt_token_count", 0) or 0
             output_tokens: int = getattr(usage, "candidates_token_count", 0) or 0
         except Exception:
-            # Fallback: rough estimate from prompt length
             input_tokens = len(prompt) // 4
-            output_tokens = 150
+            output_tokens = _DEFAULT_ESTIMATED_OUTPUT_TOKENS
 
-        cost = _estimate_cost(input_tokens, output_tokens)
+        actual = _estimate_cost(input_tokens, output_tokens)
+        delta = actual - estimated
+        if abs(delta) < 0.000001:
+            return
         try:
-            await self._cost_tracker.incrbyfloat(_month_key(), cost)
+            await self._cost_tracker.incrbyfloat(_month_key(), delta)
         except Exception as exc:
-            logger.warning("gemini_description_cost_record_failed", error=str(exc))
+            logger.warning("gemini_cost_adjust_failed", error=str(exc))
+
+    async def _undo_reservation(self, estimated_cost: float) -> None:
+        """Undo a pre-reserved cost (e.g. on API call failure)."""
+        if self._cost_tracker is None or estimated_cost == 0.0:
+            return
+        try:
+            await self._cost_tracker.incrbyfloat(_month_key(), -estimated_cost)
+        except Exception as exc:
+            logger.warning("gemini_cost_undo_failed", error=str(exc))
 
     @staticmethod
     def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:

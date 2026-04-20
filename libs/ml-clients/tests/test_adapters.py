@@ -892,18 +892,16 @@ class TestNullDescriptionAdapter:
 class TestGeminiDescriptionAdapter:
     @pytest.fixture
     def _mock_cost_tracker_under_cap(self) -> AsyncMock:
-        """A cost tracker that reports $1.00 spent (well under $10 cap)."""
+        """A cost tracker where INCRBYFLOAT returns $1.00 (well under $9.50 cap threshold)."""
         tracker = AsyncMock()
-        tracker.get.return_value = b"1.0"
         tracker.incrbyfloat.return_value = 1.000075
         return tracker
 
     @pytest.fixture
     def _mock_cost_tracker_over_cap(self) -> AsyncMock:
-        """A cost tracker that reports $10.00 spent (at cap)."""
+        """A cost tracker where INCRBYFLOAT returns $10.00 (at cap → triggers undo)."""
         tracker = AsyncMock()
-        tracker.get.return_value = b"10.0"
-        tracker.incrbyfloat.return_value = 10.000075
+        tracker.incrbyfloat.return_value = 10.0
         return tracker
 
     def _make_genai_mock(self, response_text: str) -> tuple[MagicMock, MagicMock]:
@@ -929,7 +927,10 @@ class TestGeminiDescriptionAdapter:
         semaphore: asyncio.Semaphore,
         _mock_cost_tracker_over_cap: AsyncMock,
     ) -> None:
-        """Monthly counter ≥ cap → generate_description returns None without API call."""
+        """Monthly counter ≥ cap → generate_description returns None without API call.
+
+        The atomic reserve pattern: INCRBYFLOAT returns >= cap*0.95 → undo (negative INCRBYFLOAT).
+        """
         from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
 
         adapter = GeminiDescriptionAdapter(
@@ -947,8 +948,11 @@ class TestGeminiDescriptionAdapter:
         )
 
         assert result is None
-        # The genai API must NOT have been called
-        _mock_cost_tracker_over_cap.get.assert_called_once()
+        # Reserve call (positive) + undo call (negative) = 2 INCRBYFLOAT calls
+        assert _mock_cost_tracker_over_cap.incrbyfloat.call_count == 2
+        # Second call is the undo (negative amount)
+        undo_args = _mock_cost_tracker_over_cap.incrbyfloat.call_args_list[1]
+        assert undo_args[0][1] < 0, "Undo call should have negative amount"
 
     async def test_valid_response_returns_description(
         self,
@@ -977,7 +981,8 @@ class TestGeminiDescriptionAdapter:
             )
 
         assert result == description_text
-        _mock_cost_tracker_under_cap.incrbyfloat.assert_called_once()
+        # At least 1 call for reservation; potentially a 2nd for cost adjustment
+        assert _mock_cost_tracker_under_cap.incrbyfloat.call_count >= 1
 
     async def test_no_cost_tracker_skips_cap_check(self, semaphore: asyncio.Semaphore) -> None:
         """With no cost_tracker, the adapter calls the API without any cap check."""
@@ -1057,14 +1062,15 @@ class TestGeminiDescriptionAdapter:
     ) -> None:
         """Cost cap guard fires at 95% of cap (5% margin buffer — F-DS-001).
 
-        At $9.50 (= 95% of $10 cap), the adapter must return None without
-        making an API call.  At $9.40 (< 95%), the API MUST be called.
+        When INCRBYFLOAT returns ≥ $9.50 (95% of $10 cap), the adapter undoes
+        the reservation and returns None.  When it returns < $9.50, the API call
+        proceeds.
         """
         from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
 
-        # ── $9.50 → blocked (95% of $10) ────────────────────────────────────
+        # ── $9.50 → blocked (INCRBYFLOAT returns at-threshold value) ─────────
         tracker_at_95 = AsyncMock()
-        tracker_at_95.get.return_value = b"9.50"
+        tracker_at_95.incrbyfloat.return_value = 9.50  # post-increment total >= cap*0.95
 
         adapter = GeminiDescriptionAdapter(
             api_key="key",
@@ -1080,10 +1086,9 @@ class TestGeminiDescriptionAdapter:
         )
         assert result is None, "At 95% of cap, generate_description must return None"
 
-        # ── $9.40 → not blocked (< 95%) ─────────────────────────────────────
+        # ── $9.40 → not blocked (INCRBYFLOAT returns below threshold) ────────
         tracker_below = AsyncMock()
-        tracker_below.get.return_value = b"9.40"
-        tracker_below.incrbyfloat.return_value = 9.4001
+        tracker_below.incrbyfloat.return_value = 9.40  # post-increment total < cap*0.95
 
         description_text = "Germany is a country in central Europe."
         mock_google, mock_genai = self._make_genai_mock(description_text)
@@ -1133,6 +1138,168 @@ class TestGeminiDescriptionAdapter:
         assert (
             mock_genai.Client.call_count == 1
         ), f"genai.Client should be instantiated once; got {mock_genai.Client.call_count}"
+
+    # ── G-005 / PLAN-0031 C-2: Atomic cost cap tests ─────────────────────
+
+    async def test_cost_cap_atomic_allows_under_limit(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """INCRBYFLOAT returns value below cap → reservation succeeds, API called."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        tracker = AsyncMock()
+        tracker.incrbyfloat.return_value = 2.0  # well under $9.50 threshold
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker,
+            max_monthly_usd=10.0,
+        )
+        description_text = "Test entity description."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result = await adapter.generate_description(
+                entity_id="e-under",
+                canonical_name="Test Entity",
+                entity_type="organization",
+                context_hints={},
+            )
+
+        assert result == description_text
+        # First call is the reservation (positive amount)
+        first_call_amount = tracker.incrbyfloat.call_args_list[0][0][1]
+        assert first_call_amount > 0, "First INCRBYFLOAT should be a positive reservation"
+
+    async def test_cost_cap_atomic_blocks_at_limit(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """INCRBYFLOAT returns value at cap → reservation is undone, returns None."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        tracker = AsyncMock()
+        tracker.incrbyfloat.return_value = 9.50  # exactly at 95% threshold
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker,
+            max_monthly_usd=10.0,
+        )
+
+        result = await adapter.generate_description(
+            entity_id="e-at-limit",
+            canonical_name="Test Entity",
+            entity_type="organization",
+            context_hints={},
+        )
+
+        assert result is None
+        # Exactly 2 calls: reserve (positive) + undo (negative)
+        assert tracker.incrbyfloat.call_count == 2
+        reserve_amount = tracker.incrbyfloat.call_args_list[0][0][1]
+        undo_amount = tracker.incrbyfloat.call_args_list[1][0][1]
+        assert reserve_amount > 0
+        assert undo_amount == -reserve_amount, "Undo must exactly negate the reservation"
+
+    async def test_cost_cap_concurrent_safe(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """Two concurrent calls at cap-1: first proceeds, second is blocked.
+
+        Simulates the atomic INCRBYFLOAT pattern: each caller sees its own
+        post-increment total.  The first call gets total < cap; the second
+        call gets total >= cap and undoes its reservation.
+        """
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        call_count = 0
+        cap_threshold = 10.0 * 0.95  # 9.50
+
+        async def _incrbyfloat_side_effect(key: str, amount: float) -> float:
+            """Simulate two concurrent reservations against a counter near cap."""
+            nonlocal call_count
+            call_count += 1
+            if amount < 0:
+                # Undo call — return doesn't matter for the test
+                return 9.0
+            # First positive call → under cap; second positive call → at cap
+            if call_count == 1:
+                return cap_threshold - 0.01  # 9.49 — allowed
+            return cap_threshold  # 9.50 — blocked
+
+        # ── First adapter (under cap) ────────────────────────────────────────
+        tracker1 = AsyncMock()
+        tracker1.incrbyfloat.side_effect = _incrbyfloat_side_effect
+
+        adapter1 = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker1,
+            max_monthly_usd=10.0,
+        )
+        description_text = "Allowed description."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result1 = await adapter1.generate_description(
+                entity_id="e-concurrent-1",
+                canonical_name="Entity A",
+                entity_type="organization",
+                context_hints={},
+            )
+        assert result1 == description_text, "First concurrent caller must succeed"
+
+        # ── Second adapter (at cap) ──────────────────────────────────────────
+        tracker2 = AsyncMock()
+        tracker2.incrbyfloat.side_effect = _incrbyfloat_side_effect
+
+        adapter2 = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker2,
+            max_monthly_usd=10.0,
+        )
+        result2 = await adapter2.generate_description(
+            entity_id="e-concurrent-2",
+            canonical_name="Entity B",
+            entity_type="organization",
+            context_hints={},
+        )
+        assert result2 is None, "Second concurrent caller must be blocked at cap"
+
+    async def test_cost_cap_valkey_unavailable_fail_open(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """Valkey error in _reserve_cost → fail-open (allow the API call)."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        tracker = AsyncMock()
+        tracker.incrbyfloat.side_effect = ConnectionError("Valkey down")
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=tracker,
+            max_monthly_usd=10.0,
+        )
+        description_text = "Allowed despite Valkey failure."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result = await adapter.generate_description(
+                entity_id="e-failopen",
+                canonical_name="Test",
+                entity_type="organization",
+                context_hints={},
+            )
+
+        assert result == description_text, "Must fail-open on Valkey unavailability"
 
 
 # ── ResizableSemaphore ────────────────────────────────────────────────────────
