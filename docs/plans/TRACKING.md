@@ -8,27 +8,12 @@
 | Plan ID | Title | PRD | Status | Waves Done/Total | QA | Updated |
 |---------|-------|-----|--------|-----------------|-----|---------|
 | PLAN-0001-D | S9 API Gateway: External Ingestion + Intelligence Query Proxy | PRD-0001 | draft | 0/2 | — | 2026-03-25 |
-| PLAN-0010 | Architecture Hardening — DLQ Use Cases (R25), Security, Platform QA Script | QA-S4S5S6S7S10-001 | complete | 6/6 | 2026-03-31 | 2026-03-31 |
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
-| PLAN-0015 | S8 RAG/Chat: Hybrid Intelligence Pipeline | PRD-0015 | completed | 22/22 | 2026-04-09 | 2026-04-09 |
-| PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | completed | 11/11 | 2026-04-09 | 2026-04-09 |
-| PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | completed | 10/10 | 2026-04-09 | 2026-04-09 |
-| PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | completed | 6/6 | 2026-04-09 | 2026-04-09 |
-| PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | completed | 8/8 | 2026-04-10 | 2026-04-10 |
-| PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | completed | 6/6 | 2026-04-10 | 2026-04-10 |
-| PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | in-progress | 8/9 | — | 2026-04-12 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
-| PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 | — | 2026-04-11 |
-| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 6/6 (Wave E pending) | 2026-04-18 | 2026-04-18 |
+| PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
+| PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 5/6 (Wave E frontend pending) | 2026-04-18 | 2026-04-18 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/7 | — | 2026-04-11 |
-| PLAN-0027 | Frontend MVP UI — Professional Design v2.0: Landing (ComparisonTable/TrustBar/FAQ), Dashboard (HeatMap/TopMovers/MacroCalendar), Workspace (11 panels), Company Detail (18 fundamentals sections + full Intelligence tab), Portfolio (Strategy analytics + AddTransaction), Chat (thread search) + S8 Briefing + S9 bulk routes (20+ new proxy routes) | PRD-0027 | in-progress | 5/6 (P5 Landing ✅; P6 Markets/Screener ✅, Intelligence⬜ Portfolio✅; P7 Design-System ✅; P8 Workspace ✅; P9 Settings ✅; P10 Onboarding ✅; P4 Instrument Detail: State A ✅ State E ✅ State F ⚠️ State B ⬜ State C ⬜ State D ⬜; Canvas design plan 0027-design-canvas-plan.md 0/6 waves) | 2026-04-14 | 2026-04-14 |
-| PLAN-0027-V2 | Frontend MVP UI — Complete Implementation v2 (Canvas C-1..C-6 + Backend Security S-1 + Frontend Code F-1..F-12 + Tests T-1). Supersedes PLAN-0027-DESIGN and PLAN-0027-B. 18 waves total, maximally parallelised. S-1 ✅; Canvas ALL DONE: C-1✅ C-2✅ C-3✅ C-4✅ C-5✅ C-6✅ Fix-A✅ Fix-B✅ Fix-C+D✅ Intelligence page (05-Intelligence tUPQd) FULLY DESIGNED: State A (SL9kb — Morning Brief + 14 articles + TRENDING ENTITIES), State B (mFKf3 — Signal Board entity matrix), State C (pKH88 — Impact Board PRD-0026 multi-window) — 2026-04-15 | PRD-0027 | **superseded by PRD-0028** | 2/18 | — | 2026-04-17 |
-| PLAN-0028 | Worldview Web — Standalone Next.js frontend at `apps/worldview-web/` + 3 S9 proxy route waves (S9-1 market+entity, S9-2 portfolio+watchlist+auth+ws-token+S10-middleware, S9-3 composed OQ-resolved endpoints). Frontend: Bootstrap, Auth, Shell, Dashboard (9 widgets), Instrument Detail (4 tabs + sigma.js), Screener, Portfolio, Workspace (8 panels), Alerts/News, Chat (fetch+POST SSE), Settings, Landing. 17 waves total (S9-1, S9-2, S9-3, F-1..F-13, T-1). All 5 BLOCKING OQs resolved. ALL WAVES COMPLETE ✅ | PRD-0028 | **completed** | 17/17 | 2026-04-18 | 2026-04-18 |
-| PLAN-0029 | Missing Frontend Endpoints — S1 watchlist rename (PATCH), S8 briefing GET endpoints (morning + instrument), S9 signals/ai proxy fix (stub → real S6 proxy) | PRD-0028 §6.2 | completed | 2/2 | 2026-04-19 | 2026-04-19 |
-| PLAN-0030 | Security Hardening — QA-2026-04-19 Remediation: dependency pinning (PyJWT/cryptography bounds, pnpm-lock), CI/CD SHA-pin + yq checksum, frontend security headers, gateway hardening (fail-open log, cookie_secure, dev JWT require, CORS guard), backend JWT issuer=, Docker non-root, JTI replay protection | QA-2026-04-19 | completed | 6/6 | 2026-04-19 | 2026-04-19 |
-| PLAN-UI-VISUAL-OVERHAUL | Bloomberg-Grade Visual Overhaul — Amber/gold palette, data density, component polish, landing page, dashboard 4-col, page-specific polish + critic fixups | PRD-0027 | completed | 6/6 + fixups | 2026-04-19 | 2026-04-19 |
-| PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | completed | 8/8 | — | 2026-04-22 |
-| PLAN-0032 | Forensic QA Remediation — Next.js/Vitest CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization, CORS port fix, transaction header forwarding, S1 watchlist PATCH, S7 500 errors, doc fixes | Forensic QA 2026-04-21 | draft | 0/7 | — | 2026-04-21 |
+| PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor (insert→log rename), S9 admin cost endpoint (period=YYYY-MM) | PRD-0029 | draft | 0/5 | — | 2026-04-22 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -64,49 +49,67 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
-| PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | 2026-03-29 | 11 | 2026-03-30 |
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 | — |
-| PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | 2026-03-26 | 2 | — |
 | PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 | 2026-04-09 |
-| PLAN-0001-B-R4 | S4+S5 QA Review Fixes: DLQ Fidelity, SSRF Hardening, DDL Alignment, Process Compounding | QA Review | 2026-03-27 | 4 | — |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | 2026-03-26 | 7 | — |
 | PLAN-0001-B-R2 | S4+S5 QA Fixes: DDL, DLQ, SSRF, LSH, Contract Tests, Compounding | QA Review | 2026-03-27 | 4 | — |
 | PLAN-0001-B-R3 | S4+S5 Architecture: ABCs, BaseKafkaConsumer, MinIO GC, DomainError, Standards | QA Review | 2026-03-27 | 5 | — |
-| PLAN-0003 | Observability Standardization: Service Fixes + Monitoring Stack | N/A | 2026-03-27 | 4 | 2026-03-27 |
-| QA-CROSS-001 | Cross-Service QA: market-ingestion, market-data, portfolio (16 findings fixed) | N/A | 2026-03-27 | — | 2026-03-27 |
-| QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
+| PLAN-0001-B-R4 | S4+S5 QA Review Fixes: DLQ Fidelity, SSRF Hardening, DDL Alignment, Process Compounding | QA Review | 2026-03-27 | 4 | — |
+| PLAN-0001-C | Ingestion Pipeline v1: S6 NLP Pipeline + S7 Knowledge Graph + S10 Alert Service | PRD-0001 | 2026-03-29 | 11 | 2026-03-30 |
 | PLAN-0001-E | S1+S2+S3 Deep QA Fixes: Idempotency, Atomicity, Security Hardening, Architecture Consistency | QA Review (QA-CROSS-002) | 2026-03-28 | 14 | 2026-03-28 |
+| PLAN-0001-E-R1 | S1+S2+S3 Remaining Open Items: UoW commit, TOCTOU dedup, arch violations, topic mismatch, domain layer, auth | QA-CROSS-002 | 2026-03-30 | 6 | 2026-03-30 |
+| PLAN-0002 | Enum Standardization: Shared OutboxStatus + ContentSourceType | N/A | 2026-03-26 | 2 | — |
+| PLAN-0003 | Observability Standardization: Service Fixes + Monitoring Stack | N/A | 2026-03-27 | 4 | 2026-03-27 |
 | PLAN-0004 | Observability Dashboards, Alerts & Recording Rules — Auto-Provisioned | N/A | 2026-03-27 | 5 | — |
-| QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
 | PLAN-0005 | Provider Config Externalization — Nested Settings Pattern (S4 + S2) | N/A | 2026-03-29 | 3 | — |
 | PLAN-0006 | Process Architecture & Database Standardization: S4 Decoupling + Scheduler-Worker + R/W Split | N/A | 2026-03-30 | 5 | 2026-03-30 |
-| PLAN-0001-E-R1 | S1+S2+S3 Remaining Open Items: UoW commit, TOCTOU dedup, arch violations, topic mismatch, domain layer, auth | QA-CROSS-002 | 2026-03-30 | 6 | 2026-03-30 |
 | PLAN-0007 | PLAN-0001-C QA Fixes: Idempotency, Valkey Hardening, Observability, Deployment Constraints | PLAN-0001-C QA | 2026-03-30 | 2 | — |
 | PLAN-0008 | QA Follow-Up — Standards Enforcement, Architecture Hardening & Production Readiness | PLAN-0001-E-R1 QA | 2026-03-30 | 10 | 2026-03-30 |
 | PLAN-0009 | R25 Layer Violation Remediation — S4 API Routes + ExecuteContentTaskUseCase | PLAN-0006 QA | 2026-03-30 | 4 | 2026-03-30 |
-| QA-S4S5S6S7S10-001 | Full QA Pass + E2E Test Suite: S4/S5/S6/S7/S10 security fixes + ASGI e2e suites + cross-service integration + real provider tests + infra scaffold | N/A | 2026-03-30 | — | 2026-03-30 |
-| PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | 2026-04-07 |
+| PLAN-0010 | Architecture Hardening — DLQ Use Cases (R25), Security, Platform QA Script | QA-S4S5S6S7S10-001 | 2026-03-31 | 6 | 2026-03-31 |
 | PLAN-0011 | Process Topology Standardization & Architecture Test Enforcement | N/A | 2026-04-01 | 9 | 2026-04-01 |
+| PLAN-0012 | R23 Read/Write Database Session Split — Tests & Enforcement | N/A | 2026-04-01 | 4 | 2026-04-07 |
 | PLAN-0013 | Process Topology Completion + Alert WebSocket Cross-Process Bridge | PLAN-0011 QA follow-up | 2026-04-01 | 6 | 2026-04-01 |
-| QA-S1S2S3-2026-04-07 | QA Pass S1+S2+S3: PASS_WITH_WARNINGS — 8 MAJOR (ULID/metrics/cache-hook/contract-tests), 0 BLOCKING/CRITICAL, all unit+lint+mypy PASS | N/A | 2026-04-07 | — | 2026-04-07 |
+| PLAN-0015 | S8 RAG/Chat: Hybrid Intelligence Pipeline | PRD-0015 | 2026-04-09 | 22 | 2026-04-09 |
+| PLAN-0016 | Chat Enhancements: GENERAL Intent + Context Window + Portfolio Risk Email Digest | PRD-0016 | 2026-04-09 | 11 | 2026-04-09 |
 | PLAN-0017 | Entity Screener + Similarity Search + Embedding View Fix + EODHD Description LLM | PRD-0017 | 2026-04-08 | 11 | 2026-04-08 |
+| PLAN-0018 | Geopolitical Intelligence + EODHD Deep Enrichment + Apache AGE Cypher Shadow Sync | PRD-0018 | 2026-04-09 | 10 | 2026-04-09 |
+| PLAN-0019 | Polymarket Prediction Markets Integration + EDGAR Market-Hours Polling | PRD-0019 | 2026-04-09 | 6 | 2026-04-09 |
+| PLAN-0020 | Market-Impact Signal Scoring (Option A — S6 Block 5 routing extension) | PRD-0020 | 2026-04-10 | 8 | 2026-04-10 |
+| PLAN-0021 | Score-Gated Flash Alerts (AlertSeverity tiers — S10 + frontend) | PRD-0021 | 2026-04-10 | 6 | 2026-04-10 |
+| PLAN-0027 | Frontend MVP UI — Professional Design v2.0. Superseded by PLAN-0028 before implementation was complete. | PRD-0027 | superseded | — | — |
+| PLAN-0027-V2 | Frontend MVP UI — Complete Implementation v2 (Canvas + Code + Security). Superseded by PLAN-0028 after scope was rebaselined to `apps/worldview-web/`. | PRD-0027 | superseded | 2 | — |
+| PLAN-0022 | SnapTrade Brokerage Portfolio Sync (Read-Only, S1 + S9 + frontend) | PRD-0022 | 2026-04-22 | 9 | — |
+| PLAN-0028 | Worldview Web — Standalone Next.js frontend at `apps/worldview-web/` + S9 proxy route waves (S9-1/S9-2/S9-3) + all frontend waves F-1..F-13 + T-1 | PRD-0028 | 2026-04-18 | 17 | 2026-04-18 |
+| PLAN-0029 | Missing Frontend Endpoints — S1 watchlist rename (PATCH), S8 briefing GET endpoints, S9 signals/ai proxy fix | PRD-0028 §6.2 | 2026-04-19 | 2 | 2026-04-19 |
+| PLAN-0030 | Security Hardening — QA-2026-04-19 Remediation: dependency pinning, CI/CD SHA-pin, frontend security headers, gateway hardening, backend JWT issuer=, Docker non-root, JTI replay protection | QA-2026-04-19 | 2026-04-19 | 6 | 2026-04-19 |
+| PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | 2026-04-22 | 8 | 2026-04-22 |
+| PLAN-UI-VISUAL-OVERHAUL | Bloomberg-Grade Visual Overhaul — Amber/gold palette, data density, component polish, landing page, dashboard 4-col, page-specific polish + critic fixups | PRD-0027 | 2026-04-19 | 6+fixups | 2026-04-19 |
+| PLAN-0032 | Forensic QA Remediation — Next.js 15.5.15 CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization (SEC-003), CORS port fix (SEC-008), transaction header forwarding (API-004), economic-calendar param (R-002), contradictions BP-069 fix, doc fixes | Forensic QA 2026-04-21 | 2026-04-22 | 6 | — |
+| QA-CROSS-001 | Cross-Service QA: market-ingestion, market-data, portfolio (16 findings fixed) | N/A | 2026-03-27 | — | 2026-03-27 |
+| QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
+| QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
+| QA-S4S5S6S7S10-001 | Full QA Pass + E2E Test Suite: S4/S5/S6/S7/S10 security fixes + ASGI e2e suites + cross-service integration + real provider tests + infra scaffold | N/A | 2026-03-30 | — | 2026-03-30 |
+| QA-S1S2S3-2026-04-07 | QA Pass S1+S2+S3: PASS_WITH_WARNINGS — 8 MAJOR (ULID/metrics/cache-hook/contract-tests), 0 BLOCKING/CRITICAL, all unit+lint+mypy PASS | N/A | 2026-04-07 | — | 2026-04-07 |
 | QA-S6S7S8-2026-04-09 | Deep QA Pass S6/S7/S8: TOCTOU soft_delete (CRITICAL), VectorSearch query wiring, entity.canonical.created.v1 dispatcher fix, S8 integration tests (14), 506+313+212 tests green | N/A | 2026-04-09 | — | 2026-04-09 |
 | QA-S4S5-2026-04-09 | Deep QA Pass S4+S5: 5-agent review, 9 missing use-case unit tests added, F-DS-014 intra-batch dedup fix, 490+289 tests green, PASS_WITH_WARNINGS | N/A | 2026-04-09 | — | 2026-04-09 |
-| QA-DEPLOY-2026-04-09 | Pre-Hetzner Deployment QA: full unit suite ~4059 tests PASS across all services+libs; BP-134 live test scope mismatch (market-ingestion/market-data); observability gap (6/10 services in Prometheus); no production error tracking (Sentry/Glitchtip) | N/A | 2026-04-09 | — | 2026-04-09 |
-| QA-PRE-DEMO-2026-04-13 | Pre-Demo Full QA Pass (2nd run, Docker running): infra UP (postgres/kafka/valkey/minio/ollama); 6 Kafka topics; rag-chat BP-134 fix applied (conftest _make_system_jwt + X-Internal-JWT header); market-data readyz test fixed (state override inside TestClient block); 21 RUF059 fixed + 34 format files reformatted; ruff PASS; mypy PASS all 6 key services; libs 566 pass; services total ~3,650 pass, 0 fail; integration tests pass (api-gw 8, portfolio 53, market-data 67, nlp 10); Schema Registry networking issue (kafka:9092 vs localhost:9092 in compose); Ollama 0 models loaded; service .env files missing (runtime docker profile unusable — expected dev mode); DEMO READINESS: CONDITIONAL GO. See docs/audits/2026-04-13-qa-pre-demo-report.md | N/A | 2026-04-13 | — | 2026-04-13 |
+| QA-DEPLOY-2026-04-09 | Pre-Hetzner Deployment QA: full unit suite ~4059 tests PASS across all services+libs; BP-134 live test scope mismatch; observability gap (6/10 services in Prometheus); no production error tracking (Sentry/Glitchtip) | N/A | 2026-04-09 | — | 2026-04-09 |
+| QA-PRE-DEMO-2026-04-13 | Pre-Demo Full QA Pass (2nd run, Docker running): ruff PASS; mypy PASS all 6 key services; libs 566 pass; services total ~3,650 pass, 0 fail; DEMO READINESS: CONDITIONAL GO. See docs/audits/2026-04-13-qa-pre-demo-report.md | N/A | 2026-04-13 | — | 2026-04-13 |
 
 ## Conventions
 
 - **Plan IDs** match their PRD: `PLAN-0001` corresponds to `PRD-0001`
-- **Status values**: `draft` → `approved` → `in-progress` → `completed` | `cancelled`
+- **File naming**: `NNNN-<description>-plan.md` (e.g. `0031-pipeline-reliability-hardening-plan.md`) — no `PLAN-` prefix in filename
+- **Status values**: `draft` → `approved` → `in-progress` → `completed` | `cancelled` | `superseded`
 - **QA column**: Date when `/qa` was run against the plan. `—` means not yet QA'd. `/qa` skill MUST update this column when it runs.
 - **Wave tracking**: See the individual plan file for wave/task-level detail
 - **Session boundaries**: Each sub-plan (A, B, C...) can be executed in a separate Claude Code session
 - **Conflict check**: Before starting a wave, verify no other plan modifies the same files
+- **Move to Completed**: When ALL waves in a plan reach `✅`, immediately move the row from Active to Completed. Do NOT leave completed rows in Active.
 
 ## How to Use
 
 1. **Starting work**: Check this index for active plans. Read the plan file for the next ready wave.
 2. **During implementation**: The `/implement` skill updates wave/task status in the plan file.
-3. **After completion**: Move the plan from Active to Completed when all waves are done.
+3. **After last wave**: Move the plan row from Active → Completed. Update the plan file frontmatter to `status: completed`.
 4. **Conflict resolution**: If two plans touch the same service, execute them in dependency order.

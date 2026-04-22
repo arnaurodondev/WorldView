@@ -13,6 +13,7 @@ Implements the PKCE auth flow (F-01..F-07) from PRD-0025:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import jwt
@@ -26,6 +27,50 @@ from api_gateway.pkce import (
     retrieve_and_delete_pkce_state,
     store_pkce_state,
 )
+
+# SEC-003: Whitelist of valid RFC 6749 error codes.  Any error value not in this
+# set is replaced with "unknown_error" before it is reflected in a JSON response.
+# This prevents an attacker from injecting arbitrary strings (e.g. HTML/JS) via
+# a crafted redirect URI.
+_KNOWN_OIDC_ERRORS: frozenset[str] = frozenset(
+    {
+        "invalid_request",
+        "unauthorized_client",
+        "access_denied",
+        "unsupported_response_type",
+        "invalid_scope",
+        "server_error",
+        "temporarily_unavailable",
+        "interaction_required",
+        "login_required",
+        "account_selection_required",
+        "consent_required",
+    }
+)
+
+# SEC-003: Only alphanumeric characters plus safe punctuation are allowed in
+# error_description.  Everything else is stripped.  Capped at 200 characters to
+# prevent log-flooding via a crafted redirect URI.
+_SAFE_DESC_RE = re.compile(r"[^a-zA-Z0-9 _.,!?()\-]")
+_SAFE_DESC_MAX_LEN: int = 200
+
+
+def _sanitize_oidc_error(error: str | None, description: str | None) -> tuple[str, str | None]:
+    """Return (sanitized_error, sanitized_description) safe for JSON reflection.
+
+    WHY: RFC 6749 §4.1.2.1 errors come from Zitadel query params.  An attacker
+    can craft a redirect URI that injects arbitrary content into the JSON body.
+    We sanitize both fields before returning them to the caller.
+    """
+    safe_error = error if error in _KNOWN_OIDC_ERRORS else "unknown_error"
+    safe_desc: str | None = None
+    if description is not None:
+        # Strip disallowed characters, then truncate
+        safe_desc = _SAFE_DESC_RE.sub("", description)[:_SAFE_DESC_MAX_LEN]
+        if not safe_desc:
+            safe_desc = None
+    return safe_error, safe_desc
+
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
@@ -121,10 +166,18 @@ async def callback(
 
     # 1. Zitadel error forwarded in query params
     if error:
-        logger.warning("callback_oidc_error", action="login", error=error, result="error")
+        # SEC-003: sanitize before reflecting — log raw values for debugging
+        logger.warning(
+            "callback_oidc_error",
+            action="login",
+            error_raw=error,
+            error_description_raw=error_description,
+            result="error",
+        )
+        safe_error, safe_desc = _sanitize_oidc_error(error, error_description)
         return JSONResponse(
             status_code=400,
-            content={"error": error, "error_description": error_description},
+            content={"error": safe_error, "error_description": safe_desc},
         )
 
     # 2. Required params

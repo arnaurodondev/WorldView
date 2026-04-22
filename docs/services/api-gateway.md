@@ -84,7 +84,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | POST | `/v1/fundamentals/screen` | Dynamic screener | No |
 | GET | `/v1/fundamentals/screen/fields` | Available screener fields | No |
 | GET | `/v1/fundamentals/timeseries` | Fundamental timeseries | No |
-| GET | `/v1/fundamentals/economic-calendar` | Economic events (→ S7 temporal_events) | Yes |
+| GET | `/v1/fundamentals/economic-calendar` | Economic events (→ S7 temporal_events, passes `event_type=economic`) | Yes |
 
 ### Entity & Knowledge Graph Endpoints (→ S7)
 
@@ -100,7 +100,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 |--------|------|-------------|------|
 | GET | `/v1/portfolios` | List portfolios | Yes |
 | GET | `/v1/holdings/{portfolio_id}` | Holdings for a portfolio | Yes |
-| GET | `/v1/transactions` | List transactions | Yes |
+| GET | `/v1/transactions` | List transactions (API-004: `portfolio_id` forwarded as `X-Portfolio-ID` header, not query param) | Yes |
 | POST | `/v1/transactions` | Create transaction | Yes |
 
 ### Watchlist Endpoints (→ S1 Portfolio)
@@ -290,7 +290,7 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `ALERT_URL` | `http://localhost:8010` | No | S10 URL |
 | `RATE_LIMIT_REQUESTS` | `100` | No | Auth rate limit per minute |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Rate limit window |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | No | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3001` | No | Comma-separated allowed origins (SEC-008: port 3001 is worldview-web, not 3000) |
 | `SERVICE_NAME` | `api-gateway` | No | structlog service name |
 | `LOG_LEVEL` | `INFO` | No | Logging level |
 | `LOG_JSON` | `true` | No | JSON-formatted logs |
@@ -337,6 +337,13 @@ Every response includes (via `SecurityHeadersMiddleware`):
 - `X-XSS-Protection: 0`
 - `Permissions-Policy: geolocation=(), microphone=(), camera=()`
 - `Strict-Transport-Security: max-age=31536000` (production only, when `COOKIE_SECURE=true`)
+
+### OIDC Callback Error Sanitization (SEC-003)
+
+The `/v1/auth/callback` handler sanitizes `error` and `error_description` query params before JSON reflection:
+
+- **`error`**: Only known RFC 6749 error codes pass through (e.g. `access_denied`, `invalid_scope`). Unknown values become `"unknown_error"`.
+- **`error_description`**: Non-alphanumeric special characters are stripped by regex `[^a-zA-Z0-9 _.,!?()\-]`. Truncated to 200 chars.
 
 ---
 

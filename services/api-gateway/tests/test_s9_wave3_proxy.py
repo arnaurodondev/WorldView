@@ -256,7 +256,8 @@ async def test_economic_calendar_proxies_to_s7(authed_app, authed_mock_clients) 
     assert resp.status_code == 200
     authed_mock_clients.knowledge_graph.get.assert_called_once()
     call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
-    assert call_kwargs["params"]["type"] == "economic"
+    # R-002 fix: S7 expects `event_type`, not `type` — assertion updated from "type" to "event_type"
+    assert call_kwargs["params"]["event_type"] == "economic"
 
 
 # ── AI signals proxy (PLAN-0029: stub replaced with real S6 proxy) ──���────────

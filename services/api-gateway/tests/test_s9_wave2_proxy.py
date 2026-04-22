@@ -130,8 +130,13 @@ async def test_holdings_proxy_authenticated(authed_app, authed_mock_clients) -> 
 
 
 @pytest.mark.asyncio
-async def test_transactions_get_forwards_params(authed_app, authed_mock_clients) -> None:
-    """GET /v1/transactions?portfolio_id=x&limit=10 forwards query params to S1."""
+async def test_transactions_get_forwards_portfolio_id_as_header(authed_app, authed_mock_clients) -> None:
+    """GET /v1/transactions?portfolio_id=x forwards portfolio_id as X-Portfolio-ID header.
+
+    API-004 fix: S1 expects portfolio_id as the X-Portfolio-ID header, not as a
+    query parameter.  The proxy must extract it from query params and inject it
+    as a header so S1 can validate portfolio ownership.
+    """
     authed_mock_clients.portfolio.get = AsyncMock(
         return_value=_mock_response(200, b'{"transactions": []}'),
     )
@@ -146,8 +151,43 @@ async def test_transactions_get_forwards_params(authed_app, authed_mock_clients)
 
     assert resp.status_code == 200
     call_kwargs = authed_mock_clients.portfolio.get.call_args[1]
-    assert call_kwargs["params"].get("portfolio_id") == "p-1"
+    # portfolio_id must be in the headers, NOT in query params
+    forwarded_headers = call_kwargs.get("headers", {})
+    assert (
+        forwarded_headers.get("X-Portfolio-ID") == "p-1"
+    ), "portfolio_id must be forwarded as X-Portfolio-ID header (API-004)"
+    assert "portfolio_id" not in call_kwargs.get(
+        "params", {}
+    ), "portfolio_id must not remain in query params after extraction"
+    # Other query params are still forwarded as params
     assert call_kwargs["params"].get("limit") == "10"
+    assert call_kwargs["params"].get("offset") == "0"
+
+
+@pytest.mark.asyncio
+async def test_transactions_get_without_portfolio_id_still_proxies(authed_app, authed_mock_clients) -> None:
+    """GET /v1/transactions without portfolio_id still proxies (S1 validates ownership).
+
+    When portfolio_id is absent, the request is forwarded without X-Portfolio-ID —
+    S1 will return 422 but the proxy should not crash.
+    """
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(422, b'{"detail": "X-Portfolio-ID required"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/transactions",
+            params={"limit": "10"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # S1 returns 422 — proxy forwards it without crashing
+    assert resp.status_code == 422
+    call_kwargs = authed_mock_clients.portfolio.get.call_args[1]
+    # No X-Portfolio-ID header when portfolio_id was absent
+    assert "X-Portfolio-ID" not in call_kwargs.get("headers", {})
 
 
 @pytest.mark.asyncio
@@ -432,3 +472,61 @@ async def test_watchlists_list_no_legacy_headers(authed_app, authed_mock_clients
     headers_sent = call_kwargs["headers"]
     assert "X-Owner-ID" not in headers_sent
     assert "X-User-Id" not in headers_sent
+
+
+# ── Force-sync proxy (brokerage) ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trigger_brokerage_sync_requires_auth(app, mock_clients) -> None:
+    """POST /v1/brokerage-connections/{id}/sync without auth → 401; downstream never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/v1/brokerage-connections/conn-1/sync")
+
+    assert resp.status_code == 401
+    mock_clients.portfolio.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_trigger_brokerage_sync_proxied_202(authed_app, authed_mock_clients) -> None:
+    """POST /v1/brokerage-connections/{id}/sync with valid JWT → 202 proxied from S1."""
+    conn_id = "fc3e8a42-0000-7000-8000-000000000001"
+    authed_mock_clients.portfolio.post = AsyncMock(
+        return_value=_mock_response(202, b'{"status": "syncing", "connection_id": "' + conn_id.encode() + b'"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/brokerage-connections/{conn_id}/sync",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 202
+    authed_mock_clients.portfolio.post.assert_called_once()
+    call_args = authed_mock_clients.portfolio.post.call_args[0]
+    assert f"/api/v1/brokerage-connections/{conn_id}/sync" in call_args[0]
+
+
+@pytest.mark.asyncio
+async def test_trigger_brokerage_sync_forwards_s1_error(authed_app, authed_mock_clients) -> None:
+    """POST /v1/brokerage-connections/{id}/sync forwards S1 error status codes transparently.
+
+    If S1 returns 404 (connection not found) or 422 (not active), the proxy
+    must forward the status code unchanged — no swallowing or re-mapping.
+    """
+    conn_id = "fc3e8a42-0000-7000-8000-000000000002"
+    authed_mock_clients.portfolio.post = AsyncMock(
+        return_value=_mock_response(404, b'{"detail": "Brokerage connection not found"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/brokerage-connections/{conn_id}/sync",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 404
+    authed_mock_clients.portfolio.post.assert_called_once()

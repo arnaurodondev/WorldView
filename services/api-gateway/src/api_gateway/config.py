@@ -58,7 +58,9 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
 
     # CORS
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    # SEC-008: Port 3001 is the worldview-web frontend.  Port 3000 is unused and
+    # could be attacker-controlled; it must not appear in the default allowlist.
+    cors_origins: str = "http://localhost:5173,http://localhost:3001"
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"

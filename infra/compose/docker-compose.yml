@@ -589,6 +589,12 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      # BP-164: InternalJWTMiddleware fetches JWKS from api-gateway at startup.
+      # If api-gateway is not yet healthy the fetch fails permanently (no re-try
+      # for 1 hour).  Waiting for service_healthy guarantees the JWKS endpoint
+      # is live before this service attempts to contact it.
+      api-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
       interval: 30s
@@ -1482,6 +1488,12 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      # BP-164: InternalJWTMiddleware fetches JWKS from api-gateway at startup.
+      # Without this dependency rag-chat starts before api-gateway is healthy,
+      # the 3 retries all fail, and the service returns 503 on all authenticated
+      # requests for the next hour.  service_healthy breaks the race condition.
+      api-gateway:
+        condition: service_healthy
     ports:
       - "8008:8008"
     env_file:
@@ -1504,25 +1516,23 @@ services:
       # Infrastructure must be healthy — api-gateway needs these directly
       valkey:
         condition: service_healthy
-      # Backend services just need to be started, not healthy.
-      # api-gateway proxies to them and handles errors gracefully.
-      # Using service_started breaks the circular dependency where backends
-      # need api-gateway for JWKS while api-gateway waited on backends.
+      # Backend services: api-gateway handles backend unavailability gracefully
+      # so it does NOT need to wait for backends.  rag-chat and content-ingestion
+      # are deliberately omitted here (BP-164): those services depend on
+      # api-gateway being healthy for JWKS, so adding them here would create a
+      # circular dependency.  All other services are also removed — api-gateway
+      # is stateless and will return 502/503 for any backend that isn't up yet.
       portfolio:
         condition: service_started
       market-ingestion:
         condition: service_started
       market-data:
         condition: service_started
-      content-ingestion:
-        condition: service_started
       content-store:
         condition: service_started
       nlp-pipeline:
         condition: service_started
       knowledge-graph:
-        condition: service_started
-      rag-chat:
         condition: service_started
       alert:
         condition: service_started
