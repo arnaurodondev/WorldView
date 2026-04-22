@@ -12,7 +12,7 @@
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 5/6 (Wave E frontend pending) | 2026-04-18 | 2026-04-18 |
-| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | draft | 0/8 | — | 2026-04-22 |
+| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | in-progress | 3/8 | — | 2026-04-22 |
 | PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor (insert→log rename), S9 admin cost endpoint (period=YYYY-MM) | PRD-0029 | draft | 0/5 | — | 2026-04-22 |
 <!-- New plans are appended here by the /plan skill -->
 

@@ -6,7 +6,7 @@ These models MUST stay in sync with alembic/versions/0001_create_nlp_schema.py (
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -109,6 +109,14 @@ class EntityMentionModel(Base):
     resolution_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolution_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ner_model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Added by migration 0007 (PLAN-0033 T-B-1-01)
+    resolution_outcome: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="unresolved",
+    )
+    resolution_noise_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    resolution_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -217,6 +225,9 @@ class DocumentSourceMetadataModel(Base):
     source_type: Mapped[str | None] = mapped_column(VARCHAR(50), nullable=True)
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PRD-0026 §6.4: LLM relevance scoring columns (nullable; migration 0009)
+    llm_relevance_score: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    llm_scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EmbeddingPendingModel(Base):
@@ -239,30 +250,34 @@ class EmbeddingPendingModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
-class ArticlePriceImpactModel(Base):
-    """Retrospective price-impact labels for processed articles (migration 0005).
+class ArticleImpactWindowModel(Base):
+    """Multi-window price-impact measurements (PRD-0026 §6.4, migration 0009).
 
-    One row per article (UNIQUE on article_id).  Populated by
-    ``PriceImpactLabellingWorker`` (Wave B-1) and queried by Block 5 (Wave A-4).
-    Stays in sync with ``ArticlePriceImpact`` domain entity (BP-019).
+    One row per (article_id, entity_id, window_type). Replaces article_price_impacts.
+    UNIQUE enforced by idx_article_impact_windows_unique index in migration 0009.
     """
 
-    __tablename__ = "article_price_impacts"
+    __tablename__ = "article_impact_windows"
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
         server_default=sa.text("gen_random_uuid()"),
     )
-    article_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, unique=True)
+    article_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     symbol: Mapped[str] = mapped_column(Text, nullable=False)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    ohlcv_date: Mapped[date] = mapped_column(sa.Date(), nullable=False)
-    price_open: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
-    price_close: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
-    price_delta_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 6), nullable=False)
-    next_day_delta_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
-    max_intraday_range_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    window_type: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price_start: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    price_end: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    delta_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 6), nullable=False)
+    high_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    low_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    volume: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2), nullable=True)
     impact_score: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4), nullable=False)
+    normalisation_cap_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 2), nullable=False)
+    data_quality: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default="daily_proxy")
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

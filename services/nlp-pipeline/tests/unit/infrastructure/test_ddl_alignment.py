@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.models import (
-    ArticlePriceImpactModel,
+    ArticleImpactWindowModel,
     ChunkEmbeddingModel,
     ChunkEntityMentionModel,
     ChunkModel,
@@ -181,6 +181,8 @@ class TestEmbeddingPendingDDLAlignment:
         _assert_aligned("embedding_pending", EmbeddingPendingModel)
 
 
-class TestArticlePriceImpactsDDLAlignment:
-    def test_article_price_impacts_ddl_matches_orm(self) -> None:
-        _assert_aligned("article_price_impacts", ArticlePriceImpactModel)
+class TestArticleImpactWindowsDDLAlignment:
+    """PRD-0026: article_impact_windows replaces article_price_impacts (migration 0009)."""
+
+    def test_article_impact_windows_ddl_matches_orm(self) -> None:
+        _assert_aligned("article_impact_windows", ArticleImpactWindowModel)

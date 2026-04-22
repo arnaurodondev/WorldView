@@ -1,23 +1,23 @@
-"""Unit tests for ArticlePriceImpactRepository (T-A-2-02)."""
+"""Unit tests for deprecated ArticlePriceImpactRepository (PRD-0026 Wave 3).
+
+The article_price_impacts table was dropped in migration 0009. The repository
+is kept as a temporary shim while PriceImpactLabellingWorker is migrated
+in Wave 4. Tests validate the shim behavior of the updated class.
+"""
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nlp_pipeline.application.ports.repositories import PriceImpactRepositoryPort
-from nlp_pipeline.domain.models import ArticlePriceImpact
 from nlp_pipeline.infrastructure.nlp_db.repositories.price_impact import (
     ArticlePriceImpactRepository,
 )
 
 pytestmark = pytest.mark.unit
-
-_PUBLISHED_AT = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
-_OHLCV_DATE = date(2026, 4, 1)
 
 
 def _make_session() -> AsyncMock:
@@ -26,62 +26,42 @@ def _make_session() -> AsyncMock:
     return session
 
 
-def _make_impact(article_id: uuid.UUID | None = None) -> ArticlePriceImpact:
-    return ArticlePriceImpact.compute(
-        article_id=article_id or uuid.uuid4(),
-        entity_id=uuid.uuid4(),
-        symbol="AAPL",
-        published_at=_PUBLISHED_AT,
-        price_open=Decimal("100"),
-        price_close=Decimal("103"),
-    )
+class TestPortIsAbstract:
+    def test_price_impact_repo_port_is_abstract(self) -> None:
+        """PriceImpactRepositoryPort cannot be instantiated directly."""
+        with pytest.raises(TypeError):
+            PriceImpactRepositoryPort()  # type: ignore[abstract]
 
 
-class TestUpsertIdempotent:
+class TestDeprecatedUpsertIsNoop:
     @pytest.mark.asyncio
-    async def test_upsert_calls_execute(self) -> None:
-        """upsert() must call session.execute() with an INSERT statement."""
+    async def test_upsert_is_noop(self) -> None:
+        """upsert() is a no-op since article_price_impacts table was dropped (migration 0009)."""
         session = _make_session()
         repo = ArticlePriceImpactRepository(session)
 
-        await repo.upsert(_make_impact())
+        # Should not raise and should not call execute (table no longer exists)
+        await repo.upsert(None)  # type: ignore[arg-type]
 
-        session.execute.assert_awaited_once()
+        session.execute.assert_not_awaited()
 
+
+class TestDeprecatedGetByArticleIdReturnsNone:
     @pytest.mark.asyncio
-    async def test_upsert_same_article_id_twice_no_error(self) -> None:
-        """Second upsert with same article_id must not raise (ON CONFLICT DO NOTHING)."""
-        article_id = uuid.uuid4()
+    async def test_get_by_article_id_always_returns_none(self) -> None:
+        """get_by_article_id() always returns None since table no longer exists."""
         session = _make_session()
-        repo = ArticlePriceImpactRepository(session)
-
-        await repo.upsert(_make_impact(article_id=article_id))
-        await repo.upsert(_make_impact(article_id=article_id))
-
-        assert session.execute.await_count == 2
-
-
-class TestGetByArticleId:
-    @pytest.mark.asyncio
-    async def test_get_by_article_id_returns_none(self) -> None:
-        """Unknown article_id → None returned without error."""
-        fake_result = MagicMock()
-        fake_result.scalar_one_or_none.return_value = None
-
-        session = _make_session()
-        session.execute = AsyncMock(return_value=fake_result)
         repo = ArticlePriceImpactRepository(session)
 
         result = await repo.get_by_article_id(uuid.uuid4())
 
         assert result is None
-        session.execute.assert_awaited_once()
 
 
-class TestGetMaxImpactNoRows:
+class TestGetMaxImpactQueriesNewTable:
     @pytest.mark.asyncio
-    async def test_get_max_impact_no_rows(self) -> None:
-        """No rows for doc_id → Decimal('0.0') returned."""
+    async def test_get_max_impact_returns_zero_when_no_rows(self) -> None:
+        """No windows for doc_id -> Decimal('0.0') (queries article_impact_windows)."""
         fake_result = MagicMock()
         fake_result.scalar_one_or_none.return_value = None
 
@@ -92,10 +72,18 @@ class TestGetMaxImpactNoRows:
         result = await repo.get_max_impact_for_doc(uuid.uuid4())
 
         assert result == Decimal("0.0")
+        session.execute.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_get_max_impact_returns_value_from_new_table(self) -> None:
+        """Returns Decimal value from article_impact_windows (new table)."""
+        fake_result = MagicMock()
+        fake_result.scalar_one_or_none.return_value = Decimal("0.6")
 
-class TestPortIsAbstract:
-    def test_price_impact_repo_port_is_abstract(self) -> None:
-        """PriceImpactRepositoryPort cannot be instantiated directly."""
-        with pytest.raises(TypeError):
-            PriceImpactRepositoryPort()  # type: ignore[abstract]
+        session = _make_session()
+        session.execute = AsyncMock(return_value=fake_result)
+        repo = ArticlePriceImpactRepository(session)
+
+        result = await repo.get_max_impact_for_doc(uuid.uuid4())
+
+        assert result == Decimal("0.6")

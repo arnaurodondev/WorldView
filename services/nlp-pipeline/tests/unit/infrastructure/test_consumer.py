@@ -649,11 +649,11 @@ _PIPELINE_PATCHES_NO_ROUTING = (
 
 @pytest.mark.unit
 class TestPriceImpactSignalLookup:
-    """Tests for T-A-4-02: price_impact signal wiring into Block 5 (PRD-0020 §6.7)."""
+    """Tests for T-A-4-02: price_impact signal wiring into Block 5 (PRD-0026 §6.7)."""
 
     @pytest.mark.asyncio
     async def test_consumer_uses_price_impact_zero_when_no_label(self) -> None:
-        """When article_price_impacts has no row, price_impact_score=0.0 is passed to routing."""
+        """When article_impact_windows has no row, price_impact_score=0.0 is passed to routing."""
         from decimal import Decimal
 
         doc_id = uuid.uuid4()
@@ -679,7 +679,7 @@ class TestPriceImpactSignalLookup:
                 side_effect=_capture_routing,
             ),
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.impact_window.ArticleImpactWindowRepository",
                 return_value=mock_impact_repo,
             ),
         ]
@@ -706,7 +706,7 @@ class TestPriceImpactSignalLookup:
 
     @pytest.mark.asyncio
     async def test_consumer_uses_max_price_impact_across_entities(self) -> None:
-        """When article_price_impacts repo returns 0.7, price_impact_score=0.7 is passed to routing."""
+        """When article_impact_windows repo returns 0.7, price_impact_score=0.7 is passed to routing."""
         from decimal import Decimal
 
         doc_id = uuid.uuid4()
@@ -732,7 +732,7 @@ class TestPriceImpactSignalLookup:
                 side_effect=_capture_routing,
             ),
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.impact_window.ArticleImpactWindowRepository",
                 return_value=mock_impact_repo,
             ),
         ]
@@ -911,7 +911,7 @@ class TestEnqueueSignalEvents:
                 new=AsyncMock(side_effect=_capture_enqueue_signal),
             ),
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.impact_window.ArticleImpactWindowRepository",
                 return_value=mock_impact_repo,
             ),
         ]
@@ -993,7 +993,7 @@ class TestEnqueueSignalEvents:
                 new=enqueue_signal_spy,
             ),
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.price_impact.ArticlePriceImpactRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.impact_window.ArticleImpactWindowRepository",
                 return_value=mock_impact_repo,
             ),
         ]
