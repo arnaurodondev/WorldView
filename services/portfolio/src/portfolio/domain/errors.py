@@ -222,6 +222,20 @@ class BrokerageApiError(DomainError):
     error_code = "BROKERAGE_API_ERROR"
 
 
+class InstrumentResolutionTransientError(DomainError):
+    """Raised when the market-data service (S3) is unreachable or returns a
+    non-404 error during instrument resolution.
+
+    This is a *transient* infrastructure failure — the symbol may still be valid;
+    the lookup failed due to a downstream outage.  Callers should record the
+    failure as ``SyncErrorType.API_ERROR`` rather than ``UNKNOWN_INSTRUMENT`` so
+    that genuine "instrument not found" errors (404) remain distinguishable from
+    transient network/5xx failures.
+    """
+
+    error_code = "INSTRUMENT_RESOLUTION_TRANSIENT"
+
+
 # ── Auth / Provisioning ────────────────────────────────────────────────────────
 
 

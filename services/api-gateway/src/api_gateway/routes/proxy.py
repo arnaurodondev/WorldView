@@ -525,6 +525,25 @@ async def get_brokerage_sync_errors(connection_id: str, request: Request) -> Any
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.post("/brokerage-connections/{connection_id}/sync", status_code=202)
+async def trigger_brokerage_connection_sync(connection_id: str, request: Request) -> Any:
+    """Proxy POST /api/v1/brokerage-connections/{id}/sync → S1 Portfolio service.
+
+    Triggers an immediate sync cycle for a single brokerage connection.
+    Returns 202 immediately — sync runs in the background.
+    Rate-limited at 30 req/min (same as other brokerage endpoints).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        f"/api/v1/brokerage-connections/{connection_id}/sync",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 def _portfolio_headers(request: Request) -> dict[str, str]:
     """Auth headers for S1 Portfolio service.
 

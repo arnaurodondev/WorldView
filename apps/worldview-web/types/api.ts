@@ -191,6 +191,10 @@ export interface Article {
   impact_window_t1: number | null; // 2-day
   impact_window_t2: number | null; // 3-day
   impact_window_t5: number | null; // 5-day
+  // WHY optional: older API responses may omit this field; undefined → treat as STANDARD.
+  // LIGHT = low-relevance/low-signal article (de-emphasised in UI at 60% opacity).
+  // HIGH = top-ranked article (may receive visual boost in future waves).
+  routing_tier?: "LIGHT" | "STANDARD" | "HIGH";
 }
 
 export interface NewsResponse {
@@ -507,6 +511,59 @@ export interface AiSignal {
 
 export interface AiSignalsResponse {
   signals: AiSignal[];
+}
+
+// ── Brokerage ──────────────────────────────────────────────────────────────
+
+/**
+ * BrokerageConnection — a SnapTrade brokerage link for a portfolio.
+ *
+ * WHY status enum: status drives all UI decisions — which buttons to show,
+ * which badge color to use, whether sync is possible. Keeping it typed
+ * prevents string typos from reaching the UI.
+ *
+ * DATA SOURCE: S9 GET /api/v1/brokerage-connections
+ * DESIGN REFERENCE: PRD-0022 §6.6
+ */
+export interface BrokerageConnection {
+  connection_id: string;      // UUIDv7 — stable identifier across retries
+  portfolio_id: string;
+  brokerage_name: string | null; // null when SnapTrade hasn't confirmed broker yet
+  status: "pending" | "active" | "error" | "disconnected";
+  last_synced_at: string | null; // ISO UTC — null if never synced successfully
+  created_at: string;
+}
+
+export interface BrokerageConnectionsResponse {
+  items: BrokerageConnection[];
+}
+
+export interface InitiateBrokerageConnectionResponse {
+  connection_id: string;  // pre-created so we can embed it in the redirect URI
+  redirect_uri: string;   // SnapTrade portal URL — frontend immediately redirects here
+}
+
+/**
+ * SyncError — a transaction-level error recorded during a SnapTrade sync.
+ *
+ * WHY non-blocking: these are transaction-level errors (e.g., unknown instrument),
+ * not connection-level failures. The connection stays active and continues syncing
+ * other transactions. The UI shows them as warnings, not errors.
+ *
+ * DATA SOURCE: S9 GET /api/v1/brokerage-connections/{id}/sync-errors
+ * DESIGN REFERENCE: PRD-0022 §6.6
+ */
+export interface SyncError {
+  id: string;
+  connection_id: string;
+  snaptrade_transaction_id: string;
+  error_type: "unknown_instrument" | "unsupported_type" | "api_error" | "validation_error";
+  error_detail: string | null;
+  created_at: string;
+}
+
+export interface SyncErrorsResponse {
+  items: SyncError[];
 }
 
 // ── Pagination helper ─────────────────────────────────────────────────────

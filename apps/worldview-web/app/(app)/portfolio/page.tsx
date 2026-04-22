@@ -4,14 +4,15 @@
  * WHY THIS EXISTS: The dashboard PortfolioSummary widget shows only 4 holdings.
  * This page is the "zoom in" view that traders use for deep position management:
  * reviewing all holdings with live P&L, scrolling full transaction history,
- * and monitoring watchlists — all in one authenticated page.
+ * monitoring watchlists, and managing brokerage connections — all in one page.
  *
- * WHY THREE TABS: Holdings / Transactions / Watchlist maps to the three primary
- * trader workflows:
+ * WHY FOUR TABS: Holdings / Transactions / Watchlist / Brokerages maps to the four
+ * primary trader workflows:
  *   Holdings    — "Where is my money? How is each position performing?"
  *   Transactions — "What did I do recently? Am I holding too long?"
  *   Watchlist   — "What am I watching that I don't own yet?"
- * Keeping them in tabs avoids a 3-panel vertical scroll marathon.
+ *   Brokerages  — "Which brokerages feed this portfolio? Is sync healthy?"
+ * Keeping them in tabs avoids a 4-panel vertical scroll marathon.
  *
  * DATA LOADING PATTERN (waterfall chain):
  *   1. getPortfolios() → pick portfolio (or let user select from dropdown)
@@ -20,10 +21,11 @@
  *   4. getTransactions(portfolioId) → history (lazy, only fetches when tab active)
  *   5. getWatchlists() → watchlist members
  *   6. getBatchQuotes(watchlistIds) → watchlist live prices, refetchInterval 30s
+ *   7. getBrokerageConnections(portfolioId) → SnapTrade connections (Brokerages tab)
  *
  * WHO USES IT: Authenticated users navigating to /portfolio
- * DATA SOURCE: S9 portfolio + watchlist routes
- * DESIGN REFERENCE: PRD-0028 §6.5 Portfolio, docs/ui/DESIGN_SYSTEM.md
+ * DATA SOURCE: S9 portfolio + watchlist + brokerage routes
+ * DESIGN REFERENCE: PRD-0028 §6.5 Portfolio, PRD-0022 §6.6, docs/ui/DESIGN_SYSTEM.md
  */
 
 "use client";
@@ -34,7 +36,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Plus, TrendingUp, TrendingDown } from "lucide-react";
+import { ChevronDown, Plus, TrendingUp, TrendingDown, Link2 } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -46,6 +48,13 @@ import {
   cn,
 } from "@/lib/utils";
 import type { Portfolio, Holding, Transaction, WatchlistMember } from "@/types/api";
+
+// ── Brokerage components ──────────────────────────────────────────────────────
+// WHY import here: the Brokerages tab renders these two components.
+// ConnectBrokerageModal is controlled by local state; ConnectedBrokeragesList
+// owns its own query (useBrokerageConnections) keyed to the active portfolio.
+import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
+import { ConnectedBrokeragesList } from "@/components/brokerage/ConnectedBrokeragesList";
 
 // ── shadcn/ui components ──────────────────────────────────────────────────────
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -86,7 +95,10 @@ function PnlSummaryRow({
     // sm:grid-cols-2 collapses on mobile so numbers don't get clipped.
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {/* ── Total Value ──────────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      {/* WHY hover:bg-muted/50 + transition-colors on all PnL tiles: subtle hover
+          feedback tells the user these tiles are interactive-looking data regions.
+          transition-colors smooths the background change (no jarring flash). */}
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Total Value
         </p>
@@ -96,7 +108,7 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Today P&L ──────────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Today P&amp;L
         </p>
@@ -111,7 +123,7 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Unrealised P&L ──────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Unrealised P&amp;L
         </p>
@@ -126,7 +138,7 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Unrealised P&L% ─────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Unrealised P&amp;L%
         </p>
@@ -331,8 +343,8 @@ function TransactionsTable({ transactions }: TransactionsTableProps) {
               key={tx.transaction_id}
               className="grid min-w-[600px] grid-cols-[130px_70px_90px_90px_100px_100px_80px] gap-2 rounded px-2 py-1.5 text-sm"
             >
-              {/* Date */}
-              <span className="text-xs text-muted-foreground">
+              {/* Date — font-mono tabular-nums ensures column-aligned date/time digits */}
+              <span className="font-mono text-xs tabular-nums text-muted-foreground">
                 {formatDateTime(tx.executed_at)}
               </span>
 
@@ -340,10 +352,10 @@ function TransactionsTable({ transactions }: TransactionsTableProps) {
               <span
                 className={cn(
                   "font-mono text-xs font-semibold tabular-nums",
-                  // WHY literal hex colors: Tailwind purge can't detect dynamic
-                  // class names built at runtime; using cn() with static strings
-                  // ensures both classes are in the stylesheet.
-                  isBuy ? "text-[#26A69A]" : "text-[#EF5350]",
+                  // WHY semantic tokens: bg-positive/text-positive and
+                  // bg-negative/text-negative are defined in tailwind.config.ts
+                  // via CSS variables, so they survive Tailwind purge.
+                  isBuy ? "text-positive" : "text-negative",
                 )}
                 data-testid={`tx-type-${tx.transaction_id}`}
               >
@@ -478,6 +490,12 @@ export default function PortfolioPage() {
   // Switching portfolios is ephemeral — we don't want the URL to change
   // and trigger a Next.js navigation for each portfolio switch.
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
+
+  // WHY local state for modal: ConnectBrokerageModal is a controlled dialog.
+  // The portfolio page owns the open/close state so it can place the trigger
+  // button wherever it wants (Brokerages tab header) while keeping the modal
+  // definition in its own file. Only one connection attempt at a time.
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
 
   // ── Query 1: portfolio list ──────────────────────────────────────────────
   const {
@@ -671,7 +689,7 @@ export default function PortfolioPage() {
 
       {/* ── Page header: title + portfolio selector ────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold text-foreground">Portfolio</h1>
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">Portfolio</h1>
 
         <div className="flex items-center gap-3">
           {/* Portfolio selector — only shown if user has multiple portfolios */}
@@ -737,12 +755,16 @@ export default function PortfolioPage() {
           <TabsTrigger value="holdings">Holdings</TabsTrigger>
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="watchlist">Watchlist</TabsTrigger>
+          {/* WHY Brokerages tab: PLAN-0022 Wave E-1 — SnapTrade brokerage integration.
+              The tab is always visible regardless of connection count so users can
+              always find the Connect Brokerage button without hunting for it. */}
+          <TabsTrigger value="brokerages">Brokerages</TabsTrigger>
         </TabsList>
 
         {/* ── Holdings Tab ─────────────────────────────────────────────── */}
         <TabsContent value="holdings">
           <Card>
-            <CardHeader className="pb-2 pt-3">
+            <CardHeader className="pb-1 pt-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Holdings
@@ -777,7 +799,7 @@ export default function PortfolioPage() {
         {/* ── Transactions Tab ─────────────────────────────────────────── */}
         <TabsContent value="transactions">
           <Card>
-            <CardHeader className="pb-2 pt-3">
+            <CardHeader className="pb-1 pt-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Transactions
@@ -808,7 +830,7 @@ export default function PortfolioPage() {
         {/* ── Watchlist Tab ─────────────────────────────────────────────── */}
         <TabsContent value="watchlist">
           <Card>
-            <CardHeader className="pb-2 pt-3">
+            <CardHeader className="pb-1 pt-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   Watchlist
@@ -837,7 +859,71 @@ export default function PortfolioPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* ── Brokerages Tab ────────────────────────────────────────────── */}
+        {/*
+         * WHY a dedicated tab (not a settings panel):
+         * Brokerage sync status is operationally important — traders need to know
+         * if their data is fresh. Putting it in the portfolio context (not settings)
+         * keeps it visible alongside the data it affects.
+         *
+         * DATA: ConnectedBrokeragesList owns its own query keyed to activePortfolioId.
+         * The query is not triggered until this tab mounts, keeping page load fast.
+         */}
+        <TabsContent value="brokerages">
+          <Card>
+            <CardHeader className="pb-2 pt-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  Connected Brokerages
+                </CardTitle>
+
+                {/* Connect Brokerage button — opens the consent modal */}
+                {activePortfolioId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2.5 text-xs"
+                    onClick={() => setConnectModalOpen(true)}
+                  >
+                    <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    Connect Brokerage
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {/*
+               * WHY render ConnectedBrokeragesList unconditionally (not inside activePortfolioId guard):
+               * The tab content renders after portfolios load (loading state above handles the
+               * null case). activePortfolioId will be set by the time this tab is visible.
+               * If somehow it's null, ConnectedBrokeragesList defaults to empty state gracefully
+               * because its query is disabled when portfolioId is empty.
+               */}
+              <ConnectedBrokeragesList portfolioId={activePortfolioId ?? ""} />
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {/* ── Connect Brokerage Modal ──────────────────────────────────────── */}
+      {/*
+       * WHY render outside Tabs: the modal should be accessible regardless of
+       * which tab is active (in case we add a trigger elsewhere in the future).
+       * Rendering outside the tab content also avoids the modal unmounting when
+       * the user switches tabs mid-connection-attempt.
+       *
+       * WHY conditional render on activePortfolioId: the modal requires a portfolio
+       * to associate the new connection with. Without an ID the POST would fail.
+       */}
+      {activePortfolioId && (
+        <ConnectBrokerageModal
+          portfolioId={activePortfolioId}
+          portfolioName={activePortfolio?.name}
+          open={connectModalOpen}
+          onOpenChange={setConnectModalOpen}
+        />
+      )}
     </div>
   );
 }
