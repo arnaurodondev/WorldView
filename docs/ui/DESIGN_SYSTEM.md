@@ -1,12 +1,11 @@
 # Worldview Design System
 
 > **Single source of truth** for all frontend design decisions: tokens, components, patterns, and UX conventions.
-> **Last updated**: 2026-04-13 (v2.1 — Visual Identity System: IBM Plex fonts + Midnight Pro colors; see PRD-0027 §1.4)
+> **Last updated**: 2026-04-19 (v2.2 — Bloomberg Dark palette overhaul: #0A0E14 bg + amber/gold accent + warm parchment text)
 >
 > Referenced by: `/design-ui` skill, `/scaffold-frontend` skill, `ux-ui-designer` agent, `frontend-engineer` agent.
 >
-> **BLOCKING**: Design direction must be confirmed (OQ-14 in PRD-0027) before canvas redesign.
-> Current recommendation: Direction B "Midnight Pro" — `#131722` bg + IBM Plex + sky accent + teal-green positive.
+> **CONFIRMED**: "Bloomberg Dark" direction — `#0A0E14` bg + IBM Plex + amber/gold accent (#E8A317) + teal-green positive.
 > See `docs/ui/competitive-design-research.md` for full competitor analysis.
 
 ---
@@ -17,7 +16,7 @@
 |-------|--------|-------|
 | Framework | Next.js 15 (App Router) | Node SSR; no `output: 'export'` (ADR-F-01) |
 | UI library | shadcn/ui **only** | Radix UI primitives + Tailwind CSS; no other component library |
-| Styling | Tailwind CSS v4 + CSS variables | Dark theme enforced; no hardcoded hex colors |
+| Styling | Tailwind CSS v3 + CSS variables | Dark theme enforced; no hardcoded hex colors |
 | Theme | **Dark only** | `class="dark"` set permanently on `<html>` (ADR-F-04) |
 | **Font (UI)** | **IBM Plex Sans** | Loaded via `next/font/google`. Weights: 300/400/500/600/700. Variable: `--font-sans` |
 | **Font (Data/Mono)** | **IBM Plex Mono** | Loaded via `next/font/google`. Weights: 400/500/600. Variable: `--font-mono`. Used for ALL numbers, prices, tickers, percentages |
@@ -35,92 +34,91 @@ Never mix number display between font-sans and font-mono — tabular-nums requir
 
 ---
 
-## 2. Color Palette (Dark Theme — "Midnight Pro" Direction B)
+## 2. Color Palette (Dark Theme — "Bloomberg Dark")
 
-> **Direction B confirmed pending OQ-14. Do NOT revert to slate-950/blue-500 defaults.**
-> See PRD-0027 §1.4 for all three directions and rationale.
+> **Bloomberg Dark confirmed. Do NOT revert to slate-950/blue-500 defaults.**
+> See PRD-0027 §1.4 for prior direction history and rationale.
 > Reference: `docs/ui/competitive-design-research.md`
 
 All colors are expressed as CSS custom properties. **Never use hardcoded hex values in components.**
 
-### 2.1 CSS Variables (`src/app/globals.css`) — Direction B: Midnight Pro
-
-The current globals.css uses Tailwind slate/blue defaults. The target values below MUST replace
-them when Direction B is confirmed. The hex equivalents are shown for pencil.dev canvas use.
+### 2.1 CSS Variables (`app/globals.css`) — Bloomberg Dark
 
 ```css
 :root.dark {
   /* ── Backgrounds ──────────────────────────────────────────────────── */
-  --background:        222 47% 11%;    /* #131722 — TradingView background (CRITICAL CHANGE) */
-  --card:              215 28% 14%;    /* #1E2329 — panel/card backgrounds */
-  --muted:             213 20% 19%;    /* #2B3139 — elevated surfaces, hover states */
-  --popover:           222 47% 11%;    /* same as --background */
+  --background:        210 38% 6%;       /* #0A0E14 — Bloomberg-style deep background */
+  --card:              212 31% 9%;       /* #111820 — panel/card backgrounds */
+  --muted:             215 26% 14%;      /* #1A2030 — elevated surfaces, hover states */
+  --popover:           210 38% 6%;       /* #0A0E14 — same as --background */
+  --surface-2:         215 26% 14%;      /* #1A2030 — alias for muted (explicit surface step) */
+  --surface-3:         210 22% 19%;      /* #243040 — third elevation level */
 
   /* ── Text ──────────────────────────────────────────────────────────── */
-  --foreground:        220 14% 85%;    /* #D1D4DC — TradingView primary text (warm white) */
-  --card-foreground:   220 14% 85%;
-  --muted-foreground:  220 9% 50%;     /* #787B86 — labels, timestamps, axis captions */
+  --foreground:        36 14% 85%;       /* #E0DDD4 — Bloomberg warm-white text */
+  --card-foreground:   36 14% 85%;       /* #E0DDD4 */
+  --muted-foreground:  215 8% 47%;       /* #6B7585 — labels, timestamps, axis captions */
 
   /* ── Interactive ───────────────────────────────────────────────────── */
-  --primary:           199 89% 48%;   /* #0EA5E9 — sky-500 accent (DISTINCTIVE from blue-500) */
-  --primary-foreground: 222 47% 11%;  /* dark text on sky button */
+  --primary:           40 83% 50%;       /* #E8A317 — amber/gold accent */
+  --primary-foreground: 210 38% 6%;      /* #0A0E14 — dark text on gold button */
 
   /* ── Structural ────────────────────────────────────────────────────── */
-  --border:            213 20% 19%;   /* #2B3139 — dividers */
-  --input:             213 20% 19%;
-  --ring:              199 89% 48%;   /* focus rings match accent */
-  --accent:            213 20% 19%;
-  --destructive:       0 63% 62%;     /* #EF5350 — destructive actions */
-  --destructive-foreground: 220 14% 85%;
+  --border:            210 22% 19%;      /* #243040 — dividers */
+  --input:             210 22% 19%;      /* #243040 */
+  --ring:              40 83% 50%;       /* #E8A317 — focus rings match accent */
+  --accent:            215 26% 14%;      /* #1A2030 */
+  --destructive:       0 63% 62%;        /* #EF5350 — destructive actions */
+  --destructive-foreground: 36 14% 85%;  /* #E0DDD4 */
 
   /* ── Financial domain ──────────────────────────────────────────────── */
-  --positive:          174 42% 40%;   /* #26A69A — TradingView teal-green (professional) */
-  --negative:          0 63% 62%;     /* #EF5350 — TradingView muted red */
-  --warning:           38 92% 50%;    /* #F59E0B — amber-500 alerts/warnings */
-  --neutral-value:     220 9% 50%;    /* #787B86 — unchanged/flat */
+  --positive:          174 42% 40%;      /* #26A69A — teal-green (price up) */
+  --negative:          0 63% 62%;        /* #EF5350 — muted red (price down) */
+  --warning:           38 92% 50%;       /* #F59E0B — amber-500 alerts/warnings */
 }
 ```
 
 ### 2.1a Hex Quick-Reference (for pencil.dev canvas and design tools)
 
-| Token | Hex | Tailwind Equivalent |
-|-------|-----|---------------------|
-| Page background | `#131722` | (custom — not a Tailwind default) |
-| Card/panel | `#1E2329` | between gray-800 and gray-900 |
-| Elevated/hover | `#2B3139` | gray-700 range |
-| Border | `#2B3139` | gray-700 range |
-| Primary text | `#D1D4DC` | between slate-200 and slate-300 |
-| Secondary text | `#787B86` | slate-500 range |
-| Accent (sky) | `#0EA5E9` | sky-500 |
-| Positive (teal) | `#26A69A` | (custom — between teal-500 and teal-600) |
-| Negative (red) | `#EF5350` | red-500 range |
-| Warning (amber) | `#F59E0B` | amber-500 |
-| Positive bg | `#0D2926` | (dark teal tint — for HeatCell positive) |
-| Negative bg | `#2D1515` | (dark red tint — for HeatCell negative) |
+| Token | Hex | Description |
+|-------|-----|-------------|
+| Page background | `#0A0E14` | Bloomberg-style deep background |
+| Card/panel | `#111820` | Panel/card backgrounds |
+| Elevated/hover (surface-2) | `#1A2030` | Elevated surfaces, hover states |
+| Surface-3 | `#243040` | Third elevation level, borders |
+| Border | `#243040` | Dividers, table borders |
+| Primary text | `#E0DDD4` | Warm parchment white |
+| Secondary text | `#6B7585` | Labels, timestamps, axis captions |
+| Accent (gold) | `#E8A317` | Bloomberg amber/gold accent |
+| Positive (teal) | `#26A69A` | Price up, portfolio gain |
+| Negative (red) | `#EF5350` | Price down, loss |
+| Warning (amber) | `#F59E0B` | Medium severity alerts |
+| Positive bg (heat) | `#0A2420` | Dark teal tint for HeatCell positive |
+| Negative bg (heat) | `#300E12` | Dark red tint for HeatCell negative |
 
 ### 2.2 Semantic Usage
 
-| Context | Variable | Example | Hex (Direction B) |
-|---------|----------|---------|-------------------|
-| Page background | `bg-background` | `<body>`, `<main>` | `#131722` |
-| Card / panel | `bg-card` | shadcn `<Card>`, sidebar panels | `#1E2329` |
-| Elevated panel | `bg-muted` | nested cards, hover states | `#2B3139` |
-| Primary headings | `text-foreground` | page titles, values | `#D1D4DC` |
-| Labels, captions | `text-muted-foreground` | "P/E Ratio", timestamps | `#787B86` |
-| Price up | `text-[hsl(var(--positive))]` | `+2.34%` | `#26A69A` (teal) |
-| Price down | `text-[hsl(var(--negative))]` | `-1.12%` | `#EF5350` |
-| CTA buttons | `bg-primary text-primary-foreground` | "Buy", "Confirm" | `#0EA5E9` bg |
-| Borders | `border-border` | `<Separator>`, table borders | `#2B3139` |
-| Active nav item | `bg-primary/10 text-primary` | sidebar active link | sky-blue tint |
-| Ticker badge | `bg-primary/20 text-primary font-mono` | "AAPL" badge | sky-blue tint |
+| Context | Variable | Example | Hex (Bloomberg Dark) |
+|---------|----------|---------|----------------------|
+| Page background | `bg-background` | `<body>`, `<main>` | `#0A0E14` |
+| Card / panel | `bg-card` | shadcn `<Card>`, sidebar panels | `#111820` |
+| Elevated panel | `bg-muted` | nested cards, hover states | `#1A2030` |
+| Primary headings | `text-foreground` | page titles, values | `#E0DDD4` |
+| Labels, captions | `text-muted-foreground` | "P/E Ratio", timestamps | `#6B7585` |
+| Price up | `text-positive` | `+2.34%` | `#26A69A` (teal) |
+| Price down | `text-negative` | `-1.12%` | `#EF5350` |
+| CTA buttons | `bg-primary text-primary-foreground` | "Buy", "Confirm" | `#E8A317` bg |
+| Borders | `border-border` | `<Separator>`, table borders | `#243040` |
+| Active nav item | `bg-primary/10 text-primary` | sidebar active link | amber/gold tint |
+| Ticker badge | `bg-primary/20 text-primary font-mono` | "AAPL" badge | amber/gold tint |
 
 ### 2.3 Background Elevation Hierarchy
 
 ```
-Page (--background / slate-950)
-  └── Sidebar, panels (--card / slate-800)
-        └── Nested cards, hover rows (--muted / slate-700)
-              └── Input fields, tooltips (--input / same)
+Page (--background / #0A0E14)
+  └── Sidebar, panels (--card / #111820)
+        └── Nested cards, hover rows (--muted, --surface-2 / #1A2030)
+              └── Input fields, tooltips, borders (--surface-3 / #243040)
 ```
 
 ---

@@ -27,10 +27,26 @@ const nextConfig: NextConfig = {
   // Enable React strict mode for better dev-time error detection
   reactStrictMode: true,
 
+  // SEC-005 FIX: Remove X-Powered-By: Next.js header to avoid leaking stack info
+  poweredByHeader: false,
+
   // Standalone output: produces a self-contained server.js + minimal node_modules.
   // Required for the Docker multi-stage build (see Dockerfile).
   // The standalone output is ~120 MB vs ~500 MB with full node_modules.
   output: "standalone",
+
+  // BT-001 FIX: Server-side redirect for /instruments → /screener.
+  // Previously handled by a client-side router.replace() in instruments/page.tsx,
+  // which caused a 404 flash on SSR and broke non-JS crawlers / link previews.
+  async redirects() {
+    return [
+      {
+        source: "/instruments",
+        destination: "/screener",
+        permanent: false, // 307 temporary — may change if we add an instruments index page
+      },
+    ];
+  },
 
   // API gateway proxy rewrite:
   // /api/v1/* → API_GATEWAY_URL/v1/*
@@ -52,10 +68,38 @@ const nextConfig: NextConfig = {
   // These headers harden the browser environment and protect against common
   // web vulnerabilities without requiring any application-level changes.
   async headers() {
+    // Derive both ws:// and wss:// origins from the configured WS base URL so that
+    // the CSP connect-src covers both plaintext (dev) and TLS (prod) WebSocket connections.
+    // e.g. "ws://localhost:8010" → allows both ws://localhost:8010 and wss://localhost:8010
+    const wsOrigin = wsBaseUrl.replace(/^wss?:\/\//, "");
+    const cspDirectives = [
+      "default-src 'self'",
+      // SEC-001 FIX: Content-Security-Policy header added (was absent entirely).
+      // 'unsafe-inline' is required for Next.js 15 App Router — the React runtime
+      // injects inline hydration scripts during SSR.  A nonce-based CSP (using
+      // Next.js Middleware to set a per-request nonce) would be strictly stronger,
+      // but that requires significant refactoring (see TODO below).
+      // TODO: upgrade to nonce-based CSP via Next.js Middleware when attack surface justifies it.
+      "script-src 'self' 'unsafe-inline'",
+      // 'unsafe-inline' for styles: required by Tailwind's runtime CSS injection
+      // and shadcn/ui's inline style attributes (SVG animations, chart colours).
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      // data: and blob: needed for chart SVG exports and image placeholders.
+      "img-src 'self' https://*.eodhd.com https://*.clearbit.com data: blob:",
+      // connect-src: 'self' covers /api/* (proxied to S9) plus both WS variants for S10.
+      `connect-src 'self' ws://${wsOrigin} wss://${wsOrigin}`,
+      // frame-ancestors: belt-and-suspenders with X-Frame-Options: DENY below.
+      "frame-ancestors 'none'",
+    ].join("; ");
+
     return [
       {
         source: "/(.*)",
         headers: [
+          // SEC-001 FIX: Content-Security-Policy — blocks XSS, clickjacking, and
+          // mixed-content attacks by declaring authorised script/style/connect origins.
+          { key: "Content-Security-Policy", value: cspDirectives },
           // Prevent clickjacking — no page should ever be framed
           { key: "X-Frame-Options", value: "DENY" },
           // Prevent MIME-type sniffing (e.g., serving JS as text/html)

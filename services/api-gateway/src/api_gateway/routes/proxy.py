@@ -627,8 +627,12 @@ async def economic_calendar(request: Request) -> Any:
     clients = _clients(request)
     resp = await clients.knowledge_graph.get(
         "/api/v1/temporal-events",
-        # F-010: filter out user-supplied 'type' to enforce economic-only filter
-        params={"type": "economic", **{k: v for k, v in dict(request.query_params).items() if k != "type"}},
+        # R-002 (revise-prd 2026-04-22): S7's list_temporal_events endpoint uses
+        # the query param name `event_type`, not `type`.  Passing `type=economic`
+        # was silently ignored by FastAPI, meaning no type filter was applied and
+        # ALL temporal events were returned regardless of type.
+        # Also strip any user-supplied `event_type` to prevent overriding the filter.
+        params={"event_type": "economic", **{k: v for k, v in dict(request.query_params).items() if k != "event_type"}},
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -828,16 +832,23 @@ async def get_holdings(portfolio_id: str, request: Request) -> Any:
 async def list_transactions(request: Request) -> Any:
     """Proxy GET /api/v1/transactions → S1 Portfolio service.
 
-    Requires authentication. Forwards query parameters (portfolio_id, limit, offset)
-    to S1 for transaction listing.
+    Requires authentication. S1 expects portfolio_id as the X-Portfolio-ID header
+    (not as a query parameter).  We extract it from query params and inject it as
+    a header so S1 can authenticate portfolio ownership.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _portfolio_headers(request)
     clients = _clients(request)
+    # API-004: portfolio_id must be forwarded as X-Portfolio-ID header, not query param.
+    # S1 validates X-Portfolio-ID to ensure portfolio belongs to the authenticated tenant.
+    qp = dict(request.query_params)
+    portfolio_id = qp.pop("portfolio_id", None)
+    if portfolio_id:
+        headers["X-Portfolio-ID"] = portfolio_id
     resp = await clients.portfolio.get(
         "/api/v1/transactions",
-        params=dict(request.query_params),
+        params=qp,
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

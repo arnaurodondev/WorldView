@@ -262,6 +262,88 @@ async def test_callback_error_param_400() -> None:
     assert body["error"] == "access_denied"
 
 
+# ── SEC-003: callback error sanitization ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_callback_known_oidc_error_passes_through() -> None:
+    """Known RFC 6749 error codes are returned unchanged (SEC-003)."""
+    app = _make_auth_app()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # All standard OIDC error codes must be reflected verbatim
+        for code in ("access_denied", "invalid_request", "server_error", "login_required"):
+            resp = await ac.get(f"/v1/auth/callback?error={code}")
+            assert resp.status_code == 400
+            assert resp.json()["error"] == code, f"Expected {code!r} to pass through unchanged"
+
+
+@pytest.mark.asyncio
+async def test_callback_unknown_error_sanitized_to_unknown_error() -> None:
+    """Unknown/attacker-supplied error values are replaced with 'unknown_error' (SEC-003)."""
+    app = _make_auth_app()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/v1/auth/callback?error=evil_custom_code")
+
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "unknown_error"
+
+
+@pytest.mark.asyncio
+async def test_callback_xss_in_error_sanitized() -> None:
+    """HTML/JS injection in error param is sanitized to 'unknown_error' (SEC-003)."""
+    app = _make_auth_app()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/v1/auth/callback?error=%3Cscript%3Ealert%281%29%3C%2Fscript%3E")
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"] == "unknown_error"
+    # Raw XSS string must never appear in the response
+    assert "<script>" not in str(body)
+
+
+@pytest.mark.asyncio
+async def test_callback_description_html_stripped() -> None:
+    """HTML tags in error_description are stripped to safe characters (SEC-003)."""
+    app = _make_auth_app()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get(
+            "/v1/auth/callback?error=access_denied"
+            "&error_description=User+%3Cscript%3Ealert%281%29%3C%2Fscript%3E+denied"
+        )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    desc = body.get("error_description", "")
+    assert "<script>" not in (desc or ""), "HTML tags must be stripped from error_description"
+    # Note: the character-level sanitizer strips special chars (<>/etc.) but not alphanumeric words
+    # like "alert".  The XSS risk is eliminated by stripping the surrounding <script> tags; the
+    # plain word "alert" in isolation is not a security vector.
+
+
+@pytest.mark.asyncio
+async def test_callback_description_truncated_to_200_chars() -> None:
+    """error_description longer than 200 safe chars is truncated (SEC-003)."""
+    app = _make_auth_app()
+    long_desc = "a" * 500  # 500 safe alpha chars
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get(f"/v1/auth/callback?error=access_denied&error_description={long_desc}")
+
+    body = resp.json()
+    desc = body.get("error_description") or ""
+    assert len(desc) <= 200, f"error_description must be truncated to ≤200 chars, got {len(desc)}"
+
+
 # ── Refresh endpoint ──────────────────────────────────────────────────────────
 
 

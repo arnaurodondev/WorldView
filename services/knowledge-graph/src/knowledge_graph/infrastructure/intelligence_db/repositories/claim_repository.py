@@ -97,9 +97,29 @@ LIMIT :top_k
         → ``claims`` (both sides) to produce a two-sided contradiction view.
         Side A = the new evidence's claim (LEFT JOIN — claim_id may be NULL).
         Side B = the opposing existing claim.
+
+        BP-069 / API-008: The original query used
+          ``AND (:claim_type IS NULL OR rcl.contradiction_type = :claim_type)``
+        with ``"claim_type": None`` in the params dict.  asyncpg cannot infer the
+        PostgreSQL type of a Python ``None`` value used inside a column equality
+        comparison (``rcl.contradiction_type = :claim_type``), raising
+        ``AmbiguousParameterError`` on every request where ``claim_type`` was
+        absent.  Fix: build the WHERE clause conditionally and never bind a
+        ``None``-valued parameter that appears in an equality expression.
         """
-        result = await self._session.execute(
-            text("""
+        # Build WHERE clause dynamically — only add :claim_type when it is
+        # supplied so asyncpg always receives a typed string value.
+        conditions = [
+            "rer.subject_entity_id = :entity_id",
+            "rcl.invalidated_at IS NULL",
+        ]
+        params: dict[str, object] = {"entity_id": str(entity_id), "top_k": top_k}
+        if claim_type is not None:
+            conditions.append("rcl.contradiction_type = :claim_type")
+            params["claim_type"] = claim_type
+
+        where_clause = "\n  AND ".join(conditions)
+        query = f"""
 SELECT rcl.link_id,
        rcl.contradiction_type AS claim_type,
        rcl.strength,
@@ -120,18 +140,11 @@ FROM relation_contradiction_links rcl
 JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
 LEFT JOIN claims ca ON ca.claim_id = rer.claim_id
 JOIN claims cb ON cb.claim_id = rcl.claim_id
-WHERE rer.subject_entity_id = :entity_id
-  AND rcl.invalidated_at IS NULL
-  AND (:claim_type IS NULL OR rcl.contradiction_type = :claim_type)
+WHERE {where_clause}
 ORDER BY rcl.strength DESC
 LIMIT :top_k
-"""),
-            {
-                "entity_id": str(entity_id),
-                "claim_type": claim_type,
-                "top_k": top_k,
-            },
-        )
+"""
+        result = await self._session.execute(text(query), params)
         rows = result.fetchall()
         out: list[ContradictionData] = []
         for r in rows:
