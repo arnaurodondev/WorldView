@@ -29,7 +29,7 @@ from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
 from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
 from portfolio.domain.enums import SyncErrorType, TransactionDirection, TransactionType
-from portfolio.domain.errors import BrokerageApiError, IdempotencyConflictError
+from portfolio.domain.errors import BrokerageApiError, IdempotencyConflictError, InstrumentResolutionTransientError
 from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 from portfolio.infrastructure.metrics.prometheus import (
     BROKERAGE_SYNC_CYCLE_DURATION,
@@ -221,7 +221,30 @@ class BrokerageTransactionSyncWorker:
             return
 
         # 3. Instrument resolution
-        instrument = await self._resolve_instrument(activity.symbol, uow)
+        #
+        # Two distinct failure modes must be told apart (F-007):
+        #   a) Genuine 404 → market-data does not know this symbol → UNKNOWN_INSTRUMENT
+        #   b) S3 network exception or 5xx → transient outage → API_ERROR
+        #
+        # _resolve_instrument() returns None only for (a); it raises
+        # InstrumentResolutionTransientError for (b).  This prevents a brief
+        # S3 outage from flooding brokerage_sync_errors with UNKNOWN_INSTRUMENT
+        # records that look identical to real missing instruments.
+        try:
+            instrument = await self._resolve_instrument(activity.symbol, uow)
+        except InstrumentResolutionTransientError as exc:
+            await uow.brokerage_sync_errors.save(
+                BrokerageTransactionSyncError(
+                    id=new_uuid(),
+                    connection_id=connection.id,
+                    snaptrade_transaction_id=activity.snaptrade_transaction_id,
+                    error_type=SyncErrorType.API_ERROR,
+                    error_detail=str(exc),
+                ),
+            )
+            BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="api_error").inc()
+            return
+
         if instrument is None:
             await uow.brokerage_sync_errors.save(
                 BrokerageTransactionSyncError(
@@ -291,11 +314,26 @@ class BrokerageTransactionSyncWorker:
             response = await self._http_client.get(
                 f"{self._settings.market_data_service_url}/api/v1/instruments/{encoded_symbol}",
             )
-        except Exception:
+        except Exception as exc:
+            # Network error (timeout, DNS failure, connection refused, etc.) —
+            # raise a transient error so the caller records API_ERROR, not
+            # UNKNOWN_INSTRUMENT.  The instrument may be perfectly valid; S3 is
+            # just temporarily unreachable.
+            raise InstrumentResolutionTransientError(
+                f"Transient instrument resolution failure for symbol: {symbol!r} "
+                f"— market-data service unreachable ({type(exc).__name__})",
+            ) from exc
+
+        if response.status_code == 404:
+            # S3 confirmed the symbol does not exist on this platform → genuine unknown.
             return None
 
         if response.status_code != 200:
-            return None
+            # 5xx / 429 / etc. — transient infrastructure failure, not a genuine 404.
+            raise InstrumentResolutionTransientError(
+                f"Transient instrument resolution failure for symbol: {symbol!r} "
+                f"— market-data service unavailable (HTTP {response.status_code})",
+            )
 
         data = response.json()
         from common.ids import new_uuid  # type: ignore[import-untyped]

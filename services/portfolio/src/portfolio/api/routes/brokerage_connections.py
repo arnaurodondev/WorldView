@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
@@ -204,3 +205,117 @@ async def get_sync_errors(
             for e in result.items
         ],
     )
+
+
+# ── Background task helper ────────────────────────────────────────────────────
+
+
+async def _run_single_sync(app_state: Any, connection: Any) -> None:
+    """Run one sync cycle for a single brokerage connection in a background task.
+
+    This is intentionally fire-and-forget: any exception is logged but NOT
+    re-raised so that the 202 response has already been sent to the caller.
+
+    Dependencies are constructed from ``app_state`` rather than from FastAPI
+    DI so this function can be scheduled via ``BackgroundTasks.add_task()``
+    without a live request context.
+    """
+    import httpx
+
+    from observability import get_logger  # type: ignore[import-untyped]
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+    from portfolio.workers.brokerage_sync_worker import BrokerageTransactionSyncWorker
+
+    _log = get_logger(__name__)  # type: ignore[no-any-return]
+
+    try:
+        # Build a worker using the same app-level dependencies as the scheduled
+        # background process.  We deliberately use the write session_factory
+        # (not read_factory) because _sync_connection performs DB writes.
+        worker = BrokerageTransactionSyncWorker(
+            session_factory=app_state.session_factory,
+            brokerage_client=app_state.brokerage_client,
+            settings=app_state.settings,
+            cipher=getattr(app_state, "snaptrade_cipher", None),
+        )
+
+        # Provide an HTTP client so S3 instrument resolution works.
+        # We create it scoped to this single task — no long-lived client to leak.
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            worker._http_client = http_client
+
+            # _sync_connection opens its own UoW internally (BP-057 pattern).
+            # We patch SqlAlchemyUnitOfWork so it uses the app session_factory
+            # (already wired correctly inside the worker).
+            await worker._sync_connection(connection)
+
+    except Exception as exc:
+        # Log but do not propagate — the HTTP response was already sent.
+        _log.error(  # type: ignore[no-any-return]
+            "brokerage_force_sync_background_error",
+            connection_id=str(connection.id),
+            error=str(exc),
+        )
+
+    # Unused import guard — SqlAlchemyUnitOfWork is imported inside the try block
+    # to ensure it is only loaded when the background task runs (lazy load).
+    _ = SqlAlchemyUnitOfWork
+
+
+# ── Force re-sync endpoint ────────────────────────────────────────────────────
+
+
+@router.post(
+    "/brokerage-connections/{connection_id}/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_brokerage_sync(
+    connection_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    uow: ReadUoWDep,  # read-only ownership check (R27)
+) -> dict[str, str]:
+    """Trigger an immediate background sync for a single active or errored brokerage connection.
+
+    Returns 202 immediately — the sync runs asynchronously via FastAPI BackgroundTasks.
+    Rate-limited at 30 req/min (same limit as other brokerage endpoints in S9).
+
+    Status codes:
+        202 — sync started (connection is ACTIVE or ERROR)
+        401 — missing or invalid auth claims
+        403 — connection belongs to a different user
+        404 — connection_id not found in this tenant
+        422 — connection is DISCONNECTED or PENDING (cannot sync)
+    """
+    from portfolio.domain.enums import ConnectionStatus
+
+    user_id, tenant_id = _require_user_headers(request)
+
+    # Validate UUID format before hitting the DB
+    try:
+        conn_uuid = UUID(connection_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid connection_id format") from exc
+
+    # Ownership check — use read replica (R27); we only need to verify the
+    # connection exists and belongs to this user before scheduling the task.
+    connection = await uow.brokerage_connections.get(conn_uuid, tenant_id)
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Brokerage connection not found")
+
+    if connection.user_id != user_id:
+        # The connection exists in the tenant but belongs to a different user.
+        raise HTTPException(status_code=403, detail="Forbidden: connection belongs to a different user")
+
+    # Only ACTIVE and ERROR connections can be force-synced.  PENDING means the
+    # OAuth flow is not complete yet; DISCONNECTED means the user has revoked access.
+    if connection.status in (ConnectionStatus.DISCONNECTED, ConnectionStatus.PENDING):
+        raise HTTPException(
+            status_code=422,
+            detail="Connection is not active — cannot sync",
+        )
+
+    # Schedule the sync as a FastAPI background task — returns 202 immediately.
+    background_tasks.add_task(_run_single_sync, request.app.state, connection)
+
+    return {"status": "syncing", "connection_id": connection_id}

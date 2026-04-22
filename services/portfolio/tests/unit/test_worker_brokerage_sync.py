@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 from portfolio.application.ports.brokerage_client import SnapTradeActivity
 from portfolio.domain.entities.brokerage_connection import BrokerageConnection
@@ -397,3 +398,137 @@ async def _setup_full_uow() -> FakeUnitOfWork:
     await uow.holdings.save(holding)
 
     return uow
+
+
+# ── _resolve_instrument: S3 404 → genuine UNKNOWN_INSTRUMENT ─────────────────
+
+
+async def test_resolve_instrument_s3_404_returns_none() -> None:
+    """S3 returns 404 → _resolve_instrument returns None → UNKNOWN_INSTRUMENT sync error.
+
+    This is the 'genuine unknown' path: market-data confirmed the symbol
+    does not exist on the platform.  The error must remain UNKNOWN_INSTRUMENT
+    (not API_ERROR) so that operators can identify truly unmappable instruments.
+    """
+    uow = FakeUnitOfWork()  # empty — no instruments in DB
+    worker, _ = _make_worker(uow)
+
+    # Provide a mock HTTP client that returns 404
+    mock_http_client = MagicMock()
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 404
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    worker._http_client = mock_http_client
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="BUY", symbol="NOTREAL")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.UNKNOWN_INSTRUMENT
+    assert "NOTREAL" in (errors[0].error_detail or "")
+
+
+# ── _resolve_instrument: S3 500 → transient → API_ERROR ──────────────────────
+
+
+async def test_resolve_instrument_s3_500_creates_api_error() -> None:
+    """S3 returns 500 (or any non-404, non-200) → API_ERROR sync error with transient message.
+
+    A 500 from market-data is a transient infrastructure failure.  Recording it
+    as UNKNOWN_INSTRUMENT would create false positives during outages.  The error
+    type must be API_ERROR and the message must mention 'transient'.
+    """
+    uow = FakeUnitOfWork()  # empty — no instruments in DB
+    worker, _ = _make_worker(uow)
+
+    # Provide a mock HTTP client that returns 500
+    mock_http_client = MagicMock()
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 500
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    worker._http_client = mock_http_client
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="BUY", symbol="AAPL")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.API_ERROR
+    # Message must identify the symbol and signal transient failure
+    detail = errors[0].error_detail or ""
+    assert "AAPL" in detail
+    assert "transient" in detail.lower() or "unavailable" in detail.lower()
+
+
+async def test_resolve_instrument_s3_503_creates_api_error() -> None:
+    """S3 returns 503 → API_ERROR (same as 500 — any non-200/non-404 triggers transient path)."""
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+
+    mock_http_client = MagicMock()
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 503
+    mock_http_client.get = AsyncMock(return_value=mock_response)
+    worker._http_client = mock_http_client
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="BUY", symbol="TSLA")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.API_ERROR
+
+
+# ── _resolve_instrument: network exception → transient → API_ERROR ────────────
+
+
+async def test_resolve_instrument_network_exception_creates_api_error() -> None:
+    """Network exception during S3 call → API_ERROR sync error (not UNKNOWN_INSTRUMENT).
+
+    Connection refused, DNS failure, timeout etc. are transient failures.
+    The symbol may be perfectly valid — S3 is just temporarily unreachable.
+    """
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+
+    # Provide a mock HTTP client that raises a network exception
+    mock_http_client = MagicMock()
+    mock_http_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+    worker._http_client = mock_http_client
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="BUY", symbol="MSFT")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.API_ERROR
+    detail = errors[0].error_detail or ""
+    assert "MSFT" in detail
+
+
+async def test_resolve_instrument_timeout_creates_api_error() -> None:
+    """httpx.TimeoutException during S3 call → API_ERROR (transient outage, not genuine unknown)."""
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+
+    mock_http_client = MagicMock()
+    mock_http_client.get = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
+    worker._http_client = mock_http_client
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="SELL", symbol="GOOG")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    errors = uow.brokerage_sync_errors._store
+    assert len(errors) == 1
+    assert errors[0].error_type == SyncErrorType.API_ERROR
