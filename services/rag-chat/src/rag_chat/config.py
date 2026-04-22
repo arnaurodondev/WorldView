@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # ── Feature flags ─────────────────────────────────────────────────────────
     cypher_enabled: bool = False
 
+    # ── Circuit breaker (PLAN-0031 T-D-1-02) ──────────────────────────────────
+    cb_enabled: bool = True
+    cb_failure_threshold: int = 3
+    cb_failure_window_seconds: int = 120
+    cb_cool_down_seconds: int = 3600
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0

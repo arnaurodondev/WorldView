@@ -245,3 +245,149 @@ async def test_retrieval_entity_count_capped_at_3(
 
     # get_egocentric_graph called at most 3 times
     assert s7.get_egocentric_graph.call_count <= 3
+
+
+# ── Circuit breaker integration tests (T-D-1-02) ─────────────────────────────
+
+
+def _make_cb(*, is_open: bool = False) -> AsyncMock:
+    """Create a mock SourceCircuitBreaker."""
+    cb = AsyncMock()
+    cb.is_open.return_value = is_open
+    cb.record_success = AsyncMock()
+    cb.record_failure = AsyncMock()
+    return cb
+
+
+@pytest.mark.unit
+async def test_cb_open_skips_source(
+    s6: AsyncMock,
+    s7: AsyncMock,
+    s3: AsyncMock,
+    s1: AsyncMock,
+) -> None:
+    """When a source CB is OPEN, the source is skipped entirely."""
+    cb_chunk = _make_cb(is_open=True)
+    cb_claims = _make_cb(is_open=False)
+
+    orch = ParallelRetrievalOrchestrator(
+        s6_client=s6,
+        s7_client=s7,
+        s3_client=s3,
+        s1_client=s1,
+        circuit_breakers={"chunk": cb_chunk, "claims": cb_claims},
+    )
+
+    entity = _make_entity()
+    plan = _make_plan(use_chunks=True, use_claims=True, entity_ids=(entity.entity_id,))
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    claim = MagicMock()
+    claim.claim_id = "cl-1"
+    claim.claim_type = "revenue"
+    claim.polarity = "positive"
+    claim.claim_text = "Revenue grew 10%"
+    claim.extraction_confidence = 0.80
+    claim.subject_entity_id = str(entity.entity_id)
+    claim.created_at = "2024-01-01T00:00:00Z"
+    s7.search_claims.return_value = [claim]
+
+    items = await orch.retrieve(plan, resolved, request, query_embedding=[0.1] * 768)
+
+    # Chunks were skipped (CB open) — only claims returned
+    assert all(i.item_type == ItemType.claim for i in items)
+    s6.search_chunks.assert_not_awaited()
+    cb_chunk.is_open.assert_awaited_once()
+    cb_claims.record_success.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_cb_records_success_on_source_completion(
+    s6: AsyncMock,
+    s7: AsyncMock,
+    s3: AsyncMock,
+    s1: AsyncMock,
+) -> None:
+    """Successful retrieval calls record_success() on the source CB."""
+    cb_chunk = _make_cb(is_open=False)
+    orch = ParallelRetrievalOrchestrator(
+        s6_client=s6,
+        s7_client=s7,
+        s3_client=s3,
+        s1_client=s1,
+        circuit_breakers={"chunk": cb_chunk},
+    )
+
+    chunk = _make_chunk_result()
+    s6.search_chunks.return_value = [chunk]
+
+    entity = _make_entity()
+    plan = _make_plan(use_chunks=True, entity_ids=(entity.entity_id,))
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    items = await orch.retrieve(plan, resolved, request, query_embedding=[0.1] * 768)
+
+    assert len(items) == 1
+    cb_chunk.record_success.assert_awaited_once()
+    cb_chunk.record_failure.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_cb_records_failure_on_source_exception(
+    s6: AsyncMock,
+    s7: AsyncMock,
+    s3: AsyncMock,
+    s1: AsyncMock,
+) -> None:
+    """Source exception calls record_failure() and returns empty list."""
+    cb_chunk = _make_cb(is_open=False)
+    s6.search_chunks.side_effect = TimeoutError("upstream timed out")
+
+    orch = ParallelRetrievalOrchestrator(
+        s6_client=s6,
+        s7_client=s7,
+        s3_client=s3,
+        s1_client=s1,
+        circuit_breakers={"chunk": cb_chunk},
+    )
+
+    entity = _make_entity()
+    plan = _make_plan(use_chunks=True, entity_ids=(entity.entity_id,))
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    items = await orch.retrieve(plan, resolved, request, query_embedding=[0.1] * 768)
+
+    assert items == []
+    cb_chunk.record_failure.assert_awaited_once()
+    cb_chunk.record_success.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_cb_disabled_no_breakers(
+    s6: AsyncMock,
+    s7: AsyncMock,
+    s3: AsyncMock,
+    s1: AsyncMock,
+) -> None:
+    """When no circuit_breakers dict is provided, retrieval works as before."""
+    orch = ParallelRetrievalOrchestrator(
+        s6_client=s6,
+        s7_client=s7,
+        s3_client=s3,
+        s1_client=s1,
+        # No circuit_breakers — cb_enabled=False equivalent
+    )
+
+    chunk = _make_chunk_result()
+    s6.search_chunks.return_value = [chunk]
+
+    entity = _make_entity()
+    plan = _make_plan(use_chunks=True, entity_ids=(entity.entity_id,))
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    items = await orch.retrieve(plan, resolved, request, query_embedding=[0.1] * 768)
+    assert len(items) == 1

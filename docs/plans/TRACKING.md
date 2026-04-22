@@ -27,7 +27,7 @@
 | PLAN-0029 | Missing Frontend Endpoints — S1 watchlist rename (PATCH), S8 briefing GET endpoints (morning + instrument), S9 signals/ai proxy fix (stub → real S6 proxy) | PRD-0028 §6.2 | completed | 2/2 | 2026-04-19 | 2026-04-19 |
 | PLAN-0030 | Security Hardening — QA-2026-04-19 Remediation: dependency pinning (PyJWT/cryptography bounds, pnpm-lock), CI/CD SHA-pin + yq checksum, frontend security headers, gateway hardening (fail-open log, cookie_secure, dev JWT require, CORS guard), backend JWT issuer=, Docker non-root, JTI replay protection | QA-2026-04-19 | completed | 6/6 | 2026-04-19 | 2026-04-19 |
 | PLAN-UI-VISUAL-OVERHAUL | Bloomberg-Grade Visual Overhaul — Amber/gold palette, data density, component polish, landing page, dashboard 4-col, page-specific polish + critic fixups | PRD-0027 | completed | 6/6 + fixups | 2026-04-19 | 2026-04-19 |
-| PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | in-progress | 7/8 | — | 2026-04-21 |
+| PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | completed | 8/8 | — | 2026-04-22 |
 | PLAN-0032 | Forensic QA Remediation — Next.js/Vitest CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization, CORS port fix, transaction header forwarding, S1 watchlist PATCH, S7 500 errors, doc fixes | Forensic QA 2026-04-21 | draft | 0/7 | — | 2026-04-21 |
 <!-- New plans are appended here by the /plan skill -->
 

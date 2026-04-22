@@ -2,9 +2,9 @@
 id: PLAN-0031
 source: docs/audits/2026-04-20-unstructured-data-pipeline-deep-dive.md
 title: "Pipeline Reliability & Intelligence Hardening"
-status: in-progress
+status: completed
 created: 2026-04-20
-updated: 2026-04-21
+updated: 2026-04-22
 plans: 5
 waves: 8
 tasks: 30
@@ -768,11 +768,12 @@ Also add `EXPIRE` with TTL = seconds until end of current month (ensures counter
 
 ## Sub-Plan D — S8 RAG Chat Enhancement
 
-### Wave D-1: Per-Source Circuit Breaker
+### Wave D-1: Per-Source Circuit Breaker ✅
 
 **Goal**: Add a Valkey-backed circuit breaker to the RAG retrieval orchestrator so repeatedly-failing or slow sources are skipped for a 60-minute cool-down period, preventing a degraded S7 from consuming the full 5s timeout budget on every request.
 **Depends on**: none
 **Estimated effort**: 60–75 min
+**Status**: **DONE** — 2026-04-22 · 356 S8 unit tests pass (11 new) · ruff + mypy clean
 **Architecture layer**: application (pipeline) + infrastructure (config)
 
 #### Pre-read
@@ -869,9 +870,9 @@ cb_enabled: bool = True  # feature flag
 ---
 
 #### Validation Gate — Wave D-1
-- [ ] All S8 unit tests pass (≥ 6 new tests)
-- [ ] `cb_enabled=False` produces identical behavior to before
-- [ ] ruff + mypy clean
+- [x] All S8 unit tests pass (≥ 6 new tests) — 356 pass, 11 new (7 CB + 4 orchestrator CB integration)
+- [x] `cb_enabled=False` produces identical behavior to before — empty circuit_breakers dict = no-op
+- [x] ruff + mypy clean
 
 #### Break Impact
 | Broken File | Why | Fix |
