@@ -19,6 +19,7 @@ from rag_chat.domain.enums import ItemType
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
     from rag_chat.application.ports.upstream_clients import (
         S1Port,
         S3Port,
@@ -57,6 +58,9 @@ class ParallelRetrievalOrchestrator:
         s3_client:  S3 Market Data client (fundamentals, earnings, quotes).
         s1_client:  S1 Portfolio client (portfolio context).
         timeout:    Per-task timeout in seconds (default 5.0).
+        circuit_breakers: Optional dict of source_name → SourceCircuitBreaker.
+                          When provided, sources are checked/recorded via their CB.
+                          When absent or empty, all sources run unconditionally.
     """
 
     def __init__(
@@ -68,6 +72,7 @@ class ParallelRetrievalOrchestrator:
         *,
         timeout: float = _RETRIEVAL_TIMEOUT,
         s1_internal_token: str = "",
+        circuit_breakers: dict[str, SourceCircuitBreaker] | None = None,
     ) -> None:
         self._s6 = s6_client
         self._s7 = s7_client
@@ -75,6 +80,7 @@ class ParallelRetrievalOrchestrator:
         self._s1 = s1_client
         self._timeout = timeout
         self._s1_internal_token = s1_internal_token
+        self._cbs = circuit_breakers or {}
 
     async def retrieve(
         self,
@@ -93,27 +99,27 @@ class ParallelRetrievalOrchestrator:
         tasks: list[Any] = []
 
         if plan.use_chunks:
-            tasks.append(self._safe_chunks(resolved_query, plan, query_embedding))
+            tasks.append(self._with_cb("chunk", self._fetch_chunks(resolved_query, plan, query_embedding)))
         if plan.use_relations and query_embedding:
-            tasks.append(self._safe_relations(query_embedding, entity_ids))
+            tasks.append(self._with_cb("relations", self._fetch_relations(query_embedding, entity_ids)))
         if plan.use_graph:
             for eid in entity_ids[:_MAX_GRAPH_ENTITIES]:
-                tasks.append(self._safe_graph(eid))
+                tasks.append(self._with_cb("graph", self._fetch_graph(eid)))
         if plan.use_claims:
-            tasks.append(self._safe_claims(entity_ids, plan))
+            tasks.append(self._with_cb("claims", self._fetch_claims(entity_ids, plan)))
         if plan.use_events:
-            tasks.append(self._safe_events(entity_ids, plan))
+            tasks.append(self._with_cb("events", self._fetch_events(entity_ids, plan)))
         if plan.use_contradictions:
             for eid in entity_ids[:_MAX_GRAPH_ENTITIES]:
-                tasks.append(self._safe_contradictions(eid))
+                tasks.append(self._with_cb("contradictions", self._fetch_contradictions(eid)))
         if plan.use_financial:
             for entity in resolved_query.resolved_entities[:_MAX_GRAPH_ENTITIES]:
                 if entity.ticker:
-                    tasks.append(self._safe_financial(entity.ticker))
+                    tasks.append(self._with_cb("financial", self._fetch_financial(entity.ticker)))
         if plan.use_portfolio:
-            tasks.append(self._safe_portfolio(request))
+            tasks.append(self._with_cb("portfolio", self._fetch_portfolio(request)))
         if plan.use_cypher and entity_ids:
-            tasks.append(self._safe_cypher(entity_ids[0]))
+            tasks.append(self._with_cb("cypher", self._fetch_cypher(entity_ids[0])))
 
         if not tasks:
             return []
@@ -128,9 +134,41 @@ class ParallelRetrievalOrchestrator:
                 items.extend(r)
         return items
 
-    # ── Private task wrappers ─────────────────────────────────────────────────
+    # ── Circuit breaker wrapper ──────────────────────────────────────────────
 
-    async def _safe_chunks(
+    async def _with_cb(
+        self,
+        source_name: str,
+        coro: Any,
+    ) -> list[RetrievedItem]:
+        """Wrap a retrieval coroutine with circuit breaker check/record.
+
+        If the circuit breaker for *source_name* is OPEN, skip the call and
+        return an empty list.  On success, record success; on failure, record
+        failure.  If no CB is configured for this source, run directly.
+        """
+        cb = self._cbs.get(source_name)
+        if cb is not None and await cb.is_open():
+            # Close the unawaited coroutine to suppress RuntimeWarning
+            coro.close()
+            log.warning("retrieval_source_skipped_circuit_open", source=source_name)
+            return []
+
+        try:
+            result = await coro
+        except Exception as exc:
+            if cb is not None:
+                await cb.record_failure()
+            log.warning("retrieval_source_failed", source=source_name, error=str(exc))
+            return []
+
+        if cb is not None:
+            await cb.record_success()
+        return result  # type: ignore[no-any-return]
+
+    # ── Private fetch methods (may raise — _with_cb catches) ──────────────────
+
+    async def _fetch_chunks(
         self,
         resolved_query: ResolvedQuery,
         plan: RetrievalPlan,
@@ -146,11 +184,7 @@ class ParallelRetrievalOrchestrator:
             date_from=_date_to_dt(plan.date_filter.start) if plan.date_filter else None,
             date_to=_date_to_dt(plan.date_filter.end) if plan.date_filter else None,
         )
-        try:
-            results = await asyncio.wait_for(self._s6.search_chunks(req), timeout=self._timeout)
-        except Exception as exc:
-            log.warning("retrieval_chunks_failed", error=str(exc))  # type: ignore[no-any-return]
-            return []
+        results = await asyncio.wait_for(self._s6.search_chunks(req), timeout=self._timeout)
         items: list[RetrievedItem] = []
         for r in results:
             trust = DEFAULT_TRUST_WEIGHTS.get(r.source_type, DEFAULT_TRUST_WEIGHTS["default"])
@@ -174,19 +208,15 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_relations(
+    async def _fetch_relations(
         self,
         embedding: list[float],
         entity_ids: list[UUID],
     ) -> list[RetrievedItem]:
-        try:
-            results = await asyncio.wait_for(
-                self._s7.search_relations(embedding, entity_ids, top_k=15, min_confidence=0.30),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_relations_failed", error=str(exc))  # type: ignore[no-any-return]
-            return []
+        results = await asyncio.wait_for(
+            self._s7.search_relations(embedding, entity_ids, top_k=15, min_confidence=0.30),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for r in results:
             text = f"{r.subject} {r.relation_type} {r.object}: {r.summary}"
@@ -209,15 +239,11 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_graph(self, entity_id: UUID) -> list[RetrievedItem]:
-        try:
-            graph = await asyncio.wait_for(
-                self._s7.get_egocentric_graph(entity_id, min_confidence=0.40, limit=30),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_graph_failed", entity_id=str(entity_id), error=str(exc))  # type: ignore[no-any-return]
-            return []
+    async def _fetch_graph(self, entity_id: UUID) -> list[RetrievedItem]:
+        graph = await asyncio.wait_for(
+            self._s7.get_egocentric_graph(entity_id, min_confidence=0.40, limit=30),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for edge in graph.edges:
             text = (
@@ -242,7 +268,7 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_claims(
+    async def _fetch_claims(
         self,
         entity_ids: list[UUID],
         plan: RetrievalPlan,
@@ -255,14 +281,10 @@ class ParallelRetrievalOrchestrator:
         date_to: datetime = (
             _date_to_dt(plan.date_filter.end) if plan.date_filter and plan.date_filter.end else datetime.now(tz=UTC)
         )
-        try:
-            results = await asyncio.wait_for(
-                self._s7.search_claims(entity_ids, date_from=date_from, date_to=date_to, top_k=15, min_confidence=0.50),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_claims_failed", error=str(exc))  # type: ignore[no-any-return]
-            return []
+        results = await asyncio.wait_for(
+            self._s7.search_claims(entity_ids, date_from=date_from, date_to=date_to, top_k=15, min_confidence=0.50),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for r in results:
             text = f"{r.claim_type} ({r.polarity}): {r.claim_text}"
@@ -285,7 +307,7 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_events(
+    async def _fetch_events(
         self,
         entity_ids: list[UUID],
         plan: RetrievalPlan,
@@ -298,14 +320,10 @@ class ParallelRetrievalOrchestrator:
         date_to_ev: datetime = (
             _date_to_dt(plan.date_filter.end) if plan.date_filter and plan.date_filter.end else datetime.now(tz=UTC)
         )
-        try:
-            results = await asyncio.wait_for(
-                self._s7.search_events(entity_ids, date_from=date_from_ev, date_to=date_to_ev, top_k=10),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_events_failed", error=str(exc))  # type: ignore[no-any-return]
-            return []
+        results = await asyncio.wait_for(
+            self._s7.search_events(entity_ids, date_from=date_from_ev, date_to=date_to_ev, top_k=10),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for r in results:
             text = f"{r.event_type}: {r.event_text}"
@@ -328,16 +346,11 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_contradictions(self, entity_id: UUID) -> list[RetrievedItem]:
-        try:
-            results = await asyncio.wait_for(
-                self._s7.get_contradictions(entity_id, top_k=3),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_contradictions_failed", entity_id=str(entity_id), error=str(exc))  # type: ignore[no-any-return]
-            return []
-        # Contradictions are stored in the items list for later extraction by fusion/assembler
+    async def _fetch_contradictions(self, entity_id: UUID) -> list[RetrievedItem]:
+        results = await asyncio.wait_for(
+            self._s7.get_contradictions(entity_id, top_k=3),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for r in results:
             sides_text = " vs. ".join(s.get("text", "") for s in r.sides[:2])
@@ -361,23 +374,19 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_financial(self, ticker: str) -> list[RetrievedItem]:
-        try:
-            instrument_id = await asyncio.wait_for(
-                self._s3.find_instrument_by_ticker(ticker),
-                timeout=self._timeout,
-            )
-            if not instrument_id:
-                return []
-            highlights, _earnings, quote = await asyncio.gather(
-                asyncio.wait_for(self._s3.get_fundamentals_highlights(instrument_id), timeout=self._timeout),
-                asyncio.wait_for(self._s3.get_earnings(instrument_id), timeout=self._timeout),
-                asyncio.wait_for(self._s3.get_quote(instrument_id), timeout=self._timeout),
-                return_exceptions=True,
-            )
-        except Exception as exc:
-            log.warning("retrieval_financial_failed", ticker=ticker, error=str(exc))  # type: ignore[no-any-return]
+    async def _fetch_financial(self, ticker: str) -> list[RetrievedItem]:
+        instrument_id = await asyncio.wait_for(
+            self._s3.find_instrument_by_ticker(ticker),
+            timeout=self._timeout,
+        )
+        if not instrument_id:
             return []
+        highlights, _earnings, quote = await asyncio.gather(
+            asyncio.wait_for(self._s3.get_fundamentals_highlights(instrument_id), timeout=self._timeout),
+            asyncio.wait_for(self._s3.get_earnings(instrument_id), timeout=self._timeout),
+            asyncio.wait_for(self._s3.get_quote(instrument_id), timeout=self._timeout),
+            return_exceptions=True,
+        )
 
         items: list[RetrievedItem] = []
         if isinstance(highlights, dict) and highlights:
@@ -418,19 +427,15 @@ class ParallelRetrievalOrchestrator:
             )
         return items
 
-    async def _safe_portfolio(self, request: ChatRequest) -> list[RetrievedItem]:
-        try:
-            ctx = await asyncio.wait_for(
-                self._s1.get_portfolio_context(
-                    request.user_id,
-                    request.tenant_id,
-                    self._s1_internal_token,
-                ),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_portfolio_failed", error=str(exc))  # type: ignore[no-any-return]
-            return []
+    async def _fetch_portfolio(self, request: ChatRequest) -> list[RetrievedItem]:
+        ctx = await asyncio.wait_for(
+            self._s1.get_portfolio_context(
+                request.user_id,
+                request.tenant_id,
+                self._s1_internal_token,
+            ),
+            timeout=self._timeout,
+        )
         if not ctx:
             return []
         holdings_text = ", ".join(h.get("ticker", "") for h in ctx.holdings[:10])
@@ -453,16 +458,12 @@ class ParallelRetrievalOrchestrator:
             )
         ]
 
-    async def _safe_cypher(self, entity_id: UUID) -> list[RetrievedItem]:
+    async def _fetch_cypher(self, entity_id: UUID) -> list[RetrievedItem]:
         cypher = "MATCH (e:Entity {id: $id})-[r*1..3]->(n) RETURN n, r, length(r) as hops"
-        try:
-            results = await asyncio.wait_for(
-                self._s7.cypher_traverse(cypher, {"id": str(entity_id)}, max_results=30),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
-            log.warning("retrieval_cypher_failed", entity_id=str(entity_id), error=str(exc))  # type: ignore[no-any-return]
-            return []
+        results = await asyncio.wait_for(
+            self._s7.cypher_traverse(cypher, {"id": str(entity_id)}, max_results=30),
+            timeout=self._timeout,
+        )
         items: list[RetrievedItem] = []
         for i, row in enumerate(results[:10]):
             text = str(row)
