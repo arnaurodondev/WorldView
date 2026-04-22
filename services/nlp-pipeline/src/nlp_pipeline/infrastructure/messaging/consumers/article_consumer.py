@@ -270,15 +270,16 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         watched_ids = await self._watchlist.get_all_watched()
 
         # Fetch price_impact signal — best-effort; defaults to 0.0 for articles
-        # < 25h old (not yet labelled) or on any lookup error (PRD-0020 §6.7).
+        # < 25h old (not yet labelled) or on any lookup error (PRD-0026 §6.7).
+        # Queries article_impact_windows (multi-window table, migration 0009).
         price_impact_score = 0.0
         try:
-            from nlp_pipeline.infrastructure.nlp_db.repositories.price_impact import (
-                ArticlePriceImpactRepository,
+            from nlp_pipeline.infrastructure.nlp_db.repositories.impact_window import (
+                ArticleImpactWindowRepository,
             )
 
             async with self._nlp_sf() as impact_session:
-                impact_repo = ArticlePriceImpactRepository(impact_session)
+                impact_repo = ArticleImpactWindowRepository(impact_session)
                 max_impact = await impact_repo.get_max_impact_for_doc(doc_id)
                 price_impact_score = float(max_impact)
         except Exception:

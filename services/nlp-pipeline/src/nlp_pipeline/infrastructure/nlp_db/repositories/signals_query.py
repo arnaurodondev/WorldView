@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 from nlp_pipeline.application.ports.repositories import SignalsQueryPort
 from nlp_pipeline.infrastructure.nlp_db.models import (
-    ArticlePriceImpactModel,
+    ArticleImpactWindowModel,
     EntityMentionModel,
     OutboxEventModel,
     RoutingDecisionModel,
@@ -35,22 +35,34 @@ class SqlaSignalsQueryRepo(SignalsQueryPort):
         min_impact_score: float = 0.0,
         order_by: str = "created_at",
     ) -> tuple[list[dict[str, Any]], int]:
-        impact_score_col = func.coalesce(ArticlePriceImpactModel.impact_score, 0.0).label("impact_score")
+        # Join article_impact_windows on day_t0 rows only (PRD-0026 §6.5).
+        # LEFT OUTER JOIN means articles without a day_t0 row get impact_score = 0.0.
+        # DISTINCT ON partition_key guards against multiple day_t0 rows per article.
+        day_t0_subq = (
+            select(
+                ArticleImpactWindowModel.article_id,
+                func.max(ArticleImpactWindowModel.impact_score).label("impact_score"),
+            )
+            .where(ArticleImpactWindowModel.window_type == "day_t0")
+            .group_by(ArticleImpactWindowModel.article_id)
+            .subquery("day_t0")
+        )
+        impact_score_col = func.coalesce(day_t0_subq.c.impact_score, 0.0).label("impact_score")
         q = (
             select(OutboxEventModel, impact_score_col)
             .outerjoin(
-                ArticlePriceImpactModel,
-                ArticlePriceImpactModel.article_id == cast(OutboxEventModel.partition_key, PGUUID(as_uuid=True)),
+                day_t0_subq,
+                day_t0_subq.c.article_id == cast(OutboxEventModel.partition_key, PGUUID(as_uuid=True)),
             )
             .where(OutboxEventModel.topic == "nlp.signal.detected.v1")
         )
         if doc_id is not None:
             q = q.where(OutboxEventModel.partition_key == str(doc_id))
         if min_impact_score > 0.0:
-            q = q.where(func.coalesce(ArticlePriceImpactModel.impact_score, 0.0) >= min_impact_score)
+            q = q.where(func.coalesce(day_t0_subq.c.impact_score, 0.0) >= min_impact_score)
 
         if order_by == "market_impact_score":
-            q = q.order_by(func.coalesce(ArticlePriceImpactModel.impact_score, 0.0).desc())
+            q = q.order_by(func.coalesce(day_t0_subq.c.impact_score, 0.0).desc())
         else:
             q = q.order_by(OutboxEventModel.created_at.desc())
 

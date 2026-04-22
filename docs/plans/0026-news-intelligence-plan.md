@@ -2,7 +2,7 @@
 id: PLAN-0026
 prd: docs/specs/0026-news-intelligence-ranked-feed.md
 title: News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring
-status: draft
+status: in-progress
 created: 2026-04-22
 updated: 2026-04-22
 services: [nlp-pipeline, api-gateway, worldview-web]
@@ -67,6 +67,7 @@ Waves 4 and 5 depend only on Wave 3 (no shared files) and can be executed in par
 ---
 
 ## Wave 1: Domain Layer — New Entities, Enums & Value Objects ✅
+**Status**: **DONE** — 2026-04-22 · 466 tests pass · ruff + mypy clean
 
 **Goal**: Add `ArticleImpactWindow` entity, `DisplayRelevanceScore` value object, `WindowType`/`DataQuality` enums; extend `DocumentSourceMetadata`; update `__all__` exports.
 **Depends on**: none
@@ -314,7 +315,8 @@ llm_scored_at: datetime | None = None       # UTC; null until worker runs
 
 ---
 
-## Wave 2: Alembic Migration 0009 — article_impact_windows + document_source_metadata
+## Wave 2: Alembic Migration 0009 — article_impact_windows + document_source_metadata ✅
+**Status**: **DONE** — 2026-04-22 · migration applies cleanly · ruff + mypy clean
 
 **Goal**: Create `article_impact_windows` table, migrate existing `article_price_impacts` data as `day_t0` rows, drop old table, add 2 columns to `document_source_metadata`, add all performance indexes.
 **Depends on**: Wave 1
@@ -432,7 +434,8 @@ CREATE INDEX idx_routing_decisions_doc_id
 
 ---
 
-## Wave 3: Infrastructure — ORM Model, Repositories, Signals Query Update
+## Wave 3: Infrastructure — ORM Model, Repositories, Signals Query Update ✅
+**Status**: **DONE** — 2026-04-22 · 480 tests pass (+14 new) · ruff + mypy clean
 
 **Goal**: Replace `ArticlePriceImpactModel` with `ArticleImpactWindowModel`, add new `ArticleImpactWindowRepository`, update `SignalsQueryPort` and `SqlaSignalsQueryRepo` to use new table, update DDL alignment tests.
 **Depends on**: Wave 2

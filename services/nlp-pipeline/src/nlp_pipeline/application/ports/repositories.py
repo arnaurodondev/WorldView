@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from decimal import Decimal
     from uuid import UUID
 
-    from nlp_pipeline.domain.models import ArticlePriceImpact
+    from nlp_pipeline.domain.models import ArticleImpactWindow, ArticlePriceImpact
 
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
@@ -241,5 +241,48 @@ class PriceImpactRepositoryPort(ABC):
 
         Limits to ``batch_size`` *distinct doc_ids* — multiple rows per doc are normal
         when a document mentions several financial instruments.
+        """
+        ...
+
+
+# ── ArticleImpactWindow repository port ─────────────────────────────────────
+
+
+class ArticleImpactWindowRepositoryPort(ABC):
+    """Port for multi-window price-impact label persistence (PRD-0026 §6.5).
+
+    Used by ``PriceImpactLabellingWorker`` (writes) and news API use cases (reads).
+    Concrete implementation: ``ArticleImpactWindowRepository`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def upsert_batch(self, windows: list[ArticleImpactWindow]) -> None:
+        """Bulk INSERT ON CONFLICT (article_id, entity_id, window_type) DO NOTHING.
+
+        Idempotent (R9): re-inserting the same (article_id, entity_id, window_type)
+        triple is a no-op. Caller is responsible for commit.
+        """
+        ...
+
+    @abstractmethod
+    async def get_articles_needing_windows(
+        self,
+        min_age_hours: int,
+        batch_size: int,
+    ) -> list[tuple[UUID, UUID, str, datetime]]:
+        """Return ``(doc_id, entity_id, symbol, published_at)`` for articles with missing windows.
+
+        Finds article/entity pairs where at least one daily window (day_t0/t1/t2/t5)
+        is due (article old enough) but not yet written to ``article_impact_windows``.
+        Returns at most ``batch_size`` distinct doc_id rows.
+        """
+        ...
+
+    @abstractmethod
+    async def get_max_impact_for_doc(self, doc_id: UUID) -> Decimal:
+        """Return max ``impact_score`` across all windows and entities for ``doc_id``.
+
+        Returns ``Decimal("0.0")`` when no windows exist yet.
+        Used by Block 5 (signal scoring) in the article consumer.
         """
         ...
