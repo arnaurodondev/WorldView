@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ml_clients.description_client import EntityDescriptionClient  # type: ignore[import-untyped]
+    from ml_clients.usage_log import LlmUsageLogProtocol
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
@@ -57,11 +58,13 @@ class DefinitionRefreshWorker:
     ``description_client`` and falls back to a deterministic template on failure.
 
     Args:
+    ----
         session_factory:    Read/write sessionmaker for intelligence_db.
         llm_client:         FallbackChainClient (embedding path).
         description_client: EntityDescriptionClient for non-company descriptions.
                             If None, ``NullDescriptionAdapter`` is used (always
                             returns None → falls back to deterministic template).
+
     """
 
     def __init__(
@@ -69,6 +72,7 @@ class DefinitionRefreshWorker:
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         description_client: EntityDescriptionClient | None = None,
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
@@ -78,6 +82,11 @@ class DefinitionRefreshWorker:
             self._description_client: EntityDescriptionClient = NullDescriptionAdapter()
         else:
             self._description_client = description_client
+        # Inject usage logger into GeminiDescriptionAdapter if present (PLAN-0033 T-D-1-03)
+        if usage_logger is not None:
+            _adapter = getattr(self._description_client, "_adapter", None)
+            if _adapter is not None:
+                _adapter._usage_logger = usage_logger
 
     async def run(self) -> None:
         """Periodic fallback: refresh definition embeddings due for refresh.
@@ -144,7 +153,7 @@ class DefinitionRefreshWorker:
                         source_hash=new_hash,
                         embedding=None,  # COALESCE in SQL preserves existing
                         model_id=None,  # COALESCE in SQL preserves existing
-                    )
+                    ),
                 )
                 skipped += 1
                 continue
@@ -161,7 +170,7 @@ class DefinitionRefreshWorker:
                     source_hash=new_hash,
                     embedding=embedding,
                     model_id=_EMBED_MODEL_ID,
-                )
+                ),
             )
             refreshed += 1
 

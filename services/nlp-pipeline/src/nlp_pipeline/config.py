@@ -119,6 +119,17 @@ class Settings(BaseSettings):
     # Legacy setting — kept for backward compatibility, not used by the new worker
     impact_normalisation_cap_pct: float = 5.0
 
+    # ArticleRelevanceScoringWorker (PRD-0026 §6.7 Flow B)
+    relevance_scoring_cycle_seconds: int = 1800  # RELEVANCE_SCORING_CYCLE_SECONDS
+    relevance_scoring_batch_size: int = 50  # RELEVANCE_SCORING_BATCH_SIZE
+    relevance_scoring_ollama_url: str = "http://ollama:11434"  # RELEVANCE_SCORING_OLLAMA_URL
+    relevance_scoring_model: str = "qwen2.5:3b"  # RELEVANCE_SCORING_MODEL
+    relevance_scoring_timeout_seconds: int = 30  # RELEVANCE_SCORING_TIMEOUT_SECONDS
+    # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
+    s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
+    s6_display_weight_llm: float = 0.40  # S6_DISPLAY_WEIGHT_LLM
+    s6_display_weight_routing: float = 0.10  # S6_DISPLAY_WEIGHT_ROUTING
+
     # UnresolvedResolutionWorker (PLAN-0033 T-C-1-04)
     # All env vars: NLP_PIPELINE_UNRESOLVED_RESOLUTION_* prefix (auto via model_config)
     unresolved_resolution_enabled: bool = True

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
 
@@ -133,41 +132,42 @@ class TestFallbackChainClientExtraction:
 
 class TestFallbackChainLlmLogging:
     def test_llm_usage_log_written_on_success(self) -> None:
-        """Success → usage_log_repo.insert() called once."""
+        """Success → usage_logger.log() called once (PLAN-0033 T-D-1-01: insert→log rename)."""
         from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
         from ml_clients.dataclasses import EmbeddingInput
 
         ollama = _make_embedding_client()
-        usage_repo = AsyncMock()
-        usage_repo.insert = AsyncMock(return_value=uuid4())
+        # Duck-typed mock satisfying LlmUsageLogProtocol (has async .log())
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
 
         client = FallbackChainClient(
             ollama_embedding=ollama,
-            usage_log_repo=usage_repo,
+            usage_logger=usage_logger,
             retry_delays_ollama=(),
             retry_delays_gemini=(),
         )
         inp = EmbeddingInput(text="hello", model_id="nomic")
         asyncio.run(client.embed([inp]))
-        usage_repo.insert.assert_awaited_once()
+        usage_logger.log.assert_awaited_once()
 
     def test_llm_usage_log_written_on_failure(self) -> None:
-        """Failure → usage logged with success=False."""
+        """Failure → usage logged with success=False (PLAN-0033 T-D-1-01)."""
         from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
         from ml_clients.dataclasses import EmbeddingInput
 
         ollama = _make_embedding_client(fail=True)
-        usage_repo = AsyncMock()
-        usage_repo.insert = AsyncMock(return_value=uuid4())
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
 
         client = FallbackChainClient(
             ollama_embedding=ollama,
-            usage_log_repo=usage_repo,
+            usage_logger=usage_logger,
             retry_delays_ollama=(),
             retry_delays_gemini=(),
         )
         inp = EmbeddingInput(text="hello", model_id="nomic")
         asyncio.run(client.embed([inp]))
         # Should log with success=False
-        call_kwargs = usage_repo.insert.call_args.kwargs
+        call_kwargs = usage_logger.log.call_args.kwargs
         assert call_kwargs["success"] is False

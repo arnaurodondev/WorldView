@@ -370,3 +370,53 @@ async def test_price_impact_worker_entrypoint_runs_and_stops() -> None:
 
     mock_nlp_engine.dispose.assert_called_once()
     mock_worker.run_forever.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# article_relevance_scoring_worker (entry point) — PRD-0026 Wave 5
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relevance_scoring_worker_entrypoint_importable() -> None:
+    """``from nlp_pipeline.workers.article_relevance_scoring_worker import main`` imports without error."""
+    from nlp_pipeline.workers.article_relevance_scoring_worker import main
+
+    assert callable(main)
+
+
+@pytest.mark.asyncio
+async def test_relevance_scoring_worker_entrypoint_runs_and_stops() -> None:
+    """Entry point runs to completion and disposes nlp_engine when stop is pre-set."""
+    mock_nlp_engine = AsyncMock()
+    mock_worker = MagicMock()
+    mock_worker.run_forever = AsyncMock()
+
+    mock_settings = _mock_settings(
+        relevance_scoring_ollama_url="http://ollama:11434",
+        relevance_scoring_model="qwen2.5:3b",
+        relevance_scoring_batch_size=50,
+        relevance_scoring_timeout_seconds=30,
+        relevance_scoring_cycle_seconds=1800,
+    )
+
+    with (
+        patch("nlp_pipeline.config.Settings", return_value=mock_settings),
+        patch("observability.configure_logging"),
+        patch("observability.get_logger", return_value=MagicMock()),
+        patch(
+            "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
+            return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "nlp_pipeline.infrastructure.workers.article_relevance_scoring_worker.ArticleRelevanceScoringWorker",
+            return_value=mock_worker,
+        ),
+        patch("asyncio.Event", side_effect=_preset_event),
+    ):
+        from nlp_pipeline.workers.article_relevance_scoring_worker import main
+
+        await main()
+
+    mock_nlp_engine.dispose.assert_called_once()
+    mock_worker.run_forever.assert_called_once()

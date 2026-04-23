@@ -27,8 +27,7 @@ if TYPE_CHECKING:
 
     from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput, ExtractionInput, ExtractionOutput
     from ml_clients.protocols import EmbeddingClient, ExtractionClient
-
-    from knowledge_graph.infrastructure.intelligence_db.repositories.llm_usage_log import LlmUsageLogRepository
+    from ml_clients.usage_log import LlmUsageLogProtocol
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -40,13 +39,15 @@ class FallbackChainClient:
     """Primary-Ollama → secondary-Gemini fallback with logging.
 
     Args:
+    ----
         ollama_embedding: Primary embedding client (Ollama).
         gemini_embedding: Secondary embedding client (Gemini Flash Lite).
         ollama_extraction: Primary extraction client (Ollama).
         gemini_extraction: Secondary extraction client (Gemini Flash Lite).
-        usage_log_repo:  Repository for LLM cost logging; may be None (logging skipped).
+        usage_logger:    LlmUsageLogProtocol implementation for cost logging; None skips logging.
         retry_delays_ollama: Seconds to wait between Ollama attempts.
         retry_delays_gemini: Seconds to wait between Gemini attempts.
+
     """
 
     def __init__(
@@ -56,7 +57,7 @@ class FallbackChainClient:
         gemini_embedding: EmbeddingClient | None = None,
         ollama_extraction: ExtractionClient | None = None,
         gemini_extraction: ExtractionClient | None = None,
-        usage_log_repo: LlmUsageLogRepository | None = None,
+        usage_logger: LlmUsageLogProtocol | None = None,
         retry_delays_ollama: tuple[float, ...] = _DEFAULT_OLLAMA_DELAYS,
         retry_delays_gemini: tuple[float, ...] = _DEFAULT_GEMINI_DELAYS,
     ) -> None:
@@ -64,7 +65,7 @@ class FallbackChainClient:
         self._gemini_emb = gemini_embedding
         self._ollama_ext = ollama_extraction
         self._gemini_ext = gemini_extraction
-        self._log_repo = usage_log_repo
+        self._usage_logger = usage_logger
         self._delays_ollama = retry_delays_ollama
         self._delays_gemini = retry_delays_gemini
 
@@ -249,11 +250,16 @@ class FallbackChainClient:
         return None
 
     async def _log(self, **kwargs: Any) -> None:
-        """Log to usage_log_repo if available; swallow errors to never block callers."""
-        if self._log_repo is None:
+        """Log via usage_logger if available; swallow errors to never block callers.
+
+        Changed in PLAN-0033 T-D-1-01: parameter renamed from ``usage_log_repo``
+        to ``usage_logger`` (accepts ``LlmUsageLogProtocol``); method call changed
+        from ``.insert()`` to ``.log()`` to match the shared protocol.
+        """
+        if self._usage_logger is None:
             return
         try:
-            await self._log_repo.insert(**kwargs)
+            await self._usage_logger.log(**kwargs)
         except Exception as exc:
             logger.warning("llm_usage_log_write_failed", error=str(exc))  # type: ignore[no-any-return]
 

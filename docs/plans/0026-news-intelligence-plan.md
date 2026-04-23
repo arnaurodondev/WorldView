@@ -698,7 +698,8 @@ price_impact_cap_day_t5_pct: float = 10.0  # S6_CAP_DAY_T5_PCT
 
 ---
 
-## Wave 5: ArticleRelevanceScoringWorker — LLM Relevance Scoring
+## Wave 5: ArticleRelevanceScoringWorker — LLM Relevance Scoring ✅
+**Status**: **DONE** — 2026-04-22 · 20 tests pass (9 new + 11 entrypoints) · ruff + mypy clean
 
 **Goal**: Implement `ArticleRelevanceScoringWorker` (new independent process, R22) using Qwen2.5:3b via Ollama. Three-phase loop (read → score via Ollama → write). Add config vars, docker-compose entry.
 **Depends on**: Wave 3
