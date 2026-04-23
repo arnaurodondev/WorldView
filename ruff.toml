@@ -27,6 +27,11 @@ select = [
 ignore = [
     "S101",  # assert is fine in tests
     "B008",  # Depends() in FastAPI signatures
+    # TCH003: Pydantic models, SQLAlchemy ORM models, and Python dataclasses
+    # all call get_type_hints() at runtime. Moving stdlib types (UUID, datetime, Decimal,
+    # etc.) into TYPE_CHECKING blocks causes PydanticUndefinedAnnotation at startup.
+    # Rule name in ruff ≤0.5 (pinned pre-commit v0.4.0): TCH003 (renamed TC003 in ruff ≥0.6).
+    "TCH003",
 ]
 unfixable = ["F841"]  # don't auto-remove unused variables
 
