@@ -6,6 +6,7 @@ Chains all 13 pipeline steps for streaming (/chat/stream) and sync (/chat) paths
 from __future__ import annotations
 
 import json
+from collections import Counter as _Counter
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,14 @@ from rag_chat.application.pipeline.prompt_builder import PromptBuilder
 from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery
+from rag_chat.infrastructure.metrics.prometheus import (
+    rag_cache_hits,
+    rag_contradiction_surfaced,
+    rag_injection_blocked,
+    rag_latency,
+    rag_queries_total,
+    rag_retrieval_items,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -116,11 +125,20 @@ class ChatOrchestrator:
         thread_id: UUID = request.thread_id or _new_thread_id()
 
         # Step 0: input validation (synchronous)
-        validated_message = self._validator.validate(request.message)
+        try:
+            validated_message = self._validator.validate(request.message)
+        except Exception as _exc:
+            # Count injection blocks before re-raising so the route can return 400.
+            from rag_chat.domain.errors import PromptInjectionError  # local import avoids cycle
+
+            if isinstance(_exc, PromptInjectionError):
+                rag_injection_blocked.inc()
+            raise
 
         # Check completion cache
         cached = await self._cache.get(request.message, request.thread_id)
         if cached:
+            rag_cache_hits.labels(cache_type="completion").inc()
             yield self._emitter.emit_status("cache_hit")
             yield self._emitter.emit_token(cached.get("answer", ""))
             yield self._emitter.emit_citations([])
@@ -176,6 +194,10 @@ class ChatOrchestrator:
 
         # Steps 5A-5I: parallel retrieval
         raw_items = await self._retrieval.retrieve(plan, resolved_query, request, query_embedding)
+        # Record item counts per item_type so the dashboard can show retrieval breakdown.
+        _type_counts = _Counter(item.item_type.value for item in raw_items)
+        for _source_type, _count in _type_counts.items():
+            rag_retrieval_items.labels(source_type=_source_type).observe(_count)
 
         # Steps 6-7: graph enrichment + fusion
         enriched = self._graph_enricher.enrich(raw_items, [])  # relation_results passed as []
@@ -189,6 +211,9 @@ class ChatOrchestrator:
         # Step 9: contradiction detection
         contradiction_refs: list = []
         contradiction_block = self._contradiction_assembler.build(contradiction_refs)
+        for _ref in contradiction_refs:
+            _claim_type = getattr(_ref, "claim_type", "unknown")
+            rag_contradiction_surfaced.labels(claim_type=str(_claim_type)).inc()
 
         # Step 10: prompt construction
         context_block = self._context_assembler.assemble(reranked)
@@ -249,6 +274,15 @@ class ChatOrchestrator:
             )
         except Exception:
             log.debug("completion_cache_write_failed")  # type: ignore[no-any-return]
+
+        # Record query + latency metrics after the full pipeline completes.
+        _total_latency_s = (datetime.now(tz=UTC) - start).total_seconds()
+        rag_queries_total.labels(
+            intent=intent.value,
+            provider=provider_name,
+            tenant_id=str(request.tenant_id),
+        ).inc()
+        rag_latency.labels(intent=intent.value, step="total").observe(_total_latency_s)
 
         yield self._emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
 

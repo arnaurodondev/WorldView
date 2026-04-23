@@ -171,3 +171,27 @@ dev-clean:
 ## Seed development data (instruments, entities, sample articles)
 seed:
 	@./scripts/seed-dev-data.sh
+
+# ── Observability stack ─────────────────────────────────────────────────────
+
+COMPOSE_MONITORING := docker compose -f infra/compose/docker-compose.yml --profile monitoring
+
+## Start the monitoring stack (Prometheus, Grafana, Alertmanager, Alloy, Loki, Tempo).
+## Run AFTER `make dev` — monitoring targets the running dev services.
+## Grafana: http://localhost:3000  Prometheus: http://localhost:9090
+## Alertmanager: http://localhost:9093
+monitoring:
+	$(COMPOSE_MONITORING) up -d
+	@echo ""
+	@echo "Observability stack is running:"
+	@echo "  Grafana:        http://localhost:3000  (admin/admin)"
+	@echo "  Prometheus:     http://localhost:9090"
+	@echo "  Alertmanager:   http://localhost:9093"
+	@echo ""
+	@echo "Use 'make monitoring-down' to stop."
+
+## Stop the monitoring stack
+monitoring-down:
+	$(COMPOSE_MONITORING) down
+
+.PHONY: monitoring monitoring-down

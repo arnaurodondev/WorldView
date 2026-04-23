@@ -190,7 +190,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
       "targets": [
         {
-          "expr": "sum(rate(s4_fetches_total[5m])) by (source, status)",
+          "expr": "sum(rate(s4_fetches_total{source=~\"$source\"}[5m])) by (source, status)",
           "legendFormat": "{{source}} — {{status}}",
           "refId": "A"
         }
@@ -219,7 +219,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(s4_fetch_duration_seconds_bucket[5m])) by (source, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(s4_fetch_duration_seconds_bucket{source=~\"$source\"}[5m])) by (source, le))",
           "legendFormat": "{{source}}",
           "refId": "A"
         }
@@ -284,7 +284,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(s5_dedup_duration_seconds_bucket[5m])) by (tier, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(s5_dedup_duration_seconds_bucket{tier=~\"$tier\"}[5m])) by (tier, le))",
           "legendFormat": "{{tier}}",
           "refId": "A"
         }
@@ -320,7 +320,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
       "targets": [
         {
-          "expr": "sum(rate(s5_duplicates_suppressed_total[5m])) by (tier)",
+          "expr": "sum(rate(s5_duplicates_suppressed_total{tier=~\"$tier\"}[5m])) by (tier)",
           "legendFormat": "{{tier}}",
           "refId": "A"
         }

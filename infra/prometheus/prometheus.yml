@@ -13,7 +13,10 @@ alerting:
 scrape_configs:
   - job_name: "portfolio"
     static_configs:
-      - targets: ["portfolio:8001"]
+      # Use container-internal port (right side of host:container mapping).
+      # docker-compose maps 8001:8000 on the host — within the Docker network
+      # the service listens on :8000, not :8001. (BP-175)
+      - targets: ["portfolio:8000"]
     metrics_path: /metrics
 
   - job_name: "market-ingestion"
@@ -28,7 +31,8 @@ scrape_configs:
 
   - job_name: "content-ingestion"
     static_configs:
-      - targets: ["content-ingestion:8004"]
+      # Container listens on :8000; host maps 8004:8000. Use :8000. (BP-175)
+      - targets: ["content-ingestion:8000"]
     metrics_path: /metrics
 
   - job_name: "content-store"

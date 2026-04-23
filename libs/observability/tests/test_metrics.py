@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from prometheus_client import CollectorRegistry
+from prometheus_client import REGISTRY, CollectorRegistry
 
 from observability.metrics import ServiceMetrics, create_metrics
 
@@ -86,6 +86,29 @@ class TestCreateMetrics:
         for _ in range(3):
             reg = CollectorRegistry()
             create_metrics("same-svc", registry=reg)  # must not raise
+
+    def test_none_registry_uses_global_registry(self) -> None:
+        """Regression for BP-173: `create_metrics(None)` must use the global REGISTRY.
+
+        The bug was `registry or CollectorRegistry()` which always creates an
+        isolated registry when None is passed (since None is falsy), making all
+        metrics invisible to `generate_latest()` which reads the global REGISTRY.
+        """
+        # Use a unique service name to avoid duplicate-registration errors
+        # if this test is run alongside other tests that also call create_metrics().
+        m = create_metrics("_bp173_regression_test_svc")
+        # The metrics must live in the global REGISTRY so generate_latest() can see them.
+        assert m.registry is REGISTRY
+        # Cleanup: unregister to keep the global REGISTRY clean between test runs.
+        try:
+            REGISTRY.unregister(m.requests_total)
+            REGISTRY.unregister(m.request_duration_seconds)
+            REGISTRY.unregister(m.kafka_messages_consumed_total)
+            REGISTRY.unregister(m.kafka_messages_produced_total)
+            REGISTRY.unregister(m.outbox_dispatched_total)
+            REGISTRY.unregister(m.outbox_dispatch_errors_total)
+        except Exception:  # noqa: S110
+            pass  # best-effort cleanup; don't fail the test if unregister raises
 
     def test_counter_value_increments(self) -> None:
         reg = CollectorRegistry()

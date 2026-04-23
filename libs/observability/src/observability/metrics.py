@@ -7,7 +7,7 @@ import time
 from typing import TYPE_CHECKING
 
 import structlog
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import REGISTRY, CollectorRegistry, Counter, Histogram
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from starlette.responses import Response
 
 logger = structlog.get_logger(__name__)
+
+# Cache for ServiceMetrics registered in the global REGISTRY, keyed by service_name.
+# Prevents duplicate-registration errors when the same service name is used more than
+# once in the same process (common in test suites that instantiate consumers repeatedly).
+# Isolated registries (passed explicitly) are never cached here — callers own their
+# registry lifecycle.
+_global_registry_cache: dict[str, ServiceMetrics] = {}
 
 
 @dataclasses.dataclass
@@ -49,7 +56,21 @@ def create_metrics(
     Returns:
         A :class:`ServiceMetrics` dataclass with all standard metrics pre-registered.
     """
-    reg = registry or CollectorRegistry()
+    # IMPORTANT: use `is not None` check, NOT truthiness (`or`).
+    # `CollectorRegistry()` objects have no __bool__ — `registry or CollectorRegistry()`
+    # creates a new isolated registry when None is passed, making all metrics invisible
+    # to prometheus_client.generate_latest() which reads the global REGISTRY singleton.
+    # Tests that pass an explicit isolated registry (to avoid duplicate-registration errors)
+    # continue to work unchanged. (BP-173)
+    reg = registry if registry is not None else REGISTRY
+    # Idempotency: when using the global REGISTRY, return the cached ServiceMetrics if
+    # the same service_name was already registered.  This avoids ValueError on duplicate
+    # registration when BaseKafkaConsumer (or tests) create multiple instances of the
+    # same service without an explicit registry.
+    if reg is REGISTRY:
+        cached = _global_registry_cache.get(service_name)
+        if cached is not None:
+            return cached
     ns = service_name.replace("-", "_")
 
     requests_total = Counter(
@@ -90,7 +111,7 @@ def create_metrics(
 
     logger.debug("metrics_registered", service=service_name)
 
-    return ServiceMetrics(
+    m = ServiceMetrics(
         service_name=service_name,
         registry=reg,
         requests_total=requests_total,
@@ -100,6 +121,9 @@ def create_metrics(
         outbox_dispatched_total=outbox_dispatched_total,
         outbox_dispatch_errors_total=outbox_dispatch_errors_total,
     )
+    if reg is REGISTRY:
+        _global_registry_cache[service_name] = m
+    return m
 
 
 def add_prometheus_middleware(app: object, metrics: ServiceMetrics) -> None:
