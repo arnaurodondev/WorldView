@@ -282,11 +282,19 @@ async def test_get_entity_invalid_uuid_returns_422(e2e_client: AsyncClient) -> N
 # ── GET /api/v1/entities/{id}/articles ───────────────────────────────────────
 
 
-async def test_get_entity_articles_not_found_returns_404(e2e_client: AsyncClient) -> None:
-    """GET /api/v1/entities/{id}/articles with unknown entity returns 404."""
+async def test_get_entity_articles_unknown_entity_returns_empty(e2e_client: AsyncClient) -> None:
+    """GET /api/v1/entities/{id}/articles with unknown entity returns 200 + empty list.
+
+    PRD-0026 Wave 6 changed this endpoint to use NewsQueryPort.get_entity_articles()
+    which returns an empty list (not 404) when the entity has no articles.
+    This avoids a separate entity-existence check and is more correct for range queries.
+    """
     unknown_id = uuid.uuid4()
     resp = await e2e_client.get(f"/api/v1/entities/{unknown_id}/articles")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["articles"] == []
+    assert data["total"] == 0
 
 
 async def test_get_entity_articles_invalid_uuid_returns_422(e2e_client: AsyncClient) -> None:

@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nlp_pipeline.application.ports.repositories import SignalsQueryPort
+from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
@@ -76,6 +76,16 @@ def get_signals_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_sess
 
 
 SignalsQueryRepoDep = Annotated[SignalsQueryPort, Depends(get_signals_query_repo)]
+
+
+def get_news_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> NewsQueryPort:
+    """Build a SqlaNewsQueryRepo for the current request session (R25-compliant)."""
+    from nlp_pipeline.infrastructure.nlp_db.repositories.news_query import SqlaNewsQueryRepo
+
+    return SqlaNewsQueryRepo(session)
+
+
+NewsQueryRepoDep = Annotated[NewsQueryPort, Depends(get_news_query_repo)]
 
 
 def get_entity_resolver_use_case(

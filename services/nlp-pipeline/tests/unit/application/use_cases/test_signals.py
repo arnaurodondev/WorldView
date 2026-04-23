@@ -325,36 +325,109 @@ class TestGetEntityDetailUseCase:
 
 
 # ---------------------------------------------------------------------------
-# GetEntityArticlesUseCase
+# GetEntityArticlesUseCase (enhanced — PRD-0026 Wave 6, uses NewsQueryPort)
 # ---------------------------------------------------------------------------
+
+_START = datetime(2026, 3, 24, 0, 0, 0, tzinfo=UTC)
+_END = datetime(2026, 4, 23, 23, 59, 59, tzinfo=UTC)
+
+
+def _make_news_repo(article_rows: list | None = None) -> AsyncMock:
+    """Minimal NewsQueryPort mock for entity-article tests."""
+    from nlp_pipeline.application.ports.repositories import RankedArticleData
+
+    rows = article_rows or []
+    # Convert dict rows to RankedArticleData DTOs so the use case can pass them through.
+    dtos = [
+        RankedArticleData(
+            article_id=_DOC_ID,
+            title=r.get("title"),
+            url=r.get("url"),
+            published_at=_NOW,
+            source_type=r.get("source_type"),
+            source_name=r.get("source_name"),
+            routing_tier=r.get("routing_tier"),
+            routing_score=None,
+            market_impact_score=None,
+            llm_relevance_score=None,
+            display_relevance_score=float(r.get("display_relevance_score", 0.0)),
+            day_t0_score=None,
+            day_t1_score=None,
+            day_t2_score=None,
+            day_t5_score=None,
+        )
+        for r in rows
+    ]
+    repo = AsyncMock()
+    repo.get_entity_articles = AsyncMock(return_value=(dtos, len(dtos)))
+    return repo
 
 
 class TestGetEntityArticlesUseCase:
-    async def test_returns_entity_article_data(self) -> None:
-        """Maps repo rows to EntityArticleData objects."""
+    async def test_returns_ranked_article_data(self) -> None:
+        """Use case passes through RankedArticleData from NewsQueryPort (PRD-0026 Wave 6)."""
         from nlp_pipeline.application.use_cases.signals import GetEntityArticlesUseCase
 
-        rows = [
-            {"doc_id": str(_DOC_ID), "routing_tier": "deep", "mention_count": "5"},
-        ]
-        repo = _make_signals_repo(article_rows=rows)
+        rows = [{"routing_tier": "DEEP", "display_relevance_score": 0.75}]
+        repo = _make_news_repo(article_rows=rows)
 
-        items, total = await GetEntityArticlesUseCase().execute(repo=repo, entity_id=_ENTITY_ID, limit=10)
+        # New signature: start_date, end_date, order_by, offset added (signal passes through).
+        items, total = await GetEntityArticlesUseCase().execute(
+            repo=repo,
+            entity_id=_ENTITY_ID,
+            start_date=_START,
+            end_date=_END,
+            order_by="display_relevance_score",
+            limit=10,
+            offset=0,
+        )
 
         assert len(items) == 1
-        assert items[0].doc_id == _DOC_ID
-        assert items[0].routing_tier == "deep"
-        assert items[0].mention_count == 5
+        assert items[0].article_id == _DOC_ID
+        assert items[0].routing_tier == "DEEP"
+        assert items[0].display_relevance_score == pytest.approx(0.75)
         assert total == 1
 
-    async def test_delegates_limit_to_repo(self) -> None:
-        """limit is forwarded to repo.get_entity_articles."""
+    async def test_delegates_params_to_news_repo(self) -> None:
+        """All params are forwarded to NewsQueryPort.get_entity_articles."""
         from nlp_pipeline.application.use_cases.signals import GetEntityArticlesUseCase
 
-        repo = _make_signals_repo()
-        await GetEntityArticlesUseCase().execute(repo=repo, entity_id=_ENTITY_ID, limit=25)
+        repo = _make_news_repo()
+        await GetEntityArticlesUseCase().execute(
+            repo=repo,
+            entity_id=_ENTITY_ID,
+            start_date=_START,
+            end_date=_END,
+            order_by="published_at",
+            limit=25,
+            offset=5,
+        )
 
-        repo.get_entity_articles.assert_called_once_with(entity_id=_ENTITY_ID, limit=25)
+        repo.get_entity_articles.assert_called_once_with(
+            entity_id=_ENTITY_ID,
+            start_date=_START,
+            end_date=_END,
+            order_by="published_at",
+            limit=25,
+            offset=5,
+        )
+
+    async def test_empty_result_returns_empty_list(self) -> None:
+        """Empty repo result → empty list with total=0 (not 404)."""
+        from nlp_pipeline.application.use_cases.signals import GetEntityArticlesUseCase
+
+        repo = _make_news_repo(article_rows=[])
+        items, total = await GetEntityArticlesUseCase().execute(
+            repo=repo,
+            entity_id=_ENTITY_ID,
+            start_date=_START,
+            end_date=_END,
+            order_by="display_relevance_score",
+            limit=20,
+            offset=0,
+        )
+        assert items == []
+        assert total == 0
 
 
 # ---------------------------------------------------------------------------

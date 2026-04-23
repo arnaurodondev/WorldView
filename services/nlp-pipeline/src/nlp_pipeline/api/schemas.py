@@ -169,6 +169,46 @@ class ChunkSearchResponse(BaseModel):
     embedding_model: str
 
 
+# ── Ranked news (PRD-0026 §6.2) ──────────────────────────────────────────────
+
+
+class ImpactWindows(BaseModel):
+    """Per-window price-impact scores for a single article (PRD-0026 §6.5)."""
+
+    day_t0: float | None = None
+    day_t1: float | None = None
+    day_t2: float | None = None
+    day_t5: float | None = None
+
+
+class RankedArticleResponse(BaseModel):
+    """One article in a ranked news feed response (PRD-0026 §6.2)."""
+
+    article_id: UUID
+    title: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None
+    source_type: str | None = None
+    source_name: str | None = None
+    routing_tier: str | None = None
+    routing_score: float | None = None
+    market_impact_score: float | None = None
+    llm_relevance_score: float | None = None
+    display_relevance_score: float = Field(ge=0.0)
+    # Only present for global top-news endpoint; None for entity article endpoint.
+    primary_entity_id: UUID | None = None
+    primary_entity_symbol: str | None = None
+    # Nested window scores; None when the article has no price-impact data yet.
+    impact_windows: ImpactWindows | None = None
+
+
+class RankedNewsResponse(BaseModel):
+    """Paginated ranked news response (used by both top-news and entity-articles)."""
+
+    articles: list[RankedArticleResponse]
+    total: int
+
+
 # ── Reprocess ─────────────────────────────────────────────────────────────────
 
 

@@ -23,7 +23,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import dlq, entities, health, internal_costs, search, signals
+from nlp_pipeline.api.routes import dlq, entities, health, internal_costs, news, search, signals
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
     _build_intelligence_factories,
@@ -263,6 +263,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(signals.router)
     app.include_router(entities.router)
     app.include_router(search.router)
+    app.include_router(news.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
 
