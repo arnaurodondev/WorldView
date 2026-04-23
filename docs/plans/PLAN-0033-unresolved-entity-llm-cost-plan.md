@@ -898,7 +898,7 @@ Note: Token counts are approximate (word-count heuristic). This is acceptable �
 **Depends on**: Wave 2 (migration 0007 must exist), Wave 3 (S6 domain + ORM + config + NlpUsageLogRepository)
 **Estimated effort**: 60–90 minutes
 **Architecture layer**: application / infrastructure (worker)
-**Status**: **DONE** — 2026-04-22 · ruff + mypy clean
+**Status**: **DONE** — 2026-04-22 · 16 tests pass · ruff + mypy clean
 
 ---
 
@@ -1068,11 +1068,11 @@ Integration tests using a real Postgres test database (via `pytest-asyncio` + `s
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py` (Worker 13E for reference pattern)
 
 ### Validation Gate
-- [ ] `ruff check services/nlp-pipeline/` passes
-- [ ] `mypy services/nlp-pipeline/` passes
-- [ ] All 8 unit tests pass
-- [ ] All 4 integration tests pass (requires Postgres)
-- [ ] Worker shuts down gracefully (no asyncio warnings on cancellation)
+- [x] `ruff check services/nlp-pipeline/` passes
+- [x] `mypy services/nlp-pipeline/` passes
+- [x] All 8 unit tests pass
+- [ ] All 4 integration tests pass (requires Postgres) — deferred (Postgres not running in CI)
+- [x] Worker shuts down gracefully (no asyncio warnings on cancellation)
 
 ### Break Impact
 
