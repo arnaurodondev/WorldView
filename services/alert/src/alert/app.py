@@ -154,6 +154,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(email_routes.router)
 
     return app
-
-
-app = create_app()

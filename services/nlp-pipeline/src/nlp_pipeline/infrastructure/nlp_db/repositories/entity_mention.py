@@ -101,7 +101,7 @@ class EntityMentionRepository:
                 SELECT *
                 FROM entity_mentions
                 WHERE resolution_outcome = 'unresolved'
-                  AND created_at >= now() - interval ':days days'
+                  AND created_at >= now() - make_interval(days => :days)
                 ORDER BY created_at ASC
                 LIMIT :limit
                 {lock_clause}
@@ -173,7 +173,7 @@ class EntityMentionRepository:
                 SET resolution_outcome = 'unresolved',
                     resolution_processed_at = NULL
                 WHERE resolution_outcome = 'escalated'
-                  AND resolution_processed_at < now() - interval ':minutes minutes'
+                  AND resolution_processed_at < now() - make_interval(mins => :minutes)
                 RETURNING mention_id
                 """,
             ),
