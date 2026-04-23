@@ -17,6 +17,7 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import common.ids
 import common.time as ct
@@ -24,7 +25,6 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
-    from uuid import UUID
 
     from content_ingestion.application.ports import BronzeStoragePort, FetchLogPort, OutboxPort, SourceAdapterPort
     from content_ingestion.domain.entities import FetchResult, Source

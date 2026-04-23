@@ -10,12 +10,11 @@ from __future__ import annotations
 import secrets
 import time
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from rag_chat.domain.errors import RateLimitExceededError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 _WINDOW_SECONDS = 60

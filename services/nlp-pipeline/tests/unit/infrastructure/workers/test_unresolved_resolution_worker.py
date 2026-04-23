@@ -130,7 +130,7 @@ class TestRecoverStaleEscalated:
         )
 
         with patch(
-            "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+            "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
             return_value=repo,
         ):
             count = await worker.recover_stale_escalated()
@@ -165,7 +165,7 @@ class TestRunOnceEmptyBatch:
         )
 
         with patch(
-            "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+            "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
             return_value=repo,
         ):
             stats = await worker.run_once()
@@ -205,7 +205,7 @@ class TestRunOnceNonEligibleClass:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
                 return_value=repo,
             ),
             patch("httpx.AsyncClient") as mock_httpx,
@@ -263,7 +263,7 @@ class TestRunOncePhase2EntityCreated:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
                 return_value=repo,
             ),
             patch("httpx.AsyncClient", return_value=mock_client),
@@ -317,7 +317,7 @@ class TestRunOncePhase2Noise:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
                 return_value=repo,
             ),
             patch("httpx.AsyncClient", return_value=mock_client),
@@ -372,7 +372,7 @@ class TestRunOnceJsonParseFailure:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
                 return_value=repo,
             ),
             patch("httpx.AsyncClient", return_value=mock_client),
@@ -470,7 +470,7 @@ class TestUsageLogging:
 
         with (
             patch(
-                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention." "EntityMentionRepository",
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
                 return_value=repo,
             ),
             patch("httpx.AsyncClient", return_value=mock_client),

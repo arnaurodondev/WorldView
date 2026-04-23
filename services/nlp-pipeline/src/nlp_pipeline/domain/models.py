@@ -6,17 +6,16 @@ Pure dataclasses — NO infrastructure imports allowed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import DataQuality, WindowType  # needed at runtime for default arg values
 from nlp_pipeline.domain.errors import PriceImpactError
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
-    from uuid import UUID
-
     from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome, RoutingTier
 
 

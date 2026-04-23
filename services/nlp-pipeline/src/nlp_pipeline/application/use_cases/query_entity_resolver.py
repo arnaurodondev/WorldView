@@ -19,12 +19,11 @@ import json
 import re
 import unicodedata
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from ml_clients.protocols import EmbeddingClient, NERClient  # type: ignore[import-not-found]
 
     from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository

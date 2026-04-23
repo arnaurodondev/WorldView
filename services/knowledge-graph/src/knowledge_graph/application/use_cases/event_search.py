@@ -5,11 +5,10 @@ Read-only use case; depends only on port interfaces, never on infrastructure.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datetime import date
-
     from knowledge_graph.application.ports.event_repository import (
         EventRepositoryPort,
         EventSearchResult,

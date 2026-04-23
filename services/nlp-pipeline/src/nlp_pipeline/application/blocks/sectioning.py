@@ -8,13 +8,10 @@ If no sections are produced, a synthetic fallback section covers the full text.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.domain.models import Section
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 # ── Sectioner implementations ─────────────────────────────────────────────────
 

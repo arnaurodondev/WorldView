@@ -47,7 +47,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
-| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | 2026-04-22 | 8 | — |
+| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | 2026-04-22 | 8 | 2026-04-23 |
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 | — |
 | PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 | 2026-04-09 |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | 2026-03-26 | 7 | — |
@@ -84,8 +84,8 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0030 | Security Hardening — QA-2026-04-19 Remediation: dependency pinning, CI/CD SHA-pin, frontend security headers, gateway hardening, backend JWT issuer=, Docker non-root, JTI replay protection | QA-2026-04-19 | 2026-04-19 | 6 | 2026-04-19 |
 | PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | 2026-04-22 | 8 | 2026-04-22 |
 | PLAN-UI-VISUAL-OVERHAUL | Bloomberg-Grade Visual Overhaul — Amber/gold palette, data density, component polish, landing page, dashboard 4-col, page-specific polish + critic fixups | PRD-0027 | 2026-04-19 | 6+fixups | 2026-04-19 |
-| PLAN-0032 | Forensic QA Remediation — Next.js 15.5.15 CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization (SEC-003), CORS port fix (SEC-008), transaction header forwarding (API-004), economic-calendar param (R-002), contradictions BP-069 fix, doc fixes | Forensic QA 2026-04-21 | 2026-04-22 | 6 | — |
-| PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor, S9 admin cost endpoint | PRD-0029 | 2026-04-22 | 5 | — |
+| PLAN-0032 | Forensic QA Remediation — Next.js 15.5.15 CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization (SEC-003), CORS port fix (SEC-008), transaction header forwarding (API-004), economic-calendar param (R-002), contradictions BP-069 fix, doc fixes | Forensic QA 2026-04-21 | 2026-04-22 | 6 | 2026-04-23 |
+| PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor, S9 admin cost endpoint | PRD-0029 | 2026-04-22 | 5 | 2026-04-23 |
 | QA-CROSS-001 | Cross-Service QA: market-ingestion, market-data, portfolio (16 findings fixed) | N/A | 2026-03-27 | — | 2026-03-27 |
 | QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
 | QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
@@ -95,6 +95,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | QA-S4S5-2026-04-09 | Deep QA Pass S4+S5: 5-agent review, 9 missing use-case unit tests added, F-DS-014 intra-batch dedup fix, 490+289 tests green, PASS_WITH_WARNINGS | N/A | 2026-04-09 | — | 2026-04-09 |
 | QA-DEPLOY-2026-04-09 | Pre-Hetzner Deployment QA: full unit suite ~4059 tests PASS across all services+libs; BP-134 live test scope mismatch; observability gap (6/10 services in Prometheus); no production error tracking (Sentry/Glitchtip) | N/A | 2026-04-09 | — | 2026-04-09 |
 | QA-PRE-DEMO-2026-04-13 | Pre-Demo Full QA Pass (2nd run, Docker running): ruff PASS; mypy PASS all 6 key services; libs 566 pass; services total ~3,650 pass, 0 fail; DEMO READINESS: CONDITIONAL GO. See docs/audits/2026-04-13-qa-pre-demo-report.md | N/A | 2026-04-13 | — | 2026-04-13 |
+| QA-PLAN-0032-0033-0026-2026-04-23 | Cross-plan QA certification PLAN-0032+0033+0026: 4 BLOCKING + 3 CRITICAL fixed (TC003 regression, BP-165 JWT UUID, resolution_outcome type, log_id Rule 6); 5-agent review; 3,812 unit + 72 contract + 27+ integration PASS; ruff/mypy all clean; READY. See docs/audits/2026-04-23-qa-plan-0032-0033-0026-report.md | N/A | 2026-04-23 | — | 2026-04-23 |
 
 ## Conventions
 

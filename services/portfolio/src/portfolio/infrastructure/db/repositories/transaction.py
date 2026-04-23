@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select
 
@@ -12,8 +13,6 @@ from portfolio.domain.enums import TransactionDirection, TransactionType
 from portfolio.infrastructure.db.models.transaction import TransactionModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

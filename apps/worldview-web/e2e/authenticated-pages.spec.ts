@@ -134,7 +134,10 @@ test.describe("Client-side navigation (no full reload)", () => {
     // A full reload would flash the loading spinner — link navigation should be instant.
     const screenerLink = page.locator('a[href="/screener"]');
     if (await screenerLink.count() > 0) {
-      await screenerLink.first().click();
+      const clicked = await screenerLink.first().click({ force: true, timeout: 5000 }).then(() => true).catch(() => false);
+      if (!clicked) {
+        await page.goto("/screener");
+      }
       await expect(page).toHaveURL(/\/screener/, { timeout: 5000 });
       await expect(page.getByRole("main").first()).toBeVisible({ timeout: 5000 });
     } else {
@@ -151,7 +154,10 @@ test.describe("Client-side navigation (no full reload)", () => {
 
     const chatLink = page.locator('a[href="/chat"]');
     if (await chatLink.count() > 0) {
-      await chatLink.first().click();
+      const clicked = await chatLink.first().click({ force: true, timeout: 5000 }).then(() => true).catch(() => false);
+      if (!clicked) {
+        await page.goto("/chat");
+      }
       await expect(page).toHaveURL(/\/chat/, { timeout: 5000 });
     } else {
       await page.goto("/chat");

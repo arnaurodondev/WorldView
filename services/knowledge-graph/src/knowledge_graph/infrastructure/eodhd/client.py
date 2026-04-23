@@ -11,13 +11,12 @@ can treat them as "no data available, retry next cycle" without crashing.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from datetime import date
-
     import httpx
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

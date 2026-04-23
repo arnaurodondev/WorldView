@@ -9,6 +9,8 @@ read (replica) session.
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, select
@@ -20,9 +22,6 @@ from market_data.infrastructure.db.models.instruments import InstrumentModel
 from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
 
 if TYPE_CHECKING:
-    from datetime import date
-    from decimal import Decimal
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

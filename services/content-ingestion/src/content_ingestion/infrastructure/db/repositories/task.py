@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -14,8 +15,6 @@ from content_ingestion.domain.entities import ContentIngestionTask
 from content_ingestion.infrastructure.db.models import ContentIngestionTaskModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]

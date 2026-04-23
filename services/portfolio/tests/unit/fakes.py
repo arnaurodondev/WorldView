@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradeUser
 from portfolio.application.ports.repositories import (
@@ -27,9 +29,6 @@ from portfolio.application.ports.repositories import (
 from portfolio.application.ports.unit_of_work import UnitOfWork
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection

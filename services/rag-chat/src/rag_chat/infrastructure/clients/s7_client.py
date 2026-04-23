@@ -11,7 +11,8 @@ Endpoints:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime
+from uuid import UUID
 
 from rag_chat.application.ports.upstream_clients import (
     ClaimResult,
@@ -21,10 +22,6 @@ from rag_chat.application.ports.upstream_clients import (
     RelationResult,
 )
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
 
 
 class S7Client(BaseUpstreamClient):

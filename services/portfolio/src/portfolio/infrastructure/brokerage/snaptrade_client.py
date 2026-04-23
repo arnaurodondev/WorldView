@@ -21,17 +21,13 @@ SDK method mapping (verified against snaptrade-python-sdk==1.0.1):
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 import structlog
 
 from portfolio.application.ports.brokerage_client import SnapTradeActivity, SnapTradeUser
 from portfolio.domain.errors import BrokerageApiError
-
-if TYPE_CHECKING:
-    from datetime import date
 
 logger = structlog.get_logger(__name__)
 

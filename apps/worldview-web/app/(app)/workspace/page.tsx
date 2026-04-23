@@ -309,7 +309,7 @@ function PanelSelectorBar({
     <div className="border-b border-border/40 bg-background px-4 py-3">
       {/* Row 1: Page title + panel count */}
       <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-sm font-semibold text-foreground">Workspace</h1>
+        <h1 className="text-sm font-semibold tracking-tight text-foreground">Workspace</h1>
         {/* WHY show panel count: gives instant feedback on how many more panels
             the user can add before hitting the 4-panel limit. */}
         <span className="font-mono text-xs tabular-nums text-muted-foreground">

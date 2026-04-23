@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from portfolio.domain.enums import AuthAuditEventType
 
 _PRECISION = Decimal("0.00000001")  # (18,8) scale

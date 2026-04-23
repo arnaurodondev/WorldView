@@ -9,13 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from rag_chat.domain.entities.chat import RetrievalPlan
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.domain.value_objects import DateRange
 
 

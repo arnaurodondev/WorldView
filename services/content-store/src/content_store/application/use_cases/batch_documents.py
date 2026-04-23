@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from content_store.domain.errors import DomainError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from content_store.application.ports.repositories import DocumentMetadataDTO, DocumentRepositoryPort
 
 _MAX_BATCH_SIZE = 50

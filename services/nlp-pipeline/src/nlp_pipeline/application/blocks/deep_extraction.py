@@ -19,7 +19,9 @@ evidence_date heuristic: coalesce(published_at, extracted_at) — NEVER use now(
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 
@@ -29,9 +31,6 @@ from nlp_pipeline.application.blocks.suppression import should_run_deep_extracti
 from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
@@ -101,7 +100,6 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
     },
     "required": ["events", "claims", "relations"],
 }
-
 
 # ── Window splitting ──────────────────────────────────────────────────────────
 

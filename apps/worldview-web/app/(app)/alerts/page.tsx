@@ -54,7 +54,9 @@ export default function AlertsPage() {
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div>
-        <h1 className="text-xl font-semibold text-foreground">Alerts &amp; News</h1>
+        {/* WHY text-lg (not text-xl): matches the global heading hierarchy —
+            all page titles use text-lg font-semibold tracking-tight. */}
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">Alerts &amp; News</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Pending alerts and latest market news
         </p>

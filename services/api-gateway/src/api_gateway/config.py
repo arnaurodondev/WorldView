@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import SecretStr  # noqa: TCH002 — pydantic inspects this at runtime
+from pydantic import SecretStr  # — pydantic evaluates field types at runtime
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

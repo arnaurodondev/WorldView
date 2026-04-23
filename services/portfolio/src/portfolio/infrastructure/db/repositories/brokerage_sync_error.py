@@ -8,6 +8,7 @@ included in API responses or logs.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -17,8 +18,6 @@ from portfolio.domain.enums import SyncErrorType
 from portfolio.infrastructure.db.models.brokerage_sync_error import BrokerageTransactionSyncErrorModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

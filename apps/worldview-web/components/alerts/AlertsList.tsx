@@ -119,7 +119,7 @@ export function AlertsList() {
 
         {/* Severity filter dropdown */}
         {/* WHY DropdownMenu (not select): matches the dark-theme design system;
-            native <select> doesn't inherit the Midnight Pro palette reliably. */}
+            native <select> doesn't inherit the Bloomberg Dark palette reliably. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="sm" className="gap-1.5 text-xs">

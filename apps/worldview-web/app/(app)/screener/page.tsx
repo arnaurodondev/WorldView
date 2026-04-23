@@ -46,6 +46,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   formatPercent,
   formatMarketCap,
   priceChangeClass,
@@ -406,39 +413,52 @@ export default function ScreenerPage() {
         </div>
 
         {/* ── Sector dropdown ─────────────────────────────────────────────── */}
-        {/*
-          WHY native <select>: no shadcn Select component exists in this project.
-          Adding Radix Select for a single filter would pull in extra bundle weight.
-          The native <select> is accessible, keyboard-navigable, and easier to
-          style with Tailwind's appearance-none approach.
-        */}
         <div className="flex flex-col gap-1.5">
           <label
-            htmlFor="screener-sector"
+            htmlFor="screener-sector-trigger"
             className="text-xs font-medium text-muted-foreground"
           >
             Sector (GICS)
           </label>
-          <select
-            id="screener-sector"
+          {/*
+            WHY shadcn Select (not native <select>): native <select> dropdowns on
+            macOS render in the OS light mode stylesheet when opened — the options
+            list shows as white background with dark text, breaking the Bloomberg
+            Dark terminal aesthetic. shadcn Select uses Radix UI + Tailwind so the
+            dropdown fully respects our dark theme tokens (bg-popover, text-foreground,
+            hover:bg-muted). @radix-ui/react-select 2.1.4 is already in package.json.
+          */}
+          <Select
             value={pendingFilters.sector}
-            onChange={(e) =>
-              setPendingFilters((prev) => ({ ...prev, sector: e.target.value }))
+            onValueChange={(value) =>
+              setPendingFilters((prev) => ({
+                ...prev,
+                // WHY __all__ sentinel: Radix Select requires each SelectItem to have a
+                // non-empty string value; we cannot use "" as a SelectItem value because
+                // Radix treats it as unset (the placeholder would show instead of the
+                // "All sectors" text). We use "__all__" as the sentinel and convert it
+                // back to "" (which the FilterState and buildFilters() expect) on change.
+                sector: value === "__all__" ? "" : value,
+              }))
             }
-            // WHY these classes: matches the Input component's visual style
-            // (border-border, bg-muted, h-9) for visual consistency.
-            // appearance-none removes the OS-default dropdown arrow so we
-            // have full control over padding and text colour.
-            className="h-9 w-full rounded-md border border-border bg-muted px-3 py-1 text-sm text-foreground shadow-sm focus:outline-none focus:ring-1 focus:ring-ring appearance-none"
-            aria-label="Filter by GICS sector"
           >
-            <option value="">All sectors</option>
-            {GICS_SECTORS.map((sector) => (
-              <option key={sector} value={sector}>
-                {sector}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              id="screener-sector-trigger"
+              className="h-9 w-full border-border bg-muted text-sm text-foreground focus:ring-ring"
+              aria-label="Filter by GICS sector"
+            >
+              <SelectValue placeholder="All sectors" />
+            </SelectTrigger>
+            <SelectContent className="bg-popover border-border">
+              {/* "All sectors" option maps to the "" FilterState value */}
+              <SelectItem value="__all__">All sectors</SelectItem>
+              {GICS_SECTORS.map((sector) => (
+                <SelectItem key={sector} value={sector}>
+                  {sector}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {/* ── Market cap tier buttons ──────────────────────────────────────── */}
@@ -509,7 +529,7 @@ export default function ScreenerPage() {
 
         {/* ── Results header bar ────────────────────────────────────────────── */}
         <div className="flex items-center justify-between border-b border-border px-4 py-2">
-          <h1 className="text-sm font-semibold text-foreground">
+          <h1 className="text-sm font-semibold tracking-tight text-foreground">
             Instrument Screener
           </h1>
           {/* WHY show count even during fetch: keeps the user oriented.
@@ -681,7 +701,9 @@ interface ScreenerRowProps {
 function ScreenerRow({ result, onClick }: ScreenerRowProps) {
   return (
     <tr
-      className="cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      // WHY h-8: compact row height for data-dense screener table — matches
+      // Bloomberg's tight row spacing that lets analysts scan 20+ rows at once.
+      className="h-8 cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       onClick={() => onClick(result)}
       // WHY role="row" + tabIndex: table rows are keyboard-navigable
       // (Tab to row, Enter to navigate) for accessibility compliance.
@@ -736,7 +758,7 @@ function ScreenerRow({ result, onClick }: ScreenerRowProps) {
       </td>
 
       {/* Score — HeatCell component with 7-step color scale */}
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2 text-right text-xs">
         <div className="flex justify-end">
           <HeatCell score={result.market_impact_score} />
         </div>

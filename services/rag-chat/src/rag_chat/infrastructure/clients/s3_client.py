@@ -9,12 +9,9 @@ Endpoints:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from uuid import UUID
 
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 
 class S3Client(BaseUpstreamClient):

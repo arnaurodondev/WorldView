@@ -3,14 +3,14 @@
  *
  * WHY THIS EXISTS: shadcn/ui Button is used throughout the app for all interactive
  * controls. Variants cover the main use cases:
- * - default: primary action (sky blue background)
+ * - default: primary action (amber/gold background)
  * - destructive: dangerous actions (red background)
  * - outline: secondary actions
  * - ghost: nav items, icon buttons
  * - link: text links with button semantics
  *
  * This file is based on shadcn/ui's generated Button component, adapted for
- * the Midnight Pro palette. Do not edit the variant logic — use Tailwind
+ * the Bloomberg Dark palette. Do not edit the variant logic — use Tailwind
  * classes at the callsite instead.
  *
  * DESIGN REFERENCE: docs/ui/DESIGN_SYSTEM.md §4 Components
@@ -27,12 +27,19 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Primary CTA — sky-500 background matches Midnight Pro accent
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Primary CTA — amber background with warm glow effect.
+        // WHY shadow-sm + shadow-primary/20: gives the main CTA a subtle warm amber
+        // glow at rest, making it visually "float" above the dark background. On hover,
+        // shadow-md + shadow-primary/30 deepens the glow — institutional UIs use this
+        // to signal "this is the primary action" without neon-bright borders.
+        default: "bg-primary text-primary-foreground shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30",
         // Destructive — muted red for delete/dangerous actions
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        // Outline — bordered, transparent background
-        outline: "border border-border bg-transparent hover:bg-muted hover:text-foreground",
+        // Outline — bordered, transparent background.
+        // WHY text-muted-foreground + font-medium: outline buttons are secondary actions.
+        // Muted text at rest creates clear visual hierarchy (primary > outline > ghost).
+        // font-medium ensures the label remains legible against the transparent background.
+        outline: "border border-border bg-transparent text-muted-foreground font-medium hover:bg-muted hover:text-foreground",
         // Secondary — elevated panel background
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         // Ghost — no background, for icon buttons and nav items

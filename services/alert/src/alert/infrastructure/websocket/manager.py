@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import contextlib
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from fastapi import WebSocket
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from rag_chat.domain.entities.conversation import ConversationThread
 
 

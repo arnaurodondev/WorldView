@@ -110,7 +110,8 @@ class EntityMentionModel(Base):
     resolution_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ner_model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Added by migration 0007 (PLAN-0033 T-B-1-01)
-    resolution_outcome: Mapped[str | None] = mapped_column(
+    # nullable=False with server_default="unresolved" → always has a value → Mapped[str]
+    resolution_outcome: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
         server_default="unresolved",

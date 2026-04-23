@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+from uuid import UUID
 
 import fastavro  # type: ignore[import-untyped]
 import fastavro.schema  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 
 def _find_schema_path(schema_name: str) -> Path:

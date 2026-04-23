@@ -85,8 +85,8 @@ export function RecentAlerts() {
       <div className="space-y-2">
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="flex gap-2">
-            <Skeleton className="h-5 w-12" />
-            <Skeleton className="h-5 flex-1" />
+            <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
           </div>
         ))}
       </div>

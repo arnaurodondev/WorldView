@@ -104,7 +104,8 @@ export const ALERTS_PENDING_RESPONSE = {
 export const MORNING_BRIEF_RESPONSE = {
   brief_id: "mock-brief-001",
   generated_at: "2026-04-18T08:00:00Z",
-  sections: [] as unknown[],
+  content: "Markets are quiet today. No major events expected.",
+  entity_mentions: [] as Array<{ entity_id: string; name: string; ticker: string | null }>,
 };
 
 /** Instrument brief — returned by GET /api/v1/briefings/instrument/:entityId */
@@ -219,8 +220,10 @@ function getStrictEndpointMocks(status: number): EndpointMock[] {
     // ── Market data ─────────────────────────────────────────────────────────
     { pattern: "**/api/v1/market/heatmap", status, body: ok ? MARKET_HEATMAP_RESPONSE : errorBody },
     { pattern: "**/api/v1/market/top-movers**", status, body: ok ? TOP_MOVERS_RESPONSE : errorBody },
-    { pattern: "**/api/v1/quotes/batch", status, body: ok ? BATCH_QUOTES_RESPONSE : errorBody },
+    // WHY wildcard before specific: LIFO order — specific pattern registered
+    // later takes priority over the wildcard for /quotes/batch.
     { pattern: "**/api/v1/quotes/**", status, body: ok ? { instrument_id: "ins-001", ticker: "AAPL", price: 0, change: 0, change_pct: 0, timestamp: "2026-04-18T00:00:00Z", volume: 0 } : errorBody },
+    { pattern: "**/api/v1/quotes/batch", status, body: ok ? BATCH_QUOTES_RESPONSE : errorBody },
 
     // ── Alerts ──────────────────────────────────────────────────────────────
     { pattern: "**/api/v1/alerts/pending**", status, body: ok ? ALERTS_PENDING_RESPONSE : errorBody },
@@ -234,10 +237,13 @@ function getStrictEndpointMocks(status: number): EndpointMock[] {
     { pattern: "**/api/v1/signals/prediction-markets**", status, body: ok ? PREDICTION_MARKETS_RESPONSE : errorBody },
 
     // ── Fundamentals / Screener ─────────────────────────────────────────────
+    // WHY wildcard FIRST: Playwright matches routes in LIFO order (last registered
+    // wins). The wildcard must be registered BEFORE specific patterns so that
+    // specific patterns (registered later) take priority over the catch-all.
+    { pattern: "**/api/v1/fundamentals/**", status, body: ok ? {} : errorBody },
     { pattern: "**/api/v1/fundamentals/economic-calendar", status, body: ok ? ECONOMIC_CALENDAR_RESPONSE : errorBody },
     { pattern: "**/api/v1/fundamentals/screen/fields", status, body: ok ? SCREENER_FIELDS_RESPONSE : errorBody },
     { pattern: "**/api/v1/fundamentals/screen", status, body: ok ? { results: [], total: 0 } : errorBody },
-    { pattern: "**/api/v1/fundamentals/**", status, body: ok ? {} : errorBody },
 
     // ── Companies (instrument detail) ───────────────────────────────────────
     { pattern: "**/api/v1/companies/*/overview", status, body: ok ? COMPANY_OVERVIEW_RESPONSE : errorBody },
@@ -250,8 +256,10 @@ function getStrictEndpointMocks(status: number): EndpointMock[] {
     { pattern: "**/api/v1/entities/*/contradictions", status, body: ok ? { entity_id: "ent-001", contradictions: [] } : errorBody },
 
     // ── Chat ────────────────────────────────────────────────────────────────
-    { pattern: "**/api/v1/threads", status, body: ok ? THREADS_RESPONSE : errorBody },
+    // WHY wildcard before specific: LIFO — specific /threads registered after
+    // wildcard so it takes priority for the exact path.
     { pattern: "**/api/v1/threads/**", status, body: ok ? { thread_id: "t-1", title: "", messages: [] } : errorBody },
+    { pattern: "**/api/v1/threads", status, body: ok ? THREADS_RESPONSE : errorBody },
 
     // ── Search ──────────────────────────────────────────────────────────────
     { pattern: "**/api/v1/search/instruments**", status, body: ok ? SEARCH_RESPONSE : errorBody },

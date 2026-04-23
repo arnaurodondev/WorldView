@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -27,9 +29,6 @@ from portfolio.domain.errors import (
 from portfolio.domain.events import HoldingChanged, TransactionRecorded
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from portfolio.application.ports.unit_of_work import UnitOfWork
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

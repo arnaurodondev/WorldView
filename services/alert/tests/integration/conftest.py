@@ -39,17 +39,23 @@ if TYPE_CHECKING:
 
 # ── Internal JWT (PRD-0025) ───────────────────────────────────────────────────
 
+# Fixed UUID for the integration-test "system" user — used as JWT sub so that
+# CurrentUserIdDep can parse it as a valid UUID (BP-165).
+INTEGRATION_USER_ID: str = "00000000-0000-0000-0000-000000000099"
 
-def _make_system_jwt() -> str:
+
+def _make_system_jwt(user_id: str = INTEGRATION_USER_ID) -> str:
     """HS256 JWT with role=system for integration tests.
 
     InternalJWTMiddleware decodes without signature verification when
     internal_jwt_skip_verification=True and public_key is None
     (JWKS server not running in integration test environment).
+
+    ``sub`` must be a valid UUID so that CurrentUserIdDep can parse it (BP-165).
     """
     payload = {
         "iss": "worldview-gateway",
-        "sub": "integration-test-system",
+        "sub": user_id,
         "tenant_id": "",
         "role": "system",
         "iat": int(time.time()),

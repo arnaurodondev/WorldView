@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import common.time
@@ -26,7 +27,6 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from datetime import datetime
 
     from content_ingestion.config import PolymarketProviderSettings
     from content_ingestion.domain.entities import Source

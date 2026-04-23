@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down qa
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed
 
 # ── Default target ────────────────────────────────────────────────────────────
 
@@ -13,16 +13,25 @@ help:
 	@echo "  make infra-up        Start test Docker Compose stack (--profile all)"
 	@echo "  make infra-down      Stop test Docker Compose stack"
 	@echo "  make qa              lint + typecheck + test-unit (CI gate)"
+	@echo "  make qa-exhaustive   Exhaustive QA vs live dev stack (make dev + make seed first)"
+	@echo "  make qa-live-stack   Frontend vs real API, no mocks (exposes broken backends)"
+	@echo "  make qa-contract     Verify mock fixtures match real API shapes"
 	@echo ""
 	@echo "  make test-unit SERVICE=<svc>   Unit tests for a single service"
 	@echo "  make test-e2e  SERVICE=<svc>   E2E tests for a single service"
 	@echo "  make infra-up  PROFILE=<p>     Start a specific Compose profile"
+	@echo ""
+	@echo "Dev environment setup:"
+	@echo "  (worldview-gitops)/scripts/setup-dev.sh   Copy dev env files from private repo"
+	@echo "  make dev                                   Start full Docker Compose dev stack"
+	@echo "  make dev-clean                             Remove local docker.env files"
+	@echo "  make seed                                  Load sample data"
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
 lint:
-	uvx ruff check libs/ services/ tests/
-	uvx ruff format --check libs/ services/ tests/
+	uvx ruff@0.4.0 check libs/ services/ tests/
+	uvx ruff@0.4.0 format --check libs/ services/ tests/
 
 # ── Type check ────────────────────────────────────────────────────────────────
 
@@ -79,6 +88,33 @@ infra-down:
 
 qa: lint typecheck test-unit
 
+# ── Exhaustive QA (requires dev stack running: make dev + make seed) ──────
+
+.PHONY: qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend
+
+## Run the full exhaustive QA layer (backend + frontend) against the live dev stack
+qa-exhaustive: qa-exhaustive-backend qa-exhaustive-frontend
+
+## Backend exhaustive QA: endpoint coverage, auth, security, schema validation
+qa-exhaustive-backend:
+	@echo "=== Running backend exhaustive QA ==="
+	python3 scripts/qa_exhaustive.py
+
+## Frontend exhaustive QA: all routes, states, screenshots, a11y, security headers
+qa-exhaustive-frontend:
+	@echo "=== Running frontend exhaustive QA ==="
+	cd apps/worldview-web && npx playwright test e2e/qa-exhaustive.spec.ts --reporter=list
+
+## Frontend live-stack QA: real API calls, no mocks — exposes broken backends
+qa-live-stack:
+	@echo "=== Running frontend live-stack QA (no mocks) ==="
+	cd apps/worldview-web && npx playwright test e2e/qa-live-stack.spec.ts --project=chromium --reporter=list
+
+## Contract alignment: verify frontend mock fixtures match real API response shapes
+qa-contract:
+	@echo "=== Running contract alignment check ==="
+	python3 scripts/qa_contract_alignment.py
+
 # ── Architecture tests ─────────────────────────────────────────────────────
 
 test-arch:
@@ -86,7 +122,10 @@ test-arch:
 
 # ── Development Environment ──────────────────────────────────────────────────
 
-.PHONY: dev dev-down dev-reset dev-logs dev-ps dev-rebuild fetch-secrets fetch-secrets-prod seed
+# ── Development Environment ──────────────────────────────────────────────────
+# Dev env files (docker.env) are NOT generated here — they live in the private
+# worldview-gitops repo. Run scripts/setup-dev.sh from worldview-gitops first.
+# See: https://github.com/your-org/worldview-gitops/blob/main/scripts/setup-dev.sh
 
 ## Start the full development stack (all services + dev tools + MailHog)
 dev:
@@ -124,13 +163,10 @@ dev-ps:
 dev-rebuild:
 	$(COMPOSE_DEV) up -d --build
 
-## Fetch secrets from worldview-config repo (requires gh CLI)
-fetch-secrets:
-	@./scripts/fetch-secrets.sh dev
-
-## Fetch production secrets from worldview-config repo
-fetch-secrets-prod:
-	@./scripts/fetch-secrets.sh prod
+## Remove local docker.env files (re-run setup-dev.sh from worldview-gitops to restore)
+dev-clean:
+	@find services/*/configs -name "docker.env" -delete
+	@echo "docker.env files removed. Run scripts/setup-dev.sh from worldview-gitops to restore."
 
 ## Seed development data (instruments, entities, sample articles)
 seed:

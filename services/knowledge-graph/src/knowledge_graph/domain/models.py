@@ -9,12 +9,10 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from knowledge_graph.domain.enums import EventScope, EventType, ExposureType, SemanticMode
-
 
 # ---------------------------------------------------------------------------
 # Similarity search (PRD-0017 §6.5)

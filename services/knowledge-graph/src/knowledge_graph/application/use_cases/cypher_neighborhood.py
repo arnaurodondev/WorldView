@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -28,8 +29,6 @@ from knowledge_graph.application.use_cases.cypher_path import (
 )
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 
 # Statement timeout — same 5 s limit as the path endpoint (PRD §6.3)
 _STATEMENT_TIMEOUT_MS = "5000"
-
 
 # ── Result dataclass (internal) ───────────────────────────────────────────────
 

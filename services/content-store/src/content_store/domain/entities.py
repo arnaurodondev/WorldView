@@ -6,16 +6,12 @@ Entities are plain dataclasses with no infrastructure dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import datetime
+from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from content_store.domain.enums import DedupOutcome, DocumentStatus, SourceType
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
 
 # ── Dedup thresholds (per-source) ──────────────────────────────────────────────
 

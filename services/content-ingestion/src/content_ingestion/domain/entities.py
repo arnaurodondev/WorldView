@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from uuid import UUID
+from typing import Any
+from uuid import UUID
 
 import common.ids
 import common.time
@@ -82,7 +80,6 @@ class RawArticle:
 
 
 # ── Scheduler-Worker task entity ──────────────────────────────────────────────
-
 
 _CLAIMABLE_STATUSES = frozenset({IngestionTaskStatus.PENDING, IngestionTaskStatus.RETRY})
 

@@ -45,9 +45,9 @@ export function AiSignals() {
       <div className="space-y-2">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="flex gap-2">
-            <Skeleton className="h-5 w-12" />
-            <Skeleton className="h-5 flex-1" />
-            <Skeleton className="h-5 w-8" />
+            <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-5 w-8" style={{ animationDelay: `${i * 50}ms` }} />
           </div>
         ))}
       </div>
@@ -104,9 +104,9 @@ export function AiSignals() {
                 <div
                   className={`h-1.5 rounded-full ${
                     signal.label === "POSITIVE"
-                      ? "bg-[#26A69A]"
+                      ? "bg-positive"
                       : signal.label === "NEGATIVE"
-                        ? "bg-[#EF5350]"
+                        ? "bg-negative"
                         : "bg-muted-foreground"
                   }`}
                   style={{ width: `${signal.score * 100}%` }}

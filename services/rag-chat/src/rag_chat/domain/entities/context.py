@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.domain.entities.chat import RetrievedItem
     from rag_chat.domain.enums import QueryIntent
 

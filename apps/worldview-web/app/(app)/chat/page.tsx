@@ -163,7 +163,7 @@ function MessageBubble({ message }: { message: Message }) {
         <div
           className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? // User bubble: right side, sky-blue tint (Midnight Pro primary/10)
+              ? // User bubble: right side, amber tint (Bloomberg Dark primary/10)
                 "rounded-br-sm bg-primary/10 text-foreground"
               : // Assistant bubble: left side, muted background
                 "rounded-bl-sm bg-muted text-foreground"
@@ -670,8 +670,11 @@ export default function ChatPage() {
                   // WHY group: allows hover:visible on the delete button inside
                   className="group relative flex cursor-pointer items-start gap-2 rounded-md px-3 py-2.5 transition-colors hover:bg-muted"
                   // WHY bg-primary/10 on active: clear selection indicator using
-                  // the Midnight Pro primary (#0EA5E9) at low opacity — not overwhelming.
-                  style={isActive ? { backgroundColor: "rgba(14,165,233,0.08)" } : undefined}
+                  // the Bloomberg Dark primary (#E8A317) at low opacity — not overwhelming.
+                  // WHY inline style: Tailwind's dynamic class generation can't handle
+                  // runtime conditionals in className for active thread highlighting.
+                  // rgba(232,163,23,0.08) = Bloomberg Dark primary #E8A317 at 8% opacity.
+                  style={isActive ? { backgroundColor: "rgba(232,163,23,0.08)" } : undefined}
                   onClick={() => handleSelectThread(thread.thread_id)}
                   role="button"
                   aria-pressed={isActive}

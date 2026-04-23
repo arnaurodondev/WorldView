@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS: Used in search boxes (GlobalSearch), transaction forms,
  * screener filter inputs, and settings fields. The dark-theme styling ensures
- * inputs are visible against the Midnight Pro background (#131722).
+ * inputs are visible against the Bloomberg Dark background (#0A0E14).
  */
 
 import * as React from "react";

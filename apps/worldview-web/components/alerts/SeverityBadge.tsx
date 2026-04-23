@@ -42,7 +42,7 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
- * SeverityBadge — compact severity indicator using Midnight Pro palette colours.
+ * SeverityBadge — compact severity indicator using Bloomberg Dark palette colours.
  *
  * WHY custom className over Badge variant: The Badge component has default/secondary/
  * destructive/warning/positive variants, but severity needs four distinct states.

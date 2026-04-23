@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -10,9 +12,6 @@ import common.time
 from content_ingestion.infrastructure.db.models import SourceAdapterStateModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

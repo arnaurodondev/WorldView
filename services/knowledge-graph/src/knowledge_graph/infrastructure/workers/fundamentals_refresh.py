@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -31,8 +32,6 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     import httpx
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

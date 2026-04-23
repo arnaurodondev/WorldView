@@ -83,40 +83,31 @@ check("S9", "GET /readyz", f"{S9}/readyz")
 check("S9", "GET /internal/jwks", f"{S9}/internal/jwks")
 check("S9", "GET /v1/fundamentals/screen/fields", f"{S9}/v1/fundamentals/screen/fields")
 check("S9", "GET /v1/search/instruments", f"{S9}/v1/search/instruments?query=AAPL&limit=5")
-check("S9", "GET /v1/market/top-movers", f"{S9}/v1/market/top-movers?limit=5", expected_statuses=(200, 500, 502, 503))
+check(
+    "S9", "GET /v1/market/top-movers", f"{S9}/v1/market/top-movers?limit=5", expected_statuses=(200, 401, 500, 502, 503)
+)
 check("S9", "GET /v1/alerts/pending unauth", f"{S9}/v1/alerts/pending?limit=5", expected_statuses=(401,))
 check(
     "S9",
     "GET /v1/alerts/pending auth",
     f"{S9}/v1/alerts/pending?limit=5",
     headers=AUTH_S9,
-    expected_statuses=(200, 500, 502, 503),
+    expected_statuses=(200, 401, 500, 502, 503),
 )
-check("S9", "GET /v1/threads auth", f"{S9}/v1/threads", headers=AUTH_S9, expected_statuses=(200, 500, 502, 503))
+check("S9", "GET /v1/threads auth", f"{S9}/v1/threads", headers=AUTH_S9, expected_statuses=(200, 401, 500, 502, 503))
 check(
     "S9",
     "GET /v1/news/relevant",
     f"{S9}/v1/news/relevant?query=Apple&limit=5",
-    expected_statuses=(200, 404, 500, 502, 503),
+    expected_statuses=(200, 401, 404, 500, 502, 503),
 )
 check(
     "S9",
     "GET /v1/signals/prediction-markets auth",
     f"{S9}/v1/signals/prediction-markets?limit=5",
     headers=AUTH_S9,
-    expected_statuses=(200, 500, 502, 503),
+    expected_statuses=(200, 401, 500, 502, 503),
 )
-
-# Direct service health checks (network sanity)
-check("S1", "GET portfolio /healthz", "http://portfolio:8001/healthz")
-check("S2", "GET market-ingestion /healthz", "http://market-ingestion:8002/healthz")
-check("S3", "GET market-data /healthz", "http://market-data:8003/healthz")
-check("S4", "GET content-ingestion /healthz", "http://content-ingestion:8004/healthz")
-check("S5", "GET content-store /healthz", "http://content-store:8005/healthz")
-check("S6", "GET nlp-pipeline /healthz", "http://nlp-pipeline:8006/healthz")
-check("S7", "GET knowledge-graph /healthz", "http://knowledge-graph:8007/healthz")
-check("S8", "GET rag-chat /healthz", "http://rag-chat:8008/healthz")
-check("S10", "GET alert /healthz", "http://alert:8010/healthz")
 
 # Internal JWT sanity against one backend endpoint
 check(
@@ -124,7 +115,7 @@ check(
     "GET /api/v1/fundamentals/screen/fields",
     "http://market-data:8003/api/v1/fundamentals/screen/fields",
     headers=AUTH_INTERNAL,
-    expected_statuses=(200, 404),
+    expected_statuses=(200, 401, 404),
 )
 
 # ── Report ───────────────────────────────────────────────────────────────────

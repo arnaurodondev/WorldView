@@ -17,14 +17,13 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+from datetime import date
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from datetime import date
-    from uuid import UUID
-
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
     from nlp_pipeline.application.ports.repositories import (
@@ -38,7 +37,6 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 
 _EMBED_CACHE_TTL = 3600  # 1 hour
 _ENTITY_MIN_CONFIDENCE = 0.45
-
 
 # ── Domain types ──────────────────────────────────────────────────────────────
 

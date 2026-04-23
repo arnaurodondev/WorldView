@@ -399,8 +399,10 @@ If implementing a plan wave:
    - Increment the `Waves Done/Total` column (e.g., `1/8` → `2/8`)
    - Update the `Updated` column to today's date
    - **Verify plan IDs match** between the tracking table and the plan file's `id:` frontmatter field
-   - If all waves are done, move the plan from "Active Plans" to "Completed Plans" (add `QA` column as `—`)
+   - **If all waves are done → MOVE THE ROW** from "Active Plans" to "Completed Plans". This is mandatory — do not leave a completed plan in the Active section. Set the `Completed` column to today's date and the `QA` column to `—`.
    - If the plan was never in the Active table (e.g., created by another session), add it now
+
+   > **Why this matters**: Rows left in Active with `status: completed` accumulate over sessions, making the Active table unreadable. The rule is: the moment the last wave is marked `✅`, the row moves. No exceptions.
 
 3. **Verify consistency**: The plan ID in `TRACKING.md` MUST match the `id:` field in the plan file's frontmatter. If they differ, fix the tracking file (the plan file is authoritative).
 
@@ -439,6 +441,7 @@ At any point, if you are blocked for >2 attempts on the same issue:
 - [ ] Bug patterns updated (if applicable)
 - [ ] Plan file updated (wave heading ✅, status line, validation checkboxes, frontmatter)
 - [ ] `docs/plans/TRACKING.md` updated (wave count, date, plan ID verified)
+- [ ] **If this was the last wave**: plan row MOVED from Active → Completed in TRACKING.md (not just status updated in place)
 - [ ] `docs/MASTER_PLAN.md` updated (if last wave completing a service: status, milestones, prerequisites, version)
 - [ ] Commit created with conventional message (includes tracking + doc files)
 

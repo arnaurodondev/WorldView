@@ -4,7 +4,7 @@
  * WHY THIS EXISTS: Next.js App Router requires a root layout that wraps ALL pages.
  * This layout:
  * 1. Loads IBM Plex fonts (Sans + Mono) from Google Fonts via next/font
- * 2. Sets class="dark" permanently on <html> (Midnight Pro theme, ADR-F-04)
+ * 2. Sets class="dark" permanently on <html> (Bloomberg Dark theme, ADR-F-04)
  * 3. Provides the TanStack Query client for all child components
  * 4. Sets page metadata (title, description, Open Graph)
  *

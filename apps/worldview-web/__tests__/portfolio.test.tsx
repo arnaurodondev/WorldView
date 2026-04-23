@@ -322,9 +322,9 @@ describe("PortfolioPage — Transactions tab", () => {
       // The BUY transaction type cell should be visible
       const buyEl = container.querySelector('[data-testid="tx-type-tx-1"]');
       expect(buyEl).toBeInTheDocument();
-      // WHY check for text-[#26A69A]: this is the spec-mandated positive color
-      // (Midnight Pro positive green), applied by cn() in TransactionsTable
-      expect(buyEl?.className).toContain("text-[#26A69A]");
+      // WHY check for text-positive: this is the spec-mandated positive color
+      // (Bloomberg Dark positive teal), applied by cn() in TransactionsTable
+      expect(buyEl?.className).toContain("text-positive");
     });
   });
 
@@ -342,9 +342,9 @@ describe("PortfolioPage — Transactions tab", () => {
     await waitFor(() => {
       const sellEl = container.querySelector('[data-testid="tx-type-tx-2"]');
       expect(sellEl).toBeInTheDocument();
-      // WHY check for text-[#EF5350]: this is the spec-mandated negative color
-      // (Midnight Pro negative red), applied when type === "SELL"
-      expect(sellEl?.className).toContain("text-[#EF5350]");
+      // WHY check for text-negative: this is the spec-mandated negative color
+      // (Bloomberg Dark negative red), applied when type === "SELL"
+      expect(sellEl?.className).toContain("text-negative");
     });
   });
 });

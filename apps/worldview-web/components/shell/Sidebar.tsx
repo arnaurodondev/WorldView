@@ -34,7 +34,6 @@ import {
   Bell,
   MessageSquare,
   Settings,
-  HelpCircle,
   ChevronRight,
 } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
@@ -55,9 +54,10 @@ const NAV_ITEMS = [
   { href: "/chat", icon: MessageSquare, label: "Intelligence / Chat" },
 ] as const;
 
+// BT-002 FIX: Removed /help link — no help page exists. Settings is the only
+// bottom nav item. A help page can be added in a future wave if needed.
 const BOTTOM_ITEMS = [
   { href: "/settings", icon: Settings, label: "Settings" },
-  { href: "/help", icon: HelpCircle, label: "Help" },
 ] as const;
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -95,9 +95,9 @@ export function Sidebar() {
   return (
     // WHY w-14: 56px is the minimum width for icon-only nav that's still tap-friendly.
     // A wider sidebar would eat into the chart/data view area.
-    <aside className="flex h-full w-14 flex-col border-r border-border bg-background">
+    <aside className="flex h-full w-14 flex-col border-r border-border bg-background" aria-label="Application navigation">
       {/* ── Primary nav ──────────────────────────────────────── */}
-      <nav className="flex flex-1 flex-col gap-1 px-2 py-3">
+      <nav className="flex flex-1 flex-col gap-1 px-2 py-3" aria-label="Main navigation">
         {NAV_ITEMS.map(({ href, icon: Icon, label }) => {
           // WHY startsWith: /instruments/AAPL should also highlight the Instruments nav item
           const isActive = pathname === href || pathname.startsWith(href + "/");
@@ -108,7 +108,12 @@ export function Sidebar() {
               href={href}
               title={label} // WHY title: serves as tooltip for icon-only nav
               className={cn(
+                // WHY focus-visible:ring-*: keyboard users (Tab/Shift-Tab) must see
+                // a clear focus indicator. ring-ring maps to #E8A317 (amber) — consistent
+                // with all other interactive elements. ring-offset-background creates a
+                // 2px gap against #0A0E14 so the amber ring is clearly visible in the dark.
                 "group flex h-9 w-9 items-center justify-center rounded-md transition-colors",
+                "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
                 isActive
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -167,7 +172,7 @@ export function Sidebar() {
       )}
 
       {/* ── Bottom nav (Settings, Help) ───────────────────────── */}
-      <nav className="flex flex-col gap-1 border-t border-border px-2 py-3">
+      <nav className="flex flex-col gap-1 border-t border-border px-2 py-3" aria-label="Settings">
         {BOTTOM_ITEMS.map(({ href, icon: Icon, label }) => {
           const isActive = pathname === href || pathname.startsWith(href + "/");
 
@@ -177,7 +182,10 @@ export function Sidebar() {
               href={href}
               title={label}
               className={cn(
+                // WHY focus-visible:ring-*: same keyboard accessibility requirement as NAV_ITEMS.
+                // All focusable elements in the sidebar must show the amber ring on keyboard focus.
                 "flex h-9 w-9 items-center justify-center rounded-md transition-colors",
+                "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
                 isActive
                   ? "bg-primary/15 text-primary"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",

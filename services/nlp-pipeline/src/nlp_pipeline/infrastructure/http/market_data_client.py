@@ -10,14 +10,13 @@ logged as warnings so a single bad symbol never aborts the labelling cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from datetime import date
-
     import httpx
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

@@ -66,7 +66,7 @@ export function MorningBriefCard() {
       <div className="space-y-2 p-1">
         {/* 5-line skeleton matching typical brief length */}
         {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className={`h-4 ${i === 4 ? "w-2/3" : "w-full"}`} />
+          <Skeleton key={i} className={`h-4 ${i === 4 ? "w-2/3" : "w-full"}`} style={{ animationDelay: `${i * 50}ms` }} />
         ))}
       </div>
     );

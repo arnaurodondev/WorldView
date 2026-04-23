@@ -7,6 +7,7 @@ explicit invariant: zero mentions NEVER suppresses a document.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import MentionClass
@@ -14,10 +15,8 @@ from nlp_pipeline.domain.models import DocumentEntityStats, EntityMention, Secti
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from uuid import UUID
 
     from ml_clients.protocols import NERClient  # type: ignore[import-not-found]
-
 
 # ── NER class ontology ────────────────────────────────────────────────────────
 
@@ -49,7 +48,6 @@ SECTION_TOKEN_LIMIT: int = 450
 
 #: Non-Maximum Suppression IoU threshold for overlapping spans
 NMS_IOU_THRESHOLD: float = 0.5
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

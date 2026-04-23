@@ -11,16 +11,15 @@ never bare equality with None, to avoid NULL = NULL (always false in SQL).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import text
 
 from nlp_pipeline.application.ports.repositories import NewsQueryPort, RankedArticleData
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---------------------------------------------------------------------------

@@ -9,14 +9,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from uuid import UUID
 
 from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 # ---------------------------------------------------------------------------
 # SeverityThresholds — value object for market_impact_score classification

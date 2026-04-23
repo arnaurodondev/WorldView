@@ -671,6 +671,24 @@ export function OHLCVChart({ data }: { data: CandlestickData[] }) {
 
 ---
 
+## Phase 2.9 — Design Critique (After Every Render)
+
+After writing code but before the security checklist, scan every new `.tsx` file for AI fingerprints. These are patterns that make the UI look immediately AI-generated — fix any that are present.
+
+**Run the Squint Test**: blur your eyes on the rendered page. The most important number and primary CTA must be readable blurred. If not, the visual hierarchy needs strengthening.
+
+| Fingerprint | Tailwind signal | Fix |
+|-------------|----------------|-----|
+| Side-stripe borders | `border-l-2` / `border-r-2` on cards, alerts, badges | Full border or background tint |
+| Gradient text | `bg-clip-text bg-gradient-to-*` | Solid `text-primary` or weight change |
+| Decorative box shadow | `shadow-*` without elevation purpose | Remove; use border |
+| Non-mono numbers | Price/% spans without both `font-mono` AND `tabular-nums` | Add both classes |
+| Uniform spacing | `gap-4 gap-4 gap-4` everywhere in a layout | Vary: tighter for data rows, generous for sections |
+| 60-30-10 violation | >4 distinct accent colors visible simultaneously | Consolidate to: neutrals + `$primary` + one semantic color |
+| Bounce/elastic animation | `transition-bounce`, spring physics | `ease-out` only |
+
+---
+
 ## Phase 3 — Security Checklist
 
 Before committing, verify:

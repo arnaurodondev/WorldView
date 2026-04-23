@@ -7,7 +7,7 @@
  * prominently for the same reason: pattern recognition from color at a glance.
  *
  * WHY 7-STEP COLOR SCALE:
- * Linear interpolation from deep red (−3%) → neutral (#2B3139) → deep teal (+3%)
+ * Linear interpolation from deep red (−3%) → neutral (#1A2030) → deep teal (+3%)
  * maps the typical daily range. Outside ±3% is clipped to max saturation.
  * Intermediates: step at ±1%, ±2%. 7 steps avoids visual noise from continuous gradients.
  *
@@ -44,7 +44,7 @@ export function MarketHeatmap() {
     return (
       <div className="grid grid-cols-3 gap-1 sm:grid-cols-4">
         {Array.from({ length: 11 }).map((_, i) => (
-          <Skeleton key={i} className="h-14" />
+          <Skeleton key={i} className="h-14" style={{ animationDelay: `${i * 40}ms` }} />
         ))}
       </div>
     );

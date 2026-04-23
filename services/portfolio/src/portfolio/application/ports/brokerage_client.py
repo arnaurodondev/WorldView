@@ -8,11 +8,9 @@ allowed here — this is a pure application-layer port.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from datetime import date, datetime
-    from decimal import Decimal
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)

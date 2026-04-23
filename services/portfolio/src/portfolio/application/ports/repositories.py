@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection

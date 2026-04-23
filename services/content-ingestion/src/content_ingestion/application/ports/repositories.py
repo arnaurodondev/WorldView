@@ -5,14 +5,12 @@ Use cases depend only on these protocols, never on infrastructure classes direct
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from content_ingestion.domain.entities import ContentIngestionTask
-
 
 # ── Existing ports ───────────────────────────────────────────────────────────
 

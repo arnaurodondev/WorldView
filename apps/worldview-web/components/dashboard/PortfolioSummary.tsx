@@ -93,7 +93,7 @@ export function PortfolioSummary() {
         </div>
         <div className="space-y-1">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-6 w-full" />
+            <Skeleton key={i} className="h-6 w-full" style={{ animationDelay: `${i * 50}ms` }} />
           ))}
         </div>
       </div>

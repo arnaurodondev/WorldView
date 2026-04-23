@@ -13,15 +13,12 @@ stored in ``value_text`` and optionally parsed to ``value_numeric``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from market_data.domain.enums import FundamentalsSection
 from observability.logging import get_logger  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from datetime import date, datetime
-
 
 logger = get_logger(__name__)
 

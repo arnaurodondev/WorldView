@@ -112,6 +112,16 @@
 - [ ] New services have a Dockerfile, `configs/docker.env`, correct `build.context: ../..`, and healthcheck
 - [ ] Build context is `../..` (repo root) — never the service directory alone (Dockerfiles COPY from `libs/`)
 
+## 7c. Observability Correctness
+
+- [ ] **Prometheus metrics use the global registry**: any helper that accepts `registry=None` must default to `REGISTRY` (from `prometheus_client`), NOT `CollectorRegistry()` — `generate_latest()` reads the global registry only (BP-173, HR-040)
+- [ ] **Every defined Prometheus metric has at least one call site**: grep for each new metric variable name; if `.inc()`/`.set()`/`.observe()` is not called anywhere in the service, delete the definition (BP-174, HR-041)
+- [ ] **Prometheus scrape targets in `infra/prometheus/prometheus.yml` use the container-internal port** (right side of `host:container` port mapping), never the host-mapped port (BP-175)
+- [ ] **New services added to `prometheus.yml`**: target uses the internal port from the service's `CMD` or `uvicorn --port` argument; verify with `docker compose exec prometheus wget -qO- http://<service>:<port>/metrics`
+- [ ] **Alertmanager has at least one receiver with a working notification channel** — an empty `receivers:` list or a receiver with no `email_configs`/`slack_configs`/`webhook_configs` is a silent black hole; all alerts will be discarded (BP-176)
+- [ ] **Template variables in Grafana dashboards are referenced in at least one panel query** — a variable declared in `templating.list` but never appearing in any `expr` field is dead (audit finding)
+- [ ] **`tracing.configure_tracing()` receives a non-empty `otlp_endpoint`** in production config — empty string installs `NoOpTracerProvider` and emits zero traces despite Alloy+Tempo being configured
+
 ## 8. Test Coverage
 
 - [ ] New public functions/methods have unit tests

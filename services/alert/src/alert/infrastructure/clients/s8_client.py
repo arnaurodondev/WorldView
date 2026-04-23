@@ -10,13 +10,12 @@ Timeout is set to 90 s to accommodate large-model inference latency.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
 from httpx import AsyncClient, HTTPStatusError, RequestError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from alert.config import Settings
 
 logger = structlog.get_logger(__name__)

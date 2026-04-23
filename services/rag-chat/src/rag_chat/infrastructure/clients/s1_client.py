@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
 import structlog  # type: ignore[import-untyped]
@@ -19,8 +20,6 @@ from rag_chat.application.ports.upstream_clients import PortfolioContext
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]

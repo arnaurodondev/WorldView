@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from alert.domain.entities import Alert, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
 
 

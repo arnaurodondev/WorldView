@@ -42,23 +42,23 @@ interface OHLCVChartProps {
   initialBars?: OHLCVBar[];
 }
 
-// ── Midnight Pro chart theme ───────────────────────────────────────────────────
+// ── Bloomberg Dark chart theme ─────────────────────────────────────────────────
 // WHY inline object (not CSS): lightweight-charts applies these via its own theming
-// API, not via CSS classes. The values must match the Midnight Pro palette.
+// API, not via CSS classes. The values must match the Bloomberg Dark palette.
 const CHART_THEME = {
   layout: {
-    background: { color: "#131722" },   // --background
-    textColor: "#787B86",               // --muted-foreground
+    background: { color: "#0A0E14" },   // --background (Bloomberg Dark)
+    textColor: "#6B7585",               // --muted-foreground
   },
   grid: {
-    vertLines: { color: "#1E2329" },    // --card
-    horzLines: { color: "#1E2329" },
+    vertLines: { color: "#111820" },    // --card
+    horzLines: { color: "#111820" },
   },
   crosshair: {
     mode: 0, // Normal crosshair mode
   },
-  upColor: "#26A69A",  // Midnight Pro positive
-  downColor: "#EF5350", // Midnight Pro negative
+  upColor: "#26A69A",  // Bloomberg Dark positive
+  downColor: "#EF5350", // Bloomberg Dark negative
   borderUpColor: "#26A69A",
   borderDownColor: "#EF5350",
   wickUpColor: "#26A69A",
@@ -118,10 +118,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           grid: CHART_THEME.grid,
           crosshair: CHART_THEME.crosshair,
           rightPriceScale: {
-            borderColor: "#1E2329",
+            borderColor: "#111820",  // --card (Bloomberg Dark)
           },
           timeScale: {
-            borderColor: "#1E2329",
+            borderColor: "#111820",  // --card (Bloomberg Dark)
             timeVisible: true,
           },
         });

@@ -8,14 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from content_store.domain.entities import CanonicalDocument, MinHashSignature
-
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 

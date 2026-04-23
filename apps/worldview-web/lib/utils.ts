@@ -164,7 +164,10 @@ export function formatDateTime(isoString: string | null | undefined): string {
 
 /**
  * formatRelativeTime — human-readable relative time for news/alerts
- * e.g., "2h ago", "just now", "3d ago"
+ * e.g., "2h ago", "just now", "3d ago", "in 2h" (for future dates like economic calendar)
+ *
+ * BT-010 FIX: Now handles future timestamps (e.g., economic calendar events)
+ * instead of producing negative values like "-1m ago".
  */
 export function formatRelativeTime(isoString: string | null | undefined): string {
   if (!isoString) return "—";
@@ -172,6 +175,16 @@ export function formatRelativeTime(isoString: string | null | undefined): string
   const then = new Date(isoString).getTime();
   const diffSeconds = Math.floor((now - then) / 1000);
 
+  // Future timestamps (negative diff) — used by economic calendar, scheduled events
+  if (diffSeconds < 0) {
+    const absDiff = Math.abs(diffSeconds);
+    if (absDiff < 60) return "soon";
+    if (absDiff < 3600) return `in ${Math.floor(absDiff / 60)}m`;
+    if (absDiff < 86400) return `in ${Math.floor(absDiff / 3600)}h`;
+    return `in ${Math.floor(absDiff / 86400)}d`;
+  }
+
+  // Past timestamps
   if (diffSeconds < 60) return "just now";
   if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m ago`;
   if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h ago`;
@@ -210,19 +223,23 @@ export function heatCellColor(changePct: number | null): {
   color: string;
 } {
   if (changePct == null) {
-    return { background: "#2B3139", color: "#787B86" }; // neutral/no data
+    return { background: "#1A2030", color: "#6B7585" }; // neutral/no data
   }
 
   // Clamp to [-3%, +3%] range for the 7-step scale
   const clamped = Math.max(-3, Math.min(3, changePct));
 
-  if (clamped >= 3) return { background: "#0D3A35", color: "#26A69A" };
-  if (clamped >= 1.5) return { background: "#0D2926", color: "#26A69A" };
-  if (clamped >= 0.5) return { background: "#122520", color: "#4DB6AC" };
-  if (clamped > -0.5) return { background: "#2B3139", color: "#787B86" };
-  if (clamped > -1.5) return { background: "#2D1515", color: "#EF9A9A" };
-  if (clamped > -3) return { background: "#3D1010", color: "#EF5350" };
-  return { background: "#4D0A0A", color: "#EF5350" };
+  // WHY these specific hex values: tinted backgrounds harmonize with the
+  // Bloomberg Dark #0A0E14 page background. Each step blends the teal or
+  // red hue into the dark blue-grey base so cells feel "part of the page"
+  // rather than painted-on color blocks.
+  if (clamped >= 3) return { background: "#0A2E28", color: "#26A69A" };
+  if (clamped >= 1.5) return { background: "#0A2420", color: "#26A69A" };
+  if (clamped >= 0.5) return { background: "#0E201C", color: "#4DB6AC" };
+  if (clamped > -0.5) return { background: "#1A2030", color: "#6B7585" };
+  if (clamped > -1.5) return { background: "#251218", color: "#EF9A9A" };
+  if (clamped > -3) return { background: "#300E12", color: "#EF5350" };
+  return { background: "#3D0A0E", color: "#EF5350" };
 }
 
 /**

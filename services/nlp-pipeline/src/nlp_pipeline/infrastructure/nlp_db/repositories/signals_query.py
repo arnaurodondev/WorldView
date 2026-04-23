@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import Integer, cast, func, select, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -16,8 +17,6 @@ from nlp_pipeline.infrastructure.nlp_db.models import (
 )
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

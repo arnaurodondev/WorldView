@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -11,8 +12,6 @@ from nlp_pipeline.application.ports.repositories import DocumentSourceMetadataRe
 from nlp_pipeline.infrastructure.nlp_db.models import DocumentSourceMetadataModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import DocumentSourceMetadata

@@ -19,12 +19,11 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput, ExtractionInput, ExtractionOutput
     from ml_clients.protocols import EmbeddingClient, ExtractionClient
     from ml_clients.usage_log import LlmUsageLogProtocol

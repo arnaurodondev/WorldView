@@ -15,7 +15,9 @@ Natural-key deduplication prevents duplicate rows across daily runs:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -24,9 +26,6 @@ from knowledge_graph.infrastructure.metrics.prometheus import s7_economic_events
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from datetime import date
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.eodhd.client import EodhDClient

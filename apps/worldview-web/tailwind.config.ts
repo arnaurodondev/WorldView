@@ -1,10 +1,10 @@
 /**
- * tailwind.config.ts — Tailwind CSS v3 configuration with Midnight Pro palette
+ * tailwind.config.ts — Tailwind CSS v3 configuration with Bloomberg Dark palette
  *
- * WHY THIS EXISTS: Maps the Worldview "Midnight Pro" design token system to
+ * WHY THIS EXISTS: Maps the Worldview "Bloomberg Dark" design token system to
  * Tailwind utility classes. The CSS variables (--background, --primary, etc.)
  * are defined in app/globals.css and referenced here so every shadcn/ui
- * component automatically uses the correct Midnight Pro colors.
+ * component automatically uses the correct Bloomberg Dark colors.
  *
  * CRITICAL: Never use Tailwind's default slate-950 or blue-500.
  * Use the semantic tokens: bg-background, text-primary, bg-card, etc.
@@ -81,6 +81,12 @@ const config: Config = {
         positive: "hsl(var(--positive))",
         negative: "hsl(var(--negative))",
         warning: "hsl(var(--warning))",
+
+        // Surface elevation tokens — explicit surface-level steps for
+        // components that need more granularity than card/muted (e.g.,
+        // nested panels, tertiary backgrounds). Defined in globals.css.
+        "surface-2": "hsl(var(--surface-2))",
+        "surface-3": "hsl(var(--surface-3))",
       },
       borderRadius: {
         lg: "var(--radius)",

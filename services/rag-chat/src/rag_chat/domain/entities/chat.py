@@ -6,13 +6,11 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.domain.enums import ItemType, QueryIntent
     from rag_chat.domain.value_objects import DateRange
-
 
 # ── Recency score helper ───────────────────────────────────────────────────────
 

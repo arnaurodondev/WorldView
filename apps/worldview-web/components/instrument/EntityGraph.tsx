@@ -33,14 +33,15 @@ import { useRouter } from "next/navigation";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 
 // ── Node type → color map ─────────────────────────────────────────────────────
-// WHY these exact values: match the design system palette (sky-500, teal, amber, indigo-400).
+// WHY these exact values: match the Bloomberg Dark design system palette.
 // Using hex directly (not Tailwind classes) because sigma reads node attributes — not CSS.
+// WHY #E8A317 for company: amber primary — publicly traded entities are the flagship node type.
 const NODE_TYPE_COLORS: Record<string, string> = {
-  company: "#0EA5E9", // sky-500 — publicly traded entities
+  company: "#E8A317", // amber primary (#E8A317) — publicly traded entities
   person:  "#26A69A", // teal-500 — executives, board members
   event:   "#F59E0B", // amber-500 — macro events, earnings releases
   topic:   "#818CF8", // indigo-400 — themes, sectors, concepts
-  default: "#4B5563", // gray-600 — unknown / unclassified entity types
+  default: "#6B7585", // muted-foreground (#6B7585) — unknown / unclassified entity types
 };
 
 // ── Tooltip state types ───────────────────────────────────────────────────────
@@ -231,7 +232,7 @@ function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
             // WHY min 0.5px: very low weight edges still need to be visible.
             // Multiplied by 2 so weight=1.0 edges appear as 2px lines.
             size: Math.max(0.5, edge.weight * 2),
-            color: "#2B3139", // default dim edge color (highlighted on hover via GraphEvents)
+            color: "#1A2030", // muted (#1A2030) — dim edge color (highlighted on hover via GraphEvents)
           });
         }
       }
@@ -368,10 +369,10 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
       <div
         ref={containerRef}
         className="relative h-[460px] overflow-hidden rounded border border-border/40"
-        // WHY inline style for background: Tailwind's bg-[#0C0E12] would work but
+        // WHY inline style for background: Tailwind's bg-[#0A0E14] would work but
         // this makes the dark graph background explicit and visually consistent with
-        // the rest of the dark theme (#0C0E12 is the app background token).
-        style={{ background: "#0C0E12" }}
+        // the rest of the dark theme (#0A0E14 is the app background token).
+        style={{ background: "#0A0E14" }}
       >
         <SigmaContainer
           className="h-full w-full"
@@ -387,7 +388,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
             // direct neighbors (size=10) and center (size=20) get labels.
             // Avoids text clutter for dense depth=2 graphs.
             labelRenderedSizeThreshold: 8,
-            labelColor: { color: "#9CA3AF" },
+            labelColor: { color: "#6B7585" },
             labelFont: "IBM Plex Mono, monospace",
             labelSize: 10,
             labelWeight: "500",
@@ -400,7 +401,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
             // or when the component is conditionally rendered.
             allowInvalidContainer: true,
           }}
-          style={{ background: "#0C0E12" }}
+          style={{ background: "#0A0E14" }}
         >
           {/* GraphLoader builds the graphology graph and passes it to sigma */}
           <GraphLoader data={data} centerEntityId={centerEntityId} />

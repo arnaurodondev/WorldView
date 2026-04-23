@@ -38,6 +38,9 @@ interface HeatCellProps {
  * classes — lightweight-charts and other non-Tailwind contexts also use these
  * same hex values, so the source of truth stays in utils.ts, not CSS files.
  */
+// WHY inline hex (not Tailwind classes): heatCellColor() returns hex values because
+// these same colors are shared with lightweight-charts and other non-Tailwind contexts.
+// The hex source of truth lives in lib/utils.ts heatCellColor() — see V-1.4.
 export function HeatCell({ score }: HeatCellProps) {
   // ── Null / no-data case ────────────────────────────────────────────────────
   if (score === null || score === undefined) {
@@ -46,7 +49,7 @@ export function HeatCell({ score }: HeatCellProps) {
     return (
       <span
         className="inline-flex h-6 w-12 items-center justify-center rounded text-xs font-mono font-semibold tabular-nums"
-        style={{ backgroundColor: "#2B3139", color: "#787B86" }}
+        style={{ backgroundColor: "#1A2030", color: "#6B7585" }}
         title="No score available"
         aria-label="Score unavailable"
       >

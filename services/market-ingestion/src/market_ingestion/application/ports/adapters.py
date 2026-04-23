@@ -9,11 +9,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from market_ingestion.domain.enums import DatasetType, Provider
     from market_ingestion.domain.value_objects import ObjectRef
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import sqlalchemy as sa
 from sqlalchemy import func, text
@@ -13,9 +15,6 @@ from nlp_pipeline.application.ports.repositories import ArticleImpactWindowRepos
 from nlp_pipeline.infrastructure.nlp_db.models import ArticleImpactWindowModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import ArticleImpactWindow

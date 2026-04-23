@@ -15,6 +15,7 @@ UPSERT with next_refresh_at = now() + 7 days.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
@@ -24,8 +25,6 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient

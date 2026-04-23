@@ -6,8 +6,8 @@ status: in-progress
 created: 2026-04-14
 updated: 2026-04-14
 supersedes:
-  - docs/plans/0027-design-canvas-plan.md
-  - docs/plans/0027-design-completion-plan.md
+  - docs/plans/0027-design-canvas-plan.md (deleted — superseded)
+  - docs/plans/0027-design-completion-plan.md (deleted — superseded)
 canvas_file: apps/frontend/designs/worldview-mvp_v1.pen
 waves:
   canvas: 6
@@ -18,8 +18,7 @@ waves:
 
 # PLAN-0027-V2: Frontend MVP — Complete UI Implementation
 
-> **Supersedes**: `docs/plans/0027-design-canvas-plan.md` (PLAN-0027-DESIGN, 0/6 done) and
-> `docs/plans/0027-design-completion-plan.md` (PLAN-0027-B, 0/14 done).
+> **Supersedes**: PLAN-0027-DESIGN and PLAN-0027-B (both deleted — consolidated here).
 > Those plans were correct but fragmented. This plan consolidates them, maximises parallelism,
 > and adds precise dependency metadata so agent scheduling tools can claim waves independently.
 
@@ -107,9 +106,6 @@ Track C (Frontend Code):
 1. `apps/frontend/designs/DESIGN.md` — color tokens, typography rules, component specs (hex values authoritative)
 2. `docs/specs/0027-frontend-mvp-ui-design.md` — full PRD
 3. `apps/frontend/designs/REDESIGN_PLAN.md` — page-level design decisions and completed sections
-
-For canvas waves, additionally:
-- `docs/plans/0027-design-canvas-plan.md` — candle anatomy, article row data, entity graph positions
 
 For backend waves, additionally:
 - `services/portfolio/.claude-context.md`

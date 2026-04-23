@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog
 
@@ -15,8 +16,6 @@ from rag_chat.domain.entities.conversation import Message
 from rag_chat.domain.enums import MessageRole
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.domain.entities.chat import ResolvedEntity, RetrievalPlan
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef

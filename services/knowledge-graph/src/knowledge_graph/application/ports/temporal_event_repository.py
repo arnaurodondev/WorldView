@@ -7,11 +7,8 @@ No infrastructure imports are permitted in this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from datetime import date, datetime
-    from uuid import UUID
+from datetime import date, datetime
+from uuid import UUID
 
 
 class TemporalEventRepositoryPort(ABC):

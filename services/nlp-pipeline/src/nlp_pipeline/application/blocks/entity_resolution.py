@@ -18,6 +18,7 @@ Writes mention_resolutions audit trail for every attempted stage.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 
@@ -26,8 +27,6 @@ from nlp_pipeline.domain.enums import ResolutionOutcome
 from nlp_pipeline.domain.models import EntityMention, MentionResolution
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
     from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
@@ -55,7 +54,6 @@ ANN_CONFIDENCE_MULTIPLIER: float = 0.80
 
 ANN_MAX_DISTANCE: float = 0.35
 ANN_CLEAR_MARGIN: float = 0.10
-
 
 # ── Stage implementations ─────────────────────────────────────────────────────
 

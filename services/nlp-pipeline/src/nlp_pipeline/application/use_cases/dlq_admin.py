@@ -6,10 +6,9 @@ Depends only on the ``DLQRepositoryPort`` ABC — no infrastructure imports.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from nlp_pipeline.application.ports.repositories import DLQEntryData, DLQRepositoryPort
 
 

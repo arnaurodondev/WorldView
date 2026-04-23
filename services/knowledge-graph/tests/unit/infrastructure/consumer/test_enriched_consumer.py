@@ -180,15 +180,14 @@ class TestPostCommitDirtiedProduce:
         assert "produce" in call_order, "produce_bytes() was never called"
         commit_idx = call_order.index("commit")
         produce_idx = call_order.index("produce")
-        assert commit_idx < produce_idx, (
-            f"produce_bytes() called at index {produce_idx} but "
-            f"session.commit() at {commit_idx} — must be commit FIRST"
-        )
+        assert (
+            commit_idx < produce_idx
+        ), f"produce_bytes() called at index {produce_idx} but session.commit() at {commit_idx} — must be commit FIRST"
 
     @pytest.mark.unit
     async def test_consumer_produces_for_all_dirty_entities(self) -> None:
         """All entity IDs from summary.entity_ids_to_dirty get a produce call."""
-        sf, session = _mock_session_factory()
+        sf, _session = _mock_session_factory()
         config = ConsumerConfig(
             group_id="kg-enriched-test",
             topics=["nlp.article.enriched.v1"],
