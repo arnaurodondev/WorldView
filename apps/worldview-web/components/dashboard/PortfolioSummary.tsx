@@ -150,7 +150,8 @@ export function PortfolioSummary() {
           {firstPortfolio.name}
         </span>
         {/* WHY toggle (not single value): 5D shows short-term volatility; 5W shows trend */}
-        <div className="flex rounded border border-border">
+        {/* WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default */}
+        <div className="flex rounded-[2px] border border-border">
           {(["5D", "5W"] as TimeRange[]).map((r) => (
             <button
               key={r}
@@ -202,7 +203,8 @@ export function PortfolioSummary() {
           return (
             <div
               key={h.holding_id}
-              className="flex items-center justify-between rounded px-1 py-0.5 hover:bg-muted/50"
+              // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+              className="flex items-center justify-between rounded-[2px] px-1 py-0.5 hover:bg-muted/50"
             >
               {/* Ticker + name */}
               <div className="min-w-0">

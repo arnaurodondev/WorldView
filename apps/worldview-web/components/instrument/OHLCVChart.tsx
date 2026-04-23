@@ -214,7 +214,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           <button
             key={tf}
             onClick={() => setTimeframe(tf)}
-            className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+            className={`rounded-[2px] px-2 py-0.5 text-xs font-medium transition-colors ${
               timeframe === tf
                 ? "bg-primary/20 text-primary"
                 : "text-muted-foreground hover:text-foreground"
@@ -227,7 +227,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
       {/* Chart error fallback — shown when lightweight-charts fails to load */}
       {chartError && (
-        <div className="flex h-[280px] items-center justify-center rounded border border-border bg-card">
+        <div className="flex h-[280px] items-center justify-center rounded-[2px] border border-border bg-card">
           <p className="text-sm text-muted-foreground">Chart unavailable</p>
         </div>
       )}

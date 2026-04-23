@@ -48,7 +48,7 @@ export function HeatCell({ score }: HeatCellProps) {
     // communicates absence, red communicates negative signal (important distinction)
     return (
       <span
-        className="inline-flex h-6 w-12 items-center justify-center rounded text-xs font-mono font-semibold tabular-nums"
+        className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] text-xs font-mono font-semibold tabular-nums"
         style={{ backgroundColor: "#1A2030", color: "#6B7585" }}
         title="No score available"
         aria-label="Score unavailable"
@@ -70,7 +70,7 @@ export function HeatCell({ score }: HeatCellProps) {
 
   return (
     <span
-      className="inline-flex h-6 w-12 items-center justify-center rounded text-xs font-mono font-semibold tabular-nums"
+      className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] text-xs font-mono font-semibold tabular-nums"
       style={{ backgroundColor: background, color }}
       title={`Signal score: ${displayScore}/100`}
       aria-label={`Signal score ${displayScore} out of 100`}

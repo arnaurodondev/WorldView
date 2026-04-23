@@ -81,7 +81,8 @@ export function EconomicCalendar() {
         return (
           <div
             key={event.event_id}
-            className="flex items-start gap-2 rounded px-1 py-0.5 hover:bg-muted/30"
+            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+            className="flex items-start gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
           >
             {/* Date + time — monospace for column alignment */}
             <div className="shrink-0">

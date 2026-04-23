@@ -86,7 +86,7 @@ class GraphErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-3 rounded border border-border/40 bg-card/50 p-8 text-center">
+        <div className="flex h-full flex-col items-center justify-center gap-3 rounded-[2px] border border-border/40 bg-card/50 p-8 text-center">
           <p className="text-sm font-medium text-muted-foreground">Graph unavailable</p>
           <p className="text-xs text-muted-foreground/60">
             WebGL is required for the entity graph visualization.
@@ -94,7 +94,7 @@ class GraphErrorBoundary extends React.Component<
           {/* WHY window.location.reload: simplest recovery — no state to preserve */}
           <button
             onClick={() => window.location.reload()}
-            className="rounded border border-border/40 px-3 py-1 text-xs text-muted-foreground hover:border-border hover:text-foreground"
+            className="rounded-[2px] border border-border/40 px-3 py-1 text-xs text-muted-foreground hover:border-border hover:text-foreground"
           >
             Reload page
           </button>
@@ -274,7 +274,7 @@ function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
 function NodeTooltipPanel({ tooltip }: { tooltip: NodeTooltip }) {
   return (
     <div
-      className="pointer-events-none absolute z-50 rounded border border-border/50 bg-card px-3 py-2 shadow-lg"
+      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2 shadow-lg"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
     >
       <p className="text-xs font-medium text-foreground">{tooltip.label}</p>
@@ -297,7 +297,7 @@ function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
 
   return (
     <div
-      className="pointer-events-none absolute z-50 rounded border border-border/50 bg-card px-3 py-2 shadow-lg"
+      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2 shadow-lg"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
     >
       <p className="text-xs font-medium uppercase tracking-wider text-foreground">
@@ -317,7 +317,7 @@ function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
 
 function GraphLegend() {
   return (
-    <div className="absolute bottom-2 left-2 z-10 flex flex-wrap gap-2 rounded border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
+    <div className="absolute bottom-2 left-2 z-10 flex flex-wrap gap-2 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
       {Object.entries(NODE_TYPE_COLORS)
         .filter(([k]) => k !== "default") // WHY exclude default: "default" is not a real entity type
         .map(([type, color]) => (
@@ -358,7 +358,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
   // ── Empty state ─────────────────────────────────────────────────────────────
   if (!data.nodes.length) {
     return (
-      <div className="flex h-[460px] items-center justify-center rounded border border-border/40 bg-card/30 text-sm text-muted-foreground">
+      <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30 text-sm text-muted-foreground">
         No relationship data available
       </div>
     );
@@ -368,7 +368,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
     <GraphErrorBoundary>
       <div
         ref={containerRef}
-        className="relative h-[460px] overflow-hidden rounded border border-border/40"
+        className="relative h-[460px] overflow-hidden rounded-[2px] border border-border/40"
         // WHY inline style for background: Tailwind's bg-[#0A0E14] would work but
         // this makes the dark graph background explicit and visually consistent with
         // the rest of the dark theme (#0A0E14 is the app background token).
@@ -423,7 +423,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
         <GraphLegend />
 
         {/* Controls hint — top-right corner, very small opacity text */}
-        <div className="absolute right-2 top-2 z-10 rounded border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
+        <div className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
           <span className="text-[9px] text-muted-foreground/60">
             Scroll to zoom · Drag to pan · Click to navigate
           </span>

@@ -78,7 +78,10 @@ export function MarketStatusPill() {
       {/* WHY asChild: passes pill styling directly to the trigger without extra div */}
       <PopoverTrigger asChild>
         <button
-          className={`flex cursor-default items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-opacity hover:opacity-80 ${pillClass}`}
+          // WHY rounded-[2px]: terminal design mandates 2px radius on all interactive
+          // elements. rounded-full (pill shape) is a consumer-app pattern. The status
+          // signal is communicated by color and the dot, not by pill shape.
+          className={`flex cursor-default items-center gap-1.5 rounded-[2px] border px-2.5 py-1 text-xs font-medium transition-opacity hover:opacity-80 ${pillClass}`}
           aria-label={`Market status: ${pillLabel}. Click for details.`}
         >
           {/* Status dot */}

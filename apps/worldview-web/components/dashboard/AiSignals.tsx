@@ -91,7 +91,8 @@ export function AiSignals() {
           <button
             key={signal.signal_id}
             onClick={() => signal.entity_id && router.push(`/instruments/${signal.entity_id}`)}
-            className="flex w-full items-center gap-2 rounded px-1 py-0.5 hover:bg-muted/30"
+            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+            className="flex w-full items-center gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
           >
             {/* Ticker — monospace */}
             <span className="w-12 shrink-0 font-mono text-xs font-medium tabular-nums text-foreground">
@@ -100,9 +101,10 @@ export function AiSignals() {
 
             {/* Score bar */}
             <div className="flex-1">
-              <div className="h-1.5 w-full rounded-full bg-muted">
+              {/* 2px: progress bars are rectangular UI elements, not circles — design system 2px policy */}
+              <div className="h-1.5 w-full rounded-[2px] bg-muted">
                 <div
-                  className={`h-1.5 rounded-full ${
+                  className={`h-1.5 rounded-[2px] ${
                     signal.label === "POSITIVE"
                       ? "bg-positive"
                       : signal.label === "NEGATIVE"

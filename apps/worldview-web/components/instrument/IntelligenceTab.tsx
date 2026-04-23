@@ -49,7 +49,7 @@ const EntityGraph = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-[460px] items-center justify-center rounded border border-border/40 bg-card/30">
+      <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
       </div>
     ),
@@ -92,10 +92,10 @@ function ContradictionCard({ item }: { item: Contradiction }) {
   const styles = SEVERITY_STYLES[item.severity];
 
   return (
-    <div className="rounded border border-border/40 bg-card/60 p-3">
+    <div className="rounded-[2px] border border-border/40 bg-card/60 p-3">
       {/* Header: severity badge + detected time */}
       <div className="mb-2 flex items-center justify-between">
-        <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${styles.badge}`}>
+        <span className={`rounded-[2px] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${styles.badge}`}>
           {styles.text}
         </span>
         <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
@@ -106,7 +106,7 @@ function ContradictionCard({ item }: { item: Contradiction }) {
       {/* Claim A vs Claim B */}
       <div className="space-y-2">
         {/* WHY VS layout: makes the contradiction visually obvious at a glance */}
-        <div className="rounded bg-positive/5 p-2">
+        <div className="rounded-[2px] bg-positive/5 p-2">
           <p className="text-xs text-foreground/80 leading-relaxed">&ldquo;{item.claim_a}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_a}</p>
         </div>
@@ -115,7 +115,7 @@ function ContradictionCard({ item }: { item: Contradiction }) {
           <span className={`mx-1 text-[9px] font-semibold uppercase ${styles.icon}`}>vs</span>
           <AlertTriangle className={`h-3 w-3 ${styles.icon}`} />
         </div>
-        <div className="rounded bg-negative/5 p-2">
+        <div className="rounded-[2px] bg-negative/5 p-2">
           <p className="text-xs text-foreground/80 leading-relaxed">&ldquo;{item.claim_b}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_b}</p>
         </div>
@@ -180,7 +180,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         {graphData ? (
           <EntityGraph data={graphData} centerEntityId={entityId} />
         ) : (
-          <div className="flex h-[460px] items-center justify-center rounded border border-border/40 bg-card/30">
+          <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
           </div>
         )}
@@ -193,7 +193,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           brief so the layout is established for the next implementation wave. */}
       <section className="p-4">
         <h3 className="mb-2 text-xs font-semibold text-foreground">AI Intelligence Brief</h3>
-        <div className="rounded border border-border/30 bg-card/30 p-4 text-xs text-muted-foreground">
+        <div className="rounded-[2px] border border-border/30 bg-card/30 p-4 text-xs text-muted-foreground">
           Brief generation coming soon — this section will show an AI-generated
           summary of recent developments, risk factors, and price-relevant signals.
         </div>
@@ -206,7 +206,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         {isLoading && (
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="space-y-2 rounded border border-border/40 p-3">
+              <div key={i} className="space-y-2 rounded-[2px] border border-border/40 p-3">
                 <div className="flex justify-between">
                   <Skeleton className="h-4 w-12" />
                   <Skeleton className="h-4 w-16" />
@@ -244,7 +244,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
               <h3 className="text-xs font-semibold text-foreground">
                 Detected Contradictions
               </h3>
-              <span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded-[2px] bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                 {contradictions.length} found
               </span>
             </div>

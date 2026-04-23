@@ -96,7 +96,8 @@ export function TopBets() {
             {/* Probability bar + stats row */}
             <div className="mt-1">
               {/* Visual bar: yes portion = primary color, no portion = muted */}
-              <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
+              {/* 2px: progress bars are rectangular UI elements — design system 2px policy */}
+              <div className="flex h-1.5 overflow-hidden rounded-[2px] bg-muted">
                 <div
                   className="h-full bg-primary"
                   style={{ width: `${yesPct}%` }}
@@ -118,7 +119,8 @@ export function TopBets() {
                     closes {closeDateStr}
                   </span>
                 )}
-                <span className="shrink-0 rounded bg-muted px-1 text-[9px] uppercase">
+                {/* WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default */}
+                <span className="shrink-0 rounded-[2px] bg-muted px-1 text-[9px] uppercase">
                   {market.source}
                 </span>
               </div>

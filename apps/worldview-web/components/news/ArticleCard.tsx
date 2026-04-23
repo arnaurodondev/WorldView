@@ -171,7 +171,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
               key={ticker}
               href={`/instruments?q=${encodeURIComponent(ticker)}`}
               onClick={(e) => e.stopPropagation()} // WHY: prevent bubbling to card click
-              className="rounded border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground hover:border-primary/50 hover:text-primary"
+              className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground hover:border-primary/50 hover:text-primary"
             >
               {ticker}
             </Link>

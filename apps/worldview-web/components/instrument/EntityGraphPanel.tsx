@@ -134,13 +134,13 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
-    return <Skeleton className="h-[280px] w-full rounded" />;
+    return <Skeleton className="h-[280px] w-full rounded-[2px]" />;
   }
 
   // ── Error / empty state ────────────────────────────────────────────────────
   if (isError || !graph || graph.nodes.length === 0) {
     return (
-      <div className="flex h-[280px] items-center justify-center rounded border border-border/30 bg-card/50">
+      <div className="flex h-[280px] items-center justify-center rounded-[2px] border border-border/30 bg-card/50">
         <p className="text-xs text-muted-foreground">No relationship data</p>
       </div>
     );
@@ -173,7 +173,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   const posMap = new Map(positions.map((p) => [p.id, p]));
 
   return (
-    <div className="overflow-hidden rounded border border-border/30 bg-card/30">
+    <div className="overflow-hidden rounded-[2px] border border-border/30 bg-card/30">
       {/* Legend */}
       <div className="flex flex-wrap gap-3 border-b border-border/30 px-3 py-1.5">
         {Object.entries(NODE_COLORS).filter(([k]) => k !== "default").map(([type, colors]) => (

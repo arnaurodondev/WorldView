@@ -81,7 +81,8 @@ export function WatchlistNews() {
           href={safeExternalUrl(article.url)}
           target="_blank"
           rel="noopener noreferrer"
-          className="group block rounded border border-border/50 p-2 hover:border-border hover:bg-muted/30"
+          // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+          className="group block rounded-[2px] border border-border/50 p-2 hover:border-border hover:bg-muted/30"
         >
           {/* Article headline */}
           <p className="line-clamp-2 text-xs font-medium leading-snug text-foreground group-hover:text-primary">
