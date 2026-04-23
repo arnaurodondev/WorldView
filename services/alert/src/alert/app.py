@@ -62,8 +62,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("alert.app")  # type: ignore[no-any-return]
 
-    # 1a. InternalJWT middleware startup — fetch JWKS from S9 (PRD-0025 T-D-1-08)
-    jwt_mw = InternalJWTMiddleware(app, jwks_url=f"{settings.api_gateway_url}/internal/jwks")
+    # 1a. InternalJWT middleware startup — fetch JWKS from S9 (PRD-0025 T-D-1-08).
+    # BP-159: serving instance created by add_middleware() wraps the inner stack, so
+    # self.app != FastAPI app and self.app.state is unreachable. The startup call here
+    # populates app.state._internal_jwt_public_key which dispatch() reads via request.app.state.
+    jwt_mw = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
     await jwt_mw.startup()
 
     # 2. Tracing (conditional — middleware registered in create_app)

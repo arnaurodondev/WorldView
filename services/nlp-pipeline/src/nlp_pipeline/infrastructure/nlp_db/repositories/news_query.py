@@ -103,8 +103,8 @@ counts AS (
     LEFT JOIN routing_decisions rd      ON rd.doc_id      = dsm.doc_id
     WHERE dsm.published_at >= now() - :hours * interval '1 hour'
       AND (
-          :routing_tier IS NULL
-          OR COALESCE(rd.final_routing_tier, rd.routing_tier) = :routing_tier
+          CAST(:routing_tier AS TEXT) IS NULL
+          OR COALESCE(rd.final_routing_tier, rd.routing_tier) = CAST(:routing_tier AS TEXT)
       )
 )
 SELECT c.*,
@@ -113,8 +113,8 @@ SELECT c.*,
 FROM counts c
 LEFT JOIN article_primary_entity ape ON ape.article_id = c.doc_id
 WHERE (
-    :min_display_score IS NULL
-    OR c.display_relevance_score >= :min_display_score
+    CAST(:min_display_score AS DOUBLE PRECISION) IS NULL
+    OR c.display_relevance_score >= CAST(:min_display_score AS DOUBLE PRECISION)
 )
 ORDER BY display_relevance_score DESC, published_at DESC
 LIMIT :limit OFFSET :offset

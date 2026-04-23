@@ -49,6 +49,13 @@ class CanonicalOHLCVBar:
         # Intraday bars (/intraday/ endpoint) return no adjusted price — stored as None.
         # This is expected behaviour, not a data quality issue. (FIX-O2)
 
+        # FIX-O3: EODHD (and some other providers) return "volume": null for bars
+        # where no trades were recorded (e.g. ETFs on foreign exchanges, data gaps).
+        # int(None) raises TypeError; coerce to 0 so canonicalization succeeds and
+        # downstream consumers can filter zero-volume bars rather than losing the bar.
+        raw_volume = d.get("volume")
+        volume = int(raw_volume) if raw_volume is not None else 0
+
         return cls(
             symbol=d["symbol"],
             exchange=d["exchange"],
@@ -57,7 +64,7 @@ class CanonicalOHLCVBar:
             high=float(d["high"]),
             low=float(d["low"]),
             close=float(d["close"]),
-            volume=int(d["volume"]),
+            volume=volume,
             adjusted_close=float(d["adjusted_close"]) if d.get("adjusted_close") is not None else None,
             source=d.get("source", ""),
             provider=d.get("provider", ""),

@@ -763,17 +763,18 @@ async def test_invalid_state_transition_reraises() -> None:
 
 @pytest.mark.unit
 async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
-    """BP-113 regression: TypeError from None-valued OHLCV field must call _persist_fail.
+    """BP-113 regression: TypeError from None-valued OHLCV price field must call _persist_fail.
 
-    EODHD intraday returns bars with None for volume; int(None) raises TypeError.
-    Before the fix, TypeError was not caught, so the task stayed RUNNING forever.
-    After the fix, TypeError is caught and _persist_fail is called.
+    FIX-O3 (BP-182) handles volume=null gracefully (coerced to 0), so that specific
+    input no longer raises.  This test uses open=None instead, which goes through
+    float(None) — still a TypeError — to verify the BP-113 catch-and-fail path
+    is intact for genuinely corrupt price fields.
     """
     import json
 
-    # Raw data with None volume — triggers int(None) in CanonicalOHLCVBar.from_dict
-    raw_with_none_volume = json.dumps(
-        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    # Raw data with None for a price field — float(None) raises TypeError in from_dict
+    raw_with_none_open = json.dumps(
+        [{"open": None, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100, "date": "2025-01-01"}]
     ).encode()
 
     task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
@@ -783,7 +784,7 @@ async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 
     real_serializer = DefaultCanonicalSerializer()
-    registry = _make_registry(raw_data=raw_with_none_volume)
+    registry = _make_registry(raw_data=raw_with_none_open)
     store = _make_store()
 
     uc = ExecuteTaskUseCase(
@@ -800,6 +801,45 @@ async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
 
     # task.fail must have been called (BP-113 fix)
     task.fail.assert_called_once()
+
+
+@pytest.mark.unit
+async def test_null_volume_ohlcv_succeeds_bp182() -> None:
+    """FIX-O3 / BP-182 regression: EODHD volume=null must NOT crash — coerced to 0.
+
+    Previously int(None) raised TypeError, leaving the task stuck in RUNNING
+    (BP-113). After FIX-O3, volume=null is gracefully coerced to 0 so the bar
+    is canonicalized and the task succeeds.
+    """
+    import json
+
+    raw_with_none_volume = json.dumps(
+        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_volume)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    # Must NOT raise — null volume is valid and coerced to 0
+    await uc.execute(task)
+
+    task.succeed.assert_called_once()
+    task.fail.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -877,16 +917,16 @@ async def test_watermark_concurrent_advance_only_one_succeeds() -> None:
 
 @pytest.mark.unit
 async def test_canonicalize_type_error_marks_failed() -> None:
-    """BP-113 regression: None field in record → TypeError → task.fail() called (not stuck RUNNING).
+    """BP-113 regression: None price field in record → TypeError → task.fail() called (not stuck RUNNING).
 
-    Feed a record where volume is None (simulating missing EODHD intraday data).
-    The real serializer will raise TypeError; ExecuteTaskUseCase must catch it
-    and call task.fail(), not leave the task stuck in RUNNING state.
+    FIX-O3 (BP-182) handles volume=null gracefully, so this test uses open=None
+    (a price field where float(None) still raises TypeError) to keep the BP-113
+    catch-and-fail path exercised for genuinely unrecoverable data errors.
     """
     import json as _json
 
-    raw_with_none_volume = _json.dumps(
-        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    raw_with_none_open = _json.dumps(
+        [{"open": None, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100, "date": "2025-01-01"}]
     ).encode()
 
     task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
@@ -895,7 +935,7 @@ async def test_canonicalize_type_error_marks_failed() -> None:
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 
     real_serializer = DefaultCanonicalSerializer()
-    registry = _make_registry(raw_data=raw_with_none_volume)
+    registry = _make_registry(raw_data=raw_with_none_open)
     store = _make_store()
 
     uc = ExecuteTaskUseCase(

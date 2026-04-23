@@ -17,11 +17,15 @@ class TestSqlaNewsQueryRepoSql:
         assert "published_at >= now() - :hours * interval '1 hour'" in _TOP_NEWS_SQL
 
     def test_get_top_news_sql_uses_is_null_for_routing_tier(self) -> None:
-        """Flow C SQL handles nullable :routing_tier via IS NULL, not bare equality (BP-069)."""
+        """Flow C SQL handles nullable :routing_tier via CAST + IS NULL (BP-069, BP-178).
+
+        asyncpg raises AmbiguousParameterError when a nullable param appears only in
+        ':param IS NULL' (no type inference context). Explicit CAST resolves the type.
+        """
         from nlp_pipeline.infrastructure.nlp_db.repositories.news_query import _TOP_NEWS_SQL
 
-        # Must contain IS NULL check (not just = :routing_tier directly).
-        assert ":routing_tier IS NULL" in _TOP_NEWS_SQL
+        # Must use explicit CAST for asyncpg type resolution (BP-178 pattern).
+        assert "CAST(:routing_tier AS TEXT) IS NULL" in _TOP_NEWS_SQL
 
     def test_get_entity_articles_sql_uses_entity_mentions_cte(self) -> None:
         """Flow D SQL uses entity_mentions CTE to scope article IDs by entity."""
