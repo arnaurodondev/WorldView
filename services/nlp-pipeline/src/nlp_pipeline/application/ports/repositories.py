@@ -7,7 +7,7 @@ No infrastructure imports are permitted in this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -241,6 +241,101 @@ class PriceImpactRepositoryPort(ABC):
 
         Limits to ``batch_size`` *distinct doc_ids* — multiple rows per doc are normal
         when a document mentions several financial instruments.
+        """
+        ...
+
+
+# ── RankedArticle data transfer object ──────────────────────────────────────
+
+
+@dataclass
+class RankedArticleData:
+    """Application-layer DTO for a ranked news article (PRD-0026 §6.5).
+
+    Returned by NewsQueryPort — combines document_source_metadata, routing
+    score, LLM relevance score, and multi-window price-impact scores into a
+    single flat structure.  The use case layer passes it through unchanged;
+    the API layer maps it to RankedArticleResponse.
+    """
+
+    article_id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_type: str | None
+    source_name: str | None
+    routing_tier: str | None
+    routing_score: float | None
+    market_impact_score: float | None
+    llm_relevance_score: float | None
+    display_relevance_score: float
+    day_t0_score: float | None
+    day_t1_score: float | None
+    day_t2_score: float | None
+    day_t5_score: float | None
+    # Only populated by the global top-news query (Flow C); None for entity queries.
+    primary_entity_id: UUID | None = field(default=None)
+    primary_entity_symbol: str | None = field(default=None)
+
+
+# ── News query port ───────────────────────────────────────────────────────────
+
+
+class NewsQueryPort(ABC):
+    """Port for ranked news API read queries (PRD-0026 §6.7 Flow C + Flow D).
+
+    Read-only — implementers must NOT write data.
+    Concrete implementation: ``SqlaNewsQueryRepo`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def get_top_news(
+        self,
+        hours: int,
+        limit: int,
+        offset: int,
+        min_display_score: float | None,
+        routing_tier: str | None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return top-N globally ranked articles within the given hour window.
+
+        The composite ``display_relevance_score`` is computed at query time
+        (PRD-0026 §6.5 CASE expression).
+
+        Args:
+            hours: Look-back window from now (``published_at >= now() - hours * interval '1 hour'``).
+            limit: Max articles to return.
+            offset: Pagination offset.
+            min_display_score: Exclude articles below this score (``None`` = no filter).
+            routing_tier: Filter by effective routing tier (``None`` = all tiers).
+
+        Returns:
+            ``(articles, total_count)`` — total_count is computed before LIMIT/OFFSET.
+        """
+        ...
+
+    @abstractmethod
+    async def get_entity_articles(
+        self,
+        entity_id: UUID,
+        start_date: datetime,
+        end_date: datetime,
+        order_by: str,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return articles mentioning the given entity, with full scoring fields.
+
+        Args:
+            entity_id: Canonical entity UUID.
+            start_date: Include articles published on or after this datetime.
+            end_date: Include articles published on or before this datetime.
+            order_by: ``"display_relevance_score"`` (default) or ``"published_at"`` — always DESC.
+            limit: Max articles to return.
+            offset: Pagination offset.
+
+        Returns:
+            ``(articles, total_count)`` — empty list if entity has no articles (not 404).
         """
         ...
 

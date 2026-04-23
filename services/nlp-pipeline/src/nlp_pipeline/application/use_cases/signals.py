@@ -17,7 +17,11 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from nlp_pipeline.application.ports.repositories import SignalsQueryPort
+    from nlp_pipeline.application.ports.repositories import (
+        NewsQueryPort,
+        RankedArticleData,
+        SignalsQueryPort,
+    )
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -53,13 +57,6 @@ class EntityDetailData:
     mention_count: int
     resolved_count: int
     provisional_count: int
-
-
-@dataclasses.dataclass(frozen=True)
-class EntityArticleData:
-    doc_id: UUID
-    routing_tier: str
-    mention_count: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -173,23 +170,57 @@ class GetEntityDetailUseCase:
 
 
 class GetEntityArticlesUseCase:
-    """List articles that mention a given entity."""
+    """List articles mentioning a given entity, with full scoring fields (PRD-0026 §6.7 Flow D)."""
 
     async def execute(
         self,
-        repo: SignalsQueryPort,
+        repo: NewsQueryPort,
         entity_id: UUID,
+        start_date: datetime,
+        end_date: datetime,
+        order_by: str,
         limit: int,
-    ) -> tuple[list[EntityArticleData], int]:
-        rows, total = await repo.get_entity_articles(entity_id=entity_id, limit=limit)
-        return [
-            EntityArticleData(
-                doc_id=UUID(str(row["doc_id"])),
-                routing_tier=str(row["routing_tier"]),
-                mention_count=int(row["mention_count"]),
-            )
-            for row in rows
-        ], int(total)
+        offset: int,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return ranked articles for an entity within the given date range.
+
+        Delegates entirely to the port — the SQL CTE computes display_relevance_score
+        and all window scores at query time.  Returns an empty list (not 404) when the
+        entity has no articles in the date range.
+        """
+        return await repo.get_entity_articles(
+            entity_id=entity_id,
+            start_date=start_date,
+            end_date=end_date,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+        )
+
+
+class GetTopNewsUseCase:
+    """Return globally top-ranked articles within a rolling time window (PRD-0026 §6.7 Flow C)."""
+
+    async def execute(
+        self,
+        repo: NewsQueryPort,
+        hours: int,
+        limit: int,
+        offset: int,
+        min_display_score: float | None,
+        routing_tier: str | None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return articles ranked by display_relevance_score.
+
+        Delegates entirely to the port — the 3-CTE SQL computes all scores at query time.
+        """
+        return await repo.get_top_news(
+            hours=hours,
+            limit=limit,
+            offset=offset,
+            min_display_score=min_display_score,
+            routing_tier=routing_tier,
+        )
 
 
 class VectorSearchUseCase:

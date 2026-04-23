@@ -11,17 +11,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from nlp_pipeline.api.dependencies import AdminAuthDep, SignalsQueryRepoDep
+from nlp_pipeline.api.dependencies import AdminAuthDep, NewsQueryRepoDep, SignalsQueryRepoDep
+from nlp_pipeline.api.routes.news import _to_response as _article_to_response
 from nlp_pipeline.api.schemas import (
-    EntityArticleResponse,
-    EntityArticlesResponse,
     EntityDetailResponse,
     EntityListResponse,
     EntitySearchResponse,
+    RankedNewsResponse,
     ReprocessResponse,
     SignalListResponse,
     SignalResponse,
@@ -171,29 +172,51 @@ async def get_entity(
 # ── GET /entities/{id}/articles ───────────────────────────────────────────────
 
 
-@router.get("/entities/{entity_id}/articles", response_model=EntityArticlesResponse)
+@router.get("/entities/{entity_id}/articles", response_model=RankedNewsResponse)
 async def get_entity_articles(
     entity_id: UUID,
-    repo: SignalsQueryRepoDep,
+    repo: NewsQueryRepoDep,
+    start_date: datetime | None = Query(
+        default=None,
+        description="Include articles published on or after this datetime (ISO 8601). Defaults to 30 days ago.",
+    ),
+    end_date: datetime | None = Query(
+        default=None,
+        description="Include articles published on or before this datetime (ISO 8601). Defaults to now.",
+    ),
+    order_by: str = Query(
+        default="display_relevance_score",
+        pattern="^(display_relevance_score|published_at)$",
+        description="Sort field — always descending.",
+    ),
     limit: int = Query(default=20, ge=1, le=200),
-) -> EntityArticlesResponse:
-    """List articles that mention this entity (most recent first)."""
-    entity = await GetEntityDetailUseCase().execute(repo, entity_id)
-    if entity is None:
-        raise HTTPException(status_code=404, detail="Entity not found")
-    items_data, total = await GetEntityArticlesUseCase().execute(repo, entity_id, limit)
-    return EntityArticlesResponse(
+    offset: int = Query(default=0, ge=0),
+) -> RankedNewsResponse:
+    """List articles that mention this entity, ranked by display_relevance_score.
+
+    Returns an empty list (not 404) when the entity has no articles in range.
+    Date range defaults to the last 30 days when not specified.
+    """
+    now = datetime.now(tz=UTC)
+    resolved_end = end_date or now
+    resolved_start = start_date or (now - timedelta(days=30))
+
+    if resolved_start > resolved_end:
+        from fastapi import HTTPException as _HTTPException
+
+        raise _HTTPException(status_code=422, detail="start_date must be before end_date")
+
+    articles_data, total = await GetEntityArticlesUseCase().execute(
+        repo=repo,
         entity_id=entity_id,
-        items=[
-            EntityArticleResponse(
-                doc_id=item.doc_id,
-                source_type="unknown",  # not stored in mentions; would need content-store join
-                published_at=None,
-                routing_tier=item.routing_tier,
-                mention_count=item.mention_count,
-            )
-            for item in items_data
-        ],
+        start_date=resolved_start,
+        end_date=resolved_end,
+        order_by=order_by,
+        limit=limit,
+        offset=offset,
+    )
+    return RankedNewsResponse(
+        articles=[_article_to_response(a) for a in articles_data],
         total=total,
     )
 

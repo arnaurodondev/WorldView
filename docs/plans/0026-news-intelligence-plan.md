@@ -838,12 +838,13 @@ nlp-pipeline-relevance-scoring:
 
 ---
 
-## Wave 6: S6 API Endpoints — GetTopNewsUseCase + Enhanced GetEntityArticlesUseCase
+## Wave 6: S6 API Endpoints — GetTopNewsUseCase + Enhanced GetEntityArticlesUseCase ✅
 
 **Goal**: Implement `GetTopNewsUseCase` (new), enhance `GetEntityArticlesUseCase` with scoring fields, add `GET /api/v1/news/top` router, update `GET /api/v1/entities/{id}/articles` router and schemas.
 **Depends on**: Wave 4 (repository in place) and Wave 5 (scoring columns exist)
 **Architecture layer**: application + API
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-04-23 · 511 unit tests pass · ruff + mypy clean
 
 ### Pre-read (agent must read before starting)
 - `services/nlp-pipeline/src/nlp_pipeline/application/use_cases/signals.py`
@@ -1039,16 +1040,16 @@ No authentication required (public endpoint, consistent with existing S9 proxy c
 - [ ] Both use `ReadOnlyUnitOfWork` (R27)
 
 ### Validation Gate
-- [ ] `ruff check services/nlp-pipeline/src/nlp_pipeline/api/`
-- [ ] `mypy services/nlp-pipeline/src --config-file mypy.ini`
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/api/ -m unit -v`
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/ -m unit -v` — no regressions
+- [x] `ruff check services/nlp-pipeline/src/nlp_pipeline/api/`
+- [x] `mypy services/nlp-pipeline/src --config-file mypy.ini`
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/api/ -m unit -v`
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/ -m unit -v` — 511 pass, 0 fail
 
 ### Break Impact
 | Broken File | Why It Breaks | Fix Required |
 |---|---|---|
-| `tests/unit/api/test_entities.py` | `GET /entities/{id}/articles` response schema changed | Update assertions to include new scoring fields |
-| `services/nlp-pipeline/src/nlp_pipeline/api/schemas.py` | `EntityArticleResponse` / `EntityArticlesResponse` now replaced by `RankedArticleResponse` | Update or retain old schemas with migration note |
+| `tests/unit/application/use_cases/test_signals.py` | `GetEntityArticlesUseCase` now accepts `NewsQueryPort` with new params | Updated tests to use new signature + `RankedArticleData` DTO |
+| `tests/e2e/test_api_workflows.py` | `GET /entities/{id}/articles` for unknown entity now returns 200 (not 404) | Updated assertion to check 200 + empty list |
 
 ### Regression Guardrails
 - **R25** (API layer isolation): `news.py` router MUST NOT import from `infrastructure/`. Use port + dependency injection via `NewsQueryRepoDep`.
