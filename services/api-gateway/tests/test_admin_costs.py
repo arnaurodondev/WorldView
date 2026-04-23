@@ -158,6 +158,22 @@ async def test_admin_costs_403_unauthenticated(authed_app) -> None:
 
 
 @pytest.mark.asyncio
+async def test_admin_costs_invalid_period_400(authed_app) -> None:
+    """period=not-a-month → 400 Bad Request."""
+    transport = ASGITransport(app=authed_app)
+    admin_jwt = _make_jwt(role="admin")
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/v1/admin/llm-costs",
+            params={"period": "not-a-month"},
+            headers={"Authorization": f"Bearer {admin_jwt}"},
+        )
+
+    assert resp.status_code == 400
+    assert "YYYY-MM" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_admin_costs_default_period(authed_app, authed_mock_clients) -> None:
     """Omitting period defaults to the current UTC month; downstream is called with it."""
     from datetime import UTC, datetime

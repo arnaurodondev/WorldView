@@ -346,6 +346,7 @@ Key tables S6 writes to:
 | WatchlistEventConsumer | `infrastructure/messaging/consumers/watchlist_consumer_main.py` | Maintains Valkey `nlp:v1:watched_entities` SET |
 | EmbeddingRetryWorker | `infrastructure/workers/embedding_retry_worker.py` (via dispatcher_main) | Re-embeds failed pending entries with backoff |
 | **PriceImpactLabellingWorker** | `workers/price_impact_labelling_worker.py` | Retroactively labels articles with OHLCV price-impact scores every 4h |
+| **UnresolvedResolutionWorker** | `infrastructure/workers/unresolved_resolution_worker.py` (spawned in `app.py` lifespan) | Two-phase re-resolution of UNRESOLVED entity mentions: Phase 1 = free cascade re-run (Block 9 logic); Phase 2 = Qwen2.5:3b LLM classification (entity_created or noise); stale-lock recovery on startup. Controlled by `NLP_PIPELINE_UNRESOLVED_RESOLUTION_ENABLED` (default: true, interval: 30 min). |
 
 ## Internal Modules
 

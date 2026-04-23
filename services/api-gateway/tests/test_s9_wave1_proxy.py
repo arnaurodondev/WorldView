@@ -241,8 +241,8 @@ async def test_entity_contradictions_proxy(authed_app, authed_mock_clients) -> N
 
 @pytest.mark.asyncio
 async def test_news_top_no_auth_required(app, mock_clients) -> None:
-    """GET /v1/news/top works without authentication (public endpoint)."""
-    mock_clients.content_store.get = AsyncMock(
+    """GET /v1/news/top works without authentication (public endpoint, PRD-0026 §6.7 Flow C)."""
+    mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(200, b'{"articles": []}'),
     )
 
@@ -251,8 +251,11 @@ async def test_news_top_no_auth_required(app, mock_clients) -> None:
         resp = await client.get("/v1/news/top", params={"hours": "24", "limit": "10"})
 
     assert resp.status_code == 200
-    mock_clients.content_store.get.assert_called_once()
-    call_kwargs = mock_clients.content_store.get.call_args[1]
+    mock_clients.nlp_pipeline.get.assert_called_once()
+    call_args = mock_clients.nlp_pipeline.get.call_args
+    # Verify path targets S6 NLP Pipeline (not S5 Content Store).
+    assert "/api/v1/news/top" in call_args[0][0]
+    call_kwargs = call_args[1]
     assert call_kwargs["params"].get("hours") == "24"
     assert call_kwargs["params"].get("limit") == "10"
 
@@ -266,7 +269,7 @@ async def test_news_entity_requires_auth(app, mock_clients) -> None:
         resp = await client.get(f"/v1/news/entity/{entity_id}")
 
     assert resp.status_code == 401
-    mock_clients.content_store.get.assert_not_called()
+    mock_clients.nlp_pipeline.get.assert_not_called()
 
 
 # ── Briefings ────────────────────────────────────────────────────────────────
@@ -345,8 +348,8 @@ async def test_entity_graph_downstream_error(authed_app, authed_mock_clients) ->
 
 @pytest.mark.asyncio
 async def test_news_top_downstream_error(app, mock_clients) -> None:
-    """GET /v1/news/top when S5 returns 502 → 502 forwarded (public endpoint)."""
-    mock_clients.content_store.get = AsyncMock(
+    """GET /v1/news/top when S6 returns 502 → 502 forwarded (public endpoint)."""
+    mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(502, b'{"detail": "Bad Gateway"}'),
     )
 
@@ -355,7 +358,7 @@ async def test_news_top_downstream_error(app, mock_clients) -> None:
         resp = await client.get("/v1/news/top")
 
     assert resp.status_code == 502
-    mock_clients.content_store.get.assert_called_once()
+    mock_clients.nlp_pipeline.get.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -417,9 +420,9 @@ async def test_briefings_instrument_proxied(authed_app, authed_mock_clients) -> 
 
 @pytest.mark.asyncio
 async def test_news_entity_authenticated(authed_app, authed_mock_clients) -> None:
-    """GET /v1/news/entity/{id} with auth → proxied to S5 with entity_id param."""
-    authed_mock_clients.content_store.get = AsyncMock(
-        return_value=_mock_response(200, b'{"articles": []}'),
+    """GET /v1/news/entity/{id} with auth → proxied to S6 as path param (PRD-0026 §6.7 Flow D)."""
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(
+        return_value=_mock_response(200, b'{"articles": [], "total": 0}'),
     )
 
     entity_id = "00000000-0000-0000-0000-000000000001"
@@ -431,10 +434,12 @@ async def test_news_entity_authenticated(authed_app, authed_mock_clients) -> Non
         )
 
     assert resp.status_code == 200
-    authed_mock_clients.content_store.get.assert_called_once()
-    call_kwargs = authed_mock_clients.content_store.get.call_args[1]
-    # Verify entity_id is passed as a query param to S5
-    assert call_kwargs["params"]["entity_id"] == entity_id
+    authed_mock_clients.nlp_pipeline.get.assert_called_once()
+    call_args = authed_mock_clients.nlp_pipeline.get.call_args[0]
+    # Verify entity_id is a path segment, NOT a query param (BP-026 guard).
+    assert f"/api/v1/entities/{entity_id}/articles" in call_args[0]
+    call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
+    assert "entity_id" not in call_kwargs.get("params", {})
 
 
 # ── F-02: Public proxy routes forward system JWT headers ──────────────────────
@@ -442,9 +447,12 @@ async def test_news_entity_authenticated(authed_app, authed_mock_clients) -> Non
 
 @pytest.mark.asyncio
 async def test_news_top_sends_system_jwt_header(app, mock_clients) -> None:
-    """F-02: GET /v1/news/top (public) sends X-Internal-JWT system header to S5."""
+    """F-02: GET /v1/news/top (public) sends X-Internal-JWT system header to S6 (nlp-pipeline).
+
+    Route was changed from S5 (content-store) to S6 (nlp-pipeline) in PLAN-0029.
+    """
     _inject_rsa_keys(app)
-    mock_clients.content_store.get = AsyncMock(
+    mock_clients.nlp_pipeline.get = AsyncMock(
         return_value=_mock_response(200, b'{"articles": []}'),
     )
 
@@ -453,8 +461,8 @@ async def test_news_top_sends_system_jwt_header(app, mock_clients) -> None:
         resp = await client.get("/v1/news/top", params={"limit": "5"})
 
     assert resp.status_code == 200
-    # Verify X-Internal-JWT was sent to the downstream
-    call_kwargs = mock_clients.content_store.get.call_args[1]
+    # Verify X-Internal-JWT was sent to the downstream S6 endpoint
+    call_kwargs = mock_clients.nlp_pipeline.get.call_args[1]
     assert "X-Internal-JWT" in call_kwargs.get("headers", {})
     # Verify the JWT is decodable and has system claims
     from api_gateway.jwt_utils import decode_internal_jwt

@@ -56,8 +56,8 @@ class ArticlePriceImpactRepository(PriceImpactRepositoryPort):
         """
         result = await self._session.execute(
             sa.select(func.max(ArticleImpactWindowModel.impact_score)).where(
-                ArticleImpactWindowModel.article_id == doc_id
-            )
+                ArticleImpactWindowModel.article_id == doc_id,
+            ),
         )
         val = result.scalar_one_or_none()
         return Decimal(str(val)) if val is not None else Decimal("0.0")
@@ -67,7 +67,9 @@ class ArticlePriceImpactRepository(PriceImpactRepositoryPort):
         return []
 
     async def get_unlabelled_article_details(
-        self, min_age_hours: int, batch_size: int
+        self,
+        min_age_hours: int,
+        batch_size: int,
     ) -> list[tuple[UUID, UUID, str, datetime]]:
         """Return unlabelled article details from article_impact_windows perspective.
 
@@ -103,7 +105,7 @@ class ArticlePriceImpactRepository(PriceImpactRepositoryPort):
               AND em.mention_class = 'financial_instrument'
               AND dsm.published_at IS NOT NULL
             ORDER BY em.doc_id
-            """
+            """,
         ).bindparams(min_age_hours=min_age_hours, batch_size=batch_size)
 
         result = await self._session.execute(stmt)

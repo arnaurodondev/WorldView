@@ -701,18 +701,15 @@ async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
 
 @router.get("/news/top")
 async def get_news_top(request: Request) -> Any:
-    """Proxy GET /v1/articles/relevant → S5 Content Store.
+    """Proxy GET /api/v1/news/top → S6 NLP Pipeline (PRD-0026 §6.7 Flow C).
 
-    No authentication required — public endpoint.  Issues a system JWT so S5's
+    No authentication required — public endpoint.  Issues a system JWT so S6's
     InternalJWTMiddleware accepts the request.
-    Forwards query parameters (hours, limit, offset) unchanged.
-
-    TODO(PRD-0026): S5 endpoint path will change once PRD-0026 news intelligence
-    APIs are implemented. Update the downstream path when S5 exposes /v1/news/top.
+    Forwards query parameters (hours, limit, offset, min_display_score, routing_tier) unchanged.
     """
     clients = _clients(request)
-    resp = await clients.content_store.get(
-        "/v1/articles/relevant",
+    resp = await clients.nlp_pipeline.get(
+        "/api/v1/news/top",
         params=dict(request.query_params),
         headers=_system_headers(request),
     )
@@ -721,24 +718,19 @@ async def get_news_top(request: Request) -> Any:
 
 @router.get("/news/entity/{entity_id}")
 async def get_news_entity(entity_id: str, request: Request) -> Any:
-    """Proxy GET /v1/articles → S5 Content Store (filtered by entity_id).
+    """Proxy GET /api/v1/entities/{entity_id}/articles → S6 NLP Pipeline (PRD-0026 §6.7 Flow D).
 
-    Requires authentication. Forwards query parameters plus entity_id to S5
-    for entity-scoped article retrieval.
-
-    TODO(PRD-0026): S5 endpoint path will change once PRD-0026 news intelligence
-    APIs are implemented. Update the downstream path when S5 exposes
-    /v1/entities/{entity_id}/articles.
+    Requires authentication. entity_id is a path parameter (not a query param).
+    Forwards query parameters (start_date, end_date, order_by, limit, offset) unchanged.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    params = dict(request.query_params)
-    params["entity_id"] = entity_id
-    resp = await clients.content_store.get(
-        "/v1/articles",
-        params=params,
+    # entity_id is part of the path, not a query param (BP-026 guard).
+    resp = await clients.nlp_pipeline.get(
+        f"/api/v1/entities/{entity_id}/articles",
+        params=dict(request.query_params),
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

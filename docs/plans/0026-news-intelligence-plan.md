@@ -1058,12 +1058,13 @@ No authentication required (public endpoint, consistent with existing S9 proxy c
 
 ---
 
-## Wave 7: S9 Proxy Retarget — news/top and news/entity
+## Wave 7: S9 Proxy Retarget — news/top and news/entity ✅
 
 **Goal**: Retarget S9's `GET /v1/news/top` and `GET /v1/news/entity/{entity_id}` from S5 (Content Store) to S6 (NLP Pipeline). Update auth handling (public vs authenticated). Update tests.
 **Depends on**: Wave 6 (S6 endpoints exist)
 **Architecture layer**: API (gateway)
 **Estimated effort**: 20–30 min
+**Status**: **DONE** — 2026-04-22 · 191 api-gateway tests pass · ruff + mypy clean
 
 ### Pre-read (agent must read before starting)
 - `services/api-gateway/src/api_gateway/routes/proxy.py` lines 699–745 (current TODO stubs)

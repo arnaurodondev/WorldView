@@ -76,10 +76,12 @@ class FundamentalsRefreshWorker:
     - Upserts is_in_sector / is_in_industry relations from company-profile data.
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
         llm_client:      FallbackChainClient (embedding path).
         market_data_base_url: Base URL for market-data service REST API.
         http_client:     Optional httpx.AsyncClient (injected for testing).
+
     """
 
     def __init__(
@@ -143,13 +145,23 @@ class FundamentalsRefreshWorker:
 
                     # --- Step 1: Earnings events (independent of embedding refresh) ---
                     count = await self._insert_earnings_events(
-                        http, session, entity_id, entity_id, str(ticker), canonical_name
+                        http,
+                        session,
+                        entity_id,
+                        entity_id,
+                        str(ticker),
+                        canonical_name,
                     )
                     earnings_inserted += count
 
                     # --- Step 2: Sector/industry relations (independent) ---
                     count = await self._upsert_sector_relations(
-                        http, entity_id, entity_id, relation_repo, evidence_repo, entity_repo
+                        http,
+                        entity_id,
+                        entity_id,
+                        relation_repo,
+                        evidence_repo,
+                        entity_repo,
                     )
                     relations_upserted += count
 
@@ -222,7 +234,9 @@ class FundamentalsRefreshWorker:
             resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/earnings")
             if resp.status_code == 404:
                 logger.debug(  # type: ignore[no-any-return]
-                    "earnings_not_found", entity_id=str(entity_id), ticker=ticker
+                    "earnings_not_found",
+                    entity_id=str(entity_id),
+                    ticker=ticker,
                 )
                 return 0
             if resp.status_code != 200:
@@ -236,7 +250,10 @@ class FundamentalsRefreshWorker:
             resp_data: dict[str, Any] = resp.json()
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
-                "earnings_fetch_exception", entity_id=str(entity_id), ticker=ticker, error=str(exc)
+                "earnings_fetch_exception",
+                entity_id=str(entity_id),
+                ticker=ticker,
+                error=str(exc),
             )
             return 0
 
@@ -365,7 +382,8 @@ ON CONFLICT DO NOTHING
             resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/company-profile")
             if resp.status_code == 404:
                 logger.debug(  # type: ignore[no-any-return]
-                    "company_profile_not_found", entity_id=str(entity_id)
+                    "company_profile_not_found",
+                    entity_id=str(entity_id),
                 )
                 return 0
             if resp.status_code != 200:
@@ -378,7 +396,9 @@ ON CONFLICT DO NOTHING
             resp_data: dict[str, Any] = resp.json()
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
-                "company_profile_fetch_exception", entity_id=str(entity_id), error=str(exc)
+                "company_profile_fetch_exception",
+                entity_id=str(entity_id),
+                error=str(exc),
             )
             return 0
 
