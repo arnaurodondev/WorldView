@@ -28,14 +28,20 @@ import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ArticleImpactBadge } from "@/components/news/ArticleImpactBadge";
-import { formatRelativeTime, safeExternalUrl } from "@/lib/utils";
-import type { Article } from "@/types/api";
+import { cn, formatRelativeTime, safeExternalUrl } from "@/lib/utils";
+import type { Article, RankedArticle } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface ArticleCardProps {
-  /** Full Article object from S9 GET /v1/news/* endpoints */
-  article: Article;
+  /**
+   * Article object from S9 GET /v1/news/* endpoints.
+   * WHY union type: two endpoints return different shapes:
+   *   - getRelevantNews → Article (legacy S5 format with source, summary, tickers, sentiment)
+   *   - getTopNews / getEntityNews → RankedArticle (S6 format with source_name, impact_windows)
+   * ArticleCard handles both gracefully using type narrowing helpers below.
+   */
+  article: Article | RankedArticle;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -49,23 +55,72 @@ interface ArticleCardProps {
  *   [summary — 2-line clamp, only if available]
  *   [entity tickers] ............. [ArticleImpactBadge score+sentiment]
  */
+// ── Type narrowing helpers ────────────────────────────────────────────────────
+//
+// WHY helpers instead of inline casts: keeps the JSX clean and centralises the
+// "which field does this shape use?" logic. If the API ever unifies the shapes,
+// only these helpers need updating.
+
+/** Return the human-readable source label from whichever article shape we have. */
+function getSource(a: Article | RankedArticle): string {
+  // Article has `source: string`; RankedArticle has `source_name: string | null`.
+  return ('source' in a ? a.source : a.source_name) ?? '—';
+}
+
+/** Return the optional summary text (only Article has this field). */
+function getSummary(a: Article | RankedArticle): string | null {
+  return 'summary' in a ? a.summary : null;
+}
+
+/** Return tickers to display (only Article has this field; RankedArticle does not). */
+function getTickers(a: Article | RankedArticle): string[] {
+  return 'tickers' in a ? a.tickers : [];
+}
+
+/** Return sentiment label (only Article has this field; RankedArticle does not). */
+function getSentiment(a: Article | RankedArticle): "positive" | "negative" | "neutral" | null {
+  // WHY explicit return type: ArticleImpactBadge expects the exact union from Article.
+  // If `a` is RankedArticle (no sentiment field), we return null → badge renders nothing.
+  return 'sentiment' in a ? a.sentiment : null;
+}
+
 export function ArticleCard({ article }: ArticleCardProps) {
+  // WHY isLightTier: LIGHT routing tier = low-relevance/low-signal article. De-emphasised
+  // at 60% opacity so traders can focus on HIGH/STANDARD signal articles. The italic source
+  // badge reinforces "lower confidence" routing without hiding the article entirely.
+  // WHY ?? false: RankedArticle.routing_tier is string | null; null → not LIGHT.
+  const isLightTier = (article.routing_tier ?? '') === "LIGHT";
+
+  const source = getSource(article);
+  const summary = getSummary(article);
+  const tickers = getTickers(article);
+  const sentiment = getSentiment(article);
+
   return (
     // WHY group class: enables group-hover on child elements (title colour, icon opacity)
-    <article className="group rounded-lg border border-border/50 bg-card p-3 transition-colors hover:border-border hover:bg-card/80">
+    // WHY hover:bg-muted/30 (not hover:bg-card/80): bg-card/80 is barely visible
+    // against bg-card (#111820). bg-muted/30 (#1A2030 at 30%) creates a noticeable
+    // lift effect that signals interactivity without being distracting.
+    <article className={cn(
+      "group rounded-lg border border-border/50 bg-card p-3 transition-colors hover:border-border hover:bg-muted/30",
+      isLightTier && "opacity-60",  // WHY: de-emphasise LIGHT-tier; opacity on the wrapper dims the entire card
+    )}>
 
       {/* ── Top row: source + timestamp ────────────────────────────────────── */}
       <div className="mb-1.5 flex items-center justify-between gap-2">
         {/* Source badge — secondary variant for neutral, muted appearance */}
-        <Badge variant="secondary" className="shrink-0 text-[10px] uppercase tracking-wider">
-          {article.source}
+        <Badge variant="secondary" className={cn(
+          "shrink-0 text-[10px] uppercase tracking-wider",
+          isLightTier && "italic",  // WHY: italic signals "lower confidence" source routing to traders
+        )}>
+          {source}
         </Badge>
 
         {/* Relative published time — font-mono tabular-nums per global rule */}
         {/* WHY relative not absolute: "2h ago" conveys recency instantly; absolute
             ISO time would require mental arithmetic while scanning a feed. */}
         <time
-          dateTime={article.published_at}
+          dateTime={article.published_at ?? undefined}
           className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
         >
           {formatRelativeTime(article.published_at)}
@@ -94,11 +149,12 @@ export function ArticleCard({ article }: ArticleCardProps) {
       </a>
 
       {/* ── Summary — only if available, 2-line clamp ──────────────────────── */}
-      {/* WHY conditional: ~40% of articles have no summary. The empty string check
-          handles both null and "" from the API without layout shift. */}
-      {article.summary && article.summary.trim() !== "" && (
+      {/* WHY conditional: ~40% of articles have no summary. RankedArticle has no
+          summary field at all; getSummary() returns null for those. The empty string
+          check handles both null and "" from the API without layout shift. */}
+      {summary && summary.trim() !== "" && (
         <p className="mb-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-          {article.summary}
+          {summary}
         </p>
       )}
 
@@ -106,9 +162,10 @@ export function ArticleCard({ article }: ArticleCardProps) {
       <div className="flex items-center justify-between gap-2">
         {/* Entity tickers — as outline badges */}
         {/* WHY show tickers (not entity_ids): entity IDs are UUIDs; tickers like
-            "AAPL" are immediately meaningful to traders. */}
+            "AAPL" are immediately meaningful to traders. RankedArticle has no
+            tickers field (getTickers() returns []); the div renders empty. */}
         <div className="flex flex-wrap gap-1">
-          {article.tickers.slice(0, 4).map((ticker) => (
+          {tickers.slice(0, 4).map((ticker) => (
             // Link to instrument detail page so user can pivot on mention
             <Link
               key={ticker}
@@ -120,9 +177,9 @@ export function ArticleCard({ article }: ArticleCardProps) {
             </Link>
           ))}
           {/* Show overflow count if more than 4 tickers */}
-          {article.tickers.length > 4 && (
+          {tickers.length > 4 && (
             <span className="px-1 text-[10px] text-muted-foreground">
-              +{article.tickers.length - 4}
+              +{tickers.length - 4}
             </span>
           )}
         </div>
@@ -130,7 +187,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
         {/* Article impact score badge — renders nothing if score is null */}
         <ArticleImpactBadge
           score={article.display_relevance_score}
-          sentiment={article.sentiment}
+          sentiment={sentiment}
         />
       </div>
     </article>

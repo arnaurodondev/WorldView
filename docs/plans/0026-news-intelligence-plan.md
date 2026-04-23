@@ -2,7 +2,7 @@
 id: PLAN-0026
 prd: docs/specs/0026-news-intelligence-ranked-feed.md
 title: News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring
-status: in-progress
+status: completed
 created: 2026-04-22
 updated: 2026-04-22
 services: [nlp-pipeline, api-gateway, worldview-web]
@@ -1127,12 +1127,13 @@ Update `get_news_entity()` (line ~722):
 
 ---
 
-## Wave 8: Frontend Types and API Client
+## Wave 8: Frontend Types and API Client ✅
 
 **Goal**: Add `RankedArticle`, `ImpactWindows`, `RankedNewsResponse`, `TopNewsParams`, `EntityNewsParams` TypeScript interfaces and `getTopNews()`, `getEntityNews()` methods to `apps/worldview-web/lib/gateway-client.ts`.
 **Depends on**: Wave 7 (S9 routes available)
 **Architecture layer**: frontend
 **Estimated effort**: 20–30 min
+**Status**: **DONE** — 2026-04-22 · 271 vitest tests pass · tsc --noEmit clean · no ESLint errors
 
 ### Pre-read (agent must read before starting)
 - `apps/worldview-web/lib/gateway-client.ts` — existing pattern for `request<T>()` + `buildQuery()`

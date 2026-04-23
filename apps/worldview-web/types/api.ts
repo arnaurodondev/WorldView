@@ -204,6 +204,79 @@ export interface NewsResponse {
   limit: number;
 }
 
+// ── Ranked News (PRD-0026) ─────────────────────────────────────────────────
+//
+// WHY separate from Article: S6's ranked news endpoint returns a richer
+// structure with multi-window price impact scores and separate source fields.
+// The S5 "relevant news" endpoint (getRelevantNews) still returns the old
+// Article shape, so both interfaces coexist in the codebase.
+
+/**
+ * Per-window price impact scores after an article's publication.
+ * Each value is 0.0–1.0, measuring how much the article moved the entity's
+ * stock price in the N trading days after publication.
+ * null = not yet computed (article too recent, or OHLCV data unavailable).
+ */
+export interface ImpactWindows {
+  day_t0: number | null;  // Publication-day OHLCV price impact
+  day_t1: number | null;  // Following-day impact (T+1)
+  day_t2: number | null;  // 2-day cumulative impact (T+2)
+  day_t5: number | null;  // 5-trading-day cumulative impact (T+5)
+}
+
+/**
+ * A news article returned by S6's ranked news endpoints (PRD-0026 §6.2).
+ * display_relevance_score is the weighted composite signal used for ordering:
+ *   full-signal:   0.50 * market_impact + 0.40 * llm_relevance + 0.10 * routing
+ *   market-only:   0.70 * market_impact + 0.30 * routing
+ *   llm-only:      0.60 * llm_relevance + 0.40 * routing
+ *   routing-only:  0.40 * routing  (fallback when no ML signals available)
+ */
+export interface RankedArticle {
+  article_id: string;
+  title: string | null;
+  url: string | null;
+  published_at: string | null;            // ISO-8601 UTC
+  source_type: string | null;             // e.g. "eodhd_news" (technical identifier)
+  source_name: string | null;             // e.g. "EODHD" (human-readable display name)
+  routing_tier: string | null;            // "LIGHT" | "MEDIUM" | "DEEP"
+  routing_score: number | null;           // 0.0–1.0 composite routing confidence
+  market_impact_score: number | null;     // null if no price windows computed yet
+  llm_relevance_score: number | null;     // null for LIGHT tier (skipped) or unscored
+  display_relevance_score: number;        // always 0.0–1.0; used for UI sort order
+  primary_entity_id: string | null;       // top entity for this article (global feed only)
+  primary_entity_symbol: string | null;   // ticker of top entity (global feed only)
+  impact_windows: ImpactWindows | null;   // null when OHLCV data not yet available
+}
+
+/**
+ * Response from GET /v1/news/top and GET /v1/news/entity/{id} (PRD-0026 §6.2).
+ * Unlike the legacy NewsResponse, there are no offset/limit fields —
+ * clients track pagination state locally using the total count.
+ */
+export interface RankedNewsResponse {
+  articles: RankedArticle[];
+  total: number;
+}
+
+/** Query params for GET /v1/news/top (PRD-0026 §6.2 F-25) */
+export interface TopNewsParams {
+  hours?: number;                         // 1–168, default 24
+  limit?: number;                         // 1–100, default 20
+  offset?: number;
+  min_display_score?: number;             // filter: minimum composite score 0.0–1.0
+  routing_tier?: 'LIGHT' | 'MEDIUM' | 'DEEP';
+}
+
+/** Query params for GET /v1/news/entity/{id} (PRD-0026 §6.2 F-26) */
+export interface EntityNewsParams {
+  start_date?: string;                    // ISO-8601 UTC
+  end_date?: string;                      // ISO-8601 UTC
+  order_by?: 'display_relevance_score' | 'published_at';
+  limit?: number;
+  offset?: number;
+}
+
 // ── Screener ───────────────────────────────────────────────────────────────
 
 export interface ScreenerFieldOption {

@@ -74,7 +74,9 @@ export default function InstrumentDetailPage() {
       createGateway(accessToken).getEntityNews(entityId, {
         limit: 20,
         offset: newsOffset,
-        order_by: "relevance",
+        // WHY display_relevance_score: S6 endpoint accepts "display_relevance_score"
+        // or "published_at". The old value "relevance" was a legacy S5 param name.
+        order_by: "display_relevance_score",
       }),
     enabled: !!accessToken && !!entityId,
     staleTime: 2 * 60_000,
@@ -268,10 +270,12 @@ export default function InstrumentDetailPage() {
                 ))}
 
                 {/* Pagination: load more */}
-                {newsResp && newsOffset + newsResp.limit < newsResp.total && (
+                {/* WHY 20: RankedNewsResponse has no .limit field (unlike NewsResponse).
+                    Use the same hardcoded limit passed to getEntityNews above. */}
+                {newsResp && newsOffset + 20 < newsResp.total && (
                   <div className="p-4 text-center">
                     <button
-                      onClick={() => setNewsOffset((o) => o + newsResp.limit)}
+                      onClick={() => setNewsOffset((o) => o + 20)}
                       className="text-xs text-muted-foreground hover:text-foreground"
                     >
                       Load more articles
