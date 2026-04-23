@@ -58,7 +58,7 @@ export function LiveQuoteBadge({ instrumentId, initialPrice }: LiveQuoteBadgePro
 
   if (!quote) {
     return (
-      <div className="h-10 w-32 animate-pulse rounded bg-muted" />
+      <div className="h-10 w-32 animate-pulse rounded-[2px] bg-muted" />
     );
   }
 

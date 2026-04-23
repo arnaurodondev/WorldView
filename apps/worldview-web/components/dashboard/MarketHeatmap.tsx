@@ -71,7 +71,8 @@ export function MarketHeatmap() {
         return (
           <div
             key={sector.name}
-            className="flex min-h-[3.5rem] flex-col items-center justify-center rounded p-1 text-center"
+            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+            className="flex min-h-[3.5rem] flex-col items-center justify-center rounded-[2px] p-1 text-center"
             style={{ backgroundColor: background }}
           >
             {/* Sector name — abbreviated to fit tight cell */}

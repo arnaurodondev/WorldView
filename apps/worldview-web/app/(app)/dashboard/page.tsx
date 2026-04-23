@@ -48,12 +48,19 @@ import {
 
 export default function DashboardPage() {
   return (
-    // WHY p-4 gap-3: tight but not cramped — finance terminal standard.
-    // WHY gap-3 (not gap-4): saving 4px between every widget adds up to ~32px on
-    // a 9-widget dashboard — nearly a full extra row of data at high density.
+    // WHY p-1 not p-4: Terminal-dense layout — minimal outer padding keeps panels
+    // flush with the sidebar/topbar edges, matching Bloomberg Terminal where panels
+    // touch the chrome. 4px (p-1) allows the background to show through as a very
+    // thin outer margin without wasting space.
+    // WHY gap-px (1px) not gap-3 (12px): Bloomberg-style panel grids use 1px borders
+    // as the separation mechanism — not guttering/spacing. Each panel shares its
+    // border with the adjacent panel. This is what makes it feel like a terminal
+    // (shared grid lines) vs a card wall (individual floating cards with gaps).
+    // The 1px gap creates a visible seam via the background color (#09090B) showing
+    // through — effectively a 1px "border" between panels without actual border changes.
     // WHY xl:grid-cols-4: at ≥1280px (typical finance desk), 4 columns make full
     // use of horizontal space. Full-width rows auto-expand via xl:col-span-4.
-    <div className="grid h-full grid-cols-1 gap-3 overflow-y-auto p-4 lg:grid-cols-3 xl:grid-cols-4">
+    <div className="grid h-full grid-cols-1 gap-px overflow-y-auto p-1 lg:grid-cols-3 xl:grid-cols-4">
 
       {/* ── Row 1: Morning Brief (full width at all breakpoints) ──────────── */}
       <Card className="lg:col-span-3 xl:col-span-4">

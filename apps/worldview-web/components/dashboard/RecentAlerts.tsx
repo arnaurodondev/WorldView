@@ -109,11 +109,13 @@ export function RecentAlerts() {
         return (
           <div
             key={alert.id}
-            className="flex items-start gap-2 rounded px-1 py-0.5 hover:bg-muted/30"
+            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+            className="flex items-start gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
           >
             {/* Severity badge — use Tailwind bg/text classes from severityColor */}
             <span
-              className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${severityBg} ${severityText}`}
+              // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+              className={`shrink-0 rounded-[2px] px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${severityBg} ${severityText}`}
             >
               {alert.severity.slice(0, 4)}
             </span>

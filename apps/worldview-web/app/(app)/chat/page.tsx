@@ -93,7 +93,7 @@ function TypingIndicator() {
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20">
         <Bot className="h-3.5 w-3.5 text-primary" />
       </div>
-      <div className="rounded-2xl rounded-bl-sm bg-muted px-4 py-3">
+      <div className="rounded-[2px] bg-muted px-4 py-3">
         {/* Three animated dots — the staggered animation conveys "thinking" */}
         <div className="flex gap-1" aria-label="AI is generating a response">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
@@ -124,7 +124,7 @@ function CitationList({ citations }: { citations: Citation[] }) {
           rel="noopener noreferrer"
           // WHY primary/10 border primary/30: subtle but distinguishable citation pills.
           // hover:bg-primary/20 on dark bg gives clear affordance without aggressive color.
-          className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20"
+          className="inline-flex items-center gap-1 rounded-[2px] border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20"
           title={`${cite.source} — relevance: ${(cite.relevance_score * 100).toFixed(0)}%`}
         >
           {/* WHY superscript index: matches academic citation convention analysts recognise */}
@@ -161,12 +161,15 @@ function MessageBubble({ message }: { message: Message }) {
         )}
 
         <div
-          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+          // WHY rounded-[2px]: terminal design uses uniform 2px radius; no consumer-app
+          // asymmetric corner overrides (rounded-br-sm/rounded-bl-sm were dropped — at
+          // the 2px scale, the distinction is imperceptible and adds visual complexity).
+          className={`rounded-[2px] px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? // User bubble: right side, amber tint (Bloomberg Dark primary/10)
-                "rounded-br-sm bg-primary/10 text-foreground"
-              : // Assistant bubble: left side, muted background
-                "rounded-bl-sm bg-muted text-foreground"
+              ? // User bubble: right-aligned, amber tint
+                "bg-primary/10 text-foreground"
+              : // Assistant bubble: left-aligned, muted background
+                "bg-muted text-foreground"
           }`}
         >
           {/*
@@ -211,7 +214,7 @@ function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20">
           <Bot className="h-3.5 w-3.5 text-primary" />
         </div>
-        <div className="rounded-2xl rounded-bl-sm bg-muted px-4 py-3 text-sm leading-relaxed">
+        <div className="rounded-[2px] bg-muted px-4 py-3 text-sm leading-relaxed">
           <pre className="whitespace-pre-wrap font-sans text-sm">{streaming.text}</pre>
           {/* Blinking cursor: visible while stream is active, hidden once done */}
           {streaming.active && (
@@ -712,7 +715,7 @@ export default function ChatPage() {
                    * The user needs to hover over the specific thread to see/click Delete.
                    */}
                   <button
-                    className="hidden shrink-0 rounded p-0.5 text-muted-foreground hover:text-destructive group-hover:flex"
+                    className="hidden shrink-0 rounded-[2px] p-0.5 text-muted-foreground hover:text-destructive group-hover:flex"
                     onClick={(e) => void handleDeleteThread(thread.thread_id, e)}
                     aria-label={`Delete thread: ${thread.title ?? PLACEHOLDER_THREAD_TITLE}`}
                     tabIndex={-1} // WHY -1: delete is secondary action, not in tab order
@@ -769,7 +772,7 @@ export default function ChatPage() {
                     {[...Array(3)].map((_, i) => (
                       <Skeleton
                         key={i}
-                        className={`h-16 w-2/3 rounded-2xl ${
+                        className={`h-16 w-2/3 rounded-[2px] ${
                           i % 2 === 0 ? "self-end" : "self-start"
                         }`}
                       />

@@ -53,7 +53,8 @@ export function TopMovers() {
           <button
             key={t}
             onClick={() => setType(t)}
-            className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
+            // 2px: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+            className={`rounded-[2px] px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
               type === t
                 ? t === "gainers"
                   ? "bg-positive/20 text-positive"
@@ -94,7 +95,8 @@ export function TopMovers() {
               // WHY hover:bg-surface-3/40: surface-3 is a deeper elevation token than muted,
               // giving TopMover tiles a more pronounced lift on hover. This differentiates
               // them from flat list items and signals "clickable tile" in the dashboard grid.
-              className="flex shrink-0 flex-col items-start rounded border border-border bg-muted/30 p-2 hover:bg-surface-3/40"
+              // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
+              className="flex shrink-0 flex-col items-start rounded-[2px] border border-border bg-muted/30 p-2 hover:bg-surface-3/40"
               style={{ minWidth: "4.5rem" }}
             >
               {/* Ticker — large, font-mono */}

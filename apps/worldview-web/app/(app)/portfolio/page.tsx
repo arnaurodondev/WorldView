@@ -223,7 +223,7 @@ function HoldingsTable({ holdings, quotes, onRowClick }: HoldingsTableProps) {
               key={h.holding_id}
               // WHY cursor-pointer + hover:bg-muted/50: visual affordance that
               // clicking navigates to the instrument detail page
-              className="grid min-w-[700px] cursor-pointer grid-cols-[100px_1fr_90px_100px_110px_110px_100px_90px] gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+              className="grid min-w-[700px] cursor-pointer grid-cols-[100px_1fr_90px_100px_110px_110px_100px_90px] gap-2 rounded-[2px] px-2 py-1.5 text-sm hover:bg-muted/50"
               onClick={() => onRowClick(h.entity_id)}
               role="row"
               tabIndex={0}
@@ -341,7 +341,7 @@ function TransactionsTable({ transactions }: TransactionsTableProps) {
           return (
             <div
               key={tx.transaction_id}
-              className="grid min-w-[600px] grid-cols-[130px_70px_90px_90px_100px_100px_80px] gap-2 rounded px-2 py-1.5 text-sm"
+              className="grid min-w-[600px] grid-cols-[130px_70px_90px_90px_100px_100px_80px] gap-2 rounded-[2px] px-2 py-1.5 text-sm"
             >
               {/* Date — font-mono tabular-nums ensures column-aligned date/time digits */}
               <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -437,7 +437,7 @@ function WatchlistTable({ members, quotes, onRowClick }: WatchlistTableProps) {
           return (
             <div
               key={m.entity_id}
-              className="grid min-w-[400px] cursor-pointer grid-cols-[100px_1fr_120px_100px] gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+              className="grid min-w-[400px] cursor-pointer grid-cols-[100px_1fr_120px_100px] gap-2 rounded-[2px] px-2 py-1.5 text-sm hover:bg-muted/50"
               onClick={() => onRowClick(m.entity_id)}
               role="row"
               tabIndex={0}
