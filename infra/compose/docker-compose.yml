@@ -1134,6 +1134,27 @@ services:
       retries: 3
       start_period: 30s
 
+  nlp-pipeline-relevance-scoring:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.workers.article_relevance_scoring_worker"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Knowledge Graph (S7) — API + dispatcher + scheduler + 4 consumers ───────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
   knowledge-graph:

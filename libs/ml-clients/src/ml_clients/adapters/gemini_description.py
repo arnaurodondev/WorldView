@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     import asyncio
 
     from ml_clients.description_client import CostTrackerProtocol
+    from ml_clients.usage_log import LlmUsageLogProtocol
 
 logger = structlog.get_logger()
 
@@ -47,7 +48,7 @@ _RETRYABLE_GEMINI_ERRORS = frozenset(
         "DeadlineExceeded",
         "InternalServerError",
         "TooManyRequests",
-    }
+    },
 )
 
 # Default output token estimate for pre-reservation cost calculation
@@ -69,11 +70,13 @@ class GeminiDescriptionAdapter:
     """Generates entity descriptions via Google Gemini AI Studio (gemini-3.1-flash-lite).
 
     Args:
+    ----
         api_key:          Google AI Studio API key.
         model_id:         Model ID override (default: gemini-3.1-flash-lite).
         semaphore:        Concurrency limiter (must be provided, keyword-only).
         cost_tracker:     Valkey client for monthly cost tracking (optional).
         max_monthly_usd:  Monthly spend cap in USD (default: $10.0).
+
     """
 
     def __init__(
@@ -84,6 +87,7 @@ class GeminiDescriptionAdapter:
         semaphore: asyncio.Semaphore,
         cost_tracker: CostTrackerProtocol | None = None,
         max_monthly_usd: float = _DEFAULT_MAX_MONTHLY_USD,
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
@@ -91,6 +95,8 @@ class GeminiDescriptionAdapter:
         self._cost_tracker = cost_tracker
         self._max_monthly_usd = max_monthly_usd
         self._genai_client: object | None = None  # Lazy: initialized on first generate call
+        # Optional cost logger — fire-and-forget via asyncio.create_task (PLAN-0033 T-D-1-03)
+        self._usage_logger = usage_logger
 
     async def generate_description(
         self,
@@ -152,10 +158,44 @@ class GeminiDescriptionAdapter:
             except (RetryableError, FatalError):
                 # Undo reservation — the API call failed, no cost incurred
                 await self._undo_reservation(estimated_cost)
+                # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
+                if self._usage_logger is not None:
+                    import asyncio as _asyncio
+
+                    _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                        self._usage_logger.log(
+                            model_id=self._model_id,
+                            provider="gemini",
+                            capability="description",
+                            tokens_in=0,
+                            tokens_out=0,
+                            latency_ms=0,
+                            estimated_cost_usd=0.0,
+                            success=False,
+                            error_code="model_error",
+                        ),
+                    )
                 raise
             except Exception as exc:
                 # Undo reservation — the API call failed
                 await self._undo_reservation(estimated_cost)
+                # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
+                if self._usage_logger is not None:
+                    import asyncio as _asyncio
+
+                    _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                        self._usage_logger.log(
+                            model_id=self._model_id,
+                            provider="gemini",
+                            capability="description",
+                            tokens_in=0,
+                            tokens_out=0,
+                            latency_ms=0,
+                            estimated_cost_usd=0.0,
+                            success=False,
+                            error_code="model_error",
+                        ),
+                    )
                 if type(exc).__name__ in _RETRYABLE_GEMINI_ERRORS:
                     raise RetryableError(f"Gemini transient error: {exc}") from exc
                 raise FatalError(f"Gemini error: {exc}") from exc
@@ -199,10 +239,9 @@ class GeminiDescriptionAdapter:
 
         If the actual cost differs from the pre-reserved estimate, a
         corrective INCRBYFLOAT is applied (positive or negative delta).
-        """
-        if self._cost_tracker is None or estimated == 0.0:
-            return
 
+        Also fires a success usage log via usage_logger (PLAN-0033 T-D-1-03).
+        """
         try:
             usage = getattr(response, "usage_metadata", None)
             input_tokens: int = getattr(usage, "prompt_token_count", 0) or 0
@@ -212,6 +251,27 @@ class GeminiDescriptionAdapter:
             output_tokens = _DEFAULT_ESTIMATED_OUTPUT_TOKENS
 
         actual = _estimate_cost(input_tokens, output_tokens)
+
+        # Fire-and-forget success log (PLAN-0033 T-D-1-03)
+        if self._usage_logger is not None:
+            import asyncio as _asyncio
+
+            _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                self._usage_logger.log(
+                    model_id=self._model_id,
+                    provider="gemini",
+                    capability="description",
+                    tokens_in=input_tokens,
+                    tokens_out=output_tokens,
+                    latency_ms=0,  # GeminiDescriptionAdapter does not track wall-clock time
+                    estimated_cost_usd=actual,
+                    success=True,
+                ),
+            )
+
+        if self._cost_tracker is None or estimated == 0.0:
+            return
+
         delta = actual - estimated
         if abs(delta) < 0.000001:
             return

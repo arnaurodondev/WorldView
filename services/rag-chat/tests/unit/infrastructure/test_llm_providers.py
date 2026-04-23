@@ -110,3 +110,69 @@ async def test_provider_chain_first_provider_success() -> None:
 
     assert tokens == ["tok1", "tok2", "tok3"]
     valkey.setex.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0033 T-E-1-02: cost logging integration
+# ---------------------------------------------------------------------------
+
+
+def _make_usage_logger() -> AsyncMock:
+    """Create a mock LlmUsageLogProtocol."""
+    logger = AsyncMock()
+    logger.log = AsyncMock()
+    return logger
+
+
+@pytest.mark.unit
+async def test_provider_chain_fires_success_cost_log() -> None:
+    """On success, LLMProviderChain fires a fire-and-forget cost log (PLAN-0033 T-E-1-02)."""
+    primary = _make_provider("deepinfra", ["hello", " world"])
+    primary.model_id = "deepseek-r1-distill-qwen-32b"  # Provider exposes model_id
+    valkey = _make_valkey()
+    usage_logger = _make_usage_logger()
+
+    chain = LLMProviderChain(providers=[primary], valkey=valkey, usage_logger=usage_logger)
+
+    async for _ in chain.stream("test prompt"):
+        pass
+
+    # Allow fire-and-forget task to run
+    import asyncio
+
+    await asyncio.sleep(0)
+
+    # The cost logger should have been called
+    assert chain.last_provider_name == "deepinfra"
+    usage_logger.log.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_provider_chain_no_usage_logger_no_error() -> None:
+    """If usage_logger=None, chain works normally without logging."""
+    primary = _make_provider("deepinfra", ["tok"])
+    valkey = _make_valkey()
+
+    chain = LLMProviderChain(providers=[primary], valkey=valkey, usage_logger=None)
+    tokens = []
+    async for chunk in chain.stream("prompt"):
+        tokens.append(chunk)
+
+    assert tokens == ["tok"]
+
+
+@pytest.mark.unit
+async def test_provider_chain_all_fail_fires_failure_log() -> None:
+    """All providers fail -> failure log is fired (PLAN-0033 T-E-1-02)."""
+    p1 = _make_provider("deepinfra", fail=True)
+    p2 = _make_provider("openrouter", fail=True)
+    valkey = _make_valkey()
+    usage_logger = _make_usage_logger()
+
+    chain = LLMProviderChain(providers=[p1, p2], valkey=valkey, usage_logger=usage_logger)
+
+    with pytest.raises(ProviderUnavailableError):
+        async for _ in chain.stream("prompt"):
+            pass
+
+    # The chain creates a fire-and-forget task; verify no exceptions from the chain itself

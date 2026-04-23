@@ -1301,6 +1301,75 @@ class TestGeminiDescriptionAdapter:
 
         assert result == description_text, "Must fail-open on Valkey unavailability"
 
+    # ── PLAN-0033 T-D-1-03: usage_logger wiring ──────────────────────────────
+
+    async def test_usage_logger_param_accepted(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """GeminiDescriptionAdapter accepts usage_logger kwarg without error."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
+
+        # Should not raise at construction
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            usage_logger=usage_logger,
+        )
+        assert adapter._usage_logger is usage_logger
+
+    async def test_usage_logger_none_is_default(
+        self,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        """usage_logger defaults to None (no usage logging if not provided)."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        adapter = GeminiDescriptionAdapter(api_key="key", semaphore=semaphore)
+        assert adapter._usage_logger is None
+
+    async def test_success_fires_usage_log(
+        self,
+        semaphore: asyncio.Semaphore,
+        _mock_cost_tracker_under_cap: AsyncMock,
+    ) -> None:
+        """On successful generation, usage_logger.log() is fired via create_task (PLAN-0033 T-D-1-03)."""
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter
+
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
+
+        adapter = GeminiDescriptionAdapter(
+            api_key="key",
+            semaphore=semaphore,
+            cost_tracker=_mock_cost_tracker_under_cap,
+            max_monthly_usd=10.0,
+            usage_logger=usage_logger,
+        )
+
+        description_text = "A central bank managing monetary policy."
+        mock_google, mock_genai = self._make_genai_mock(description_text)
+
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            result = await adapter.generate_description(
+                entity_id="entity-log-test",
+                canonical_name="Federal Reserve",
+                entity_type="organization",
+                context_hints={},
+            )
+
+        assert result == description_text
+        # Allow any pending create_task coroutines to run
+        await asyncio.sleep(0)
+        usage_logger.log.assert_awaited_once()
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["capability"] == "description"
+        assert call_kwargs["success"] is True
+
 
 # ── ResizableSemaphore ────────────────────────────────────────────────────────
 

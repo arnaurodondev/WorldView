@@ -2,21 +2,30 @@
 
 Provider order: DeepInfra -> OpenRouter -> Ollama (emergency)
 Negative cache: 60 seconds per failed provider (rag:v1:neg:{provider_name})
+
+PLAN-0033 T-E-1-02: post-stream cost logging via LlmUsageLogProtocol.
+Token counts are approximated from prompt/output text (word-count heuristic —
+DeepInfra stream yields text chunks without token-count metadata).
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 import structlog
+from ml_clients.cost import estimate_cost, estimate_tokens_from_text  # type: ignore[import-untyped]
 
 from rag_chat.domain.errors import ProviderUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
@@ -48,18 +57,24 @@ class LLMProviderChain:
     When all fail: raises ProviderUnavailableError.
 
     Args:
-        providers: Ordered list of provider adapters (primary first).
-        valkey:    Async Redis/Valkey client for negative cache storage.
+    ----
+        providers:     Ordered list of provider adapters (primary first).
+        valkey:        Async Redis/Valkey client for negative cache storage.
+        usage_logger:  Optional LlmUsageLogProtocol; if set, cost is logged
+                       fire-and-forget after each successful or failed stream.
+
     """
 
     def __init__(
         self,
         providers: list[LLMProvider],
         valkey: ValkeyClient,  # type: ignore[name-defined]
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         self._providers = providers
         self._valkey = valkey
         self._last_provider_name: str = ""
+        self._usage_logger = usage_logger  # PLAN-0033 T-E-1-02
 
     @property
     def last_provider_name(self) -> str:
@@ -75,8 +90,14 @@ class LLMProviderChain:
     ) -> AsyncIterator[str]:
         """Stream tokens from the first available provider.
 
-        Raises:
+        After a successful stream, fires a fire-and-forget cost log via
+        ``usage_logger`` (PLAN-0033 T-E-1-02).  Token counts are estimated
+        from the prompt text and accumulated output using word-count heuristic.
+
+        Raises
+        ------
             ProviderUnavailableError: All providers failed or are negative-cached.
+
         """
         for provider in self._providers:
             neg_key = f"{_NEG_KEY_PREFIX}{provider.name}"
@@ -87,10 +108,34 @@ class LLMProviderChain:
                 )
                 continue
 
+            t0 = time.monotonic()
+            output_chunks: list[str] = []
+
             try:
                 self._last_provider_name = provider.name
                 async for chunk in provider.stream(prompt, max_tokens=max_tokens, temperature=temperature):
+                    output_chunks.append(chunk)
                     yield chunk
+
+                # ── Success: fire-and-forget cost log ────────────────────────
+                if self._usage_logger is not None:
+                    active_model = getattr(provider, "model_id", provider.name)
+                    tokens_in = estimate_tokens_from_text(prompt)
+                    tokens_out = estimate_tokens_from_text("".join(output_chunks))
+                    cost = estimate_cost(provider.name, active_model, tokens_in, tokens_out)
+                    latency_ms = int((time.monotonic() - t0) * 1000)
+                    asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                        self._usage_logger.log(
+                            model_id=active_model,
+                            provider=provider.name,
+                            capability="chat_completion",
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                            latency_ms=latency_ms,
+                            estimated_cost_usd=cost,
+                            success=True,
+                        ),
+                    )
                 return  # success
 
             except Exception as exc:
@@ -100,5 +145,22 @@ class LLMProviderChain:
                     error=str(exc),
                 )
                 await self._valkey.setex(neg_key, _NEG_CACHE_TTL, "1")
+
+        # All providers exhausted — log failure then raise
+        if self._usage_logger is not None:
+            tokens_in = estimate_tokens_from_text(prompt)
+            asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                self._usage_logger.log(
+                    model_id="unknown",
+                    provider="unknown",
+                    capability="chat_completion",
+                    tokens_in=tokens_in,
+                    tokens_out=0,
+                    latency_ms=0,
+                    estimated_cost_usd=0.0,
+                    success=False,
+                    error_code="model_error",
+                ),
+            )
 
         raise ProviderUnavailableError("All LLM providers unavailable or negative-cached")
