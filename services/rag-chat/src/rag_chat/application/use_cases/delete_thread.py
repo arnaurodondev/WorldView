@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
+from rag_chat.infrastructure.metrics.prometheus import rag_thread_count
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
@@ -32,6 +33,7 @@ class DeleteThreadUseCase:
     ) -> datetime:
         archived_at = await uow.threads.soft_delete(thread_id, user_id, tenant_id)
         await uow.commit()
+        rag_thread_count.labels(tenant_id=str(tenant_id)).dec()
         logger.info(  # type: ignore[no-any-return]
             "thread_deleted",
             thread_id=str(thread_id),

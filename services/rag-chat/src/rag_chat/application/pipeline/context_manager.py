@@ -29,6 +29,12 @@ import structlog
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.entities.context import ConversationContext
 from rag_chat.domain.enums import ItemType, QueryIntent
+from rag_chat.infrastructure.metrics.prometheus import (
+    rag_chunk_cache_hits,
+    rag_chunk_cache_misses,
+    rag_context_token_estimate,
+    rag_turn_summary_duration,
+)
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.chunk_cache import ChunkCachePort
@@ -250,20 +256,24 @@ class ContextManager:
         payload: dict[str, Any] | None = await self._cache.get(key)
 
         if payload is None:
+            rag_chunk_cache_misses.labels(reason=MISS_NO_CACHE).inc()
             return None, MISS_NO_CACHE
 
         # ── Condition 1: same intent ──────────────────────────────────────────
         if payload.get("intent", "") != str(current_intent):
+            rag_chunk_cache_misses.labels(reason=MISS_INTENT).inc()
             return None, MISS_INTENT
 
         # ── Condition 2: entity overlap > 50 % ────────────────────────────────
         cached_entities: list[str] = payload.get("entities", [])
         if _entity_overlap(current_entities, cached_entities) <= _ENTITY_OVERLAP_THRESHOLD:
+            rag_chunk_cache_misses.labels(reason=MISS_ENTITY).inc()
             return None, MISS_ENTITY
 
         # ── Condition 3: query similarity > 0.85 ──────────────────────────────
         cached_embedding: list[float] = payload.get("query_embedding", [])
         if _cosine_similarity(current_query_embedding, cached_embedding) <= _QUERY_SIM_THRESHOLD:
+            rag_chunk_cache_misses.labels(reason=MISS_SIMILARITY).inc()
             return None, MISS_SIMILARITY
 
         # ── All conditions met — deserialise cached chunks ────────────────────
@@ -276,8 +286,10 @@ class ContextManager:
                 thread_id=str(thread_id),
                 turn_num=prev_turn_num,
             )
+            rag_chunk_cache_misses.labels(reason=MISS_NO_CACHE).inc()
             return None, MISS_NO_CACHE
 
+        rag_chunk_cache_hits.labels(intent=str(current_intent)).inc()
         return chunks, HIT
 
     def _is_cache_circuit_open(self) -> bool:
@@ -408,8 +420,10 @@ class ContextManager:
                 response_text=response_text[:_RESPONSE_TRUNCATION],
             )
             summary_text = ""
+            _t0 = time.monotonic()
             async for token in self._llm.stream(prompt, max_tokens=200, temperature=0.1):
                 summary_text += token
+            rag_turn_summary_duration.observe(time.monotonic() - _t0)
             summary_text = summary_text.strip()
 
             if not summary_text:
@@ -504,6 +518,7 @@ class ContextManager:
             fixed_tokens + summary_tokens + used_chunk_tokens,
             _MAX_CONTEXT_TOKENS,
         )
+        rag_context_token_estimate.labels(intent=str(intent)).observe(total_tokens)
 
         return ConversationContext(
             intent=intent,

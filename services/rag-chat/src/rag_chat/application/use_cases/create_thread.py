@@ -9,6 +9,7 @@ from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 from rag_chat.domain.entities.conversation import ConversationThread
+from rag_chat.infrastructure.metrics.prometheus import rag_thread_count
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
@@ -41,6 +42,7 @@ class CreateThreadUseCase:
         )
         await uow.threads.create(thread)
         await uow.commit()
+        rag_thread_count.labels(tenant_id=str(tenant_id)).inc()
         logger.info(  # type: ignore[no-any-return]
             "thread_created",
             thread_id=str(thread.thread_id),
