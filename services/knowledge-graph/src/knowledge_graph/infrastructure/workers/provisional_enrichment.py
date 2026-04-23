@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _BATCH_LIMIT = 20
-_EMBED_MODEL_ID = "nomic-embed-text"
+_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
 
@@ -51,10 +51,12 @@ class ProvisionalEnrichmentWorker:
     """Enriches provisional entities via LLM (Worker 13E).
 
     Args:
-        session_factory:  Read/write sessionmaker for intelligence_db.
-        llm_client:       FallbackChainClient for extraction + embedding.
-        direct_producer:  Direct Kafka producer for entity.dirtied.v1.
+        session_factory:   Read/write sessionmaker for intelligence_db.
+        llm_client:        FallbackChainClient for extraction + embedding.
+        direct_producer:   Direct Kafka producer for entity.dirtied.v1.
         entity_dirtied_topic: Topic name for entity.dirtied.v1.
+        embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
+                           Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
     """
 
     def __init__(
@@ -63,8 +65,10 @@ class ProvisionalEnrichmentWorker:
         llm_client: FallbackChainClient,
         direct_producer: DirectProducerProtocol | None = None,
         entity_dirtied_topic: str = "entity.dirtied.v1",
+        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     ) -> None:
         self._sf = session_factory
+        self._embed_model_id = embedding_model_id
         self._llm = llm_client
         self._producer = direct_producer
         self._dirtied_topic = entity_dirtied_topic
@@ -311,7 +315,7 @@ WHERE provisional_queue_id = :queue_id
             sha256_hex,
         )
 
-        inp = EmbeddingInput(text=source_text, model_id=_EMBED_MODEL_ID)
+        inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
         outputs = await self._llm.embed([inp], entity_id=entity_id)
         embedding = outputs[0].embedding if outputs else None
 
@@ -319,7 +323,7 @@ WHERE provisional_queue_id = :queue_id
             entity_id,
             VIEW_DEFINITION,
             embedding=embedding,
-            model_id=_EMBED_MODEL_ID if embedding else None,
+            model_id=self._embed_model_id if embedding else None,
             source_text=source_text,
             source_hash=sha256_hex(source_text),
             next_refresh_at=utc_now() + timedelta(days=90),  # type: ignore[no-any-return, operator]

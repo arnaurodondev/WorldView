@@ -33,7 +33,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 7
 _BATCH_LIMIT = 100
-_EMBED_MODEL_ID = "nomic-embed-text"
+_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _MAX_CHARS = 2048  # ~512 tokens
 
 
@@ -43,16 +43,20 @@ class NarrativeRefreshWorker:
     No LLM — deterministic template → embedding only.
 
     Args:
-        session_factory: Read/write sessionmaker for intelligence_db.
-        llm_client:      FallbackChainClient (embedding path only).
+        session_factory:   Read/write sessionmaker for intelligence_db.
+        llm_client:        FallbackChainClient (embedding path only).
+        embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
+                           Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
     """
 
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
+        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     ) -> None:
         self._sf = session_factory
+        self._embed_model_id = embedding_model_id
         self._llm = llm_client
 
     async def run(self) -> None:
@@ -82,7 +86,7 @@ class NarrativeRefreshWorker:
 
                 from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
-                inp = EmbeddingInput(text=source_text, model_id=_EMBED_MODEL_ID)
+                inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
                 outputs = await self._llm.embed([inp], entity_id=entity_id)
                 embedding = outputs[0].embedding if outputs else None
 
@@ -90,7 +94,7 @@ class NarrativeRefreshWorker:
                     entity_id,
                     VIEW_NARRATIVE,
                     embedding=embedding,
-                    model_id=_EMBED_MODEL_ID if embedding else None,
+                    model_id=self._embed_model_id if embedding else None,
                     source_text=source_text,
                     source_hash=source_hash,
                     next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
