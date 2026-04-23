@@ -107,7 +107,10 @@ export default function LandingPage() {
             // WHY shadow-sm + hover:shadow-md: nav CTA gets a subtler amber glow than the
             // hero CTA (shadow-lg) to establish hierarchy: hero > nav. transition-all
             // animates the shadow on hover (transition-colors only handles color, not shadow).
-            className="text-sm font-semibold bg-primary text-primary-foreground px-3 py-1.5 rounded-md shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30 transition-all"
+            // WHY rounded-[2px] not rounded-md: 2px radius policy — matches the rest of
+            // the app shell and keeps the landing page feeling like a terminal, not a
+            // consumer fintech product.
+            className="text-sm font-semibold bg-primary text-primary-foreground px-3 py-1.5 rounded-[2px] shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30 transition-all"
           >
             Get started
           </Link>
@@ -140,7 +143,10 @@ export default function LandingPage() {
         {/* WHY kbd element: signals power-user capability (⌘K to search). Bloomberg
             users expect keyboard shortcuts — this badge communicates "this is a
             professional tool" before the user even signs in. */}
-        <kbd className="mb-8 inline-block rounded border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+        {/* WHY rounded-[2px]: 2px radius policy — kbd key badges must match
+            the system radius. Bare `rounded` resolves to 4px in Tailwind
+            (the config only overrides rounded-lg/md/sm, not the base class). */}
+        <kbd className="mb-8 inline-block rounded-[2px] border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
           ⌘K to search instruments
         </kbd>
 
@@ -153,7 +159,8 @@ export default function LandingPage() {
               outline-only secondary CTA. hover:shadow-xl deepens the effect on hover. */}
           <Link
             href="/login"
-            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
+            // WHY rounded-[2px]: 2px radius policy — keeps CTAs sharp and terminal-grade.
+            className="bg-primary text-primary-foreground px-7 py-3 rounded-[2px] text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
           >
             Sign In
           </Link>
@@ -165,7 +172,8 @@ export default function LandingPage() {
               competing with the amber Sign In button. */}
           <a
             href="#features"
-            className="text-sm text-muted-foreground border border-border/60 rounded-md px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
+            // WHY rounded-[2px]: 2px radius policy — matches hero primary CTA.
+            className="text-sm text-muted-foreground border border-border/60 rounded-[2px] px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
           >
             Learn More ↓
           </a>
@@ -193,7 +201,10 @@ export default function LandingPage() {
             return (
               <div
                 key={feature.title}
-                className="bg-card rounded-xl p-6 border border-border/40 hover:border-primary/30 transition-colors"
+                // WHY rounded-[2px]: 2px radius policy — feature cards must match the
+                // card.tsx component which was updated to rounded-[2px] in the F-001/F-002
+                // palette overhaul. rounded-xl breaks the first visual impression.
+                className="bg-card rounded-[2px] p-6 border border-border/40 hover:border-primary/30 transition-colors"
               >
                 {/* WHY icon + title on same row: reduces vertical scanning distance;
                     traders scan quickly and don't read every word. */}
@@ -224,7 +235,12 @@ export default function LandingPage() {
             3 columns at desktop keep them compact without being unreadable. */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {SECONDARY_FEATURES.map((f) => (
-            <div key={f.title} className="bg-card rounded-lg p-4 border border-border/40">
+            <div
+              key={f.title}
+              // WHY rounded-[2px]: 2px radius policy — secondary feature cards must
+              // match the primary feature cards and the app shell panel style.
+              className="bg-card rounded-[2px] p-4 border border-border/40"
+            >
               <h3 className="text-xs font-medium text-foreground mb-1">{f.title}</h3>
               <p className="text-xs text-muted-foreground leading-relaxed">{f.desc}</p>
             </div>
@@ -234,7 +250,11 @@ export default function LandingPage() {
 
       {/* ── Social proof / thesis context ──────────────────────────────────── */}
       <section className="max-w-3xl mx-auto px-8 py-16 text-center">
-        <div className="rounded-xl border border-border/60 bg-card p-8 space-y-4">
+        <div
+          // WHY rounded-[2px]: 2px radius policy — the social proof card uses the same
+          // panel treatment as the rest of the app; rounded-xl breaks the terminal aesthetic.
+          className="rounded-[2px] border border-border/60 bg-card p-8 space-y-4"
+        >
           <Globe className="mx-auto h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
           <p className="text-sm text-muted-foreground leading-relaxed">
             Built as a university final thesis project demonstrating microservices
@@ -268,7 +288,8 @@ export default function LandingPage() {
               same urgency as the hero — users who scrolled this far are high-intent. */}
           <Link
             href="/login"
-            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
+            // WHY rounded-[2px]: 2px radius policy — matches hero CTA and the rest of the app.
+            className="bg-primary text-primary-foreground px-7 py-3 rounded-[2px] text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
           >
             Sign In
           </Link>
@@ -276,7 +297,8 @@ export default function LandingPage() {
               across all CTA pairs — outline = lower commitment action. */}
           <Link
             href="/register"
-            className="text-sm text-muted-foreground border border-border/60 rounded-md px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
+            // WHY rounded-[2px]: 2px radius policy — matches primary CTA in this section.
+            className="text-sm text-muted-foreground border border-border/60 rounded-[2px] px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
           >
             Create account
           </Link>

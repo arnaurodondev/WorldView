@@ -109,13 +109,19 @@ export function Sidebar() {
               title={label} // WHY title: serves as tooltip for icon-only nav
               className={cn(
                 // WHY focus-visible:ring-*: keyboard users (Tab/Shift-Tab) must see
-                // a clear focus indicator. ring-ring maps to #E8A317 (amber) — consistent
-                // with all other interactive elements. ring-offset-background creates a
-                // 2px gap against #0A0E14 so the amber ring is clearly visible in the dark.
-                "group flex h-9 w-9 items-center justify-center rounded-md transition-colors",
+                // a clear focus indicator. ring-ring maps to #FFD60A (trading yellow) —
+                // consistent with all other interactive elements. ring-offset-background
+                // creates a 2px gap against #09090B so the yellow ring is clearly visible.
+                // WHY rounded-[2px] not rounded-md: matches the new 2px radius system.
+                // Active state treatment:
+                // WHY bg-primary/10 not bg-primary/15: trading yellow (#FFD60A) is
+                // higher-chroma than old amber; at /15 the tint was visually heavy/loud.
+                // /10 gives a clear but restrained active background — the text-primary
+                // yellow icon color carries the "active" signal, not the background fill.
+                "group flex h-9 w-9 items-center justify-center rounded-[2px] transition-colors",
                 "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
                 isActive
-                  ? "bg-primary/15 text-primary"
+                  ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               aria-current={isActive ? "page" : undefined}
@@ -149,7 +155,9 @@ export function Sidebar() {
                 <button
                   key={entityId}
                   onClick={() => router.push(`/instruments/${entityId}`)}
-                  className="w-full rounded px-1 py-0.5 text-left hover:bg-muted"
+                  // WHY rounded-[2px]: consistent with 2px radius system; avoids
+                  // Tailwind's `rounded` shorthand (4px default) which looks too soft
+                  className="w-full rounded-[2px] px-1 py-0.5 text-left hover:bg-muted"
                   title={member?.name ?? entityId}
                 >
                   {/* Symbol — truncated for sidebar width */}
@@ -171,6 +179,63 @@ export function Sidebar() {
         </div>
       )}
 
+      {/* ── Keyboard shortcut hint strip ─────────────────────── */}
+      {/*
+       * WHY THIS EXISTS: Bloomberg and tastytrade users expect keyboard-first
+       * navigation. Making shortcuts discoverable directly in the sidebar
+       * communicates "professional tool" and reduces the learning cliff for
+       * new users. The strip is deliberately subtle (muted/50, text-[9px]) —
+       * it is a hint, not a feature advertisement.
+       *
+       * WHY a 2×2 grid (not a single column): the sidebar is only 56px wide.
+       * Stacking all 4 shortcuts vertically would require excessive height.
+       * A 2×2 grid fits 4 shortcuts in ~2.5 lines of height while keeping
+       * each badge legible at text-[9px] font-mono.
+       *
+       * WHY title attr (not visible labels): there is no horizontal room for
+       * full labels like "Dashboard". The title attr surfaces as a native
+       * browser tooltip on hover, providing the full action description
+       * without occupying permanent space.
+       *
+       * WHY rounded-[2px]: consistent with 2px radius system; these key
+       * badges are structural affordances, not decorative pills.
+       */}
+      <div
+        className="border-t border-border px-1.5 py-2"
+        aria-label="Keyboard shortcuts"
+      >
+        <div className="grid grid-cols-2 gap-0.5">
+          {/* g+d — navigate to Dashboard */}
+          <span
+            title="g then d — Go to Dashboard"
+            className="inline-flex items-center justify-center rounded-[2px] bg-muted/50 px-0.5 py-0.5 font-mono text-[9px] leading-none text-muted-foreground/50 select-none"
+          >
+            g+d
+          </span>
+          {/* g+w — navigate to Workspace */}
+          <span
+            title="g then w — Go to Workspace"
+            className="inline-flex items-center justify-center rounded-[2px] bg-muted/50 px-0.5 py-0.5 font-mono text-[9px] leading-none text-muted-foreground/50 select-none"
+          >
+            g+w
+          </span>
+          {/* g+c — navigate to Companies (instruments list) */}
+          <span
+            title="g then c — Go to Companies"
+            className="inline-flex items-center justify-center rounded-[2px] bg-muted/50 px-0.5 py-0.5 font-mono text-[9px] leading-none text-muted-foreground/50 select-none"
+          >
+            g+c
+          </span>
+          {/* ⌘K — open GlobalSearch command palette */}
+          <span
+            title="⌘K — Open search / command palette"
+            className="inline-flex items-center justify-center rounded-[2px] bg-muted/50 px-0.5 py-0.5 font-mono text-[9px] leading-none text-muted-foreground/50 select-none"
+          >
+            ⌘K
+          </span>
+        </div>
+      </div>
+
       {/* ── Bottom nav (Settings, Help) ───────────────────────── */}
       <nav className="flex flex-col gap-1 border-t border-border px-2 py-3" aria-label="Settings">
         {BOTTOM_ITEMS.map(({ href, icon: Icon, label }) => {
@@ -183,11 +248,12 @@ export function Sidebar() {
               title={label}
               className={cn(
                 // WHY focus-visible:ring-*: same keyboard accessibility requirement as NAV_ITEMS.
-                // All focusable elements in the sidebar must show the amber ring on keyboard focus.
-                "flex h-9 w-9 items-center justify-center rounded-md transition-colors",
+                // All focusable elements in the sidebar must show the trading-yellow ring on focus.
+                // WHY rounded-[2px]: consistent with NAV_ITEMS and the new 2px radius system.
+                "flex h-9 w-9 items-center justify-center rounded-[2px] transition-colors",
                 "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
                 isActive
-                  ? "bg-primary/15 text-primary"
+                  ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >

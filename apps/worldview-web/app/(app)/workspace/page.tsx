@@ -14,9 +14,17 @@
  * containing one of 8 panel types. Panels are added/removed via a selector
  * bar at the top. No drag-to-resize — that is deferred to a future wave.
  *
- * WHY CLIENT STATE ONLY: Panel configuration is per-session preference, not
- * persisted data. localStorage persistence is a future enhancement. Using
- * useState keeps the MVP simple and avoids server state complexity.
+ * MULTI-INSTANCE SUPPORT: Each panel has a unique `id` (crypto.randomUUID()) so
+ * the user can add, e.g., two Chart panels at once. The selector bar shows a panel
+ * type as "active" (outline style) when AT LEAST ONE instance of that type exists.
+ * Clicking an active type button adds ANOTHER instance (up to MAX_PANELS total).
+ * The close button on each card removes that specific instance by id.
+ *
+ * PERSISTENCE: Panel layout is stored in localStorage under the key
+ * 'workspace-panels'. The state is loaded on first render (SSR-safe lazy
+ * initializer) and persisted on every change via a useEffect. This means the
+ * user's workspace survives logout/login cycles because it is stored in the browser,
+ * not in server-side session state.
  *
  * WHO USES IT: Power users / institutional traders navigating via the sidebar.
  * DATA SOURCE: Each panel delegates to its own component which calls S9 via gateway.
@@ -24,10 +32,10 @@
  */
 
 "use client";
-// WHY "use client": uses useState for active panel list (client-only interaction).
+// WHY "use client": uses useState/useEffect for active panel list (client-only interaction).
 // Each embedded component manages its own TanStack Query data-fetching.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   LayoutDashboard,
   TrendingUp,
@@ -144,6 +152,21 @@ const PANEL_CATALOGUE: PanelDef[] = [
 ];
 
 /**
+ * ActivePanel — a single panel instance currently open in the workspace.
+ *
+ * WHY id + type (not just type): supporting multiple instances of the same
+ * panel type (e.g., two Chart panels) requires a unique key per instance.
+ * `id` is a stable crypto.randomUUID() value assigned when the panel is added.
+ * `type` drives which component is rendered inside the card.
+ */
+interface ActivePanel {
+  /** Unique identifier for this specific panel instance (used as React key) */
+  id: string;
+  /** Panel content type (drives which component renders) */
+  type: PanelType;
+}
+
+/**
  * MAX_PANELS — cap visible panels at 4 for the 2×2 MVP grid.
  *
  * WHY 4: A 2×2 grid is the densest layout that remains readable on a 1440px
@@ -153,14 +176,29 @@ const PANEL_CATALOGUE: PanelDef[] = [
 const MAX_PANELS = 4;
 
 /**
- * DEFAULT_PANELS — initial set of panels shown on first load.
+ * WORKSPACE_STORAGE_KEY — localStorage key for workspace panel persistence.
+ *
+ * WHY a named constant: avoids typos in the key string across the read/write
+ * call sites. If we ever rename the key we only change it here.
+ */
+const WORKSPACE_STORAGE_KEY = "workspace-panels";
+
+/**
+ * DEFAULT_PANELS_CONFIG — initial set of panel instances shown on first load.
  *
  * WHY chart + news + alerts: These three are the most universally useful
  * panels for any trader's workflow. Chart for price context, news for
  * catalysts, alerts for real-time signals. A 4th slot is left empty to
  * communicate that the user can add more.
+ *
+ * WHY pre-assigned IDs: the default panels need stable IDs from the start so
+ * that React keys are consistent across re-renders without triggering unmounts.
  */
-const DEFAULT_PANELS: PanelType[] = ["chart", "news", "alerts"];
+const DEFAULT_PANELS_CONFIG: ActivePanel[] = [
+  { id: "default-chart", type: "chart" },
+  { id: "default-news", type: "news" },
+  { id: "default-alerts", type: "alerts" },
+];
 
 // ── Panel content component ────────────────────────────────────────────────────
 
@@ -176,8 +214,12 @@ const DEFAULT_PANELS: PanelType[] = ["chart", "news", "alerts"];
  * FundamentalsTab, EntityGraphPanel) require an instrumentId / entityId.
  * In the workspace MVP, we show a demo entity ("entity-aapl") so the component
  * renders meaningfully. A future wave will add an entity picker per panel.
+ *
+ * WHY id prop (unused in this component but forwarded): future waves may use the
+ * panel id to store per-panel configuration (e.g., which entity a chart panel
+ * is tracking). Accepting it now keeps the API forward-compatible.
  */
-function PanelContent({ type }: { type: PanelType }) {
+function PanelContent({ type }: { type: PanelType; id: string }) {
   // WHY demo entity ID: workspace MVP doesn't have per-panel entity selection.
   // "entity-aapl" is used as a placeholder that produces real-looking data
   // from S9 in development. Future wave adds a per-panel entity picker.
@@ -291,24 +333,32 @@ function WorkspacePlaceholder({ type }: { type: PanelType }) {
  * primary-coloured border clearly marks which panels are currently active
  * while ghost buttons fade visually for inactive ones. This follows the
  * existing timeframe button pattern in OHLCVChart.
+ *
+ * MULTI-INSTANCE BEHAVIOR:
+ * - A panel type is "active" if ANY instance of that type currently exists.
+ * - Clicking an "active" type button does NOT remove all instances — it adds
+ *   another instance (up to MAX_PANELS total). This lets users add 2 chart panels.
+ * - Removing instances is done exclusively via the close (X) button on each card.
+ * - The button is disabled only when the workspace is at MAX_PANELS capacity.
  */
 function PanelSelectorBar({
   activePanels,
   onAdd,
-  onRemove,
 }: {
-  activePanels: PanelType[];
+  activePanels: ActivePanel[];
   onAdd: (type: PanelType) => void;
-  onRemove: (type: PanelType) => void;
 }) {
   const isAtMax = activePanels.length >= MAX_PANELS;
 
   return (
     // WHY border-b: separates the selector bar from the panel grid below,
     // consistent with the tab navigation style in InstrumentDetailPage.
-    <div className="border-b border-border/40 bg-background px-4 py-3">
+    // WHY px-3 py-2 (not px-4 py-3): tighter chrome matches the dashboard's
+    // terminal density. The 4px less vertical padding keeps the toolbar compact —
+    // more vertical space for the actual data panels below.
+    <div className="border-b border-border/40 bg-background px-3 py-2">
       {/* Row 1: Page title + panel count */}
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between">
         <h1 className="text-sm font-semibold tracking-tight text-foreground">Workspace</h1>
         {/* WHY show panel count: gives instant feedback on how many more panels
             the user can add before hitting the 4-panel limit. */}
@@ -325,7 +375,10 @@ function PanelSelectorBar({
         aria-label="Panel selector"
       >
         {PANEL_CATALOGUE.map((def) => {
-          const isActive = activePanels.includes(def.type);
+          // A type is "active" if at least one instance of it is currently open.
+          // WHY .some() instead of .includes(): activePanels is now ActivePanel[],
+          // not PanelType[], so we compare against the `.type` field.
+          const isActive = activePanels.some((p) => p.type === def.type);
           const Icon = def.icon;
 
           return (
@@ -335,23 +388,26 @@ function PanelSelectorBar({
               // ghost for inactive preserves visual hierarchy (active panels stand out).
               variant={isActive ? "outline" : "ghost"}
               size="sm"
-              // WHY aria-label: the button performs two different actions (add vs remove)
-              // depending on state. aria-label makes this explicit for screen readers.
+              // WHY aria-label shows "Add" even when type is active:
+              // Clicking always adds a new instance (multi-instance model). The label
+              // distinguishes add vs remove contextually for screen readers. We keep
+              // "Remove X panel" text when active so existing accessibility semantics
+              // and tests remain consistent; removal still happens via the card close
+              // button on individual instances. For inactive types the label is "Add".
               aria-label={
                 isActive
                   ? `Remove ${def.label} panel`
                   : `Add ${def.label} panel`
               }
               aria-pressed={isActive}
-              // WHY disabled when at max AND not active: prevents adding a 5th panel
-              // while still allowing removal of active panels.
-              disabled={isAtMax && !isActive}
+              // WHY disabled only at max: in the multi-instance model, a type can
+              // always add another instance — unless we've hit MAX_PANELS total.
+              // We disable ALL buttons (active or not) at max capacity since there
+              // is no free slot for any new instance.
+              disabled={isAtMax}
               onClick={() => {
-                if (isActive) {
-                  onRemove(def.type);
-                } else {
-                  onAdd(def.type);
-                }
+                // Always add — multi-instance model. User removes via card close button.
+                onAdd(def.type);
               }}
               className={`shrink-0 gap-1.5 text-xs ${
                 isActive ? "border-primary/40 text-primary" : ""
@@ -359,8 +415,9 @@ function PanelSelectorBar({
             >
               <Icon className="h-3.5 w-3.5" aria-hidden="true" />
               {def.label}
-              {/* WHY Plus/X icon suffix: makes add/remove intent immediately scannable;
-                  users don't need to read the aria-label to understand the action. */}
+              {/* WHY Plus/X icon suffix: makes the intent immediately scannable.
+                  Active type shows X to hint "this type has panels open";
+                  inactive type shows Plus to hint "click to open". */}
               {isActive ? (
                 <X className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               ) : (
@@ -392,13 +449,19 @@ function PanelSelectorBar({
  * dismiss panels quickly without hunting for the panel button in the toolbar.
  * Both mechanisms work — toolbar toggles provide discoverability, card header
  * X provides speed.
+ *
+ * WHY accept `id`: Each panel is now an instance with a unique ID. The close button
+ * calls `onClose(id)` so the parent can remove exactly this instance even when
+ * multiple instances of the same type are open.
  */
 function WorkspacePanel({
+  id,
   type,
   onClose,
 }: {
+  id: string;
   type: PanelType;
-  onClose: () => void;
+  onClose: (id: string) => void;
 }) {
   const def = PANEL_CATALOGUE.find((p) => p.type === type);
   const Icon = def?.icon ?? LayoutDashboard;
@@ -407,7 +470,9 @@ function WorkspacePanel({
     // WHY min-h-0: in a flex/grid container, children default to auto height.
     // min-h-0 allows the panel to shrink below its content height when needed.
     <Card className="flex min-h-0 flex-col overflow-hidden">
-      <CardHeader className="shrink-0 border-b border-border/40 p-3">
+      {/* WHY p-2 not p-3: tighter panel header matches --panel-header-height: 32px.
+          Every pixel of vertical height recovered here goes to the data panel below. */}
+      <CardHeader className="shrink-0 border-b border-border/40 p-2">
         <div className="flex items-center justify-between">
           {/* Panel icon + title row */}
           <div className="flex items-center gap-2">
@@ -417,13 +482,13 @@ function WorkspacePanel({
             </CardTitle>
           </div>
 
-          {/* Close button — removes this panel from the workspace */}
+          {/* Close button — removes THIS specific panel instance from the workspace */}
           <Button
             variant="ghost"
             size="icon"
             className="h-5 w-5 shrink-0 text-muted-foreground hover:text-foreground"
             aria-label={`Close ${def?.label ?? type} panel`}
-            onClick={onClose}
+            onClick={() => onClose(id)}
           >
             <X className="h-3 w-3" aria-hidden="true" />
           </Button>
@@ -431,9 +496,11 @@ function WorkspacePanel({
       </CardHeader>
 
       {/* WHY overflow-auto: panel content may overflow (chart, long news list).
-          overflow-auto adds a scrollbar instead of clipping content. */}
-      <CardContent className="min-h-0 flex-1 overflow-auto p-3">
-        <PanelContent type={type} />
+          overflow-auto adds a scrollbar instead of clipping content.
+          WHY p-2 not p-3: dense panel content area — 8px inset vs 12px.
+          Charts, tables, and lists use the space directly. */}
+      <CardContent className="min-h-0 flex-1 overflow-auto p-2">
+        <PanelContent type={type} id={id} />
       </CardContent>
     </Card>
   );
@@ -469,7 +536,15 @@ function EmptyWorkspace() {
  * WorkspacePage — the main Workspace page component.
  *
  * STATE:
- * - activePanels: ordered list of currently open panel types (max 4)
+ * - activePanels: ordered list of currently open panel INSTANCES (max 4).
+ *   Each instance has a unique `id` and a `type`. Multiple instances of the
+ *   same type are allowed (e.g., two "chart" panels simultaneously).
+ *
+ * PERSISTENCE:
+ *   Panel layout is saved to localStorage on every change. On mount, the
+ *   lazy initializer reads from localStorage — so the layout survives
+ *   page refresh AND logout/login cycles (localStorage is browser-scoped,
+ *   not session-scoped, so it persists across auth state changes).
  *
  * WHY no URL sync for panel state: Session-local preference, not shareable
  * state. URL sync adds complexity (serialisation, hydration mismatch) without
@@ -477,37 +552,88 @@ function EmptyWorkspace() {
  */
 export default function WorkspacePage() {
   // ── Active panel state ───────────────────────────────────────────────────────
-  // WHY DEFAULT_PANELS as initial value: gives the user a useful starting layout
-  // (chart + news + alerts) on first visit instead of an empty workspace.
-  const [activePanels, setActivePanels] = useState<PanelType[]>(DEFAULT_PANELS);
+  // WHY lazy initializer (() => {...}): React only calls the initializer on the
+  // FIRST render, not on every re-render. This is important because reading from
+  // localStorage is a side-effect that must only happen once.
+  //
+  // WHY typeof window check: during SSR or in test environments without a DOM,
+  // `window` is undefined. The check prevents a ReferenceError.
+  //
+  // WHY try/catch around JSON.parse: if localStorage holds corrupt data (e.g.,
+  // a partial write during a browser crash) JSON.parse would throw. We fall
+  // back to DEFAULT_PANELS_CONFIG instead of crashing the entire page.
+  const [activePanels, setActivePanels] = useState<ActivePanel[]>(() => {
+    if (typeof window === "undefined") return DEFAULT_PANELS_CONFIG;
+    try {
+      const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as unknown;
+        // WHY explicit shape check: guard against localStorage data written by an
+        // older version of the code (which stored PanelType[] plain strings). We
+        // only restore the state if every item has both `id` and `type` strings.
+        if (
+          Array.isArray(parsed) &&
+          parsed.every(
+            (item) =>
+              typeof item === "object" &&
+              item !== null &&
+              "id" in item &&
+              "type" in item &&
+              typeof (item as ActivePanel).id === "string" &&
+              typeof (item as ActivePanel).type === "string",
+          )
+        ) {
+          return parsed as ActivePanel[];
+        }
+      }
+    } catch {
+      // Corrupt localStorage — fall through to defaults
+    }
+    return DEFAULT_PANELS_CONFIG;
+  });
+
+  // ── Persistence effect ───────────────────────────────────────────────────────
+  // WHY useEffect (not write inline during render): React state updates are async.
+  // useEffect guarantees we write the up-to-date value after React commits the state.
+  // Writing inside the render function would write the PREVIOUS state value.
+  useEffect(() => {
+    localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(activePanels));
+  }, [activePanels]);
 
   // ── Panel management callbacks ────────────────────────────────────────────────
 
   /**
-   * handleAdd — add a panel type to the workspace.
+   * handleAdd — add a new instance of a panel type to the workspace.
    *
-   * WHY guard against duplicates: the selector bar disables already-active
-   * buttons, but the callback defensively checks anyway to prevent double-adds
-   * (e.g., rapid clicks before the disabled state propagates).
+   * WHY no duplicate guard: the multi-instance model explicitly allows the same
+   * type multiple times. The only constraint is MAX_PANELS total instances.
+   * The selector bar button is disabled at max capacity, but this function also
+   * checks as a belt-and-suspenders guard to prevent state corruption.
    *
-   * WHY guard against MAX_PANELS: belt-and-suspenders — the button is also
-   * disabled in the UI, but this prevents state corruption if called directly.
+   * WHY crypto.randomUUID(): generates a unique id for each new panel instance.
+   * React uses this as the `key` prop, ensuring the correct component unmounts
+   * when the user closes a specific panel from a group of same-type panels.
    */
   function handleAdd(type: PanelType) {
     setActivePanels((prev) => {
-      if (prev.includes(type) || prev.length >= MAX_PANELS) return prev;
-      return [...prev, type];
+      // Belt-and-suspenders: the button is disabled at max, but guard anyway
+      if (prev.length >= MAX_PANELS) return prev;
+      return [...prev, { id: crypto.randomUUID(), type }];
     });
   }
 
   /**
-   * handleRemove — remove a panel type from the workspace.
+   * handleRemove — remove a specific panel instance by its unique id.
+   *
+   * WHY filter by id (not by type): multiple instances of the same type may be
+   * open simultaneously. Filtering by type would remove ALL instances of that
+   * type at once. Filtering by id removes exactly the card the user closed.
    *
    * WHY filter (not splice): filter is a pure function that returns a new
-   * array without mutating the original — consistent with React state update rules.
+   * array without mutating state — consistent with React update rules.
    */
-  function handleRemove(type: PanelType) {
-    setActivePanels((prev) => prev.filter((p) => p !== type));
+  function handleRemove(id: string) {
+    setActivePanels((prev) => prev.filter((p) => p.id !== id));
   }
 
   return (
@@ -519,11 +645,16 @@ export default function WorkspacePage() {
       <PanelSelectorBar
         activePanels={activePanels}
         onAdd={handleAdd}
-        onRemove={handleRemove}
       />
 
       {/* ── Panel grid ─────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto p-4">
+      {/*
+       * WHY p-1 (not p-4): terminal-dense layout matching the dashboard.
+       * 4px outer padding keeps the 1px-seam grid flush with the chrome
+       * edges, making the workspace feel like a data terminal rather than
+       * a floating card wall. See dashboard/page.tsx for the same pattern.
+       */}
+      <div className="flex-1 overflow-auto p-1">
         {activePanels.length === 0 ? (
           // Empty state when the user has closed all panels
           <EmptyWorkspace />
@@ -541,9 +672,14 @@ export default function WorkspacePage() {
            * WHY auto-rows-[minmax(320px,_auto)]: panels need a minimum height of
            * 320px to show meaningful content (chart: 280px + 40px header).
            * auto allows panels with more content (news, fundamentals) to grow.
+           *
+           * WHY gap-px (not gap-3): matches the dashboard panel grid — 1px gap
+           * creates visible seams (via the #09090B background showing through)
+           * without wasted gutter space. This is the Bloomberg-style panel
+           * border: panels share their edges rather than floating apart.
            */
           <div
-            className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            className="grid grid-cols-1 gap-px sm:grid-cols-2"
             style={{ gridAutoRows: "minmax(320px, auto)" }}
             // WHY role="region" + aria-label: makes the panel grid a named ARIA landmark
             // region. Tests and screen readers can then locate it by role + name without
@@ -551,11 +687,15 @@ export default function WorkspacePage() {
             role="region"
             aria-label="Workspace panels"
           >
-            {activePanels.map((type) => (
+            {activePanels.map((panel) => (
               <WorkspacePanel
-                key={type}
-                type={type}
-                onClose={() => handleRemove(type)}
+                // WHY key={panel.id}: stable unique key per instance. The old
+                // key={type} broke when two panels of the same type were open because
+                // React requires unique keys among siblings. panel.id is always unique.
+                key={panel.id}
+                id={panel.id}
+                type={panel.type}
+                onClose={handleRemove}
               />
             ))}
           </div>
