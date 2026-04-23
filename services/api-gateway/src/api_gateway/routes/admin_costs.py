@@ -8,10 +8,13 @@ on service failures — 200 when at least one service responds, 503 when all fai
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+
+_PERIOD_RE = re.compile(r"^\d{4}-\d{2}$")
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -130,6 +133,10 @@ async def get_admin_llm_costs(
 
         now = datetime.now(tz=UTC)
         period = f"{now.year:04d}-{now.month:02d}"
+
+    # Validate period format: YYYY-MM
+    if not _PERIOD_RE.match(period):
+        raise HTTPException(status_code=400, detail="period must be in YYYY-MM format")
 
     # Extract the internal JWT that S9's InternalJWTIssuerMiddleware already injected
     # into the request scope headers (mutates request.scope["headers"] before calling

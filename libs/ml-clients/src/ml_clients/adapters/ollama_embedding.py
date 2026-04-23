@@ -54,14 +54,15 @@ class OllamaEmbeddingAdapter:
                         embedding: list[float] = resp.json()["embedding"]
                         if len(embedding) != self.EXPECTED_DIMENSION:
                             raise FatalError(
-                                f"Unexpected embedding dimension: {len(embedding)} (expected {self.EXPECTED_DIMENSION})"
+                                f"Unexpected embedding dimension: "
+                                f"{len(embedding)} (expected {self.EXPECTED_DIMENSION})",
                             )
                         results.append(
                             EmbeddingOutput(
                                 embedding=embedding,
                                 model_id=self._model_id,
                                 dimension=len(embedding),
-                            )
+                            ),
                         )
                         logger.info(
                             "embedding_generated",
