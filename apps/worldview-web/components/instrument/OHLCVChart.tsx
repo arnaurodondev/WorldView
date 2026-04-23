@@ -42,26 +42,42 @@ interface OHLCVChartProps {
   initialBars?: OHLCVBar[];
 }
 
-// ── Bloomberg Dark chart theme ─────────────────────────────────────────────────
+// ── Terminal Dark chart theme ──────────────────────────────────────────────────
 // WHY inline object (not CSS): lightweight-charts applies these via its own theming
-// API, not via CSS classes. The values must match the Bloomberg Dark palette.
+// API, not via CSS classes. Values must match the Terminal Dark palette exactly so
+// the chart canvas blends seamlessly into the surrounding panel background.
+//
+// WHY these exact hex values (not CSS var() references):
+// lightweight-charts does not understand CSS custom properties — it only accepts
+// literal hex strings in its options object. The values below are derived from
+// globals.css Terminal Dark tokens:
+//   --background:        #09090B  (240 10% 4%)
+//   --card:              #111113  (270 2% 7%)
+//   --muted-foreground:  #71717A  (240 4% 46%)
+//   --positive:          #26A69A  (174 42% 40%)
+//   --negative:          #EF5350  (0 63% 62%)
+//
+// If the globals.css palette changes, update these constants to match.
 const CHART_THEME = {
   layout: {
-    background: { color: "#0A0E14" },   // --background (Bloomberg Dark)
-    textColor: "#6B7585",               // --muted-foreground
+    background: { color: "#09090B" },   // --background: Terminal Dark near-black
+    textColor: "#71717A",               // --muted-foreground: zinc-500 neutral grey
   },
   grid: {
-    vertLines: { color: "#111820" },    // --card
-    horzLines: { color: "#111820" },
+    // WHY --card not --border for grid lines: #27272A (border) is too prominent
+    // as a grid line — it competes with candlestick color. Using the card color
+    // (#111113) gives a barely-visible grid that aids alignment without clutter.
+    vertLines: { color: "#111113" },    // --card: subtle vertical grid
+    horzLines: { color: "#111113" },    // --card: subtle horizontal grid
   },
   crosshair: {
-    mode: 0, // Normal crosshair mode
+    mode: 0, // Normal crosshair mode (shows both price and time crosshairs)
   },
-  upColor: "#26A69A",  // Bloomberg Dark positive
-  downColor: "#EF5350", // Bloomberg Dark negative
-  borderUpColor: "#26A69A",
+  upColor: "#26A69A",       // --positive: teal-green (bullish candles)
+  downColor: "#EF5350",     // --negative: muted red (bearish candles)
+  borderUpColor: "#26A69A", // candle body border — matches fill
   borderDownColor: "#EF5350",
-  wickUpColor: "#26A69A",
+  wickUpColor: "#26A69A",   // wick color — matches candle color for clarity
   wickDownColor: "#EF5350",
 };
 
@@ -118,10 +134,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           grid: CHART_THEME.grid,
           crosshair: CHART_THEME.crosshair,
           rightPriceScale: {
-            borderColor: "#111820",  // --card (Bloomberg Dark)
+            // WHY #111113 (--card) not #27272A (--border): the price scale border
+            // is a structural edge between the chart area and the price labels.
+            // Using the card color keeps it recessive — the data, not the frame,
+            // should draw the eye.
+            borderColor: "#111113",  // --card: Terminal Dark panel background
           },
           timeScale: {
-            borderColor: "#111820",  // --card (Bloomberg Dark)
+            borderColor: "#111113",  // --card: matches price scale border
             timeVisible: true,
           },
         });

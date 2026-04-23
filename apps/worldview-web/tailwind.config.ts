@@ -1,15 +1,16 @@
 /**
- * tailwind.config.ts — Tailwind CSS v3 configuration with Bloomberg Dark palette
+ * tailwind.config.ts — Tailwind CSS v3 configuration with Terminal Dark palette
  *
- * WHY THIS EXISTS: Maps the Worldview "Bloomberg Dark" design token system to
+ * WHY THIS EXISTS: Maps the Worldview "Terminal Dark" design token system to
  * Tailwind utility classes. The CSS variables (--background, --primary, etc.)
  * are defined in app/globals.css and referenced here so every shadcn/ui
- * component automatically uses the correct Bloomberg Dark colors.
+ * component automatically uses the correct Terminal Dark colors.
  *
  * CRITICAL: Never use Tailwind's default slate-950 or blue-500.
  * Use the semantic tokens: bg-background, text-primary, bg-card, etc.
+ * Never reference old Bloomberg Dark values: #0A0E14, #E8A317, #E0DDD4.
  *
- * DESIGN REFERENCE: docs/ui/DESIGN_SYSTEM.md §2 (Color Palette)
+ * DESIGN REFERENCE: docs/ui/DESIGN_SYSTEM.md §2 (Color Palette — Terminal Dark)
  */
 
 import type { Config } from "tailwindcss";
@@ -89,9 +90,15 @@ const config: Config = {
         "surface-3": "hsl(var(--surface-3))",
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        // WHY all three map to --radius (2px): The old scale subtracted 2px/4px from
+        // a 6px base, giving lg=6px, md=4px, sm=2px. Now --radius is 0.125rem (2px).
+        // Subtracting from 2px yields 0px or negative, which breaks border-radius.
+        // Solution: collapse all three to the same 2px value — terminal UIs should
+        // be consistently sharp; the three-step rounding scale was a consumer-app
+        // pattern that no longer applies here. All panel corners are uniformly sharp.
+        lg: "var(--radius)",   /* 2px */
+        md: "var(--radius)",   /* 2px */
+        sm: "var(--radius)",   /* 2px */
       },
       fontFamily: {
         // IBM Plex Sans for UI labels and prose — loaded via next/font/google

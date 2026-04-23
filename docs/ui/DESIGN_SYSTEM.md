@@ -1,12 +1,12 @@
 # Worldview Design System
 
 > **Single source of truth** for all frontend design decisions: tokens, components, patterns, and UX conventions.
-> **Last updated**: 2026-04-19 (v2.2 — Bloomberg Dark palette overhaul: #0A0E14 bg + amber/gold accent + warm parchment text)
+> **Last updated**: 2026-04-23 (v2.3 — Terminal Dark palette overhaul: #09090B bg + Bloomberg yellow (#FFD60A) + zinc text)
 >
 > Referenced by: `/design-ui` skill, `/scaffold-frontend` skill, `ux-ui-designer` agent, `frontend-engineer` agent.
 >
-> **CONFIRMED**: "Bloomberg Dark" direction — `#0A0E14` bg + IBM Plex + amber/gold accent (#E8A317) + teal-green positive.
-> See `docs/ui/competitive-design-research.md` for full competitor analysis.
+> **CONFIRMED**: "Terminal Dark" direction — `#09090B` neutral near-black bg + IBM Plex + Bloomberg trading yellow (#FFD60A) + teal-green positive.
+> Prior "Bloomberg Dark" palette (#0A0E14 bg + #E8A317 amber) retired 2026-04-23: blue-tinted bg read as "fintech app"; warm amber read as "notification". See `docs/ui/competitive-design-research.md` for full competitor analysis.
 
 ---
 
@@ -34,47 +34,53 @@ Never mix number display between font-sans and font-mono — tabular-nums requir
 
 ---
 
-## 2. Color Palette (Dark Theme — "Bloomberg Dark")
+## 2. Color Palette (Dark Theme — "Terminal Dark")
 
-> **Bloomberg Dark confirmed. Do NOT revert to slate-950/blue-500 defaults.**
-> See PRD-0027 §1.4 for prior direction history and rationale.
+> **Terminal Dark confirmed. Do NOT revert to Bloomberg Dark (#0A0E14 + #E8A317) or slate-950/blue-500 defaults.**
+> See `app/globals.css` for authoritative token definitions. This section mirrors those values.
 > Reference: `docs/ui/competitive-design-research.md`
 
 All colors are expressed as CSS custom properties. **Never use hardcoded hex values in components.**
+**Never reference the old Bloomberg Dark palette (#0A0E14, #E8A317, #E0DDD4, #6B7585, #111820, #1A2030, #243040).**
 
-### 2.1 CSS Variables (`app/globals.css`) — Bloomberg Dark
+### 2.1 CSS Variables (`app/globals.css`) — Terminal Dark
 
 ```css
-:root.dark {
-  /* ── Backgrounds ──────────────────────────────────────────────────── */
-  --background:        210 38% 6%;       /* #0A0E14 — Bloomberg-style deep background */
-  --card:              212 31% 9%;       /* #111820 — panel/card backgrounds */
-  --muted:             215 26% 14%;      /* #1A2030 — elevated surfaces, hover states */
-  --popover:           210 38% 6%;       /* #0A0E14 — same as --background */
-  --surface-2:         215 26% 14%;      /* #1A2030 — alias for muted (explicit surface step) */
-  --surface-3:         210 22% 19%;      /* #243040 — third elevation level */
+:root {
+  /* ── Backgrounds — elevation hierarchy, neutral (zero hue) ───────── */
+  --background:        240 10% 4%;       /* #09090B — neutral near-black, no blue tint */
+  --card:              270 2% 7%;        /* #111113 — panel/card backgrounds, neutral */
+  --muted:             240 4% 11%;       /* #18181B — elevated surfaces, hover states */
+  --popover:           240 10% 4%;       /* #09090B — same as --background */
+  --surface-2:         240 4% 11%;       /* #18181B — alias for muted */
+  --surface-3:         240 4% 16%;       /* #27272A — third elevation level, borders */
 
   /* ── Text ──────────────────────────────────────────────────────────── */
-  --foreground:        36 14% 85%;       /* #E0DDD4 — Bloomberg warm-white text */
-  --card-foreground:   36 14% 85%;       /* #E0DDD4 */
-  --muted-foreground:  215 8% 47%;       /* #6B7585 — labels, timestamps, axis captions */
+  --foreground:        240 5% 90%;       /* #E4E4E7 — zinc-200 off-white */
+  --card-foreground:   240 5% 90%;       /* #E4E4E7 */
+  --muted-foreground:  240 4% 46%;       /* #71717A — zinc-500 neutral grey */
 
   /* ── Interactive ───────────────────────────────────────────────────── */
-  --primary:           40 83% 50%;       /* #E8A317 — amber/gold accent */
-  --primary-foreground: 210 38% 6%;      /* #0A0E14 — dark text on gold button */
+  --primary:           48 100% 52%;      /* #FFD60A — Bloomberg-signature trading yellow */
+  --primary-foreground: 0 0% 0%;         /* #000000 — pure black text on yellow CTA */
 
   /* ── Structural ────────────────────────────────────────────────────── */
-  --border:            210 22% 19%;      /* #243040 — dividers */
-  --input:             210 22% 19%;      /* #243040 */
-  --ring:              40 83% 50%;       /* #E8A317 — focus rings match accent */
-  --accent:            215 26% 14%;      /* #1A2030 */
+  --border:            240 4% 16%;       /* #27272A — visible panel edges */
+  --input:             240 4% 16%;       /* #27272A */
+  --ring:              48 100% 52%;      /* #FFD60A — focus rings match primary */
+  --accent:            240 4% 11%;       /* #18181B */
   --destructive:       0 63% 62%;        /* #EF5350 — destructive actions */
-  --destructive-foreground: 36 14% 85%;  /* #E0DDD4 */
+  --destructive-foreground: 240 5% 90%;  /* #E4E4E7 */
 
   /* ── Financial domain ──────────────────────────────────────────────── */
   --positive:          174 42% 40%;      /* #26A69A — teal-green (price up) */
   --negative:          0 63% 62%;        /* #EF5350 — muted red (price down) */
   --warning:           38 92% 50%;       /* #F59E0B — amber-500 alerts/warnings */
+
+  /* ── Structural density ────────────────────────────────────────────── */
+  --radius: 0.125rem;                    /* 2px — near-zero, terminal-sharp corners */
+  --panel-header-height: 32px;           /* compact panel chrome */
+  --topbar-height: 44px;                 /* 44px top chrome */
 }
 ```
 
@@ -82,43 +88,41 @@ All colors are expressed as CSS custom properties. **Never use hardcoded hex val
 
 | Token | Hex | Description |
 |-------|-----|-------------|
-| Page background | `#0A0E14` | Bloomberg-style deep background |
-| Card/panel | `#111820` | Panel/card backgrounds |
-| Elevated/hover (surface-2) | `#1A2030` | Elevated surfaces, hover states |
-| Surface-3 | `#243040` | Third elevation level, borders |
-| Border | `#243040` | Dividers, table borders |
-| Primary text | `#E0DDD4` | Warm parchment white |
-| Secondary text | `#6B7585` | Labels, timestamps, axis captions |
-| Accent (gold) | `#E8A317` | Bloomberg amber/gold accent |
+| Page background | `#09090B` | Terminal neutral near-black (zero hue) |
+| Card/panel | `#111113` | Panel/card backgrounds |
+| Elevated/hover (surface-2) | `#18181B` | Elevated surfaces, hover states |
+| Surface-3 / border | `#27272A` | Third elevation level, dividers |
+| Primary text | `#E4E4E7` | zinc-200 off-white |
+| Secondary text | `#71717A` | zinc-500 neutral grey (labels, axis) |
+| Accent (yellow) | `#FFD60A` | Bloomberg-signature trading yellow |
+| Accent on yellow (fg) | `#000000` | Pure black text on yellow buttons |
 | Positive (teal) | `#26A69A` | Price up, portfolio gain |
 | Negative (red) | `#EF5350` | Price down, loss |
 | Warning (amber) | `#F59E0B` | Medium severity alerts |
-| Positive bg (heat) | `#0A2420` | Dark teal tint for HeatCell positive |
-| Negative bg (heat) | `#300E12` | Dark red tint for HeatCell negative |
 
 ### 2.2 Semantic Usage
 
-| Context | Variable | Example | Hex (Bloomberg Dark) |
-|---------|----------|---------|----------------------|
-| Page background | `bg-background` | `<body>`, `<main>` | `#0A0E14` |
-| Card / panel | `bg-card` | shadcn `<Card>`, sidebar panels | `#111820` |
-| Elevated panel | `bg-muted` | nested cards, hover states | `#1A2030` |
-| Primary headings | `text-foreground` | page titles, values | `#E0DDD4` |
-| Labels, captions | `text-muted-foreground` | "P/E Ratio", timestamps | `#6B7585` |
+| Context | Variable | Example | Hex (Terminal Dark) |
+|---------|----------|---------|---------------------|
+| Page background | `bg-background` | `<body>`, `<main>` | `#09090B` |
+| Card / panel | `bg-card` | shadcn `<Card>`, sidebar panels | `#111113` |
+| Elevated panel | `bg-muted` | nested cards, hover states | `#18181B` |
+| Primary headings | `text-foreground` | page titles, values | `#E4E4E7` |
+| Labels, captions | `text-muted-foreground` | "P/E Ratio", timestamps | `#71717A` |
 | Price up | `text-positive` | `+2.34%` | `#26A69A` (teal) |
 | Price down | `text-negative` | `-1.12%` | `#EF5350` |
-| CTA buttons | `bg-primary text-primary-foreground` | "Buy", "Confirm" | `#E8A317` bg |
-| Borders | `border-border` | `<Separator>`, table borders | `#243040` |
-| Active nav item | `bg-primary/10 text-primary` | sidebar active link | amber/gold tint |
-| Ticker badge | `bg-primary/20 text-primary font-mono` | "AAPL" badge | amber/gold tint |
+| CTA buttons | `bg-primary text-primary-foreground` | "Buy", "Confirm" | `#FFD60A` bg + `#000` text |
+| Borders | `border-border` | `<Separator>`, table borders | `#27272A` |
+| Active nav item | `bg-primary/10 text-primary` | sidebar active link | yellow tint |
+| Ticker badge | `bg-primary/20 text-primary font-mono` | "AAPL" badge | yellow tint |
 
 ### 2.3 Background Elevation Hierarchy
 
 ```
-Page (--background / #0A0E14)
-  └── Sidebar, panels (--card / #111820)
-        └── Nested cards, hover rows (--muted, --surface-2 / #1A2030)
-              └── Input fields, tooltips, borders (--surface-3 / #243040)
+Page (--background / #09090B)
+  └── Sidebar, panels (--card / #111113)
+        └── Nested cards, hover rows (--muted, --surface-2 / #18181B)
+              └── Input fields, tooltips, borders (--surface-3 / #27272A)
 ```
 
 ---
@@ -222,7 +226,7 @@ Purpose-built components for financial data. Implement these consistently:
 
 | Component | File path | Description |
 |-----------|-----------|-------------|
-| `OHLCVChart` | `components/charts/OHLCVChart.tsx` | lightweight-charts candlestick/line chart with MA50/MA200/Volume overlays |
+| `OHLCVChart` | `components/instrument/OHLCVChart.tsx` | lightweight-charts candlestick chart; theme synced to Terminal Dark palette |
 | `ImpactSparkline` | `components/news/ImpactSparkline.tsx` | Multi-window price impact mini chart |
 | `RelevanceBadge` | `components/news/RelevanceBadge.tsx` | 0–100 score badge with color gradient |
 | `SeverityBadge` | `components/alerts/SeverityBadge.tsx` | LOW/MEDIUM/HIGH/CRITICAL colored badge |
@@ -245,8 +249,12 @@ Purpose-built components for financial data. Implement these consistently:
 
 | Component | File path | Notes |
 |-----------|-----------|-------|
-| `AppSidebar` | `components/layout/AppSidebar.tsx` | 220px fixed sidebar, nav links + keyboard hint strip |
-| `TopBar` | `components/layout/TopBar.tsx` | Page title + ⌘K hint + WS status dot + alerts badge + avatar |
+| `Sidebar` | `components/shell/Sidebar.tsx` | 56px icon-only nav rail, watchlist prices, keyboard hint strip |
+| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + IndexTicker + alerts badge + avatar |
+| `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
+| `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
+| `IndexTicker` | `components/shell/IndexTicker.tsx` | Center-bar market index prices |
+| `MarketStatusPill` | `components/shell/MarketStatusPill.tsx` | OPEN/CLOSED/PRE status badge |
 
 ---
 
