@@ -12,6 +12,7 @@ from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.domain.models import Section
+from nlp_pipeline.infrastructure.metrics.prometheus import nlp_sectioning_fallback_total
 
 # ── Sectioner implementations ─────────────────────────────────────────────────
 
@@ -168,12 +169,14 @@ def section_document(doc_id: UUID, text: str, source_type: str) -> list[Section]
         sectioner = _transcript_sectioner
     else:
         # Unknown source — go straight to synthetic
+        nlp_sectioning_fallback_total.inc()
         return _synthetic_sectioner.section(doc_id, text)
 
     sections = sectioner.section(doc_id, text)
 
     if not sections:
         # Fallback: zero sections → one synthetic section covering full text
+        nlp_sectioning_fallback_total.inc()
         sections = _synthetic_sectioner.section(doc_id, text)
 
     return sections

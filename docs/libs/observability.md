@@ -156,9 +156,21 @@ OTEL_SERVICE_NAME=          # auto-set by configure_tracing()
 
 ## Common Pitfalls
 
-1. **Creating metrics twice** — calling `create_metrics("my-service")` in two
-   places registers duplicate counters and raises a Prometheus `ValueError`.
-   Create once, inject everywhere.
+1. **`registry` argument — use `is not None` check, not truthiness** (BP-173) —
+   `registry or CollectorRegistry()` always creates an isolated registry when `None`
+   is passed (since `None` is falsy). This makes all metrics invisible to
+   `generate_latest()` which reads the global `REGISTRY` singleton. Fixed:
+   `registry if registry is not None else REGISTRY`. Tests must pass an explicit
+   isolated `CollectorRegistry()` to avoid duplicate-registration errors.
+2. **Idempotent global registry** — `create_metrics()` caches `ServiceMetrics` per
+   `service_name` when using the global `REGISTRY`. Calling `create_metrics("svc")`
+   twice with no registry argument returns the same instance and does NOT register
+   duplicate metrics. Isolated registries (explicit `registry=` argument) are NOT
+   cached — callers own lifecycle.
+3. **Creating metrics in wrong registry (pre-BP-173)** — calling `create_metrics("my-service")` in two
+   places with isolated registries registers duplicate counters but in separate
+   stores, so only one appears in `/metrics`. Create once in the app factory,
+   inject everywhere.
 2. **Not calling `configure_tracing` before middleware** — `add_otel_middleware(app)`
    uses the active `TracerProvider`. If you call it before `configure_tracing`,
    it may attach to the default no-op provider and span IDs will be all-zeros

@@ -21,6 +21,11 @@ import structlog
 from ml_clients.cost import estimate_cost, estimate_tokens_from_text  # type: ignore[import-untyped]
 
 from rag_chat.domain.errors import ProviderUnavailableError
+from rag_chat.infrastructure.metrics.prometheus import (
+    rag_first_token,
+    rag_provider_fallback,
+    rag_provider_unavail,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -109,11 +114,15 @@ class LLMProviderChain:
                 continue
 
             t0 = time.monotonic()
+            _first_token_recorded = False
             output_chunks: list[str] = []
 
             try:
                 self._last_provider_name = provider.name
                 async for chunk in provider.stream(prompt, max_tokens=max_tokens, temperature=temperature):
+                    if not _first_token_recorded:
+                        rag_first_token.labels(provider=provider.name).observe(time.monotonic() - t0)
+                        _first_token_recorded = True
                     output_chunks.append(chunk)
                     yield chunk
 
@@ -144,7 +153,16 @@ class LLMProviderChain:
                     provider=provider.name,
                     error=str(exc),
                 )
+                rag_provider_unavail.labels(provider=provider.name).inc()
                 await self._valkey.setex(neg_key, _NEG_CACHE_TTL, "1")
+                # Record fallback if there's a subsequent provider in the chain.
+                _provider_idx = self._providers.index(provider)
+                if _provider_idx + 1 < len(self._providers):
+                    _next = self._providers[_provider_idx + 1]
+                    rag_provider_fallback.labels(
+                        from_provider=provider.name,
+                        to_provider=_next.name,
+                    ).inc()
 
         # All providers exhausted — log failure then raise
         if self._usage_logger is not None:

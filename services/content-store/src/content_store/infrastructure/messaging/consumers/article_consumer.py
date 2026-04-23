@@ -11,6 +11,7 @@ CR-3: LSH indexing happens AFTER DB commit in _handle_message override.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -27,7 +28,10 @@ from content_store.infrastructure.db.repositories.document import DocumentReposi
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
 from content_store.infrastructure.db.repositories.processed_events import ProcessedEventsRepository
-from content_store.infrastructure.metrics.prometheus import s5_lsh_index_failures_total
+from content_store.infrastructure.metrics.prometheus import (
+    record_processing_outcome,
+    s5_lsh_index_failures_total,
+)
 from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
 from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -307,6 +311,7 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
         self._current_summary = None
         self._current_uow = None  # reset so is_duplicate always uses a fresh session
         self._prefetched_bytes = None  # R24: reset; populated below before session opens
+        _start = time.perf_counter()
 
         # R24: Pre-fetch bronze bytes BEFORE the DB session opens.
         # We deserialize the message here (the base class will deserialize again;
@@ -341,7 +346,20 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             self._current_summary = None
             raise
 
+        # ── Metrics recording (post-commit) ──────────────────────────────────
+        # Record after the DB commit so only successfully committed articles
+        # are counted. Suppressed articles are also counted here with their
+        # outcome tier, giving a complete picture of the dedup pipeline.
         summary = self._current_summary
+        if summary is not None:
+            _duration = time.perf_counter() - _start
+            record_processing_outcome(
+                suppressed=summary.suppressed,
+                dedup_result=str(summary.decision.outcome),
+                duration=_duration,
+            )
+
+        # ── CR-3: LSH indexing AFTER commit ──────────────────────────────────
         if summary is not None and summary.signature is not None and summary.doc_id is not None:
             try:
                 await self._lsh.index(
