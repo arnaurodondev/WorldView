@@ -131,6 +131,19 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/v1/alerts/pending` | List pending alerts | Yes |
 | DELETE | `/v1/alerts/{alert_id}/ack` | Acknowledge (dismiss) alert | Yes |
 
+### Admin Endpoints (PLAN-0033)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/api/v1/admin/llm-costs` | Cross-service LLM cost aggregation (S6+S7+S8 fan-out) | Yes (admin role) |
+
+**Query params** for `/api/v1/admin/llm-costs`:
+- `period` (optional, `YYYY-MM`, default: current UTC month)
+- `provider` (optional, default: `all`; choices: `all`, `deepinfra`, `openrouter`, `gemini`, `ollama`)
+- `breakdown` (optional, default: `provider`; choices: `provider`, `capability`, `day`)
+
+**Behaviour**: Fan-out to S6/S7/S8 via `asyncio.gather`. Returns 200 with partial results if 1–2 services fail (failed services return `error` field); returns 503 only when all three fail. Requires `role == "admin"` in the authenticated user context.
+
 ### Email Preference Endpoints (→ S10 Alert)
 
 | Method | Path | Description | Auth |

@@ -23,6 +23,7 @@ from api_gateway.middleware import (
 )
 from api_gateway.routes import auth_router
 from api_gateway.routes import router as main_router
+from api_gateway.routes.admin_costs import router as admin_costs_router
 from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -205,6 +206,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router, tags=["health"])
     app.include_router(internal_router)
     app.include_router(auth_router)
+    app.include_router(admin_costs_router)
     app.include_router(main_router)
 
     return app

@@ -66,7 +66,10 @@ async def main() -> None:
         worker = PriceImpactLabellingWorker(
             nlp_session_factory=nlp_sf,
             market_data_client=market_client,
-            normalisation_cap_pct=settings.impact_normalisation_cap_pct,
+            cap_day_t0_pct=settings.price_impact_cap_day_t0_pct,
+            cap_day_t1_pct=settings.price_impact_cap_day_t1_pct,
+            cap_day_t2_pct=settings.price_impact_cap_day_t2_pct,
+            cap_day_t5_pct=settings.price_impact_cap_day_t5_pct,
             cycle_seconds=settings.price_impact_cycle_seconds,
             min_age_hours=settings.price_impact_min_age_hours,
         )

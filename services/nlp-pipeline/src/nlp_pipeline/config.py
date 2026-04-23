@@ -107,11 +107,33 @@ class Settings(BaseSettings):
     chunk_bucket: str = "worldview"
     silver_bucket: str = "worldview-silver"
 
-    # Price-impact labelling worker (PRD-0020 §6.5)
-    impact_normalisation_cap_pct: float = 5.0
+    # Price-impact labelling worker (PRD-0026 §6.7 Flow A)
+    # Per-window normalisation caps — configurable via S6_CAP_DAY_T*_PCT env vars
+    price_impact_cap_day_t0_pct: float = 5.0  # S6_CAP_DAY_T0_PCT
+    price_impact_cap_day_t1_pct: float = 5.0  # S6_CAP_DAY_T1_PCT
+    price_impact_cap_day_t2_pct: float = 7.5  # S6_CAP_DAY_T2_PCT
+    price_impact_cap_day_t5_pct: float = 10.0  # S6_CAP_DAY_T5_PCT
     price_impact_cycle_seconds: int = 14400
     price_impact_min_age_hours: int = 25
     market_data_internal_url: str = "http://market-data:8003"
+    # Legacy setting — kept for backward compatibility, not used by the new worker
+    impact_normalisation_cap_pct: float = 5.0
+
+    # UnresolvedResolutionWorker (PLAN-0033 T-C-1-04)
+    # All env vars: NLP_PIPELINE_UNRESOLVED_RESOLUTION_* prefix (auto via model_config)
+    unresolved_resolution_enabled: bool = True
+    unresolved_resolution_interval_s: int = 1800  # 30 minutes between poll cycles
+    unresolved_resolution_batch_size: int = 500  # rows per poll cycle
+    unresolved_resolution_lookback_days: int = 90  # max age of mentions to re-process
+    unresolved_resolution_llm_timeout_s: float = 10.0  # Ollama per-call timeout
+    unresolved_resolution_llm_retries: int = 2  # Ollama retries on JSON parse failure
+    unresolved_resolution_stale_escalated_minutes: int = 30  # stale lock recovery threshold
+    unresolved_resolution_ollama_base_url: str = "http://ollama:11434"
+    unresolved_resolution_classification_model: str = "qwen2.5:3b"
+    unresolved_resolution_max_llm_batch: int = 20  # max mentions per Ollama call
+
+    # LLM usage logging (PLAN-0033)
+    llm_usage_log_enabled: bool = True
 
     # Auth
     api_gateway_url: str = "http://api-gateway:8000"

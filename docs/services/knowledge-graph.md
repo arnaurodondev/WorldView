@@ -42,6 +42,7 @@ and performs read/write operations only.
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
 | GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
 | POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |
+| GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates for knowledge-graph (PLAN-0033); queries `intelligence_db.llm_usage_log` filtered to `service_name='knowledge-graph'`; params: `period` (YYYY-MM), `provider`, `breakdown` |
 
 ### `summary_authority` Field
 

@@ -103,6 +103,9 @@ def _build_app(settings, inject_user_from_bearer: bool = False):
                             "tenant_id": payload.get("tenant_id", ""),
                             "email": payload.get("email", "test@example.com"),
                             "email_verified": True,
+                            # role is extracted from the JWT so admin tests can set
+                            # role="admin" in their token and get it reflected here
+                            "role": payload.get("role", "user"),
                         }
                     except Exception:
                         if not hasattr(request.state, "user"):

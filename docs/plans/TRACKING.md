@@ -12,8 +12,7 @@
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 5/6 (Wave E frontend pending) | 2026-04-18 | 2026-04-18 |
-| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | in-progress | 3/8 | — | 2026-04-22 |
-| PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor (insert→log rename), S9 admin cost endpoint (period=YYYY-MM) | PRD-0029 | draft | 0/5 | — | 2026-04-22 |
+| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | in-progress | 4/8 | — | 2026-04-22 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -86,6 +85,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 | PLAN-0031 | Pipeline Reliability & Intelligence Hardening — Kafka retention, NER/extraction model tracking, D-004 dual-DB commit fix, entity.dirtied.v1 ordering, Gemini Lua atomicity, RAG circuit breaker, tenant isolation tests | Audit 2026-04-20 | 2026-04-22 | 8 | 2026-04-22 |
 | PLAN-UI-VISUAL-OVERHAUL | Bloomberg-Grade Visual Overhaul — Amber/gold palette, data density, component polish, landing page, dashboard 4-col, page-specific polish + critic fixups | PRD-0027 | 2026-04-19 | 6+fixups | 2026-04-19 |
 | PLAN-0032 | Forensic QA Remediation — Next.js 15.5.15 CVE upgrade, JWKS startup race (BP-164), CSP header, S9 callback sanitization (SEC-003), CORS port fix (SEC-008), transaction header forwarding (API-004), economic-calendar param (R-002), contradictions BP-069 fix, doc fixes | Forensic QA 2026-04-21 | 2026-04-22 | 6 | — |
+| PLAN-0033 | Unresolved Entity Re-Resolution & Cross-Service LLM Cost Tracking — UnresolvedResolutionWorker (S6), LlmUsageLogProtocol (libs/ml-clients), per-service llm_usage_log tables (S6+S8), S7+GeminiDescriptionAdapter refactor, S9 admin cost endpoint | PRD-0029 | 2026-04-22 | 5 | — |
 | QA-CROSS-001 | Cross-Service QA: market-ingestion, market-data, portfolio (16 findings fixed) | N/A | 2026-03-27 | — | 2026-03-27 |
 | QA-CROSS-002 | Deep Cross-Service QA: portfolio, market-ingestion, market-data (87 findings, 9 blocking/critical) | N/A | 2026-03-27 | — | 2026-03-27 |
 | QA-E2E-001 | Comprehensive E2E Test Suite: S4+S5+S7 ASGI tests + S2→S3 cross-service + S1 security isolation (89 new tests) | N/A | 2026-03-28 | — | 2026-03-28 |
