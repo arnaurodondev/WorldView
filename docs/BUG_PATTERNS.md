@@ -5662,7 +5662,7 @@ When using `ON CONFLICT DO NOTHING` for deduplication in a queue pattern, verify
 | **Affected areas** | `libs/observability/src/observability/metrics.py:52`; all services calling `create_metrics()` (S1–S10 except S4/S5 which use their own module-level counters) |
 | **Root cause** | `create_metrics()` defaults to `registry or CollectorRegistry()`, which creates a brand-new isolated registry every time it is called without an explicit registry argument. All returned `Counter`/`Histogram` objects are registered in this isolated registry. When Prometheus scrapes `/metrics`, the FastAPI app calls `prometheus_client.generate_latest()`, which reads from the global `REGISTRY` singleton. The custom metrics are in a different object (`reg`) that `generate_latest()` never sees. Result: 60 metric families across 10 services are permanently invisible. |
 | **Symptom** | `GET /metrics` returns only Python process metrics (`python_gc_*`, `process_*`). Service-level counters (`s1_requests_total`, `s3_kafka_messages_consumed_total`, etc.) appear as 0 series in Prometheus and are absent from all Grafana panels. |
-| **Fix** | Change `libs/observability/metrics.py:52` from `reg = registry or CollectorRegistry()` to `reg = registry if registry is not None else REGISTRY` (where `REGISTRY` is imported from `prometheus_client`). Tests that pass an isolated registry to avoid duplicate-registration errors continue to work unchanged. Services that pass `None` (the production default) will now correctly register in the global registry. |
+| **Fix** | Change `libs/observability/metrics.py:52` from `reg = registry or CollectorRegistry()` to `reg = registry if registry is not None else REGISTRY` (where `REGISTRY` is imported from `prometheus_client`). Tests that pass an isolated registry to avoid duplicate-registration errors continue to work unchanged. Services that pass `None` (the production default) will now correctly register in the global registry. Added `_global_registry_cache: dict[str, ServiceMetrics]` to make `create_metrics()` idempotent for the global REGISTRY — returns the cached instance when the same `service_name` is called again, avoiding `ValueError: Duplicated timeseries` in test suites that instantiate consumers multiple times. |
 
 ### Prevention
 
@@ -5730,3 +5730,37 @@ When adding a service to `prometheus.yml`, ALWAYS use the container-internal por
 ### Prevention
 
 An Alertmanager receiver with no integration config is not a valid production configuration. It is equivalent to disabling alerting entirely. Any CI or deployment check must verify that at least one receiver has at least one notification config entry. Add the following to the deployment checklist: "Alertmanager has at least one receiver with a working notification channel (email/Slack/PagerDuty). Verify with `amtool config routes show`."
+
+---
+
+## BP-177 — `app = create_app()` at Module Level With uvicorn `--factory` (Double Prometheus Registration)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (platform cold-start validation) |
+| **Severity** | HIGH — service crashes at startup; no traffic served |
+| **Affected areas** | FastAPI app factories used with uvicorn `--factory` |
+| **Root cause** | A module-level `app = create_app()` call executes when the module is imported by uvicorn, registering Prometheus metrics into the global `CollectorRegistry`. uvicorn then calls `create_app()` a second time (as the factory function), which tries to register the same metrics again. If the `observability.metrics._global_registry_cache` is absent (old image) or the service name is identical, the second registration raises `ValueError: Duplicated timeseries in CollectorRegistry`. |
+| **Symptom** | Service exits immediately on startup with `ValueError: Duplicated timeseries in CollectorRegistry: {'<svc>_requests_total', ...}`. Found in `alert/app.py:159`. |
+| **Fix** | Remove the module-level `app = create_app()` call. uvicorn `--factory` handles the single instantiation. If module-level access is needed for testing, use `pytest` fixtures that call `create_app()` directly. |
+
+### Prevention
+
+Never add `app = create_app()` at module level in a FastAPI service that uses uvicorn `--factory`. Add to the service scaffold template and `.claude/review/checklists/REVIEW_CHECKLIST.md`: "FastAPI app.py: no module-level `app = create_app()` if CMD uses `--factory`."
+
+---
+
+## BP-178 — asyncpg Rejects Parameter Binding Inside `interval '...'` String Literals
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (platform cold-start validation) |
+| **Severity** | HIGH — worker fails to start; all retry/recovery logic disabled |
+| **Affected areas** | Any SQLAlchemy `text()` query with parameterized interval durations (asyncpg driver) |
+| **Root cause** | asyncpg does not support parameters inside PostgreSQL `interval '...'` string literals. `interval ':minutes minutes'` becomes `interval '$1 minutes'` in the wire protocol, which asyncpg rejects with `IndeterminateDatatypeError: could not determine data type of parameter $1`. The pattern looks valid in psycopg2 or psql but fails with asyncpg's prepared-statement protocol. |
+| **Symptom** | `sqlalchemy.exc.ProgrammingError: IndeterminateDatatypeError: could not determine data type of parameter $1` on queries containing `interval ':param ...'`. |
+| **Fix** | Replace `interval ':minutes minutes'` with `make_interval(mins => :minutes)` and `interval ':days days'` with `make_interval(days => :days)`. PostgreSQL's `make_interval()` function accepts named integer parameters that asyncpg binds correctly. Affected file: `nlp-pipeline/infrastructure/nlp_db/repositories/entity_mention.py`. |
+
+### Prevention
+
+Any raw SQL with a parameterized duration must use `make_interval()`. Add to `.claude/review/checklists/REVIEW_CHECKLIST.md`: "asyncpg: no `interval ':param ...'` literals — use `make_interval(mins => :param)` instead."
