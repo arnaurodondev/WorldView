@@ -21,8 +21,10 @@
 FROM node:20-alpine AS deps
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@10 --activate
-# Copy workspace config + lock file + app package.json for dependency resolution
-COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+# Copy workspace config + lock file + app package.json for dependency resolution.
+# Root package.json must also be copied — it contains `pnpm.overrides` (vite, @eslint/plugin-kit)
+# that are recorded in pnpm-lock.yaml. Without it, pnpm raises ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/worldview-web/package.json ./apps/worldview-web/
 RUN pnpm install --frozen-lockfile --filter worldview-web
 

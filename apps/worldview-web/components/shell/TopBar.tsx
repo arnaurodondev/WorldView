@@ -66,9 +66,14 @@ export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
   };
 
   return (
-    // WHY h-12 not h-16: Finance terminals use compact chrome. Every pixel of
-    // vertical space is real estate for data. 48px (h-12) is tight but legible.
-    <header className="flex h-12 w-full shrink-0 items-center justify-between border-b border-border bg-background px-4">
+    // WHY h-[44px] not h-12 (48px): Reduced from 48px to 44px to match the
+    // --topbar-height CSS token and save 4px of vertical chrome real estate.
+    // At 44px the bar is still comfortable to click but 8% more compact.
+    // WHY border-b border-border (not border-border/40): The topbar bottom border
+    // must be fully opaque to clearly delineate the chrome from the content area.
+    // The old border-border was already opaque but the new --border (#27272A) is
+    // brighter than the old #243040, so it reads as a crisp structural edge now.
+    <header className="flex h-[44px] w-full shrink-0 items-center justify-between border-b border-border bg-background px-4">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
       <div className="flex items-center gap-4">
         {/* Wordmark — text for crisp rendering at all DPIs */}

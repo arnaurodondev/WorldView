@@ -101,7 +101,16 @@ export function GlobalSearch() {
 
         {/* Dropdown results — only shown when query is non-empty */}
         {open && (
-          <div className="absolute left-0 top-full z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-lg">
+          // WHY onMouseDown preventDefault: clicking a result fires "blur" on the input
+          // before the "click" on the CommandItem registers. Calling preventDefault() on
+          // the container's mousedown stops the input from losing focus (and closing the
+          // dropdown) before the click handler on CommandItem can execute. Without this,
+          // clicking a result on some browsers/OSes would close the dropdown and navigate
+          // to nothing.
+          <div
+            className="absolute left-0 top-full z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-lg"
+            onMouseDown={(e) => e.preventDefault()}
+          >
             <CommandList>
               <CommandEmpty className="py-3 text-xs">
                 {debouncedQuery.length >= 1 ? "No instruments found." : "Type to search…"}
@@ -112,6 +121,12 @@ export function GlobalSearch() {
                   {results.map((result) => (
                     <CommandItem
                       key={result.entity_id}
+                      // WHY value={result.entity_id}: cmdk uses the `value` prop for
+                      // keyboard selection matching. Without it, cmdk tries to match
+                      // against the text content of the item — which is a concatenation
+                      // of ticker + name + exchange. Setting value explicitly ensures
+                      // the correct item is highlighted when navigating with arrow keys.
+                      value={result.entity_id}
                       onSelect={() => {
                         // Navigate to instrument detail using entity_id (ADR-F-12:
                         // entity_id ≠ instrument_id — use entity_id for URL routing)

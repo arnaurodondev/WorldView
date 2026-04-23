@@ -4,11 +4,17 @@
  * WHY THIS EXISTS: Cards are the primary container for every data panel in the
  * dashboard, screener results, instrument detail sections, etc. Using a
  * consistent Card component ensures all panels share the same bg-card background
- * (#111820) and border styling from the Bloomberg Dark palette.
+ * (#111113) and border styling from the Terminal Dark palette.
  *
  * Finance UX note: Cards should have minimal padding (p-3 not p-6) to maximise
  * data density. CardHeader has a border-b separator and px-3 py-2 for tight headers.
  * Use CardHeader + CardContent for labelled sections.
+ *
+ * WHY rounded-[2px] (not rounded-lg or rounded-xl): --radius is now 0.125rem (2px)
+ * to match Bloomberg/tastytrade terminal aesthetic. Near-zero radius makes panels
+ * feel like grid cells in a data terminal, not floating consumer-app cards.
+ * rounded-[2px] is an explicit override to bypass Tailwind's radius scale lookup
+ * (rounded-lg etc.) and apply exactly 2px regardless of how the scale is configured.
  *
  * DESIGN REFERENCE: docs/ui/DESIGN_SYSTEM.md §2.3 Background Elevation Hierarchy
  */
@@ -23,7 +29,14 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-lg border border-border bg-card text-card-foreground shadow-sm",
+      // WHY rounded-[2px] not rounded-lg: --radius dropped from 0.375rem (6px) to
+      // 0.125rem (2px). rounded-lg resolves via Tailwind's borderRadius scale which
+      // now maps to 2px anyway, but using the explicit [2px] value makes the intent
+      // crystal-clear in code review and prevents accidental drift if the scale
+      // changes. WHY no shadow-sm: terminal panels don't cast shadows — shadows add
+      // perceived depth/floating that conflicts with the flat, dense grid aesthetic.
+      // Borders (#27272A) are the sole separation mechanism between panels.
+      "rounded-[2px] border border-border bg-card text-card-foreground",
       className,
     )}
     {...props}

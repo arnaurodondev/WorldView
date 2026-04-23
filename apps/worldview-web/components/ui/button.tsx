@@ -22,17 +22,20 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  // Base styles: all buttons share these
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // Base styles: all buttons share these.
+  // WHY rounded-[2px] not rounded-md: matches the new 2px radius system globally.
+  // rounded-md was 6px (old radius) — now that --radius is 2px, using the explicit
+  // value prevents any confusion from Tailwind's scale mapping.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[2px] text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        // Primary CTA — amber background with warm glow effect.
-        // WHY shadow-sm + shadow-primary/20: gives the main CTA a subtle warm amber
-        // glow at rest, making it visually "float" above the dark background. On hover,
-        // shadow-md + shadow-primary/30 deepens the glow — institutional UIs use this
-        // to signal "this is the primary action" without neon-bright borders.
-        default: "bg-primary text-primary-foreground shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30",
+        // Primary CTA — trading yellow background (#FFD60A) with black text.
+        // WHY shadow-primary/10 not /20: #FFD60A is more high-chroma than old #E8A317
+        // amber. At /20 the yellow glow was visually aggressive on near-black. /10
+        // keeps a subtle luminous edge that signals "primary action" without glowing.
+        // Hover: /15 for a light deepening. No float effect — terminal buttons are flat.
+        default: "bg-primary text-primary-foreground shadow-sm shadow-primary/10 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/15",
         // Destructive — muted red for delete/dangerous actions
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         // Outline — bordered, transparent background.
@@ -49,8 +52,10 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-8",
+        // WHY rounded-[2px] on sm + lg: size variants used to override rounded-md (6px).
+        // Now all sizes must explicitly use 2px to stay consistent with the radius system.
+        sm: "h-8 rounded-[2px] px-3 text-xs",
+        lg: "h-10 rounded-[2px] px-8",
         icon: "h-8 w-8",  // WHY h-8 w-8: compact icon buttons for dense toolbar layouts
       },
     },
