@@ -70,7 +70,9 @@ def create_rag_session_factory(
     )
 
     read_url = settings.database_url_read.get_secret_value() if settings.database_url_read is not None else None
-    if read_url is None or _same_db_endpoint(read_url, settings.database_url.get_secret_value()):
+    # BP-NEW-A: pydantic-settings parses KEY= (empty string) as SecretStr("") not None.
+    # `is not None` guard is bypassed; use `not read_url` to catch both None and "".
+    if not read_url or _same_db_endpoint(read_url, settings.database_url.get_secret_value()):
         # No separate read replica — share the write engine.
         read_engine = write_engine
         read_factory = write_factory

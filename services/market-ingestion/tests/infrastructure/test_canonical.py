@@ -119,6 +119,25 @@ def test_serialize_ohlcv_invalid_missing_field_raises(serializer):
 
 
 @pytest.mark.unit
+def test_serialize_ohlcv_null_volume_coerces_to_zero(serializer):
+    """Regression for FIX-O3 / BP-182: EODHD returns volume:null for some bars.
+
+    int(None) previously raised TypeError, crashing the canonicalize step and
+    leaving the task stuck in RUNNING state (BP-113). volume=null must be coerced
+    to 0 so the bar is preserved and downstream consumers can filter if needed.
+    """
+    row = _ohlcv_row(volume=None)  # simulate EODHD null-volume bar
+
+    result = serializer.serialize_ohlcv([row])
+
+    assert isinstance(result, bytes)
+    lines = result.decode("utf-8").strip().splitlines()
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["volume"] == 0  # null coerced to 0, not an error
+
+
+@pytest.mark.unit
 def test_serialize_ohlcv_roundtrip_preserves_values(serializer):
     row = _ohlcv_row(open=100.5, high=110.0, low=99.0, close=108.0, volume=42_000)
 
