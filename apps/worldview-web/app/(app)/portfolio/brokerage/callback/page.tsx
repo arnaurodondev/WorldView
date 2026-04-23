@@ -111,8 +111,14 @@ export default function BrokerageCallbackPage() {
             : "Failed to activate brokerage connection. Please try again.",
         );
       });
-  // WHY accessToken in deps: the effect must re-run if the token becomes available
-  // after the initial render (e.g., token refresh on page load).
+  // WHY only [accessToken] in the dep array — URL params intentionally omitted:
+  // connectionId/authorizationId/userId/sessionId are derived from useSearchParams()
+  // at component level. On this page the URL is fully stable after the SnapTrade
+  // redirect — SnapTrade never changes the callback URL while the component is
+  // mounted. Including them would be safe but redundant. More importantly, the
+  // hasActivated.current guard already prevents re-activation on any subsequent
+  // re-render regardless of which deps change, so omitting the URL params has
+  // no functional effect. The lint rule is suppressed to document this intent.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
