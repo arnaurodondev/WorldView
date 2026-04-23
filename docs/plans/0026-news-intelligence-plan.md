@@ -609,7 +609,8 @@ Also update the `min_impact_score` filter and `order_by=market_impact_score` sor
 
 ---
 
-## Wave 4: Updated PriceImpactLabellingWorker — 4 Windows
+## Wave 4: Updated PriceImpactLabellingWorker — 4 Windows ✅
+**Status**: **DONE** — 2026-04-22 · 36 tests pass · ruff + mypy clean
 
 **Goal**: Extend `PriceImpactLabellingWorker` to compute all 4 daily windows (day_t0, day_t1, day_t2, day_t5) with cumulative logic, switch from writing to `article_price_impacts` → `article_impact_windows`, update worker entrypoint.
 **Depends on**: Wave 3

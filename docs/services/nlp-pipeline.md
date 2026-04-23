@@ -38,6 +38,7 @@ performs read/write operations only.
 | POST | `/api/v1/search/vector` | Vector similarity search (body: query_text, top_k) | fast |
 | POST | `/api/v1/reprocess/{article_id}` | Re-run NLP on an article (admin) | — |
 | GET | `/api/v1/topics` | Active topic clusters | fast |
+| GET | `/internal/v1/llm-costs` | LLM cost aggregates (PLAN-0033); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
 
 ---
 

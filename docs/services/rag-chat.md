@@ -29,6 +29,7 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | GET | `/api/v1/threads` | List threads (paginated) | X-Tenant-Id + X-User-Id |
 | GET | `/api/v1/threads/{thread_id}` | Get thread with messages | X-Tenant-Id + X-User-Id |
 | DELETE | `/api/v1/threads/{thread_id}` | Soft-delete thread | X-Tenant-Id + X-User-Id |
+| GET | `/internal/v1/llm-costs` | LLM cost aggregates for rag-chat (PLAN-0033); queries `rag_chat_db.llm_usage_log` (no service_name filter — S8-exclusive DB); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
 
 ### Request/Response Models
 
