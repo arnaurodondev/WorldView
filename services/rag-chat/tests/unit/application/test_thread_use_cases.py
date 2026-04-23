@@ -6,7 +6,7 @@ Tests: CreateThread, ListThreads, GetThread, DeleteThread.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -88,6 +88,19 @@ class TestCreateThreadUseCase:
         )
 
         assert thread.entity_ids == (entity_id,)
+
+    async def test_create_thread_increments_thread_count_gauge(self) -> None:
+        """rag_thread_count Gauge is incremented with the tenant_id label after commit."""
+        from rag_chat.application.use_cases.create_thread import CreateThreadUseCase
+
+        uow = _make_mock_uow()
+        uc = CreateThreadUseCase()
+        mock_gauge = MagicMock()
+        with patch("rag_chat.application.use_cases.create_thread.rag_thread_count", mock_gauge):
+            await uc.execute(uow, user_id=_USER_ID, tenant_id=_TENANT_ID, title=None, entity_ids=[])
+
+        mock_gauge.labels.assert_called_once_with(tenant_id=str(_TENANT_ID))
+        mock_gauge.labels.return_value.inc.assert_called_once()
 
 
 # ── ListThreadsUseCase ────────────────────────────────────────────────────────
@@ -183,3 +196,16 @@ class TestDeleteThreadUseCase:
             await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID, tenant_id=_TENANT_ID)
 
         uow.commit.assert_not_awaited()
+
+    async def test_delete_thread_decrements_thread_count_gauge(self) -> None:
+        """rag_thread_count Gauge is decremented with the tenant_id label after commit."""
+        from rag_chat.application.use_cases.delete_thread import DeleteThreadUseCase
+
+        uow = _make_mock_uow()
+        uc = DeleteThreadUseCase()
+        mock_gauge = MagicMock()
+        with patch("rag_chat.application.use_cases.delete_thread.rag_thread_count", mock_gauge):
+            await uc.execute(uow, thread_id=_THREAD_ID, user_id=_USER_ID, tenant_id=_TENANT_ID)
+
+        mock_gauge.labels.assert_called_once_with(tenant_id=str(_TENANT_ID))
+        mock_gauge.labels.return_value.dec.assert_called_once()

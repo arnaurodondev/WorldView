@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -288,6 +289,95 @@ class TestChunkCacheMissConditions:
         assert chunks is None
         assert reason == MISS_SIMILARITY
 
+    async def test_no_cache_increments_miss_counter(self, manager: ContextManager) -> None:
+        """Cache miss due to absent key → rag_chunk_cache_misses(reason=no_cache) incremented."""
+        mock_misses = MagicMock()
+        mock_hits = MagicMock()
+        with (
+            patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_misses", mock_misses),
+            patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_hits", mock_hits),
+        ):
+            await manager.try_get_cached_chunks(
+                thread_id=_T,
+                prev_turn_num=99,
+                current_intent=QueryIntent.FACTUAL_LOOKUP,
+                current_entities=(_E1,),
+                current_query_embedding=[1.0, 0.0],
+            )
+
+        mock_misses.labels.assert_called_once_with(reason=MISS_NO_CACHE)
+        mock_misses.labels.return_value.inc.assert_called_once()
+        mock_hits.labels.assert_not_called()
+
+    async def test_intent_mismatch_increments_miss_counter(self, manager: ContextManager) -> None:
+        """Intent mismatch → rag_chunk_cache_misses(reason=intent_mismatch) incremented."""
+        await manager.cache_chunks(
+            thread_id=_T,
+            turn_num=10,
+            intent=QueryIntent.FACTUAL_LOOKUP,
+            entities=(_E1,),
+            query_embedding=[1.0, 0.0],
+            chunks=[_make_chunk()],
+        )
+        mock_misses = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_misses", mock_misses):
+            await manager.try_get_cached_chunks(
+                thread_id=_T,
+                prev_turn_num=10,
+                current_intent=QueryIntent.FINANCIAL_DATA,  # different intent
+                current_entities=(_E1,),
+                current_query_embedding=[1.0, 0.0],
+            )
+
+        mock_misses.labels.assert_called_once_with(reason=MISS_INTENT)
+        mock_misses.labels.return_value.inc.assert_called_once()
+
+    async def test_entity_mismatch_increments_miss_counter(self, manager: ContextManager) -> None:
+        """Entity mismatch → rag_chunk_cache_misses(reason=entity_mismatch) incremented."""
+        await manager.cache_chunks(
+            thread_id=_T,
+            turn_num=11,
+            intent=QueryIntent.FACTUAL_LOOKUP,
+            entities=(_E1,),
+            query_embedding=[1.0, 0.0],
+            chunks=[_make_chunk()],
+        )
+        mock_misses = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_misses", mock_misses):
+            await manager.try_get_cached_chunks(
+                thread_id=_T,
+                prev_turn_num=11,
+                current_intent=QueryIntent.FACTUAL_LOOKUP,
+                current_entities=(_E2,),  # disjoint entity set
+                current_query_embedding=[1.0, 0.0],
+            )
+
+        mock_misses.labels.assert_called_once_with(reason=MISS_ENTITY)
+        mock_misses.labels.return_value.inc.assert_called_once()
+
+    async def test_low_similarity_increments_miss_counter(self, manager: ContextManager) -> None:
+        """Low query similarity → rag_chunk_cache_misses(reason=low_similarity) incremented."""
+        await manager.cache_chunks(
+            thread_id=_T,
+            turn_num=12,
+            intent=QueryIntent.FACTUAL_LOOKUP,
+            entities=(_E1,),
+            query_embedding=[1.0, 0.0],
+            chunks=[_make_chunk()],
+        )
+        mock_misses = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_misses", mock_misses):
+            await manager.try_get_cached_chunks(
+                thread_id=_T,
+                prev_turn_num=12,
+                current_intent=QueryIntent.FACTUAL_LOOKUP,
+                current_entities=(_E1,),
+                current_query_embedding=[0.0, 1.0],  # orthogonal → sim=0
+            )
+
+        mock_misses.labels.assert_called_once_with(reason=MISS_SIMILARITY)
+        mock_misses.labels.return_value.inc.assert_called_once()
+
 
 # ── Chunk cache — hit ─────────────────────────────────────────────────────────
 
@@ -367,6 +457,36 @@ class TestChunkCacheHit:
     async def test_summary_key_format(self) -> None:
         key = ContextManager.summary_key(_T, 5)
         assert key == f"s8:ctx:summary:{_T}:5"
+
+    async def test_hit_increments_hit_counter(self, manager: ContextManager) -> None:
+        """All 3 conditions met → rag_chunk_cache_hits(intent=...) incremented."""
+        await manager.cache_chunks(
+            thread_id=_T,
+            turn_num=20,
+            intent=QueryIntent.SIGNAL_INTEL,
+            entities=(_E1,),
+            query_embedding=[1.0, 0.0],
+            chunks=[_make_chunk()],
+        )
+        mock_hits = MagicMock()
+        mock_misses = MagicMock()
+        with (
+            patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_hits", mock_hits),
+            patch("rag_chat.application.pipeline.context_manager.rag_chunk_cache_misses", mock_misses),
+        ):
+            chunks, reason = await manager.try_get_cached_chunks(
+                thread_id=_T,
+                prev_turn_num=20,
+                current_intent=QueryIntent.SIGNAL_INTEL,
+                current_entities=(_E1,),
+                current_query_embedding=[1.0, 0.0],
+            )
+
+        assert reason == HIT
+        assert chunks is not None
+        mock_hits.labels.assert_called_once_with(intent=str(QueryIntent.SIGNAL_INTEL))
+        mock_hits.labels.return_value.inc.assert_called_once()
+        mock_misses.labels.assert_not_called()
 
 
 # ── Turn summaries ────────────────────────────────────────────────────────────
@@ -481,6 +601,42 @@ class TestGenerateTurnSummary:
         for _ in range(5):
             await asyncio.sleep(0)
         assert len(manager._background_tasks) == 0
+
+    async def test_do_generate_records_summary_duration(self, manager: ContextManager) -> None:
+        """_do_generate_turn_summary records latency via rag_turn_summary_duration.observe()."""
+        mock_hist = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_turn_summary_duration", mock_hist):
+            await manager._do_generate_turn_summary(
+                thread_id=_T,
+                turn_num=30,
+                query="What is AAPL revenue?",
+                response_text="AAPL had $100B revenue.",
+                intent=QueryIntent.FINANCIAL_DATA,
+                entities=(_E1,),
+            )
+
+        mock_hist.observe.assert_called_once()
+        observed_value = mock_hist.observe.call_args[0][0]
+        assert observed_value >= 0.0  # non-negative latency
+
+    async def test_llm_error_does_not_record_duration(self) -> None:
+        """LLM error → summary generation fails → duration not observed (try/except swallows it)."""
+        cache = _FakeCache()
+        manager = ContextManager(chunk_cache=cache, llm_provider=_ErrorLLM())
+        mock_hist = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_turn_summary_duration", mock_hist):
+            await manager._do_generate_turn_summary(
+                thread_id=_T,
+                turn_num=31,
+                query="query",
+                response_text="response",
+                intent=QueryIntent.GENERAL,
+                entities=(),
+            )
+
+        # The observe call is inside the try block after the streaming loop;
+        # since _ErrorLLM raises before the loop ends, observe is never called.
+        mock_hist.observe.assert_not_called()
 
 
 # ── assemble_context ──────────────────────────────────────────────────────────
@@ -597,6 +753,23 @@ class TestAssembleContext:
         )
         # Clamped to 6000 to satisfy ConversationContext invariant
         assert ctx.total_token_estimate == 6000
+
+    def test_assemble_context_observes_token_estimate(self, manager: ContextManager) -> None:
+        """assemble_context records token estimate via rag_context_token_estimate.observe()."""
+        mock_hist = MagicMock()
+        with patch("rag_chat.application.pipeline.context_manager.rag_context_token_estimate", mock_hist):
+            ctx = manager.assemble_context(
+                intent=QueryIntent.FACTUAL_LOOKUP,
+                system_prompt="You are a financial analyst.",
+                turn_summaries=["Turn 1 summary."],
+                last_turn_verbatim="Q: revenue? A: $100B.",
+                retrieval_chunks=[_make_chunk("Some chunk text.")],
+                resolved_entities=(_E1,),
+                query="What is the revenue?",
+            )
+
+        mock_hist.labels.assert_called_once_with(intent=str(QueryIntent.FACTUAL_LOOKUP))
+        mock_hist.labels.return_value.observe.assert_called_once_with(ctx.total_token_estimate)
 
     @pytest.mark.parametrize("n_turns", [1, 5, 8, 10])
     def test_multi_turn_conversations_stay_under_budget(self, manager: ContextManager, n_turns: int) -> None:
