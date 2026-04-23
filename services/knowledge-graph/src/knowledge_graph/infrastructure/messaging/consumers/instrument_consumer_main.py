@@ -60,7 +60,9 @@ async def main() -> None:
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
 
     llm_client = FallbackChainClient()
-    definition_worker = DefinitionRefreshWorker(write_factory, llm_client)
+    definition_worker = DefinitionRefreshWorker(
+        write_factory, llm_client, embedding_model_id=settings.embedding_model_id
+    )
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,

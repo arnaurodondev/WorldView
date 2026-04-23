@@ -39,7 +39,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 90
 _BATCH_LIMIT = 50
-_EMBED_MODEL_ID = "nomic-embed-text"
+_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _FINANCIAL_INSTRUMENT = "financial_instrument"
 
 
@@ -72,9 +72,11 @@ class DefinitionRefreshWorker:
         llm_client: FallbackChainClient,
         description_client: EntityDescriptionClient | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
+        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
+        self._embed_model_id = embedding_model_id
         if description_client is None:
             from ml_clients.description_client import NullDescriptionAdapter  # type: ignore[import-untyped]
 
@@ -168,7 +170,7 @@ class DefinitionRefreshWorker:
                     source_text=source_text,
                     source_hash=new_hash,
                     embedding=embedding,
-                    model_id=_EMBED_MODEL_ID,
+                    model_id=self._embed_model_id,
                 ),
             )
             refreshed += 1
@@ -229,7 +231,7 @@ class DefinitionRefreshWorker:
                 entity_id,
                 VIEW_DEFINITION,
                 embedding=embedding,
-                model_id=_EMBED_MODEL_ID if embedding else None,
+                model_id=self._embed_model_id if embedding else None,
                 source_text=source_text,
                 source_hash=new_hash,
                 next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
@@ -292,7 +294,7 @@ class DefinitionRefreshWorker:
     async def _embed(self, entity_id: UUID, text: str) -> list[float] | None:
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
-        inp = EmbeddingInput(text=text, model_id=_EMBED_MODEL_ID)
+        inp = EmbeddingInput(text=text, model_id=self._embed_model_id)
         outputs = await self._llm.embed([inp], entity_id=entity_id)
         if outputs is None or not outputs:
             return None

@@ -48,7 +48,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 30
 _BATCH_LIMIT = 50
-_EMBED_MODEL_ID = "nomic-embed-text"
+_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 
 # Relation type constants (from relation_type_registry seed in migration 0002)
 _IS_IN_SECTOR_TYPE = "is_in_sector"
@@ -89,11 +89,13 @@ class FundamentalsRefreshWorker:
         llm_client: FallbackChainClient,
         market_data_base_url: str,
         http_client: httpx.AsyncClient | None = None,
+        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
         self._market_data_url = market_data_base_url.rstrip("/")
         self._http = http_client
+        self._embed_model_id = embedding_model_id
 
     async def run(self) -> None:
         """Refresh fundamentals embeddings due for refresh.
@@ -177,7 +179,7 @@ class FundamentalsRefreshWorker:
                     source_hash = sha256_hex(narrative)
                     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
-                    inp = EmbeddingInput(text=narrative, model_id=_EMBED_MODEL_ID)
+                    inp = EmbeddingInput(text=narrative, model_id=self._embed_model_id)
                     outputs = await self._llm.embed([inp], entity_id=entity_id)
                     embedding = outputs[0].embedding if outputs else None
 
@@ -185,7 +187,7 @@ class FundamentalsRefreshWorker:
                         entity_id,
                         VIEW_FUNDAMENTALS,
                         embedding=embedding,
-                        model_id=_EMBED_MODEL_ID if embedding else None,
+                        model_id=self._embed_model_id if embedding else None,
                         source_text=narrative,
                         source_hash=source_hash,
                         next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]

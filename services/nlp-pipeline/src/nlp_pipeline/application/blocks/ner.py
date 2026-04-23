@@ -109,6 +109,7 @@ async def run_ner_block(
     threshold: float = GLINER_THRESHOLD,
     batch_size: int = 32,
     ner_model_id: str | None = None,
+    section_token_limit: int = SECTION_TOKEN_LIMIT,
 ) -> tuple[list[EntityMention], DocumentEntityStats]:
     """Run GLiNER NER on all sections of a document.
 
@@ -138,7 +139,7 @@ async def run_ner_block(
         batch_inputs: list[NERInput] = []
         valid_sections: list[Section] = []  # parallel list to batch_inputs
         for section in batch:
-            truncated_text = _truncate_to_tokens(section.text, SECTION_TOKEN_LIMIT)
+            truncated_text = _truncate_to_tokens(section.text, section_token_limit)
             if not truncated_text.strip():
                 continue
             batch_inputs.append(

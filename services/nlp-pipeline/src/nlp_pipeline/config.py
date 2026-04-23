@@ -77,6 +77,20 @@ class Settings(BaseSettings):
     gliner_resolution_threshold: float = 0.45  # for entity resolution cascade
     gliner_batch_size: int = 32
     gliner_section_token_limit: int = 450  # truncate sections before NER
+    gliner_nms_iou_threshold: float = 0.5  # Non-Maximum Suppression overlap threshold
+
+    # Routing tier thresholds (PRD §6.7 Block 5)
+    routing_tier_deep: float = 0.70  # score >= this → DEEP processing
+    routing_tier_medium: float = 0.45  # score >= this → MEDIUM processing
+    routing_tier_light: float = 0.20  # score >= this → LIGHT processing
+
+    # Entity resolution thresholds (PRD §6.7 Block 9)
+    entity_resolution_auto_resolve_threshold: float = 0.72  # auto-resolve above this
+    entity_resolution_provisional_threshold: float = 0.45  # provisional above this
+
+    # Novelty gate thresholds (PRD §6.7 Block 8)
+    novelty_minhash_threshold: float = 0.80  # MinHash similarity → near-duplicate
+    novelty_embedding_threshold: float = 0.90  # per-entity embedding similarity → near-duplicate
 
     # Backpressure (PRD §6.7 Block 7, T-C-3-05)
     max_ollama_queue_depth: int = 20

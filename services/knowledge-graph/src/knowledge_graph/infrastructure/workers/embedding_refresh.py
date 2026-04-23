@@ -19,24 +19,28 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _BATCH_LIMIT = 100
-_EMBED_MODEL_ID = "nomic-embed-text"
+_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 
 
 class EmbeddingRefreshWorker:
     """Embeds relation summaries that are missing embeddings (Worker 13F).
 
     Args:
-        session_factory: Read/write sessionmaker for intelligence_db.
-        llm_client:      FallbackChainClient (embedding path).
+        session_factory:   Read/write sessionmaker for intelligence_db.
+        llm_client:        FallbackChainClient (embedding path).
+        embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
+                           Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
     """
 
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
+        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
+        self._embed_model_id = embedding_model_id
 
     async def run(self) -> None:
         """Embed current relation summaries that lack embeddings."""
@@ -58,7 +62,7 @@ class EmbeddingRefreshWorker:
                 summary_id = row["summary_id"]  # type: ignore[assignment]
                 summary_text = str(row["summary_text"])
 
-                inp = EmbeddingInput(text=summary_text, model_id=_EMBED_MODEL_ID)
+                inp = EmbeddingInput(text=summary_text, model_id=self._embed_model_id)
                 outputs = await self._llm.embed([inp])
                 if outputs is None or not outputs:
                     continue

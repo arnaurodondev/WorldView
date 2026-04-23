@@ -57,6 +57,14 @@ from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias impor
 from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_profile_embedding import (
     EntityProfileEmbeddingRepository,
 )
+from nlp_pipeline.infrastructure.metrics.prometheus import (
+    record_article_processed,
+    record_entity_resolved,
+    s6_claims_extracted_total,
+    s6_embeddings_created_total,
+    s6_ner_mentions_total,
+    s6_ollama_queue_depth_current,
+)
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkEmbeddingModel, SectionEmbeddingModel
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk import ChunkRepository
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_entity_mention import (
@@ -264,7 +272,10 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             threshold=self._settings.gliner_threshold,
             batch_size=self._settings.gliner_batch_size,
             ner_model_id=self._settings.ner_model_id,
+            section_token_limit=self._settings.gliner_section_token_limit,
         )
+
+        s6_ner_mentions_total.inc(len(mentions))
 
         # ── Block 5: Routing score (initial, novelty_score=0.0 provisional) ───
         watched_ids = await self._watchlist.get_all_watched()
@@ -302,6 +313,9 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             novelty_score=0.0,
             watched_entity_ids=watched_ids,
             price_impact_score=price_impact_score,
+            tier_deep=self._settings.routing_tier_deep,
+            tier_medium=self._settings.routing_tier_medium,
+            tier_light=self._settings.routing_tier_light,
         )
 
         # ── Block 6: Initial suppression gate ────────────────────────────────
@@ -317,6 +331,8 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             generate_chunk_embeddings=generate_chunks,
             chunk_text_store=self._chunk_text_store,
         )
+
+        s6_embeddings_created_total.inc(len(chunk_embs) + len(section_embs))
 
         # ── D-004: Open BOTH sessions at the top level ───────────────────────
         # intel_session is used by Block 8 (novelty gate reads) and Block 9
@@ -338,6 +354,8 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     entity_profile_embedding_repo=ep_repo,
                     resolved_entity_ids=[],
                     entity_embeddings={},
+                    minhash_threshold=self._settings.novelty_minhash_threshold,
+                    embedding_threshold=self._settings.novelty_embedding_threshold,
                 )
                 final_path = apply_suppression_gate(routing_decision)
 
@@ -354,7 +372,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 # MentionResolutionRepository writes audit trail to nlp_db.
                 mr_repo = MentionResolutionRepository(nlp_session)
 
-                resolved_mentions, _audit = await run_entity_resolution_block(
+                resolved_mentions, resolution_audit = await run_entity_resolution_block(
                     mentions=mentions,
                     alias_repo=alias_repo,
                     embedding_repo=ep_repo2,
@@ -364,8 +382,15 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     intelligence_session=intel_session,
                     model_id=self._settings.embedding_model_id,
                     instruction_prefix=self._settings.embedding_instruction_prefix,
+                    auto_resolve_threshold=self._settings.entity_resolution_auto_resolve_threshold,
+                    provisional_threshold=self._settings.entity_resolution_provisional_threshold,
                 )
                 final_mentions = resolved_mentions
+                # stage: 1=exact, 2=ticker, 3=fuzzy, 4=ann
+                _stage_to_method = {1: "exact", 2: "ticker", 3: "fuzzy", 4: "ann"}
+                for res in resolution_audit:
+                    if res.is_winner:
+                        record_entity_resolved(_stage_to_method.get(res.stage, "unknown"))
 
             # Block 10: Deep LLM extraction (writes claims to outbox via nlp_session)
             from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import (
@@ -387,6 +412,9 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     extracted_at=extracted_at,
                     outbox_topic_signal=self._settings.topic_signal_detected,
                 )
+
+            if should_run_deep_extraction(final_path):
+                s6_claims_extracted_total.inc(len(list(extraction_result.get("claims", []))))
 
             # Write all artifacts to nlp_db
             section_repo = SectionRepository(nlp_session)
@@ -481,14 +509,19 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 # idempotent on retry (provisional_entity_queue has
                 # UNIQUE constraint on (normalized_surface, mention_class)).
 
+        _final_tier = (routing_decision.final_routing_tier or routing_decision.routing_tier).value
         logger.info(  # type: ignore[no-any-return]
             "article_processed",
             doc_id=str(doc_id),
-            routing_tier=(routing_decision.final_routing_tier or routing_decision.routing_tier).value,
+            routing_tier=_final_tier,
             section_count=len(sections),
             chunk_count=len(chunks),
             mention_count=len(final_mentions),
         )
+        record_article_processed(_final_tier)
+        # Update backpressure depth gauge after each article so /metrics reflects
+        # current queue depth without requiring a separate polling task.
+        s6_ollama_queue_depth_current.set(self._bp.gauge_value())
 
     # ── MinIO download ────────────────────────────────────────────────────────
 

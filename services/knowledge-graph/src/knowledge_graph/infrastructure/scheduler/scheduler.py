@@ -281,20 +281,32 @@ def build_workers(
 
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
-        def_worker = DefinitionRefreshWorker(session_factory, llm_client, description_client)
+        embed_model = settings.embedding_model_id
+        def_worker = DefinitionRefreshWorker(
+            session_factory, llm_client, description_client, embedding_model_id=embed_model
+        )
         workers.update(
             {
                 "summary_generation": SummaryWorker(session_factory, llm_client),
                 "definition_embedding": def_worker,
-                "narrative_embedding": NarrativeRefreshWorker(session_factory, llm_client),
+                "narrative_embedding": NarrativeRefreshWorker(
+                    session_factory, llm_client, embedding_model_id=embed_model
+                ),
                 "fundamentals_embedding": FundamentalsRefreshWorker(
                     session_factory,
                     llm_client,
                     market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
+                    embedding_model_id=embed_model,
                 ),
-                "provisional_enrichment": ProvisionalEnrichmentWorker(session_factory, llm_client),
-                "worker_13e_provisional": ProvisionalEnrichmentWorker(session_factory, llm_client),
-                "embedding_refresh": EmbeddingRefreshWorker(session_factory, llm_client),
+                "provisional_enrichment": ProvisionalEnrichmentWorker(
+                    session_factory, llm_client, embedding_model_id=embed_model
+                ),
+                "worker_13e_provisional": ProvisionalEnrichmentWorker(
+                    session_factory, llm_client, embedding_model_id=embed_model
+                ),
+                "embedding_refresh": EmbeddingRefreshWorker(
+                    session_factory, llm_client, embedding_model_id=embed_model
+                ),
             }
         )
 

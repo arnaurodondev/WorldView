@@ -286,6 +286,8 @@ async def run_entity_resolution_block(
     intelligence_session: object,
     model_id: str,
     instruction_prefix: str,
+    auto_resolve_threshold: float = AUTO_RESOLVE_THRESHOLD,
+    provisional_threshold: float = PROVISIONAL_THRESHOLD,
 ) -> tuple[list[EntityMention], list[MentionResolution]]:
     """Run the 4-stage entity resolution cascade for all mentions.
 
@@ -432,13 +434,13 @@ async def run_entity_resolution_block(
             )
 
         # ── Resolution classification ──────────────────────────────────────
-        if resolved_id is not None and confidence >= AUTO_RESOLVE_THRESHOLD:
+        if resolved_id is not None and confidence >= auto_resolve_threshold:
             mention.resolved_entity_id = resolved_id
             mention.resolution_confidence = confidence
             mention.resolution_stage = audit[-1].stage if audit else None
             mention.resolution_outcome = ResolutionOutcome.AUTO_RESOLVED
 
-        elif resolved_id is not None and confidence >= PROVISIONAL_THRESHOLD:
+        elif resolved_id is not None and confidence >= provisional_threshold:
             mention.resolution_confidence = confidence
             mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
             try:

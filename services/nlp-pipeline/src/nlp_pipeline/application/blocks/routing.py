@@ -95,13 +95,18 @@ def _extraction_yield_signal(mention_count: int, section_count: int) -> float:
     return 0.6 * min(1.0, mention_count / 20.0) + 0.4 * min(1.0, section_count / 8.0)
 
 
-def _assign_tier(score: float) -> RoutingTier:
+def _assign_tier(
+    score: float,
+    tier_deep: float = TIER_DEEP,
+    tier_medium: float = TIER_MEDIUM,
+    tier_light: float = TIER_LIGHT,
+) -> RoutingTier:
     """Assign routing tier from composite score (PRD §6.7 Block 5)."""
-    if score >= TIER_DEEP:
+    if score >= tier_deep:
         return RoutingTier.DEEP
-    if score >= TIER_MEDIUM:
+    if score >= tier_medium:
         return RoutingTier.MEDIUM
-    if score >= TIER_LIGHT:
+    if score >= tier_light:
         return RoutingTier.LIGHT
     return RoutingTier.SUPPRESS
 
@@ -122,6 +127,9 @@ def compute_routing_score(
     novelty_score: float,
     watched_entity_ids: frozenset[UUID],
     price_impact_score: float = 0.0,
+    tier_deep: float = TIER_DEEP,
+    tier_medium: float = TIER_MEDIUM,
+    tier_light: float = TIER_LIGHT,
 ) -> RoutingDecision:
     """Compute the 8-signal routing score and assign a RoutingTier.
 
@@ -158,7 +166,7 @@ def compute_routing_score(
     # Clamp to [0, 1] for safety
     composite = max(0.0, min(1.0, composite))
 
-    tier = _assign_tier(composite)
+    tier = _assign_tier(composite, tier_deep=tier_deep, tier_medium=tier_medium, tier_light=tier_light)
 
     return RoutingDecision(
         decision_id=decision_id,

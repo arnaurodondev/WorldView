@@ -70,6 +70,7 @@ async def _all_entities_near_duplicate(
     *,
     entity_profile_embedding_repo: object,  # EntityProfileEmbeddingRepository
     query_embeddings: dict[UUID, list[float]],  # entity_id → embedding
+    embedding_threshold: float = EMBEDDING_SIMILARITY_THRESHOLD,
 ) -> bool:
     """Check whether ALL resolved entities are near-duplicates of recent content.
 
@@ -77,7 +78,7 @@ async def _all_entities_near_duplicate(
     ``narrative`` view (temporal similarity, not identity).
 
     Returns True only if every entity in the list has a cosine similarity
-    ≥ EMBEDDING_SIMILARITY_THRESHOLD against at least one recent embedding.
+    ≥ embedding_threshold against at least one recent embedding.
     """
     if not resolved_entity_ids:
         return False
@@ -92,7 +93,7 @@ async def _all_entities_near_duplicate(
             results = await entity_profile_embedding_repo.ann_search(  # type: ignore[attr-defined]
                 embedding,
                 view_type="narrative",
-                max_distance=1.0 - EMBEDDING_SIMILARITY_THRESHOLD,
+                max_distance=1.0 - embedding_threshold,
                 top_k=1,
             )
             if results:
@@ -114,6 +115,8 @@ async def run_novelty_gate(
     entity_profile_embedding_repo: object,
     resolved_entity_ids: list[UUID],
     entity_embeddings: dict[UUID, list[float]],
+    minhash_threshold: float = MINHASH_SIMILARITY_THRESHOLD,
+    embedding_threshold: float = EMBEDDING_SIMILARITY_THRESHOLD,
 ) -> tuple[RoutingDecision, float]:
     """Apply the 2-stage novelty gate and optionally downgrade DEEP→LIGHT.
 
@@ -137,7 +140,7 @@ async def run_novelty_gate(
 
     if minhash_sim is not None:
         novelty_score = max(0.0, 1.0 - minhash_sim)
-        if minhash_sim >= MINHASH_SIMILARITY_THRESHOLD and routing_decision.routing_tier == RoutingTier.DEEP:
+        if minhash_sim >= minhash_threshold and routing_decision.routing_tier == RoutingTier.DEEP:
             logger.info(
                 "novelty.stage1_downgrade",
                 doc_id=str(doc_id),
@@ -152,6 +155,7 @@ async def run_novelty_gate(
             resolved_entity_ids,
             entity_profile_embedding_repo=entity_profile_embedding_repo,
             query_embeddings=entity_embeddings,
+            embedding_threshold=embedding_threshold,
         )
         if all_dup:
             logger.info(
