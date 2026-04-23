@@ -23,6 +23,10 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-184](#bp-184) | Scheduler / provider registry | S2 scheduler creates tasks for providers whose adapters are not registered (`ProviderRegistry`) — tasks burn all retries and permanently FAIL; creates noise in failed-task counts | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py`; any service whose scheduler creates tasks without validating provider registration |
+| [BP-185](#bp-185) | Content ingestion / rate limiting | S4 `TokenBucket` built fresh per `_build_adapter()` call — in-memory, not shared across worker processes; multiple workers multiply effective rate limit (N workers × 55 req/min for Finnhub = N×55 effective) | `services/content-ingestion/src/content_ingestion/infrastructure/workers/worker.py:_build_adapter()`; any service with per-call rate limiter construction under concurrent workers |
+| [BP-186](#bp-186) | Content ingestion / startup | S4 missing startup validators for `finnhub_api_key`, `newsapi_key`, `eodhd_api_key` — empty keys: task creation succeeds, HTTP 401 at runtime, task retries then FAILS with no early operator warning | `services/content-ingestion/src/content_ingestion/config.py`; any service with optional API keys whose absence silently degrades ingestion |
+| [BP-182](#bp-182) | Canonical serializer / OHLCV | `int() argument must be a string, a bytes-like object or a real number, not 'NoneType'` — EODHD `volume: null` bars crash `CanonicalOHLCVBar.from_dict()`, task marked FAILED | `libs/contracts/src/contracts/canonical/ohlcv.py`; any `from_dict` with `int(d["volume"])` |
 | [BP-176](#bp-176) | Observability / Alertmanager | Alertmanager receiver has no notification channels — all alerts fire and are silently discarded | `infra/alertmanager/alertmanager.yml` default receiver; any new Alertmanager config |
 | [BP-175](#bp-175) | Observability / Prometheus | Prometheus scrape target uses host-mapped port instead of container-internal port — `target: "service:8001"` fails because within Docker network containers expose their internal port, not the host-mapped one | `infra/prometheus/prometheus.yml` scrape targets; any new service added to Prometheus scrape config |
 | [BP-174](#bp-174) | Observability / Prometheus | Dead metric definition — `Counter`/`Gauge`/`Histogram` defined at module level but `.inc()`/`.set()`/`.observe()` never called anywhere; metric emits no data | S5 `content-store`, S6 `nlp-pipeline`, S8 `rag-chat` custom metrics modules; any service that copies a metrics file without wiring call sites |
@@ -5764,3 +5768,150 @@ Never add `app = create_app()` at module level in a FastAPI service that uses uv
 ### Prevention
 
 Any raw SQL with a parameterized duration must use `make_interval()`. Add to `.claude/review/checklists/REVIEW_CHECKLIST.md`: "asyncpg: no `interval ':param ...'` literals — use `make_interval(mins => :param)` instead."
+
+---
+
+## BP-179 — pydantic-settings Parses Empty Env Var as `SecretStr("")` Not `None`
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (rag-chat local bring-up) |
+| **Severity** | HIGH — service crashes at startup; all traffic fails |
+| **Affected areas** | Any service with `Optional[SecretStr]` settings checked with `is not None` |
+| **Root cause** | pydantic-settings parses `KEY=` (env var set to empty string) as `SecretStr("")` not `None`. An `is not None` guard evaluates True for `SecretStr("")`, so empty-string values are not treated as "absent". If downstream code passes the empty string to a URL parser (e.g., `create_async_engine("")`), it crashes with a parse error. |
+| **Symptom** | `sqlalchemy.exc.ArgumentError: Could not parse SQLAlchemy URL from string ''` at startup. Only happens when the env var is present but empty (`KEY=`), not when it's absent. |
+| **Fix** | Replace `if value is not None` guards on `SecretStr` settings with `if value` or `if value and value.get_secret_value()`. For URL-like settings, use: `url = settings.db_url_read.get_secret_value() if settings.db_url_read is not None else None` + `if not url or ...` (truthy check handles both `None` and `""`). |
+
+### Prevention
+
+Add to `.claude/review/checklists/REVIEW_CHECKLIST.md`: "Settings: `Optional[SecretStr]` guarded by `is not None` is broken for empty-string env vars. Use `if value` or `if not url` instead."
+
+---
+
+## BP-180 — asyncpg `AmbiguousParameterError` for Nullable Params in `IS NULL` Checks
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (news/top endpoint 500 in nlp-pipeline) |
+| **Severity** | HIGH — endpoint returns 500 for all calls when any optional filter param is None |
+| **Affected areas** | SQLAlchemy `text()` queries with nullable filter parameters using `IS NULL` checks (asyncpg driver) |
+| **Root cause** | asyncpg requires type information for all parameters before executing a prepared statement. When a nullable parameter appears ONLY in `:param IS NULL` (with no adjacent typed comparison that asyncpg can infer from), asyncpg raises `AmbiguousParameterError`. This happens even when the same param also appears in `= :param` alongside a typed column, if the type inference is inside a CTE subquery. |
+| **Symptom** | `asyncpg.exceptions.AmbiguousParameterError: could not determine data type of parameter $N` for queries with patterns like `:param IS NULL OR column >= :param`. |
+| **Fix** | Wrap the parameter in an explicit `CAST`: `CAST(:param AS TEXT) IS NULL OR column = CAST(:param AS TEXT)` and `CAST(:param AS DOUBLE PRECISION) IS NULL OR column >= CAST(:param AS DOUBLE PRECISION)`. This gives asyncpg unambiguous type info. |
+
+### Prevention
+
+In all `text()` SQL with optional filter params, always use `CAST(:param AS <type>) IS NULL` rather than bare `:param IS NULL`. Add to `.claude/review/checklists/REVIEW_CHECKLIST.md`: "asyncpg text() SQL: nullable params in `IS NULL` checks need explicit CAST for type resolution."
+
+---
+
+## BP-181 — Missing Shared Library in Service Dockerfile (ml-clients Not Installed)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (rag-chat local bring-up, `ModuleNotFoundError: No module named 'ml_clients'`) |
+| **Severity** | HIGH — service crashes at startup |
+| **Affected areas** | Any service whose Dockerfile omits a lib it imports |
+| **Root cause** | `libs/ml-clients` was added as an import in `rag_chat/infrastructure/llm/provider_chain.py` but was never added to `services/rag-chat/Dockerfile`. The build stage only copies `libs/common`, `libs/messaging`, `libs/observability`. The `PYTHONPATH` also lacks `ml-clients/src`. |
+| **Symptom** | `ModuleNotFoundError: No module named 'ml_clients'` at import time during lifespan startup. |
+| **Fix** | Add `COPY libs/ml-clients /build/libs/ml-clients` and `-e /build/libs/ml-clients` to the build stage; add `/app/libs/ml-clients/src` to `PYTHONPATH` in the runtime stage. |
+
+### Prevention
+
+When adding a new lib import to a service, check the service Dockerfile immediately and add the lib. Add to service scaffold checklist: "New lib dependency → update Dockerfile COPY + install + PYTHONPATH."
+
+---
+
+## BP-182 — `CanonicalOHLCVBar.from_dict` Crashes on `volume: null` from EODHD
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (`canonicalize_fatal error="int() argument must be a string, a bytes-like object or a real number, not 'NoneType'"` for AAPL) |
+| **Severity** | HIGH — every null-volume bar crashes canonicalize; task is marked FAILED; bronze write succeeds but canonical + downstream are lost |
+| **Affected areas** | `libs/contracts/src/contracts/canonical/ohlcv.py:CanonicalOHLCVBar.from_dict`; any provider adapter (EODHD, Yahoo, Polygon) that returns `volume: null` |
+| **Root cause** | `CanonicalOHLCVBar.from_dict()` used `int(d["volume"])` unconditionally. EODHD returns `"volume": null` for bars with no recorded trades (e.g. ETFs on foreign exchanges, data gaps, pre-market stubs). `int(None)` raises `TypeError`, which is caught by `ExecuteTaskUseCase._canonicalize()` (BP-113) and re-raised as `ProviderDataError`, failing the task. |
+| **Symptom** | `canonicalize_fatal error="int() argument must be a string, a bytes-like object or a real number, not 'NoneType'" provider=eodhd symbol=<TICKER>` in logs. Bronze object written successfully; canonical never written; task moves to FAILED. |
+| **Fix** | `libs/contracts/src/contracts/canonical/ohlcv.py` — extract `raw_volume = d.get("volume")` and compute `volume = int(raw_volume) if raw_volume is not None else 0`. The bar is preserved with `volume=0`; downstream consumers should filter zero-volume bars if needed rather than losing the entire bar. |
+
+### Prevention
+
+- Any `int()` or `float()` call on a provider-supplied field must use `int(v) if v is not None else <default>`. Price fields (`open`/`high`/`low`/`close`) default is not obvious (bad data → fail is correct); volume/size fields default to 0.
+- When adding new provider fields to a canonical model `from_dict`, explicitly handle `None` for every numeric field.
+- The regression test `test_serialize_ohlcv_null_volume_coerces_to_zero` in `test_canonical.py` and `test_null_volume_ohlcv_succeeds_bp182` in `test_execute_task.py` guard this path.
+- See also: BP-138 (same `float(None)` pattern in Kafka consumer field extraction).
+
+---
+
+## BP-183 — Docker build fails: `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` when root `package.json` has `pnpm.overrides`
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (`make dev-rebuild` fails; worldview-web image fails at `pnpm install --frozen-lockfile`) |
+| **Severity** | HIGH — blocks all Docker-based dev and CI builds for the frontend |
+| **Affected areas** | `apps/worldview-web/Dockerfile`; triggered any time `pnpm.overrides` is added/changed in the root `package.json` without updating the Dockerfile |
+| **Root cause** | pnpm v9 records `overrides` from the workspace root `package.json` (`pnpm.overrides`) into `pnpm-lock.yaml`. If the Dockerfile copies `pnpm-workspace.yaml` and `pnpm-lock.yaml` but **not** the root `package.json`, pnpm inside Docker finds overrides in the lockfile but no corresponding config → `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH`. Introduced by commit `43249e3` (PLAN-0032 CVE remediation) which added `pnpm.overrides` for `vite`/`@eslint/plugin-kit` without updating the Dockerfile. |
+| **Symptom** | `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH  Cannot proceed with the frozen installation. The current "overrides" configuration doesn't match the value found in the lockfile` in Docker build output at the `pnpm install --frozen-lockfile` step. |
+| **Fix** | `apps/worldview-web/Dockerfile` Stage 1 (`deps`): add root `package.json` to the COPY: `COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./` |
+
+### Prevention
+
+- The root `package.json` is not just a workspace marker — it carries `pnpm.overrides`, `pnpm.onlyBuiltDependencies`, and other workspace-level settings that affect lockfile resolution.
+- Whenever `pnpm.overrides` or other `pnpm.*` fields are added/changed in the root `package.json`, verify that all Dockerfiles which run `pnpm install` also `COPY package.json` at the workspace root.
+- The Dockerfile comment should document that the root `package.json` is required, not just `pnpm-workspace.yaml`.
+
+---
+
+## BP-184 — Scheduler Creates Tasks for Unregistered Providers
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (investigate skill: S2 ProviderRegistry only registers EODHD; Alpha Vantage/Polygon/Yahoo stubs not wired) |
+| **Severity** | HIGH — any `polling_policy` row with a non-EODHD provider causes task creation every tick; tasks burn all retries and move to FAILED; creates permanently-failed task noise in DB |
+| **Affected areas** | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py`; `services/market-ingestion/src/market_ingestion/infrastructure/workers/worker.py:_build_registry()`; any service whose scheduler creates tasks without validating provider registration |
+| **Root cause** | `ScheduleDueTasksUseCase._build_tasks_for_policy()` creates `IngestionTask` rows for any enabled `PollingPolicy` regardless of whether its `provider` has a registered adapter in `ProviderRegistry`. The worker then calls `registry.get(task.provider)`, receives `ProviderUnavailable("No adapter registered for provider …")`, and marks the task RETRY → eventually FAILED. |
+| **Symptom** | Flood of `task_retryable_error error="No adapter registered for provider 'alpha_vantage'"` in worker logs. `ingestion_tasks` table accumulates FAILED rows for non-EODHD providers every scheduler tick. |
+| **Fix** | In `ScheduleDueTasksUseCase._build_tasks_for_policy()`, check `str(policy.provider) in registered_providers` before creating a task. Pass the list of registered provider values into the use case at construction time (inject from `ProviderRegistry.all_providers()`). Log a WARNING and skip if the provider is not registered. |
+
+### Prevention
+
+- At service startup, assert that all enabled `PollingPolicy.provider` values are present in `ProviderRegistry.all_providers()`. Emit a CRITICAL log if any are missing.
+- When adding a new `Provider` enum value, either register a stub that logs a warning or add a migration that prevents enabling policies for that provider until an adapter exists.
+- See also: BP-031 (backfill flag flipped before budget check — same theme of scheduler optimistically creating work that cannot be executed).
+
+---
+
+## BP-185 — Content-Ingestion TokenBucket Rate Limiters Not Shared Across Worker Processes
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (investigate skill: S4 `_build_adapter()` constructs a fresh in-memory `TokenBucket` on every call) |
+| **Severity** | MEDIUM — at default concurrency=2 workers within a single process the impact is low; if the S4 worker container is horizontally scaled to N replicas, effective Finnhub request rate becomes N×55 req/min, triggering 429 responses and task retries |
+| **Affected areas** | `services/content-ingestion/src/content_ingestion/infrastructure/workers/worker.py:_build_adapter()`; any service where rate-limiter state must be shared across concurrent coroutines or processes |
+| **Root cause** | `_build_adapter()` creates `TokenBucket(capacity=int(eodhd_rps), ...)` and Finnhub-specific `TokenBucket(capacity=settings.finnhub.rate_limit_per_minute, ...)` as fresh in-memory objects. These are local to each `asyncio` coroutine invocation. Under `worker_concurrency=2`, two coroutines can simultaneously build independent buckets and each consume tokens at the full rate. |
+| **Symptom** | `429 Too Many Requests` responses from Finnhub logged as `finnhub_rate_limited`; tasks re-try after sleeping to next minute boundary; higher task latency and occasional FAILED tasks. More severe under horizontal scaling. |
+| **Fix** | Move rate-limiter state to Valkey (already used by S4). Key: `s4:ratelimit:{source_type}`. Use atomic `INCR` + `EXPIRE` for per-minute counting, or use Valkey's `token_bucket` key pattern. Inject the Valkey-backed rate limiter into `_build_adapter()`. Short-term mitigation: cap `worker_concurrency` at 1 and enforce single-replica constraint in Docker Compose. |
+
+### Prevention
+
+- Rate limiters that enforce external API quotas MUST be backed by a shared store (Valkey, DB) when the service has `worker_concurrency > 1` or runs as multiple replicas.
+- The `TokenBucket` domain entity in S4 is designed for in-process use only. Document this constraint on the class.
+- See also: BP-036 (token bucket non-atomic with DB under concurrent load).
+
+---
+
+## BP-186 — Content-Ingestion Missing Startup Validators for Optional API Keys
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (investigate skill: S4 `config.py` has `finnhub_api_key: str = ""` and `newsapi_key: str = ""` with no startup validator; contrast with S2 `_warn_demo_eodhd_key`) |
+| **Severity** | MEDIUM — with an empty API key, S4 task creation succeeds, but the adapter's first HTTP request returns HTTP 401, the task marks RETRY (up to max_attempts), then FAILED. Operators have no early warning; data gap is only visible via DLQ or failed-task count. |
+| **Affected areas** | `services/content-ingestion/src/content_ingestion/config.py`; any service with optional external API keys whose absence silently degrades ingestion |
+| **Root cause** | S4 `Settings` defines `finnhub_api_key: str = ""`, `newsapi_key: str = ""`, and `eodhd_api_key: str = ""` with empty defaults and no `@model_validator` that warns on empty values. S2 added `_warn_demo_eodhd_key` for its analogous field; S4 was not updated to match. |
+| **Symptom** | No log warning at startup. First fetch cycle: `task_retryable_error error="401 Unauthorized"` for Finnhub; `task_retryable_error error="QuotaExhaustedError"` or 401 for NewsAPI. Tasks eventually reach FAILED with `error_detail="401 Unauthorized"`. DLQ accumulates entries. |
+| **Fix** | Add `@model_validator(mode="after")` methods in `content_ingestion/config.py` mirroring S2's pattern: `_warn_empty_finnhub_key`, `_warn_empty_newsapi_key`, `_warn_empty_eodhd_key`. Emit `structlog.warning("missing_api_key", source="finnhub", ...)` at startup when the key is empty. |
+
+### Prevention
+
+- Every service with an optional external API key that enables a data source MUST emit a WARNING at startup if the key is empty or equals a known-placeholder value (`""`, `"demo"`, `"YOUR_KEY_HERE"`).
+- Pattern: `@model_validator(mode="after")` in `Settings` — same pattern as `_warn_default_db_credentials` already used in S2 and S4.
+- See also: BP-140 (settings fields defined but never read — operators believe they can tune behaviour via env vars but the code ignores them).
