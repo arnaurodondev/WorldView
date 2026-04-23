@@ -27,7 +27,18 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import common.ids  # type: ignore[import-untyped]
-from knowledge_graph.api import claims, cypher, dlq, entities, events, health, routes, search, temporal_events
+from knowledge_graph.api import (
+    claims,
+    cypher,
+    dlq,
+    entities,
+    events,
+    health,
+    internal_costs,
+    routes,
+    search,
+    temporal_events,
+)
 from knowledge_graph.config import Settings
 from knowledge_graph.domain.errors import KnowledgeGraphError
 from knowledge_graph.infrastructure.intelligence_db.session import (
@@ -162,5 +173,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(temporal_events.router)
     app.include_router(cypher.router)
     app.include_router(dlq.router)
+    app.include_router(internal_costs.router)
 
     return app
