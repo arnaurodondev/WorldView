@@ -45,8 +45,8 @@ export function WatchlistNews() {
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="space-y-1">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-3 w-3/4" />
+            <Skeleton className="h-4 w-full" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-3 w-3/4" style={{ animationDelay: `${i * 50}ms` }} />
           </div>
         ))}
       </div>
@@ -88,10 +88,12 @@ export function WatchlistNews() {
             {article.title}
           </p>
           {/* Source + timestamp */}
+          {/* WHY source_name: getTopNews now returns RankedArticle (S6) which uses
+              source_name (e.g. "EODHD") instead of source (legacy Article field). */}
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span>{article.source}</span>
+            <span>{article.source_name ?? '—'}</span>
             <span className="font-mono tabular-nums">
-              {relativeTime(article.published_at)}
+              {article.published_at ? relativeTime(article.published_at) : '—'}
             </span>
             <ExternalLink className="ml-auto h-2.5 w-2.5 opacity-0 group-hover:opacity-100" />
           </div>

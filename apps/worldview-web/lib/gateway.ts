@@ -32,6 +32,9 @@ import type {
   EntityGraph,
   ContradictionsResponse,
   NewsResponse,
+  RankedNewsResponse,
+  TopNewsParams,
+  EntityNewsParams,
   ScreenerField,
   ScreenerRequest,
   ScreenerResponse,
@@ -363,35 +366,44 @@ export function createGateway(token?: string | null) {
     // ── News ──────────────────────────────────────────────────────────
 
     /**
-     * getTopNews — ranked news feed by relevance/impact score (PRD-0026)
+     * getTopNews — ranked news feed by composite relevance/impact score (PRD-0026)
      * Used by: Dashboard WatchlistNews, Alerts/News page → Top Today tab
+     *
+     * WHY no auth: news/top is a public endpoint — no personal data involved.
+     * WHY RankedNewsResponse: S6 NLP Pipeline (not S5 Content Store) now serves
+     * this endpoint, returning the richer RankedArticle shape with multi-window
+     * price impact scores and LLM relevance scores. Proxy retargeted in Wave 7.
+     *
+     * @param params - TopNewsParams (hours, limit, offset, min_display_score, routing_tier)
      */
-    getTopNews(params: { hours?: number; limit?: number; offset?: number } = {}): Promise<NewsResponse> {
+    getTopNews(params: TopNewsParams = {}): Promise<RankedNewsResponse> {
       const qs = new URLSearchParams(
+        // WHY filter null/undefined: URLSearchParams(undefined) → "undefined" string.
+        // This filter ensures only explicitly set params appear in the query string.
         Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
       ).toString();
-      return apiFetch<NewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`);
-      // WHY no auth: news/top is a public endpoint (see proxy.py T-S9-1-03)
+      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`);
     },
 
     /**
-     * getEntityNews — scored news articles for a specific entity
+     * getEntityNews — relevance-scored news articles for a specific entity (PRD-0026)
      * Used by Instrument Detail → News tab
+     *
+     * WHY RankedNewsResponse: proxy was retargeted from S5 to S6 in Wave 7.
+     * S6 returns RankedArticle[] (with source_name, display_relevance_score, etc.)
+     * rather than Article[] (source, summary, tickers, sentiment).
+     *
+     * @param entityId - The entity UUID
+     * @param params - EntityNewsParams (start_date, end_date, order_by, limit, offset)
      */
     getEntityNews(
       entityId: string,
-      params: {
-        start_date?: string;
-        end_date?: string;
-        order_by?: string;
-        limit?: number;
-        offset?: number;
-      } = {},
-    ): Promise<NewsResponse> {
+      params: EntityNewsParams = {},
+    ): Promise<RankedNewsResponse> {
       const qs = new URLSearchParams(
         Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
       ).toString();
-      return apiFetch<NewsResponse>(
+      return apiFetch<RankedNewsResponse>(
         `/v1/news/entity/${encodeURIComponent(entityId)}${qs ? `?${qs}` : ""}`,
         { token: t },
       );

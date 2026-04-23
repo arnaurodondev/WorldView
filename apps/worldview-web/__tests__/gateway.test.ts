@@ -476,3 +476,118 @@ describe("createGateway() — response transformations", () => {
     expect(result.transactions[0].fee).toBe(1);
   });
 });
+
+// ── Ranked news methods (PRD-0026) ────────────────────────────────────────
+//
+// WHY separate describe block: These methods changed return type from the legacy
+// NewsResponse (Article[]) to RankedNewsResponse (RankedArticle[]). Tests verify:
+// 1. Correct S9 path construction (route changed from S5 to S6 in Wave 7)
+// 2. Query params forwarding (hours, limit, offset, min_display_score, routing_tier)
+// 3. Entity ID is in the path (not a query param) for getEntityNews
+
+describe("createGateway() — ranked news (PRD-0026)", () => {
+  it("getTopNews() calls /api/v1/news/top with no params when empty", async () => {
+    // WHY {articles: [], total: 0}: S6 RankedNewsResponse shape (no offset/limit field)
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway(); // no token — public endpoint
+    await gw.getTopNews();
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/news/top");
+  });
+
+  it("getTopNews() forwards hours, limit, and min_display_score as query params", async () => {
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway();
+    await gw.getTopNews({ hours: 48, limit: 10, min_display_score: 0.5 });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    // All three params must appear in the query string
+    expect(calledUrl).toContain("hours=48");
+    expect(calledUrl).toContain("limit=10");
+    expect(calledUrl).toContain("min_display_score=0.5");
+  });
+
+  it("getTopNews() forwards routing_tier filter", async () => {
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway();
+    await gw.getTopNews({ routing_tier: "DEEP" });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toContain("routing_tier=DEEP");
+  });
+
+  it("getTopNews() does not send Authorization header (public endpoint)", async () => {
+    // WHY: news/top is public — no token required. Sending one is harmless but
+    // tests ensure we don't accidentally gate it behind auth.
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway("my-token");
+    await gw.getTopNews({ limit: 5 });
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBeUndefined();
+  });
+
+  it("getEntityNews() places entity_id in the URL path (not as a query param)", async () => {
+    // WHY path param (not query): PRD-0026 §6.2 F-26 specifies the entity as a REST
+    // path segment: GET /v1/news/entity/{entity_id}. Using a query param would violate
+    // REST conventions and would be rejected by S9's route matcher.
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway("token");
+    await gw.getEntityNews("entity-abc-123", { limit: 5 });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    // Entity ID must be in the path
+    expect(calledUrl).toContain("/v1/news/entity/entity-abc-123");
+    // Entity ID must NOT appear as a query param
+    expect(calledUrl).not.toContain("entity_id=");
+    expect(calledUrl).toContain("limit=5");
+  });
+
+  it("getEntityNews() forwards order_by and date range params", async () => {
+    const spy = mockFetch(200, { articles: [], total: 0 });
+    const gw = createGateway("token");
+    await gw.getEntityNews("e-1", {
+      order_by: "published_at",
+      start_date: "2026-04-01T00:00:00Z",
+      end_date: "2026-04-22T00:00:00Z",
+    });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toContain("order_by=published_at");
+    expect(calledUrl).toContain("start_date=2026-04-01T00%3A00%3A00Z");
+  });
+
+  it("getEntityNews() returns articles array from RankedNewsResponse", async () => {
+    // Realistic S6 RankedNewsResponse — verifies the type passthrough
+    const mockArticle = {
+      article_id: "art-uuid-1",
+      title: "Fed raises rates",
+      url: "https://example.com/fed",
+      published_at: "2026-04-22T10:00:00Z",
+      source_type: "eodhd_news",
+      source_name: "EODHD",
+      routing_tier: "DEEP",
+      routing_score: 0.85,
+      market_impact_score: 0.72,
+      llm_relevance_score: 0.91,
+      display_relevance_score: 0.83,
+      primary_entity_id: null,
+      primary_entity_symbol: null,
+      impact_windows: { day_t0: 0.03, day_t1: 0.05, day_t2: null, day_t5: null },
+    };
+    mockFetch(200, { articles: [mockArticle], total: 1 });
+    const gw = createGateway("token");
+    const result = await gw.getEntityNews("e-uuid-1");
+
+    // WHY verify total not limit: RankedNewsResponse has no .limit field (unlike NewsResponse)
+    expect(result.total).toBe(1);
+    expect(result.articles).toHaveLength(1);
+    expect(result.articles[0].article_id).toBe("art-uuid-1");
+    // Verify the richer S6 fields are preserved through the gateway
+    expect(result.articles[0].display_relevance_score).toBe(0.83);
+    expect(result.articles[0].source_name).toBe("EODHD");
+    expect(result.articles[0].impact_windows?.day_t0).toBe(0.03);
+  });
+});

@@ -12,7 +12,6 @@
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | in-progress | 5/6 (Wave E frontend pending) | 2026-04-18 | 2026-04-18 |
-| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | in-progress | 7/8 | — | 2026-04-22 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -48,6 +47,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
+| PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | 2026-04-22 | 8 | — |
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 | — |
 | PLAN-0001-B | Ingestion Pipeline v1: S4 Content Ingestion + S5 Content Store | PRD-0001 | 2026-03-27 | 8 | 2026-04-09 |
 | PLAN-0001-B-R1 | S4 QA & Review Fixes: Runtime Bugs, Lock, Watermarks, Auth, Security, Tests, Infra | Review/QA | 2026-03-26 | 7 | — |
