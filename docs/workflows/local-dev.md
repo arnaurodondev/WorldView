@@ -51,7 +51,7 @@ make dev-ps         # Check container status
 make dev-logs       # Tail all logs
 make dev-down       # Stop everything
 make dev-reset      # Stop + remove volumes (clean slate)
-make dev-rebuild    # Rebuild all images and restart
+make dev-rebuild    # Rebuild all images without cache and restart
 ```
 
 **Result**: All services running at their default ports (see port map below), frontend at http://localhost:3001, dev tools at :8025 (MailHog), :8091 (pgweb), :8090 (kafka-ui).

@@ -159,9 +159,10 @@ dev-logs:
 dev-ps:
 	$(COMPOSE_DEV) ps
 
-## Rebuild all images and restart
+## Rebuild all images without cache and restart
 dev-rebuild:
-	$(COMPOSE_DEV) up -d --build
+	$(COMPOSE_DEV) build --no-cache
+	$(COMPOSE_DEV) up -d --force-recreate
 
 ## Remove local docker.env files (re-run setup-dev.sh from worldview-gitops to restore)
 dev-clean:

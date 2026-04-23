@@ -200,23 +200,39 @@ All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_p
 
 ### 7.2 Kafka Topics
 
+**Time-retention topics** (21 total — created by `infra/kafka/init/create-topics.sh`):
+
 | Topic | Part. | Retention | Producer | Consumer(s) | Key |
 |-------|-------|-----------|----------|-------------|-----|
-| `portfolio.events.v1` | 3 | 7d | S1 | -- | `aggregate_id` |
-| `portfolio.watchlist.updated.v1` | 12 | 7d | S1 | S10 | `watchlist_id` |
-| `market.dataset.fetched` | 6 | 7d | S2 | S3 | `symbol` |
-| `market.instrument.created` | 3 | 7d | S3 | S1 | `instrument_id` |
-| `market.instrument.updated` | 3 | 7d | S3 | S1 | `instrument_id` |
-| `content.article.raw.v1` | 12 | 7d | S4 | S5 | `url_hash` |
-| `content.article.stored.v1` | 12 | 7d | S5 | S6 | `article_id` |
-| `nlp.article.enriched.v1` | 12 | 14d | S6 | S7 | `article_id` |
-| `nlp.signal.detected.v1` | 24 | 14d | S6 | S10 | `entity_id` |
-| `graph.state.changed.v1` | 12 | 14d | S7 | S10, S8 | `primary_entity_id` |
-| `intelligence.contradiction.v1` | 12 | 30d | S7 | S10 | `subject_entity_id` |
-| `relation.type.proposed.v1` | 4 | 30d | S7 | Human review | `proposed_type` |
-| `entity.dirtied.v1` | 24 | compact | S7 | S7 (async) | `entity_id` |
-| `intelligence.temporal_event.v1` | 12 | 14d | S6 | S7 | `event_id` |
-| `alert.delivered.v1` | 12 | 7d | S10 | Audit | `alert_id` |
+| `portfolio.events.v1` | 3 | 7d | S1 Portfolio | -- | `aggregate_id` |
+| `portfolio.watchlist.updated.v1` | 12 | 7d | S1 Portfolio | S6 NLP Pipeline (watchlist cache), S10 Alert | `watchlist_id` |
+| `market.dataset.fetched` | 6 | 30d | S2 Market Ingestion | S3 Market Data, S7 Knowledge Graph | `symbol` |
+| `market.instrument.created` | 3 | 7d | S2 Market Ingestion | S7 Knowledge Graph | `instrument_id` |
+| `market.instrument.updated` | 3 | 7d | S2 Market Ingestion | S7 Knowledge Graph | `instrument_id` |
+| `content.article.raw.v1` | 12 | 30d | S4 Content Ingestion | S5 Content Store | `url_hash` |
+| `content.article.stored.v1` | 12 | 30d | S5 Content Store | S6 NLP Pipeline | `article_id` |
+| `nlp.article.enriched.v1` | 12 | 30d | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` |
+| `nlp.signal.detected.v1` | 24 | 14d | S6 NLP Pipeline | S10 Alert | `entity_id` |
+| `claim.extracted.v1` | 12 | 7d | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` |
+| `graph.state.changed.v1` | 12 | 14d | S7 Knowledge Graph | S10 Alert | `primary_entity_id` |
+| `intelligence.contradiction.v1` | 12 | 30d | S7 Knowledge Graph | S10 Alert | `subject_entity_id` |
+| `relation.type.proposed.v1` | 4 | 30d | S7 Knowledge Graph | (internal review) | `proposed_type` |
+| `entity.canonical.created.v1` | 12 | 7d | S7 Knowledge Graph | S7 internal consumers | `entity_id` |
+| `alert.delivered.v1` | 12 | 7d | S10 Alert | (audit/analytics) | `alert_id` |
+| `market.prediction.v1` | 8 | 30d | S4 Content Ingestion (Polymarket adapter) | S3 Market Data | `market_id` |
+| `kg.dead-letter.v1` | 12 | 7d | S7 Knowledge Graph (DLQ) | (ops) | -- |
+| `alert.dead-letter.v1` | 12 | 7d | S10 Alert (DLQ) | (ops) | -- |
+| `nlp.dead-letter.v1` | 12 | 7d | S6 NLP Pipeline (DLQ) | (ops) | -- |
+| `content.dead-letter.v1` | 12 | 7d | S4/S5 (DLQ) | (ops) | -- |
+| `market.dead-letter.v1` | 8 | 7d | S2/S3 (DLQ) | (ops) | -- |
+
+**Compacted topic** (1 total — log compaction, NOT time-retention):
+
+| Topic | Part. | Config | Producer | Consumer(s) | Key |
+|-------|-------|--------|----------|-------------|-----|
+| `entity.dirtied.v1` | 24 | `cleanup.policy=compact`, `min.cleanable.dirty.ratio=0.01`, `segment.ms=3600000` | S7 Knowledge Graph | S7 workers (re-embed trigger) | `entity_id` |
+
+> **Note on `entity.dirtied.v1`**: This is a compacted topic — after compaction only the latest message per `entity_id` key is retained. Consumers (S7 async workers) MUST treat each message as a "refresh entity X" trigger, NOT as a historical event sequence. Never consume this topic expecting a complete changelog of all mutations.
 
 ### 7.3 Core Patterns
 
