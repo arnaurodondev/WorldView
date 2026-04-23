@@ -7,12 +7,9 @@ callers must never receive an exception from these interfaces (R9 safe degradati
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
+from datetime import datetime
+from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 # ── Request / Response DTOs ────────────────────────────────────────────────────
 

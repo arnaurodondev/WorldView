@@ -68,7 +68,7 @@ class TestFetchContradictionsForEntity:
 
         # Verify execute was called
         assert session.execute.called
-        _, call_kwargs = session.execute.call_args
+        _, _call_kwargs = session.execute.call_args
         # The second positional arg is the params dict
         params: dict = session.execute.call_args[0][1]
         # claim_type must NOT be in params — it would cause asyncpg AmbiguousParameterError

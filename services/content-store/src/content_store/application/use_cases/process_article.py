@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog
 
@@ -31,8 +32,6 @@ from content_store.domain.entities import (
 from content_store.domain.enums import DedupOutcome, DocumentStatus
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from content_store.application.ports.lsh import LSHClientPort
     from content_store.application.ports.repositories import (
         DedupHashRepositoryPort,

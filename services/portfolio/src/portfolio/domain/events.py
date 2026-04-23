@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
+from uuid import UUID
 
 from common.ids import new_uuid, new_uuid7_str  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 
 @dataclass

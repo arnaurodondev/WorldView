@@ -13,9 +13,8 @@ Lifespan sequence (STANDARDS.md §5):
 
 from __future__ import annotations
 
-import asyncio
 import re
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import structlog.contextvars
@@ -173,34 +172,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             log.warning("chunk_text_store_init_failed", exc_info=True)
 
-    # 6. Optional: UnresolvedResolutionWorker (PLAN-0033 T-C-2-02)
-    _unresolved_worker_task: asyncio.Task[None] | None = None
-    if settings.unresolved_resolution_enabled:
-        from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
-            UnresolvedResolutionWorker,
-        )
-
-        # usage_logger requires a per-call session; pass None here and rely on
-        # the worker's internal structlog for cost observability until a
-        # session-factory-based adapter is wired (follow-up task).
-        _unresolved_worker = UnresolvedResolutionWorker(
-            nlp_session_factory=nlp_sf,
-            settings=settings,
-            intel_session_factory=intel_sf,
-            usage_logger=None,
-        )
-        await _unresolved_worker.recover_stale_escalated()
-        _unresolved_worker_task = asyncio.create_task(_unresolved_worker.run_loop())
-        log.info("unresolved_resolution_worker_started")
-
     log.info("service_started", service=settings.service_name)
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
-    if _unresolved_worker_task is not None:
-        _unresolved_worker_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await _unresolved_worker_task
     await valkey.close()
     await nlp_engine.dispose()
     if nlp_read_engine is not nlp_engine:

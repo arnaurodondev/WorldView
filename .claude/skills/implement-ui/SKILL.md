@@ -252,6 +252,26 @@ Review all changed files for:
 
 Structured self-review of all changed files:
 
+### 6.0 Design Critique (Impeccable-Inspired — Run Before Checklist)
+
+This step catches AI fingerprints in rendered code **after** implementation. Ask each question and fix any "yes" answers before proceeding.
+
+**The core question**: "If a Bloomberg Terminal designer saw this UI, would they think it was made by an AI?"
+
+Scan every changed `.tsx` file for:
+
+| Check | What to look for | Fail condition |
+|-------|-----------------|----------------|
+| Side-stripe borders | `border-l-` or `border-r-` Tailwind classes with widths > 1px on cards/alerts | Present → redesign element |
+| Gradient text | `bg-clip-text` + `bg-gradient-to-*` | Present → use solid `text-primary` |
+| Uniform spacing | Same `gap-*` or `p-*` everywhere in a layout | All values identical → add rhythm variation |
+| Color overuse | Count distinct `text-[color]` / `bg-[color]` classes in a single component | >4 accent colors → consolidate |
+| Box shadows for aesthetics | `shadow-*` classes on cards without elevation purpose | Present → use only border |
+| Non-mono numbers | Price/percentage spans without `font-mono tabular-nums` | Present → add both classes |
+| Animation on layout props | Transitions on `width`, `height`, `max-h` directly | Present → convert to `grid-template-rows` or `scale` |
+
+Also run the **"Squint Test"** on the visual output: blur your eyes (or screenshot + blur filter). Can you still identify the most important number and primary action? If not, the hierarchy needs strengthening.
+
 ### 6.1 Finance UX Checklist
 - [ ] Every number column uses `tabular-nums`
 - [ ] Every data surface has loading AND error states
@@ -259,6 +279,7 @@ Structured self-review of all changed files:
 - [ ] Palette uses Midnight Pro colors only (no Tailwind defaults for brand colors)
 - [ ] Data density is appropriate — no excessive padding or whitespace
 - [ ] IBM Plex Mono used for all prices, quantities, percentages
+- [ ] Design critique (§6.0) — no AI fingerprints found in rendered output
 
 ### 6.2 Code Quality Checklist
 - [ ] File-level WHY comment block on every new file

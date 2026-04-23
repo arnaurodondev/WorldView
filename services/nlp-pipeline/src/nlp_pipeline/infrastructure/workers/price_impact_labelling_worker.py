@@ -25,6 +25,7 @@ import contextlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from nlp_pipeline.domain.enums import DataQuality, WindowType
 from nlp_pipeline.domain.models import ArticleImpactWindow
@@ -32,8 +33,6 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.impact_window import Articl
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from nlp_pipeline.infrastructure.http.market_data_client import MarketDataClient, OHLCVBar

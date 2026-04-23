@@ -9,6 +9,7 @@ implements ``get_screen_field_metadata()`` on the read (replica) session.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.dialects.postgresql import insert
@@ -16,8 +17,6 @@ from sqlalchemy.dialects.postgresql import insert
 from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from market_data.domain.entities import ScreenFieldMetadata

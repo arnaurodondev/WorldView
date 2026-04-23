@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -22,15 +23,12 @@ from knowledge_graph.application.ports.repositories import (
 )
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from knowledge_graph.application.ports.repositories import (
         OutboxRepositoryPort as OutboxRepository,
     )
     from knowledge_graph.application.ports.repositories import (
         RelationTypeRegistryRepositoryPort as RelationTypeRegistryRepository,
     )
-
 
 # ---------------------------------------------------------------------------
 # Protocol for the embedding client (duck-typed — no ml-clients runtime dep)

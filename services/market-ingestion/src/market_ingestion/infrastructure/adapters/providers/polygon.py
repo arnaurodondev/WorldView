@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime
 
 from market_ingestion.application.ports.adapters import ProviderAdapter, ProviderFetchResult
 from market_ingestion.domain.enums import Provider
 from market_ingestion.domain.errors import ProviderUnavailable
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 
 class PolygonProviderAdapter(ProviderAdapter):

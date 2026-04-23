@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -10,8 +11,6 @@ from content_store.application.ports.repositories import DocumentMetadataDTO, Do
 from content_store.infrastructure.db.models import DocumentModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from content_store.domain.entities import CanonicalDocument

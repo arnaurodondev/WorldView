@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select, update
 
@@ -12,8 +13,6 @@ from portfolio.application.ports.repositories import OutboxRecord, OutboxReposit
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

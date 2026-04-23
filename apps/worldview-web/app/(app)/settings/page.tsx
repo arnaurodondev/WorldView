@@ -114,7 +114,10 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div>
-        <h1 className="text-xl font-semibold text-foreground">Settings</h1>
+        {/* WHY text-lg (not text-xl): matches the global heading hierarchy —
+            all page titles use text-lg font-semibold tracking-tight for
+            consistent vertical rhythm across the app. */}
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">Settings</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Manage your profile and preferences
         </p>
@@ -327,7 +330,7 @@ function NotificationsTab() {
  * WHY NO LIGHT MODE TOGGLE: Per ADR-F-04 (docs/ui/DESIGN_SYSTEM.md §1),
  * Worldview is permanently dark-themed. The decision is intentional:
  *   1. Finance terminal users work in low-light conditions for long sessions
- *   2. The Midnight Pro color palette (#131722 bg) is tuned for dark only
+ *   2. The Bloomberg Dark color palette (#0A0E14 bg) is tuned for dark only
  *   3. Supporting both modes doubles the CSS token complexity for no user benefit
  *      — no trader has requested light mode (no such feedback in user research)
  * The Appearance tab exists to explain this to users who expect a toggle here,
@@ -379,7 +382,7 @@ function AppearanceTab() {
                 to scan as a list than as a run-on paragraph. */}
             <ul className="space-y-1 text-xs text-muted-foreground list-disc list-inside">
               <li>
-                Midnight Pro palette (#131722) is calibrated for low-light
+                Bloomberg Dark palette (#0A0E14) is calibrated for low-light
                 conditions — ideal for pre/post market sessions
               </li>
               <li>
@@ -402,7 +405,7 @@ function AppearanceTab() {
             Color Palette
           </CardTitle>
           <CardDescription className="text-xs">
-            Midnight Pro — the terminal-grade dark palette used throughout
+            Bloomberg Dark — the terminal-grade dark palette used throughout
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -410,8 +413,8 @@ function AppearanceTab() {
               they see throughout the app; also useful for accessibility awareness. */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { name: "Background", hex: "#131722", cssVar: "--background" },
-              { name: "Primary", hex: "#0EA5E9", cssVar: "--primary" },
+              { name: "Background", hex: "#0A0E14", cssVar: "--background" },
+              { name: "Primary", hex: "#E8A317", cssVar: "--primary" },
               { name: "Positive", hex: "#26A69A", cssVar: "--positive" },
               { name: "Negative", hex: "#EF5350", cssVar: "--negative" },
             ].map((swatch) => (

@@ -8,12 +8,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
+from datetime import datetime
+from typing import Any
+from uuid import UUID
 
 # ── Outbox topic constants ───────────────────────────────────────────────────
 # Defined at the application layer so blocks and use cases can reference them
@@ -22,7 +19,6 @@ if TYPE_CHECKING:
 TOPIC_GRAPH_STATE_CHANGED = "graph.state.changed.v1"
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
-
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 

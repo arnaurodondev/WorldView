@@ -13,6 +13,7 @@ import asyncio
 import dataclasses
 import re
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 
@@ -23,13 +24,10 @@ from nlp_pipeline.domain.models import Chunk, EmbeddingPendingEntry
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.domain.models import Section
-
 
 # ── Chunking constants (PRD §6.7 Block 7) ────────────────────────────────────
 
@@ -41,7 +39,6 @@ CHUNK_OVERLAP_TOKENS: int = 64
 
 #: Sentence boundary pattern
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
-
 
 # ── Sentence-aware chunking ───────────────────────────────────────────────────
 

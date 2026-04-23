@@ -29,7 +29,7 @@ import type { MarketSessionStatus } from "@/lib/market-schedule";
 // ── Color mapping ─────────────────────────────────────────────────────────────
 
 /**
- * pillClasses — map overall market status to Midnight Pro color classes
+ * pillClasses — map overall market status to Bloomberg Dark color classes
  *
  * WHY these specific colors:
  * - Green (#26A69A = --positive): equity market in regular session
@@ -40,7 +40,7 @@ import type { MarketSessionStatus } from "@/lib/market-schedule";
  */
 const PILL_CLASSES: Record<string, string> = {
   open: "bg-positive/20 text-positive border-positive/30",
-  "pre-after-hours": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+  "pre-after-hours": "bg-warning/20 text-warning border-warning/30",
   closed: "bg-destructive/20 text-destructive border-destructive/30",
 };
 
@@ -53,8 +53,8 @@ const PILL_LABELS: Record<string, string> = {
 // Exchange session status dot color
 const SESSION_DOT: Record<MarketSessionStatus, string> = {
   open: "bg-positive",
-  "pre-market": "bg-yellow-400",
-  "after-hours": "bg-yellow-400",
+  "pre-market": "bg-warning",
+  "after-hours": "bg-warning",
   closed: "bg-destructive",
 };
 
@@ -83,7 +83,7 @@ export function MarketStatusPill() {
         >
           {/* Status dot */}
           <span
-            className={`h-1.5 w-1.5 rounded-full ${overall === "open" ? "bg-positive animate-pulse" : ""} ${overall === "pre-after-hours" ? "bg-yellow-400" : ""} ${overall === "closed" ? "bg-destructive" : ""}`}
+            className={`h-1.5 w-1.5 rounded-full ${overall === "open" ? "bg-positive animate-pulse" : ""} ${overall === "pre-after-hours" ? "bg-warning" : ""} ${overall === "closed" ? "bg-destructive" : ""}`}
           />
           {pillLabel}
         </button>

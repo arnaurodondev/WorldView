@@ -26,7 +26,7 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
-import { severityColor } from "@/lib/utils";
+
 import type { AlertPayload } from "@/types/alerts";
 
 // ── Auto-dismiss duration ─────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ class AlertErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundar
       // The user still needs to know a critical alert fired.
       return (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90">
-          <div className="text-center text-white">
+          <div className="text-center text-foreground">
             <AlertTriangle className="mx-auto h-8 w-8 text-destructive" />
             <p className="mt-2 text-sm">Critical alert (display error)</p>
           </div>
@@ -122,7 +122,8 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
   const progressPct = (remainingMs / AUTO_DISMISS_MS) * 100;
   const remainingSec = Math.ceil(remainingMs / 1000);
 
-  const { text: severityText } = severityColor(alert.severity);
+  // BT-006 FIX: severityColor() returns CSS class names (e.g., "text-negative"),
+  // NOT human-readable labels. Use alert.severity directly for the label text.
 
   return (
     // WHY inset-0 z-[9999]: must cover everything including modals and dropdowns.
@@ -152,7 +153,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
               <span id="flash-alert-title" className="text-sm font-semibold uppercase tracking-wider text-destructive">
-                {severityText} Alert
+                {alert.severity} Alert
               </span>
             </div>
 

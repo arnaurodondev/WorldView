@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from portfolio.domain.errors import UserNotFoundError
 
 if TYPE_CHECKING:
-    from decimal import Decimal
-    from uuid import UUID
-
     from portfolio.application.ports.unit_of_work import UnitOfWork
 
 

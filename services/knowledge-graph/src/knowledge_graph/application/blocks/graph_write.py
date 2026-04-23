@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -25,9 +27,6 @@ from knowledge_graph.application.ports.repositories import (
 )
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
@@ -39,7 +38,6 @@ if TYPE_CHECKING:
     from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
         RelationEvidenceRepository,
     )
-
 
 # ---------------------------------------------------------------------------
 # Protocol for direct Kafka produce (entity.dirtied.v1 bypasses outbox)

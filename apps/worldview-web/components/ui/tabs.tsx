@@ -44,8 +44,12 @@ const TabsTrigger = React.forwardRef<
       "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-xs font-medium ring-offset-background transition-all",
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       "disabled:pointer-events-none disabled:opacity-50",
-      // Active tab: white text on elevated muted background
-      "data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+      // Active tab: amber text on elevated muted background.
+      // WHY text-primary not text-foreground: --primary is #E8A317 (amber/gold accent).
+      // Previously active and inactive tabs looked nearly identical (both near-white).
+      // Amber creates clear visual hierarchy — users instantly know which tab is active.
+      // This affects every tab across the app: Portfolio, Instrument Detail, Alerts, Settings.
+      "data-[state=active]:bg-card data-[state=active]:text-primary data-[state=active]:shadow-sm",
       className,
     )}
     {...props}

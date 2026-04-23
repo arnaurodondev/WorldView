@@ -17,6 +17,8 @@ from alert.infrastructure.db.models import AlertModel, OutboxEventModel
 from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
 from sqlalchemy import func, select, text
 
+from tests.integration.conftest import INTEGRATION_USER_ID
+
 if TYPE_CHECKING:
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
 
@@ -227,7 +229,8 @@ async def test_pending_alerts_returns_severity(
 ) -> None:
     """GET /api/v1/alerts/pending includes a severity field on each returned alert."""
     entity_id = str(uuid4())
-    user_id = str(uuid4())
+    # JWT sub is INTEGRATION_USER_ID; endpoint reads user_id from JWT (BP-165)
+    user_id = INTEGRATION_USER_ID
     watchlist_id = str(uuid4())
 
     httpserver.expect_request(
@@ -263,7 +266,8 @@ async def test_pending_alerts_min_severity_filter(
     httpserver: Any,
 ) -> None:
     """?min_severity=high returns only HIGH and CRITICAL alerts from DB."""
-    user_id = str(uuid4())
+    # JWT sub is INTEGRATION_USER_ID; endpoint reads user_id from JWT (BP-165)
+    user_id = INTEGRATION_USER_ID
     watchlist_id = str(uuid4())
 
     # Create LOW alert

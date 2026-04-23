@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
 
@@ -20,8 +21,6 @@ from rag_chat.application.pipeline.prompts.intent_prompts import EMAIL_DEEP_BRIE
 from rag_chat.domain.errors import RateLimitExceededError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 

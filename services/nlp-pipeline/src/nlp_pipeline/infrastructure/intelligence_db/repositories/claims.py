@@ -8,14 +8,13 @@ This preserves atomicity — outbox pattern (no dual writes).
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 _TOPIC_CLAIM_EXTRACTED = "claim.extracted"

@@ -115,9 +115,12 @@ export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
           aria-label={`${unreadAlerts} unread alerts`}
         >
           <Bell className="h-4 w-4" />
+          {/* WHY destructive badge: critical alerts demand attention.
+              WHY text-destructive-foreground not text-white: Bloomberg Dark palette
+              prohibits pure #fff. --destructive-foreground resolves to #E0DDD4
+              (warm off-white), the correct on-destructive text color in our palette. */}
           {unreadAlerts > 0 && (
-            // WHY destructive badge: critical alerts demand attention
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-white">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
               {unreadAlerts > 9 ? "9+" : unreadAlerts}
             </span>
           )}
@@ -143,7 +146,7 @@ export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuItem onClick={() => router.push("/settings/profile")}>
+            <DropdownMenuItem onClick={() => router.push("/settings")}>
               <User className="mr-2 h-4 w-4" />
               Profile
             </DropdownMenuItem>

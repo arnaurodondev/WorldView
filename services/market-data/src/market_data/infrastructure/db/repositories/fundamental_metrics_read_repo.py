@@ -7,6 +7,7 @@ port, never on the underlying query helpers directly.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 from market_data.application.ports.repositories import (
@@ -23,8 +24,6 @@ from market_data.infrastructure.db.repositories.fundamental_metrics_query import
 )
 
 if TYPE_CHECKING:
-    from datetime import date
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from market_data.domain.entities import ScreenFieldMetadata

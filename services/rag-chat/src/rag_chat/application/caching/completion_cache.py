@@ -9,10 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 _TTL_SECONDS = 86_400  # 24 hours

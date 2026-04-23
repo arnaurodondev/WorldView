@@ -20,7 +20,7 @@ function Skeleton({
     <div
       className={cn(
         // animate-pulse with our custom skeleton-pulse keyframe (2s, gentler than default)
-        // bg-muted: elevated surface color from Midnight Pro (#2B3139)
+        // bg-muted: elevated surface color from Bloomberg Dark (#1A2030)
         "animate-pulse rounded-md bg-muted",
         className,
       )}

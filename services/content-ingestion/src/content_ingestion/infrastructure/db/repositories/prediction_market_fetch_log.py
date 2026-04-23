@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -11,9 +13,6 @@ import common.ids
 from content_ingestion.infrastructure.db.models import PredictionMarketFetchLogModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

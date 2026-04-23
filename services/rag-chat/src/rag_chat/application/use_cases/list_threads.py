@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.domain.entities.conversation import ConversationThread
 

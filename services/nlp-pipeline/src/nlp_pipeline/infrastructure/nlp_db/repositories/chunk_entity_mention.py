@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert
 
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkEntityMentionModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

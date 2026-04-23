@@ -70,6 +70,7 @@ terraform.tfvars
 .mcp.json
 
 # Node
+node_modules
 node_modules/
 
 # Design tool artifacts (too large for git)

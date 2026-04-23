@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from portfolio.application.ports.repositories import AuthAuditLogRepository
 from portfolio.infrastructure.db.models.auth_audit_log import AuthAuditLogModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from portfolio.domain.value_objects import AuthAuditEvent

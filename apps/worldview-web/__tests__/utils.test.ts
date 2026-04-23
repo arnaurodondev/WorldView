@@ -179,7 +179,7 @@ describe("priceChangeClass()", () => {
 describe("heatCellColor()", () => {
   it("returns neutral colors for zero change", () => {
     const result = heatCellColor(0);
-    expect(result.background).toBe("#2B3139");
+    expect(result.background).toBe("#1A2030");
   });
 
   it("returns positive teal for large gain", () => {
@@ -194,7 +194,7 @@ describe("heatCellColor()", () => {
 
   it("returns neutral for null", () => {
     const result = heatCellColor(null);
-    expect(result.background).toBe("#2B3139");
+    expect(result.background).toBe("#1A2030");
   });
 });
 

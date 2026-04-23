@@ -12,14 +12,13 @@ Cross-DB: reads from S5 Valkey cache (never direct DB access to S5).
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 
 from nlp_pipeline.domain.enums import RoutingTier
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from nlp_pipeline.domain.models import RoutingDecision
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -34,7 +33,6 @@ EMBEDDING_SIMILARITY_THRESHOLD: float = 0.90
 
 #: Valkey key prefix used by S5 for article MinHash signatures
 _S5_MINHASH_KEY_PREFIX: str = "s5:minhash:article:"
-
 
 # ── Stage 1: MinHash / Valkey LSH ────────────────────────────────────────────
 

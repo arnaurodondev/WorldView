@@ -44,12 +44,13 @@ interface EntityGraphPanelProps {
 
 // ── Node type colors ──────────────────────────────────────────────────────────
 // WHY hex (not Tailwind): SVG fill attributes require hex values, not class names.
+// WHY #E8A317 for company: amber primary from Bloomberg Dark palette.
 const NODE_COLORS: Record<string, { fill: string; stroke: string }> = {
-  company: { fill: "#0A2A40", stroke: "#0EA5E9" },
+  company: { fill: "#0A1A20", stroke: "#E8A317" },  // amber primary (#E8A317) — publicly traded entities
   person:  { fill: "#0D2921", stroke: "#26A69A" },
   event:   { fill: "#2A1E06", stroke: "#F59E0B" },
   topic:   { fill: "#1A1A2E", stroke: "#818CF8" },
-  default: { fill: "#1E2329", stroke: "#4B5563" },
+  default: { fill: "#111820", stroke: "#6B7585" },   // card (#111820) + muted-foreground (#6B7585)
 };
 
 // ── Layout helpers ─────────────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
               y1={src.y}
               x2={tgt.x}
               y2={tgt.y}
-              stroke={isHighlighted ? "#4B5563" : "#2B3139"}
+              stroke={isHighlighted ? "#6B7585" : "#1A2030"}
               strokeWidth={isHighlighted ? 1.5 : 0.75}
               strokeOpacity={isHighlighted ? 0.9 : 0.4}
             />
@@ -252,7 +253,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
                 textAnchor="middle"
                 dy={isCenter ? "0.35em" : "2.6em"}
                 fontSize={isCenter ? 9 : 7}
-                fill={isHovered ? "#E5E7EB" : "#9CA3AF"}
+                fill={isHovered ? "#E0DDD4" : "#6B7585"}
                 fontFamily="IBM Plex Mono, monospace"
                 pointerEvents="none"
               >

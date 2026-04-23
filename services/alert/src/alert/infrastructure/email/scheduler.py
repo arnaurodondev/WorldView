@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
 from sqlalchemy import update
@@ -33,8 +34,6 @@ from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from alert.config import Settings

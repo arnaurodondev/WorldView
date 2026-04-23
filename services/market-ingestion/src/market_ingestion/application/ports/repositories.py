@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime
-    from uuid import UUID
 
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
     from market_ingestion.domain.entities.polling_policy import PollingPolicy
@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from market_ingestion.domain.entities.watermark import Watermark
     from market_ingestion.domain.enums import DatasetType, Provider
     from market_ingestion.domain.events import DomainEvent
-
 
 # ---------------------------------------------------------------------------
 # Shared DTOs

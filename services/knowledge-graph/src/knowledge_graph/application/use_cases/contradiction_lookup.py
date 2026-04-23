@@ -6,10 +6,9 @@ Read-only use case; depends only on port interfaces, never on infrastructure.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from knowledge_graph.application.ports.claim_repository import (
         ClaimRepositoryPort,
         ContradictionData,

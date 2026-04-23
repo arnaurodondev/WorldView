@@ -8,15 +8,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from decimal import Decimal
-    from uuid import UUID
-
     from nlp_pipeline.domain.models import ArticleImpactWindow, ArticlePriceImpact
-
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 

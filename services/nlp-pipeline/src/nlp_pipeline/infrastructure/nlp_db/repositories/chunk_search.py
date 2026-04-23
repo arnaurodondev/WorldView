@@ -14,12 +14,11 @@ their ``text`` field falls back to ``sections.title`` (heading_path) or ``""``.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import text
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

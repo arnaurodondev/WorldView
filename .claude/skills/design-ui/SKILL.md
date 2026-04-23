@@ -204,6 +204,9 @@ Check the design for these **absolute bans** and **financial terminal design tel
 | Gradient text (`background-clip: text` + gradient) | Decorative, not meaningful; instant AI fingerprint | Use solid color; use weight or size for emphasis |
 | Gray text on any colored background | Looks washed out and dead | Use a shade of the background color |
 | Pure black (#000) or pure white (#fff) for surfaces | Never appears in nature | Tint every surface toward brand hue |
+| Decorative shadows (box-shadow used for aesthetics rather than elevation) | Creates visual noise without communicating hierarchy | Use only the 3-level elevation scale; borders carry structure |
+| Icon + heading + body text card grid (repeated identically) | Training-data default; signals template use immediately | Vary content type, weight, and size across cards |
+| Full-width colored banners/alerts with left accent stripe | Paired with side-stripe ban; same AI fingerprint | Use inline `$warning`/`$negative` text + icon without banded background |
 
 ### Financial Terminal Anti-Patterns
 
@@ -217,6 +220,24 @@ Check the design for these **absolute bans** and **financial terminal design tel
 | Sparklines as decoration | Conveys nothing meaningful at <40px | Only use sparklines with real data, clear scale, and color encoding |
 | Rounded corners > 8px on data tables | App aesthetic, not terminal | Keep table borders sharp (radius 4px max) |
 | `bounce` or `elastic` easing | Dated, unprofessional | Use ease-out-expo only |
+| Uniform spacing rhythm (same gap/padding everywhere) | Kills visual hierarchy — everything feels equal weight | Vary spacing intentionally: tight rows for data density, generous margins for section breaks |
+| 60-30-10 color rule violation | Too many equally-weighted colors = visual noise | 60% neutral surfaces, 30% primary text/borders, 10% accent (`$primary`, `$positive`, `$negative`) |
+| `font-size < 11px` for any label | Unreadable at normal monitor distance; forces squinting | Minimum 11px for captions, 12px for table data, 13px+ for body |
+| Animating layout properties (`width`, `height`, `margin`, `padding`) | Triggers expensive browser reflow on every frame | Animate `transform` and `opacity` only; use `grid-template-rows: 0fr→1fr` for height |
+
+### Typography Hierarchy Check
+
+Run this before proceeding: does the design have at least **5 distinct typographic levels** with a ≥1.25× ratio between steps?
+
+| Level | Use | Min size | Weight |
+|-------|-----|----------|--------|
+| Display | Page title, major KPI | 20px | 600 |
+| Heading | Section header | 14px | 600 |
+| Body | Narrative text, descriptions | 13px | 400 |
+| Data | Prices, percentages, counts | 12px (IBM Plex Mono) | 400/500 |
+| Caption | Labels, timestamps, axis text | 11px | 400 |
+
+If more than 2 levels share the same weight AND size, that's a hierarchy failure — differentiate with weight, size, OR color (not all three simultaneously).
 
 ### Font Reflex Check
 

@@ -12,7 +12,9 @@ exposure is inferred at query time via ``is_in_sector`` traversal (PRD-0018 §6.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -22,9 +24,6 @@ from knowledge_graph.application.ports.temporal_event_repository import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

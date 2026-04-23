@@ -11,6 +11,7 @@ Security invariants (AD-3 / PRD-0022 F-19):
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -20,8 +21,6 @@ from portfolio.domain.enums import ConnectionStatus
 from portfolio.infrastructure.db.models.brokerage_connection import BrokerageConnectionModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from cryptography.fernet import Fernet
     from sqlalchemy.ext.asyncio import AsyncSession
 

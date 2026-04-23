@@ -8,6 +8,7 @@ S7 does NOT own intelligence_db DDL — all queries use raw SQL via ``text()``.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -21,8 +22,6 @@ from knowledge_graph.application.ports.claim_repository import (
 )
 
 if TYPE_CHECKING:
-    from datetime import date
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

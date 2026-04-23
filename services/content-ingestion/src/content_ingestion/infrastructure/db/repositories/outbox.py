@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 
@@ -12,8 +13,6 @@ import common.time
 from content_ingestion.infrastructure.db.models import OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

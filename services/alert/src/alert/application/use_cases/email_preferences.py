@@ -7,14 +7,12 @@ R27: GetEmailPreferencesUseCase reads via a read-only session.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from alert.domain.entities import EmailPreference
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from alert.application.ports.repositories import EmailPreferenceRepositoryPort
-
 
 # ---------------------------------------------------------------------------
 # Sentinel for distinguishing "not provided" from explicit None
@@ -36,7 +34,6 @@ class _Unset:
 
 
 _UNSET = _Unset()
-
 
 # ---------------------------------------------------------------------------
 # Use cases

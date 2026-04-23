@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select, update
 
@@ -11,8 +12,6 @@ import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

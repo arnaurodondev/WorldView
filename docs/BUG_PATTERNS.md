@@ -23,6 +23,10 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-176](#bp-176) | Observability / Alertmanager | Alertmanager receiver has no notification channels — all alerts fire and are silently discarded | `infra/alertmanager/alertmanager.yml` default receiver; any new Alertmanager config |
+| [BP-175](#bp-175) | Observability / Prometheus | Prometheus scrape target uses host-mapped port instead of container-internal port — `target: "service:8001"` fails because within Docker network containers expose their internal port, not the host-mapped one | `infra/prometheus/prometheus.yml` scrape targets; any new service added to Prometheus scrape config |
+| [BP-174](#bp-174) | Observability / Prometheus | Dead metric definition — `Counter`/`Gauge`/`Histogram` defined at module level but `.inc()`/`.set()`/`.observe()` never called anywhere; metric emits no data | S5 `content-store`, S6 `nlp-pipeline`, S8 `rag-chat` custom metrics modules; any service that copies a metrics file without wiring call sites |
+| [BP-173](#bp-173) | Observability / Prometheus | `libs/observability` `create_metrics()` isolated `CollectorRegistry` — all shared-lib metrics invisible to Prometheus; `generate_latest()` uses the global `REGISTRY`, not the isolated one | `libs/observability/src/observability/metrics.py:52`; all services using `create_metrics()` |
 | [BP-161](#bp-161) | FastAPI / security | Unannotated `UUID` path function parameter silently maps to **query string** — allows callers to pass arbitrary `?tenant_id=<uuid>` and impersonate any tenant | Any FastAPI endpoint with `tenant_id: UUID` or `user_id: UUID` without `Header()`, `Path()`, or `Depends()` annotation; fix: read from `request.state.tenant_id` (set by InternalJWTMiddleware) |
 | [BP-160](#bp-160) | Frontend / Testing | `TypeError: localStorage.clear is not a function` in Vitest under Node.js 22+ | Any Vitest test that calls `localStorage.clear()` in `beforeEach` |
 | [BP-159](#bp-159) | FastAPI middleware / Starlette | `app.add_middleware()` creates a DIFFERENT instance than `MiddlewareClass(app, ...)` — `startup()` on the stored instance never populates `self._public_key` on the serving instance | Any middleware that calls startup() to load external keys/config and stores them in `self.*` |
@@ -5626,3 +5630,103 @@ When classifying mentions as UNRESOLVED, always store enough metadata (`mention_
 ### Prevention
 
 When using `ON CONFLICT DO NOTHING` for deduplication in a queue pattern, verify that the deduplication does NOT cause downstream data loss. If multiple producers need to reference the same queue row, the queue table must store N-to-1 relationships (e.g., a join table), not just the first producer's reference. Audit every `ON CONFLICT DO NOTHING` insert that is also referenced by a foreign key in another table.
+
+---
+
+## BP-172 — Integration Tests Using X-Tenant-ID/X-Owner-ID Headers After Auth Middleware Migration
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 |
+| **Severity** | HIGH (silent test false-positives and 24 integration test failures) |
+| **Affected areas** | `services/portfolio/tests/integration/` (5 test files) |
+| **Root cause** | PLAN-0025 migrated all portfolio API routes to read `tenant_id` and `user_id` from `request.state` (set by `InternalJWTMiddleware` from `X-Internal-JWT` header). The old `X-Tenant-ID` and `X-Owner-ID` headers are completely ignored. Integration tests were not fully updated: they still called `make_tenant()/make_user()` to create dynamic identities under freshly-created UUIDs, then passed `X-Tenant-ID`/`X-Owner-ID` headers — which routes silently ignore. The JWT in the test client carries fixed `INTEGRATION_TENANT_ID`/`INTEGRATION_USER_ID`. Result: route uses `INTEGRATION_TENANT_ID` to look up the dynamically-created user → `uow.users.get(U_dynamic, INTEGRATION_TENANT_ID)` returns `None` → `UserInactiveError` → 409. |
+| **Symptom** | Four failure modes: (A) 409 USER_INACTIVE on portfolio/watchlist/transaction creation; (B) `user_id` assertion mismatch (`INTEGRATION_USER_ID` ≠ dynamically-created user); (C) WATCHLIST_ALREADY_EXISTS collision across tests (all watchlists created for same `INTEGRATION_USER_ID`, duplicate name triggers 409 on second test); (D) 404 on `GET /users/{id}` (user created under `T_dynamic`, JWT lookup uses `INTEGRATION_TENANT_ID`). |
+| **Fix** | Replace `make_tenant()/make_user()` API calls with DB-seeding helpers (`seed_tenant()`, `seed_user()`). Use `INTEGRATION_TENANT_ID`/`INTEGRATION_USER_ID` directly in all requests. For isolation tests (cross-user, cross-tenant), seed additional identities in DB and use `make_jwt_headers(tenant_id, user_id)` for per-request JWT injection. Use unique watchlist names (uuid4 suffix) to prevent cross-test name collisions in shared session-scoped DB. |
+
+### Prevention
+
+- After any auth middleware migration that changes how routes extract identity (header → JWT state), run a full integration test suite immediately to detect orphaned header patterns.
+- Watchlist/collection endpoints with name uniqueness constraints MUST use unique names per test (e.g., `f"WL-{uuid4().hex[:8]}"`) when sharing a session-scoped DB.
+- When a JWT carries a fixed test identity, ALL test data (tenants, users) that routes validate against MUST be seeded under that same identity. Never mix dynamic tenant/user creation with fixed-JWT test clients.
+- Add to integration test review checklist: "Do any tests pass `X-Tenant-ID` or `X-Owner-ID` headers? If so, are routes guaranteed to read these headers (not JWT state)?"
+
+---
+
+## BP-173 — `create_metrics()` Isolated CollectorRegistry Makes All Shared-Lib Metrics Invisible
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (observability audit) |
+| **Severity** | CRITICAL — all HTTP, Kafka, and outbox metrics for 10 services emit zero data |
+| **Affected areas** | `libs/observability/src/observability/metrics.py:52`; all services calling `create_metrics()` (S1–S10 except S4/S5 which use their own module-level counters) |
+| **Root cause** | `create_metrics()` defaults to `registry or CollectorRegistry()`, which creates a brand-new isolated registry every time it is called without an explicit registry argument. All returned `Counter`/`Histogram` objects are registered in this isolated registry. When Prometheus scrapes `/metrics`, the FastAPI app calls `prometheus_client.generate_latest()`, which reads from the global `REGISTRY` singleton. The custom metrics are in a different object (`reg`) that `generate_latest()` never sees. Result: 60 metric families across 10 services are permanently invisible. |
+| **Symptom** | `GET /metrics` returns only Python process metrics (`python_gc_*`, `process_*`). Service-level counters (`s1_requests_total`, `s3_kafka_messages_consumed_total`, etc.) appear as 0 series in Prometheus and are absent from all Grafana panels. |
+| **Fix** | Change `libs/observability/metrics.py:52` from `reg = registry or CollectorRegistry()` to `reg = registry if registry is not None else REGISTRY` (where `REGISTRY` is imported from `prometheus_client`). Tests that pass an isolated registry to avoid duplicate-registration errors continue to work unchanged. Services that pass `None` (the production default) will now correctly register in the global registry. |
+
+### Prevention
+
+When writing shared-library metrics helpers that accept an optional `registry` parameter, always check `is not None` (not truthiness) to distinguish "no registry provided" from "explicit registry". `CollectorRegistry()` is falsy in Python 3.12+ because it defines no `__bool__`; relying on `or` to fall back causes the same bug. Only use an isolated registry in tests. The global `REGISTRY` must be the default for all production code.
+
+**Grep pattern** (find the bug in any shared metrics helper):
+```bash
+grep -rn "registry or CollectorRegistry\(\)" libs/ services/ --include="*.py"
+```
+
+---
+
+## BP-174 — Dead Metric Definitions (Metric Defined but Never Incremented)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (observability audit) |
+| **Severity** | HIGH — dashboards and alerts built on these metrics produce no-data panels and phantom alert state |
+| **Affected areas** | `services/content-store/src/content_store/infrastructure/metrics/prometheus.py` (8 of 9 metrics), `services/nlp-pipeline/src/nlp_pipeline/infrastructure/metrics/prometheus.py` (all metrics), `services/rag-chat/src/rag_chat/infrastructure/metrics/prometheus.py` (all metrics) |
+| **Root cause** | Metrics modules were created as copy-paste stubs during scaffolding. The counters/gauges/histograms are defined at module level and exported, but no use-case, consumer, or worker code in the service ever calls `.inc()`, `.set()`, or `.observe()` on them. The metric name appears correct in the module, but the metric is a dead symbol — never referenced outside the module. |
+| **Symptom** | Prometheus returns the metric with value `0` at startup and it never changes. Dashboards built on these metrics appear to show a healthy flat line at 0, which looks like "no traffic" rather than "metric is broken". Alert rules fire `for: 5m` without matching real conditions. |
+| **Fix** | For each dead metric, either: (a) find the correct use-case or consumer code that performs the action the metric is supposed to measure, and add a `metric.inc()` / `metric.observe()` call there; or (b) if the metric was added speculatively and no such code exists, remove the metric definition entirely. Never leave a metric defined but unincremented — it creates false confidence. |
+
+### Prevention
+
+When adding a Prometheus metric to a service, the metric definition and its first call site MUST be in the same commit. A metric with no call site is dead code. During code review, grep for each new metric name across the entire service to confirm at least one `.inc()`/`.set()`/`.observe()` call exists.
+
+**Grep pattern** (find metrics defined but never called):
+```bash
+# For each metric name found in the metrics module, check for usage:
+grep -rn "s5_articles_processed_total\|s5_processing_duration" services/content-store/src/ --include="*.py"
+# Should return at least 2 lines: the definition AND a call site.
+```
+
+---
+
+## BP-175 — Prometheus Scrape Target Uses Host-Mapped Port Instead of Container Port
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (observability audit) |
+| **Severity** | HIGH — two services' metrics are permanently missing from all dashboards |
+| **Affected areas** | `infra/prometheus/prometheus.yml` — `portfolio:8001` (correct: `portfolio:8000`) and `content-ingestion:8004` (correct: `content-ingestion:8000`) |
+| **Root cause** | The Prometheus scrape config uses the host-side port mapping from `docker-compose.yml` (e.g., `8001:8000` → uses `8001`) instead of the container-internal port (`8000`). Within a Docker network, containers communicate on the container-internal port. The host-mapped port is only accessible from the Docker host, not from other containers. Prometheus (running as a container) cannot reach `portfolio:8001` because that port is only bound on the host interface. |
+| **Symptom** | Prometheus shows `portfolio` and `content-ingestion` scrape targets as `DOWN` with `connection refused`. All panels for these services show no-data. Grafana "Service Overview" dashboard appears healthy for 8 services but blank for the other 2. |
+| **Fix** | In `infra/prometheus/prometheus.yml`, change: `targets: ["portfolio:8001"]` → `targets: ["portfolio:8000"]` and `targets: ["content-ingestion:8004"]` → `targets: ["content-ingestion:8000"]`. The container-internal port is always the right-hand side of the `host:container` port mapping in docker-compose. When adding a new service, verify the `/metrics` path and the INTERNAL port from the service's `Dockerfile` `CMD` or `uvicorn` invocation. |
+
+### Prevention
+
+When adding a service to `prometheus.yml`, ALWAYS use the container-internal port (right side of `host_port:container_port` in docker-compose). Never use the host-mapped port. A simple way to verify: `docker compose exec prometheus wget -qO- http://<service_name>:<container_port>/metrics` — if this returns text, the port is correct.
+
+---
+
+## BP-176 — Alertmanager Receiver With No Notification Channels (Silent Alert Black Hole)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-23 (observability audit) |
+| **Severity** | CRITICAL — all Prometheus alerts fire and are permanently discarded; no human is ever notified |
+| **Affected areas** | `infra/alertmanager/alertmanager.yml` |
+| **Root cause** | The Alertmanager configuration defines a `default` receiver with no `email_configs`, `slack_configs`, `webhook_configs`, `pagerduty_configs`, or any other notification integration. Prometheus correctly evaluates alert rules, transitions them to `FIRING`, and sends them to Alertmanager — but Alertmanager silently matches them to the empty default receiver and discards them. No log message is emitted by Alertmanager for discarded notifications. |
+| **Symptom** | Alertmanager UI shows alerts in `FIRING` state. No email, Slack message, or page is ever sent. On-call engineers have no awareness that alerts are firing. The Grafana "Active Alerts" panel may show counts, but operators never receive actionable notifications. |
+| **Fix** | Add at minimum one notification channel to `infra/alertmanager/alertmanager.yml`. For local development, wire to MailHog (already running in the `dev` profile): add `email_configs` with `to: "oncall@worldview.local"`, `from: "alertmanager@worldview.local"`, `smarthost: "mailhog:1025"`, `require_tls: false`. For production, add Slack webhook or PagerDuty integration. Verify by triggering a test alert via `amtool alert add` and confirming delivery. |
+
+### Prevention
+
+An Alertmanager receiver with no integration config is not a valid production configuration. It is equivalent to disabling alerting entirely. Any CI or deployment check must verify that at least one receiver has at least one notification config entry. Add the following to the deployment checklist: "Alertmanager has at least one receiver with a working notification channel (email/Slack/PagerDuty). Verify with `amtool config routes show`."

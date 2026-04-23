@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
 from observability import get_logger  # type: ignore[import-untyped]
 from storage.key_builder import KeyBuilder  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]

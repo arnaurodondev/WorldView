@@ -464,3 +464,38 @@ await session.execute(
 ```
 **Risk**: Services down >7 days silently lose the backlog. Consumer resumes from oldest *remaining* message, skipping everything from the outage window (BP-150).
 **Fix**: Add explicit `retention.ms=2592000000` (30 days) via `kafka-configs --alter` for all primary pipeline topics in `create-topics.sh`.
+
+---
+
+## RED — Added from Observability Audit (2026-04-23)
+
+### HR-040: Shared Metrics Library Using `registry or CollectorRegistry()` Default
+```python
+# BAD — creates a new isolated registry every call; metrics never reach generate_latest()
+def create_metrics(service_name: str, registry: CollectorRegistry | None = None):
+    reg = registry or CollectorRegistry()   # ← WRONG: always isolated when None passed
+    requests_total = Counter("...", registry=reg)
+    return ServiceMetrics(registry=reg, ...)
+```
+**Risk**: All metrics registered in `reg` are invisible to `prometheus_client.generate_latest()`, which reads the global `REGISTRY` singleton. Every service using this helper ships with zero observable metrics — 10 services × 6 metric families = 60 dead metric families (BP-173).
+**Fix**: Use `reg = registry if registry is not None else REGISTRY` (importing `REGISTRY` from `prometheus_client`). Tests that pass an isolated registry continue to work; production code uses the global registry.
+**Grep pattern**:
+```bash
+grep -rn "registry or CollectorRegistry()" libs/ --include="*.py"
+```
+
+### HR-041: Prometheus Metric Defined But Never Called
+```python
+# BAD — metric declared, never wired to any code that calls .inc()/.set()/.observe()
+s5_articles_processed_total = Counter("s5_articles_processed_total", "...", ["tier"])
+s5_processing_duration_seconds = Histogram("s5_processing_duration_seconds", "...", ["tier"])
+# ... neither metric appears anywhere else in services/content-store/
+```
+**Risk**: Metric shows value `0` permanently. Dashboards that rely on it appear healthy ("no failures") rather than broken ("metric not instrumented"). Alerts built on it either never fire or always fire based on `absent()` behavior. Silent instrumentation gap (BP-174).
+**Fix**: For every new metric definition, verify at least one `.inc()`/`.set()`/`.observe()` call site exists in the same service. If no call site exists, delete the metric definition.
+**Grep pattern**:
+```bash
+# Find all metric variable names in a metrics module, then verify usage:
+grep -rn "s5_articles_processed_total" services/content-store/src/ --include="*.py"
+# Must return ≥2 lines: definition + call site.
+```

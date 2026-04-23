@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -37,13 +38,10 @@ from portfolio.domain.events import (
 )
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from portfolio.application.ports.cache import WatchlistCachePort
     from portfolio.application.ports.unit_of_work import UnitOfWork
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

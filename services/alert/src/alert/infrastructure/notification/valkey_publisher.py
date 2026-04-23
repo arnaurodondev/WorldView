@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

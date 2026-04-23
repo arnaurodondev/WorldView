@@ -11,6 +11,7 @@ import hashlib
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog
 
@@ -24,7 +25,6 @@ from content_store.domain.enums import DedupOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from uuid import UUID
 
     from messaging.valkey.client import ValkeyClient
 

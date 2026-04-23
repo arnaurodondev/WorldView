@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from portfolio.domain.errors import InstrumentNotFoundError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from portfolio.application.ports.unit_of_work import UnitOfWork
     from portfolio.domain.entities import InstrumentRef
 

@@ -11,12 +11,11 @@ The API layer must wire them via DI factories in ``dependencies.py``
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from alert.domain.enums import AlertSeverity
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from alert.application.ports.repositories import AlertRepositoryPort, PendingAlertRepositoryPort

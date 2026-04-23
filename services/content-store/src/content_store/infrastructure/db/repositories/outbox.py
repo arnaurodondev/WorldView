@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select, update
 
@@ -13,8 +14,6 @@ from content_store.application.ports.repositories import OutboxPort
 from content_store.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

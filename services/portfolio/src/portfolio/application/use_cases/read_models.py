@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from portfolio.application.ports.unit_of_work import UnitOfWork
     from portfolio.domain.entities import Holding, Transaction
 

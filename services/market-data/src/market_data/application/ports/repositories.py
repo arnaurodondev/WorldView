@@ -16,12 +16,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
-    from decimal import Decimal
-
     from market_data.domain.entities import (
         FundamentalsRecord,
         Instrument,
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
     )
     from market_data.domain.enums import FundamentalsSection, Timeframe
     from market_data.domain.value_objects import InstrumentFlags
-
 
 # ── Read-side query result types ─────────────────────────────────────────────
 

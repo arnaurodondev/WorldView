@@ -1,4 +1,11 @@
-"""Integration tests for transaction API endpoints."""
+"""Integration tests for transaction API endpoints.
+
+After PLAN-0025, routes read tenant_id / user_id from JWT state.
+X-Tenant-ID and X-Owner-ID headers are completely ignored.
+
+The integration_client fixture pre-seeds INTEGRATION_TENANT_ID / USER_ID so
+that portfolio creation (which validates tenant + user existence) succeeds.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,10 @@ import uuid
 
 import pytest
 
-from tests.integration.helpers import OutboxAssertions, make_portfolio, make_tenant, make_user
+from tests.integration.helpers import (
+    INTEGRATION_USER_ID,
+    OutboxAssertions,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -15,15 +25,13 @@ _EXECUTED_AT = "2025-01-01T12:00:00Z"
 
 async def test_buy_transaction_creates_records(integration_client, db_session) -> None:
     """POST /api/v1/transactions (BUY) creates transaction + holding + outbox events."""
-    tenant = await make_tenant(integration_client, name="TxCo")
-    user = await make_user(integration_client, tenant["id"])
-    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "AAPL", "NASDAQ")
 
     resp = await integration_client.post(
         "/api/v1/transactions",
         json={
-            "portfolio_id": portfolio["id"],
+            "portfolio_id": portfolio_id,
             "instrument_id": str(instrument_id),
             "transaction_type": "BUY",
             "direction": "INFLOW",
@@ -32,10 +40,6 @@ async def test_buy_transaction_creates_records(integration_client, db_session) -
             "fees": "0.50",
             "currency": "USD",
             "executed_at": _EXECUTED_AT,
-        },
-        headers={
-            "X-Tenant-ID": tenant["id"],
-            "X-Owner-ID": user["id"],
         },
     )
     assert resp.status_code == 201
@@ -48,14 +52,12 @@ async def test_buy_transaction_creates_records(integration_client, db_session) -
 
 async def test_idempotency_replay_no_duplicate(integration_client, db_session) -> None:
     """Two requests with the same Idempotency-Key produce only one transaction + outbox event."""
-    tenant = await make_tenant(integration_client, name="IdemCo")
-    user = await make_user(integration_client, tenant["id"])
-    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "MSFT", "NASDAQ")
     idem_key = str(uuid.uuid4())
 
     body = {
-        "portfolio_id": portfolio["id"],
+        "portfolio_id": portfolio_id,
         "instrument_id": str(instrument_id),
         "transaction_type": "BUY",
         "direction": "INFLOW",
@@ -64,11 +66,7 @@ async def test_idempotency_replay_no_duplicate(integration_client, db_session) -
         "currency": "USD",
         "executed_at": _EXECUTED_AT,
     }
-    headers = {
-        "X-Tenant-ID": tenant["id"],
-        "X-Owner-ID": user["id"],
-        "Idempotency-Key": idem_key,
-    }
+    headers = {"Idempotency-Key": idem_key}
 
     # Snapshot count before requests
     count_before = await OutboxAssertions.count_events_by_type(db_session, "transaction.recorded")
@@ -87,13 +85,11 @@ async def test_idempotency_replay_no_duplicate(integration_client, db_session) -
 
 async def test_list_transactions(integration_client, db_session) -> None:
     """GET /api/v1/transactions returns all transactions for a portfolio."""
-    tenant = await make_tenant(integration_client, name="ListTxCo")
-    user = await make_user(integration_client, tenant["id"])
-    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "GOOGL", "NASDAQ")
 
     body = {
-        "portfolio_id": portfolio["id"],
+        "portfolio_id": portfolio_id,
         "instrument_id": str(instrument_id),
         "transaction_type": "BUY",
         "direction": "INFLOW",
@@ -102,36 +98,30 @@ async def test_list_transactions(integration_client, db_session) -> None:
         "currency": "USD",
         "executed_at": _EXECUTED_AT,
     }
-    headers = {"X-Tenant-ID": tenant["id"], "X-Owner-ID": user["id"]}
 
-    await integration_client.post("/api/v1/transactions", json=body, headers=headers)
+    await integration_client.post("/api/v1/transactions", json=body)
 
+    # GET /api/v1/transactions reads portfolio_id from X-Portfolio-ID header (not query params).
     resp = await integration_client.get(
         "/api/v1/transactions",
-        headers={
-            "X-Tenant-ID": tenant["id"],
-            "X-Owner-ID": user["id"],
-            "X-Portfolio-ID": portfolio["id"],
-        },
+        headers={"X-Portfolio-ID": portfolio_id},
     )
     assert resp.status_code == 200
     data = resp.json()
-    # Portfolio is freshly created — exactly 1 transaction expected (no shared state).
+    # Portfolio is freshly created — exactly 1 transaction expected.
     assert data["total"] == 1
-    assert data["items"][0]["portfolio_id"] == portfolio["id"]
+    assert data["items"][0]["portfolio_id"] == portfolio_id
 
 
 async def test_transaction_requires_positive_quantity(integration_client, db_session) -> None:
     """POST /api/v1/transactions with quantity=0 returns 422."""
-    tenant = await make_tenant(integration_client, name="ValCo")
-    user = await make_user(integration_client, tenant["id"])
-    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "AMZN", "NASDAQ")
 
     resp = await integration_client.post(
         "/api/v1/transactions",
         json={
-            "portfolio_id": portfolio["id"],
+            "portfolio_id": portfolio_id,
             "instrument_id": str(instrument_id),
             "transaction_type": "BUY",
             "direction": "INFLOW",
@@ -140,22 +130,19 @@ async def test_transaction_requires_positive_quantity(integration_client, db_ses
             "currency": "USD",
             "executed_at": _EXECUTED_AT,
         },
-        headers={"X-Tenant-ID": tenant["id"], "X-Owner-ID": user["id"]},
     )
     assert resp.status_code == 422
 
 
 async def test_transaction_requires_positive_price(integration_client, db_session) -> None:
     """POST /api/v1/transactions with price=0 returns 422."""
-    tenant = await make_tenant(integration_client, name="PriceCo")
-    user = await make_user(integration_client, tenant["id"])
-    portfolio = await make_portfolio(integration_client, tenant["id"], user["id"])
+    portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "META", "NASDAQ")
 
     resp = await integration_client.post(
         "/api/v1/transactions",
         json={
-            "portfolio_id": portfolio["id"],
+            "portfolio_id": portfolio_id,
             "instrument_id": str(instrument_id),
             "transaction_type": "BUY",
             "direction": "INFLOW",
@@ -164,7 +151,6 @@ async def test_transaction_requires_positive_price(integration_client, db_sessio
             "currency": "USD",
             "executed_at": _EXECUTED_AT,
         },
-        headers={"X-Tenant-ID": tenant["id"], "X-Owner-ID": user["id"]},
     )
     assert resp.status_code == 422
 
@@ -172,11 +158,25 @@ async def test_transaction_requires_positive_price(integration_client, db_sessio
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
+async def _create_portfolio(client) -> str:  # type: ignore[no-untyped-def]
+    """Create a portfolio for INTEGRATION_USER_ID and return its id."""
+    resp = await client.post(
+        "/api/v1/portfolios",
+        json={
+            "name": f"Tx Test Portfolio {uuid.uuid4().hex[:8]}",
+            "owner_user_id": INTEGRATION_USER_ID,
+            "currency": "USD",
+        },
+    )
+    assert resp.status_code == 201, f"create_portfolio failed: {resp.text}"
+    return resp.json()["id"]
+
+
 async def _seed_instrument(db_session, symbol: str, exchange: str) -> uuid.UUID:
     """Upsert an instrument into the test DB and return its ID.
 
-    Uses ON CONFLICT DO NOTHING so repeated calls (across the shared session-scoped
-    testcontainer) don't raise UniqueViolationError.
+    Uses ON CONFLICT DO NOTHING so repeated calls across the session-scoped
+    testcontainer don't raise UniqueViolationError.
     """
     from portfolio.infrastructure.db.models.instrument import InstrumentModel
     from sqlalchemy import select

@@ -47,7 +47,7 @@ const HERO_FEATURES = [
     title: "Entity Graph",
     description:
       "Visualise company relationships, directors, subsidiaries, and competitive dynamics in an interactive knowledge graph.",
-    color: "text-primary", // #0EA5E9 — primary brand colour for the flagship feature
+    color: "text-primary", // #E8A317 — amber/gold accent for the flagship feature
   },
   {
     icon: Zap,
@@ -104,7 +104,10 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/register"
-            className="text-sm bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors"
+            // WHY shadow-sm + hover:shadow-md: nav CTA gets a subtler amber glow than the
+            // hero CTA (shadow-lg) to establish hierarchy: hero > nav. transition-all
+            // animates the shadow on hover (transition-colors only handles color, not shadow).
+            className="text-sm font-semibold bg-primary text-primary-foreground px-3 py-1.5 rounded-md shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/30 transition-all"
           >
             Get started
           </Link>
@@ -114,36 +117,55 @@ export default function LandingPage() {
       {/* ── Hero section ───────────────────────────────────────────────────── */}
       {/* WHY id="hero": the "Learn More" CTA scrolls to #features; having a
           named anchor on the hero section also helps direct links. */}
-      <section id="hero" className="max-w-4xl mx-auto px-8 py-28 text-center">
+      <section id="hero" className="max-w-4xl mx-auto px-8 py-20 text-center">
         {/* WHY "Market Intelligence Terminal": describes the product category
             (terminal = professional tool) + domain (market intelligence).
             "For serious traders" in the sub-head qualifies the audience. */}
         <p className="text-xs font-mono text-primary uppercase tracking-widest mb-4">
           Market Intelligence Terminal
         </p>
+        {/* WHY just "Worldview" here: the amber kicker <p> directly above already
+            announces "Market Intelligence Terminal". Repeating the same phrase inside
+            the h1 is a classic AI-template redundancy — a professional landing page
+            uses the category descriptor as a kicker, and the brand name as the headline.
+            Separating them creates better visual rhythm and avoids the copy-paste tell. */}
         <h1 className="text-4xl sm:text-5xl font-semibold text-foreground mb-6 leading-tight">
-          Worldview — Market Intelligence Terminal
+          Worldview
         </h1>
-        <p className="text-lg text-muted-foreground mb-10 max-w-2xl mx-auto leading-relaxed">
+        <p className="text-lg text-muted-foreground mb-4 max-w-2xl mx-auto leading-relaxed">
           Real-time signals, AI-powered insights, and institutional-grade analytics
-          for serious traders. Bloomberg-grade terminal at a fraction of the cost.
+          for the traders who demand more.
         </p>
+
+        {/* WHY kbd element: signals power-user capability (⌘K to search). Bloomberg
+            users expect keyboard shortcuts — this badge communicates "this is a
+            professional tool" before the user even signs in. */}
+        <kbd className="mb-8 inline-block rounded border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+          ⌘K to search instruments
+        </kbd>
 
         {/* ── CTA buttons ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-center flex-wrap gap-4">
           {/* Primary CTA: Sign In — most landing-page visitors already have accounts
-              (referral / direct link); sign-in is higher conversion than register. */}
+              (referral / direct link); sign-in is higher conversion than register.
+              WHY shadow-lg + shadow-primary/25: the amber glow lifts the primary CTA
+              above the page surface, establishing clear visual hierarchy over the
+              outline-only secondary CTA. hover:shadow-xl deepens the effect on hover. */}
           <Link
             href="/login"
-            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors"
+            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
           >
             Sign In
           </Link>
           {/* WHY scroll anchor for "Learn More": users who need convincing scroll
-              down; JS-free anchor scroll works even with JS disabled. */}
+              down; JS-free anchor scroll works even with JS disabled.
+              WHY border-border/60 + hover:border-primary/40: the reduced-opacity
+              border recedes behind the solid primary CTA; on hover the border
+              tints toward primary, creating a subtle "warm invitation" without
+              competing with the amber Sign In button. */}
           <a
             href="#features"
-            className="text-sm text-muted-foreground border border-border rounded-md px-7 py-3 hover:text-foreground hover:border-border/80 transition-colors"
+            className="text-sm text-muted-foreground border border-border/60 rounded-md px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
           >
             Learn More ↓
           </a>
@@ -171,7 +193,7 @@ export default function LandingPage() {
             return (
               <div
                 key={feature.title}
-                className="bg-card rounded-xl p-6 border border-border/60 hover:border-border transition-colors"
+                className="bg-card rounded-xl p-6 border border-border/40 hover:border-primary/30 transition-colors"
               >
                 {/* WHY icon + title on same row: reduces vertical scanning distance;
                     traders scan quickly and don't read every word. */}
@@ -241,15 +263,20 @@ export default function LandingPage() {
           and your portfolio in one unified workspace.
         </p>
         <div className="flex items-center justify-center gap-4 flex-wrap">
+          {/* WHY match hero CTA pattern: repeating the same amber glow + semibold
+              treatment reinforces visual consistency and gives the final CTA the
+              same urgency as the hero — users who scrolled this far are high-intent. */}
           <Link
             href="/login"
-            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors"
+            className="bg-primary text-primary-foreground px-7 py-3 rounded-md text-sm font-semibold shadow-lg shadow-primary/25 hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/30 transition-all"
           >
             Sign In
           </Link>
+          {/* WHY outline style matches hero secondary: consistent visual language
+              across all CTA pairs — outline = lower commitment action. */}
           <Link
             href="/register"
-            className="text-sm text-muted-foreground border border-border rounded-md px-7 py-3 hover:text-foreground hover:border-border/80 transition-colors"
+            className="text-sm text-muted-foreground border border-border/60 rounded-md px-7 py-3 hover:border-primary/40 hover:text-primary transition-all"
           >
             Create account
           </Link>

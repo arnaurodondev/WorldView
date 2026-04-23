@@ -44,8 +44,8 @@ export function TopBets() {
       <div className="space-y-3">
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="space-y-1">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-2 w-full" />
+            <Skeleton className="h-4 w-full" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-2 w-full" style={{ animationDelay: `${i * 50}ms` }} />
           </div>
         ))}
       </div>

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from portfolio.domain.entities.tenant import Tenant
 from portfolio.domain.entities.user import User
@@ -18,8 +19,6 @@ from portfolio.domain.errors import ProvisionConflictError
 from portfolio.domain.value_objects import AuthAuditEvent
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from portfolio.application.ports.unit_of_work import UnitOfWork
 
 

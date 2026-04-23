@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
 
@@ -17,8 +18,6 @@ from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
     from rag_chat.application.ports.upstream_clients import (
         S1Port,

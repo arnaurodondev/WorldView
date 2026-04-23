@@ -54,13 +54,13 @@ export function ArticleImpactBadge({ score, sentiment }: ArticleImpactBadgeProps
   const displayScore = Math.round(score * 100);
 
   // ── Colour mapping by sentiment ─────────────────────────────────────────────
-  // WHY inline hex (not Tailwind color): Midnight Pro palette tokens must stay
-  // consistent; using arbitrary [#hex] in className ensures no dependency on
-  // Tailwind colour name changes in future upgrades.
+  // WHY semantic tokens (not inline hex): Bloomberg Dark palette defines --positive
+  // and --negative CSS custom properties. Using the token classes ensures colour
+  // consistency if the palette hex values change.
   const scoreColorClass = cn(
     "font-mono text-xs font-semibold tabular-nums",
-    sentiment === "positive" && "text-[#26A69A]",   // Midnight Pro positive (teal)
-    sentiment === "negative" && "text-[#EF5350]",   // Midnight Pro negative (red)
+    sentiment === "positive" && "text-positive",     // Bloomberg Dark positive (teal)
+    sentiment === "negative" && "text-negative",     // Bloomberg Dark negative (red)
     // neutral or null sentiment → muted foreground (no emphasis)
     (sentiment === "neutral" || sentiment === null) && "text-muted-foreground",
   );

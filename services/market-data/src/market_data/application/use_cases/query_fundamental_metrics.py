@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datetime import date
-
     from market_data.application.ports.cache import ScreenFieldsCachePort
     from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
     from market_data.application.ports.uow import ReadOnlyUnitOfWork

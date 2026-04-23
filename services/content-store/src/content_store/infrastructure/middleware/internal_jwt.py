@@ -79,7 +79,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 key = await self._fetch_public_key()
                 self._public_key = key
                 # BP-159: store on app.state so the serving instance can access it
-                self.app.state._internal_jwt_public_key = key
+                self.app.state._internal_jwt_public_key = key  # type: ignore[attr-defined]
                 logger.info(  # type: ignore[no-any-return]
                     "internal_jwt_public_key_loaded",
                     jwks_url=self._jwks_url,
@@ -109,7 +109,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 new_key = await self._fetch_public_key()
                 self._public_key = new_key
                 # BP-159: update app.state for the serving instance
-                self.app.state._internal_jwt_public_key = new_key
+                self.app.state._internal_jwt_public_key = new_key  # type: ignore[attr-defined]
                 logger.info("internal_jwt_public_key_refreshed")  # type: ignore[no-any-return]
             except Exception as exc:
                 logger.warning("internal_jwt_public_key_refresh_failed", error=str(exc))  # type: ignore[no-any-return]

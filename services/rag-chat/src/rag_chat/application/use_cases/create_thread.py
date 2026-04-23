@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -10,8 +11,6 @@ from observability import get_logger  # type: ignore[import-untyped]
 from rag_chat.domain.entities.conversation import ConversationThread
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]

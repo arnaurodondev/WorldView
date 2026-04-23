@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from uuid import UUID
 
 from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import EntityMention, RoutingDecision
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 # ── Signal weights (PRD §6.7 Block 5 / PRD-0020 §6.5 rebalance) ─────────────
 
@@ -57,7 +54,6 @@ DOCUMENT_TYPE_SIGNAL: dict[str, float] = {
     "manual": 0.50,
 }
 _DEFAULT_DOCUMENT_TYPE_SIGNAL: float = 0.50
-
 
 # ── Signal computation helpers ────────────────────────────────────────────────
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from sqlalchemy import case, select, update
 
@@ -14,7 +15,6 @@ from market_ingestion.infrastructure.db.models.outbox_event import OutboxEventMo
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
 

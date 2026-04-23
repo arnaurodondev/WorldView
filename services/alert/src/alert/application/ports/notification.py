@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from uuid import UUID
+from typing import Any, Protocol, runtime_checkable
+from uuid import UUID
 
 
 @runtime_checkable

@@ -56,8 +56,8 @@ export function TopMovers() {
             className={`rounded px-2 py-0.5 text-xs font-medium capitalize transition-colors ${
               type === t
                 ? t === "gainers"
-                  ? "bg-[#26A69A]/20 text-[#26A69A]"
-                  : "bg-[#EF5350]/20 text-[#EF5350]"
+                  ? "bg-positive/20 text-positive"
+                  : "bg-negative/20 text-negative"
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -70,7 +70,7 @@ export function TopMovers() {
       {isLoading && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-20 shrink-0" />
+            <Skeleton key={i} className="h-16 w-20 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
           ))}
         </div>
       )}
@@ -91,7 +91,10 @@ export function TopMovers() {
             <button
               key={mover.instrument_id}
               onClick={() => router.push(`/instruments/${mover.instrument_id}`)}
-              className="flex shrink-0 flex-col items-start rounded border border-border bg-muted/30 p-2 hover:bg-muted/60"
+              // WHY hover:bg-surface-3/40: surface-3 is a deeper elevation token than muted,
+              // giving TopMover tiles a more pronounced lift on hover. This differentiates
+              // them from flat list items and signals "clickable tile" in the dashboard grid.
+              className="flex shrink-0 flex-col items-start rounded border border-border bg-muted/30 p-2 hover:bg-surface-3/40"
               style={{ minWidth: "4.5rem" }}
             >
               {/* Ticker — large, font-mono */}
