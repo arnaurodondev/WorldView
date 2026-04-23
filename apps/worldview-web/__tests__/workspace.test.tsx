@@ -36,6 +36,29 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import WorkspacePage from "@/app/(app)/workspace/page";
 
+// WHY stub localStorage in beforeEach: The workspace page reads from localStorage
+// on mount (lazy initializer) and writes on every state change (useEffect).
+// jsdom shares a single Storage object across tests in the same file. Without
+// resetting it, a test that writes panel state could corrupt the initial state
+// seen by a later test that expects DEFAULT_PANELS_CONFIG (chart + news + alerts).
+//
+// WHY vi.stubGlobal (not localStorage.clear()): some jsdom configurations do not
+// expose a writable `clear()` on localStorage. Replacing the entire object with a
+// fresh in-memory stub avoids the "not a function" error and guarantees isolation.
+beforeEach(() => {
+  // In-memory localStorage substitute — supports getItem/setItem/removeItem/clear
+  const store: Record<string, string> = {};
+  const localStorageStub: Storage = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = value; },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { Object.keys(store).forEach((k) => { delete store[k]; }); },
+    key: (index: number) => Object.keys(store)[index] ?? null,
+    get length() { return Object.keys(store).length; },
+  };
+  vi.stubGlobal("localStorage", localStorageStub);
+});
+
 // ── Next.js navigation mock ────────────────────────────────────────────────────
 // WHY: WorkspacePage indirectly uses next/navigation via embedded panel components
 // (AlertsList uses useRouter). Mock to avoid "invariant" error in vitest/jsdom.
@@ -303,7 +326,10 @@ describe("WorkspacePage", () => {
     });
   });
 
-  it("disables inactive panel buttons when at max capacity (4 panels)", async () => {
+  it("disables all panel buttons when at max capacity (4 panels)", async () => {
+    // WHY test ALL buttons disabled (not just inactive): In the multi-instance model,
+    // every selector bar button ADDS a new instance. When MAX_PANELS is reached no new
+    // instance can be added regardless of type — so all buttons are disabled.
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper });
 
@@ -316,15 +342,23 @@ describe("WorkspacePage", () => {
       expect(screen.getByText(/4\/4 panels/)).toBeInTheDocument();
     });
 
-    // At max capacity, inactive panel buttons should be disabled.
-    // "Screener" is not in the default panels and was not added — should be disabled.
+    // At max capacity, ALL panel buttons should be disabled (no slots left).
+    // Check an inactive type button ("Screener" was not added).
     const screenerButton = screen.getByRole("button", { name: /add screener panel/i });
     expect(screenerButton).toBeDisabled();
+
+    // Also check an active type button ("Chart" is in default panels) — also disabled.
+    const chartButton = screen.getByRole("button", { name: /remove chart panel/i });
+    expect(chartButton).toBeDisabled();
   });
 
-  // ── Remove panel via selector bar ────────────────────────────────────────────
+  // ── Remove panel via card close button ────────────────────────────────────────
+  //
+  // WHY via card X button (not selector bar): The workspace now uses a multi-instance
+  // model. Selector bar buttons always ADD a new instance — they no longer toggle/remove.
+  // Removal is done exclusively via the close (X) button on each panel card.
 
-  it("removes a panel when its active selector button is clicked", async () => {
+  it("removes a panel when the close (X) button in the panel card is clicked", async () => {
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper });
 
@@ -332,29 +366,29 @@ describe("WorkspacePage", () => {
     const panelGrid = screen.getByRole("region", { name: /workspace panels/i });
     expect(within(panelGrid).getByText("Alerts")).toBeInTheDocument();
 
-    // Click the "Remove Alerts panel" button in the selector bar
-    // WHY aria-label: active panels get "Remove X panel" label in PanelSelectorBar
-    const removeButton = screen.getByRole("button", { name: /remove alerts panel/i });
-    await user.click(removeButton);
+    // Remove via the card close button (aria-label "Close Alerts panel")
+    const closeButton = within(panelGrid).getByRole("button", { name: /close alerts panel/i });
+    await user.click(closeButton);
 
     // After removal, the Alerts panel card should no longer be in the grid
     await waitFor(() => {
-      // WHY queryAllByText + filter: "Alerts" also appears in the selector bar button.
+      // WHY queryByText within panelGrid: "Alerts" also appears in the selector bar button.
       // We need to confirm it's gone from the panel grid specifically.
       expect(within(panelGrid).queryByText("Alerts")).not.toBeInTheDocument();
     });
   });
 
-  it("decrements panel count when a panel is removed", async () => {
+  it("decrements panel count when a panel is removed via card close button", async () => {
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper });
 
     // Starting count is 3/4
     expect(screen.getByText(/3\/4 panels/)).toBeInTheDocument();
 
-    // Remove the "News" panel
-    const removeButton = screen.getByRole("button", { name: /remove news panel/i });
-    await user.click(removeButton);
+    // Remove the "News" panel via its card close button
+    const panelGrid = screen.getByRole("region", { name: /workspace panels/i });
+    const closeButton = within(panelGrid).getByRole("button", { name: /close news panel/i });
+    await user.click(closeButton);
 
     // Count should drop to 2/4
     await waitFor(() => {
@@ -385,20 +419,23 @@ describe("WorkspacePage", () => {
 
   // ── Empty state ───────────────────────────────────────────────────────────────
 
-  it("shows empty state message when all panels are removed", async () => {
+  it("shows empty state message when all panels are removed via card close buttons", async () => {
+    // WHY use card close buttons (not selector bar): The multi-instance model means
+    // selector bar buttons ADD instances. Removal is done via the close (X) button
+    // on individual panel cards.
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper });
 
     const panelGrid = screen.getByRole("region", { name: /workspace panels/i });
 
-    // Remove all 3 default panels one by one
-    const removeChart = screen.getByRole("button", { name: /remove chart panel/i });
-    const removeNews = screen.getByRole("button", { name: /remove news panel/i });
-    const removeAlerts = screen.getByRole("button", { name: /remove alerts panel/i });
+    // Remove all 3 default panels via their card close buttons
+    const closeChart = within(panelGrid).getByRole("button", { name: /close chart panel/i });
+    const closeNews = within(panelGrid).getByRole("button", { name: /close news panel/i });
+    const closeAlerts = within(panelGrid).getByRole("button", { name: /close alerts panel/i });
 
-    await user.click(removeChart);
-    await user.click(removeNews);
-    await user.click(removeAlerts);
+    await user.click(closeChart);
+    await user.click(closeNews);
+    await user.click(closeAlerts);
 
     // WHY wait: three sequential state updates need to flush before the empty state renders
     await waitFor(() => {
@@ -406,7 +443,7 @@ describe("WorkspacePage", () => {
     });
 
     // The workspace grid should no longer be present after all panels are removed
-    // (the empty state replaces it)
+    // (the empty state component replaces it)
     expect(panelGrid).not.toBeInTheDocument();
   });
 
@@ -425,18 +462,21 @@ describe("WorkspacePage", () => {
     });
   });
 
-  it("hides max-capacity hint when a panel is removed below max", async () => {
+  it("hides max-capacity hint when a panel is removed below max via card close button", async () => {
+    // WHY use card close button for removal: selector bar buttons ADD instances in
+    // the multi-instance model. Removal is done via the card close (X) button.
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper });
 
-    // Add to reach max
+    // Add a 4th panel to reach max capacity
     await user.click(screen.getByRole("button", { name: /add fundamentals panel/i }));
     await waitFor(() => {
       expect(screen.getByText(/maximum 4 panels reached/i)).toBeInTheDocument();
     });
 
-    // Remove one panel to go back below max
-    await user.click(screen.getByRole("button", { name: /remove chart panel/i }));
+    // Remove one panel via its card close button to go back below max
+    const panelGrid = screen.getByRole("region", { name: /workspace panels/i });
+    await user.click(within(panelGrid).getByRole("button", { name: /close chart panel/i }));
     await waitFor(() => {
       expect(screen.queryByText(/maximum 4 panels reached/i)).not.toBeInTheDocument();
     });

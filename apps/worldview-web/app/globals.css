@@ -1,13 +1,20 @@
 /**
- * globals.css — Bloomberg Dark design system CSS variables + Tailwind base
+ * globals.css — Terminal Dark design system CSS variables + Tailwind base
  *
- * WHY THIS EXISTS: Defines the "Bloomberg Dark" color palette as CSS custom
+ * WHY THIS EXISTS: Defines the "Terminal Dark" color palette as CSS custom
  * properties. All Tailwind utility classes (bg-background, text-primary, etc.)
  * reference these variables, so changing them here updates the entire UI.
  *
- * PALETTE SOURCE: docs/ui/DESIGN_SYSTEM.md §2 "Color Palette — Bloomberg Dark"
- * #0A0E14 background + amber/gold accent (#E8A317) is the defining choice —
- * distinguishes us from generic fintech apps that use plain black or slate-950.
+ * PALETTE SOURCE: docs/ui/DESIGN_SYSTEM.md §2 "Color Palette — Terminal Dark"
+ * #09090B neutral near-black + trading yellow (#FFD60A) is the defining choice —
+ * matches Bloomberg Terminal / tastytrade institutional aesthetic. No blue tint:
+ * blue-tinted backgrounds read as "app" to finance professionals; neutral black
+ * reads as "terminal". The high-chroma yellow on near-black is the Bloomberg
+ * signature contrast ratio.
+ *
+ * PREVIOUS PALETTE: #0A0E14 (blue-tinted bg) + #E8A317 (amber-orange) — retired
+ * because the blue undertone read as "friendly fintech app" rather than terminal.
+ * The amber-orange was too warm/approachable; trading yellow is sharper/more urgent.
  *
  * DARK MODE: Permanent. No :root (light) variant needed.
  * class="dark" is set permanently on <html> (ADR-F-04).
@@ -18,75 +25,109 @@
 @tailwind utilities;
 
 @layer base {
-  /* ── Bloomberg Dark — Dark Theme (permanent, ADR-F-04) ────────────── */
+  /* ── Terminal Dark — Dark Theme (permanent, ADR-F-04) ────────────── */
   :root {
-    /* ── Backgrounds — elevation hierarchy from darkest (page) to lightest ── */
-    --background: 210 38% 6%;       /* #0A0E14 — Bloomberg-style deep background */
-    --card: 212 31% 9%;             /* #111820 — panel/card backgrounds */
-    --muted: 215 26% 14%;           /* #1A2030 — elevated surfaces, hover states */
-    --popover: 210 38% 6%;          /* #0A0E14 — same as --background for dropdown menus */
-    --accent: 215 26% 14%;          /* #1A2030 — same as --muted for subtle hover highlights */
-    --surface-2: 215 26% 14%;       /* #1A2030 — alias for muted (explicit surface step) */
-    --surface-3: 210 22% 19%;       /* #243040 — third elevation level */
+    /* ── Backgrounds — elevation hierarchy from darkest (page) to lightest ──
+     * WHY neutral (not blue-tinted): #09090B has zero hue — it reads as a true
+     * terminal/hardware screen. Blue-tinted backgrounds (#0A0E14) subconsciously
+     * signal "web app". Removing the tint shifts the feel to Bloomberg/Reuters.
+     * Each step is ~3% lighter in L* (perceptual lightness) for a visible
+     * but non-garish elevation hierarchy. */
+    --background: 240 10% 4%;      /* #09090B — neutral near-black, no blue tint */
+    --card: 270 2% 7%;             /* #111113 — panel/card backgrounds, neutral */
+    --muted: 240 4% 11%;           /* #18181B — elevated surfaces, hover states */
+    --popover: 240 10% 4%;         /* #09090B — same as --background for dropdown menus */
+    --accent: 240 4% 11%;          /* #18181B — same as --muted for subtle hover highlights */
+    --surface-2: 240 4% 11%;       /* #18181B — alias for muted (explicit surface step) */
+    --surface-3: 240 4% 16%;       /* #27272A — third elevation level */
 
-    /* Text — warm parchment primary, cool grey secondary for labels/timestamps */
-    --foreground: 36 14% 85%;       /* #E0DDD4 — Bloomberg warm-white text */
-    --card-foreground: 36 14% 85%;  /* #E0DDD4 */
-    --popover-foreground: 36 14% 85%; /* #E0DDD4 */
-    --muted-foreground: 215 8% 47%; /* #6B7585 — labels, timestamps, axis captions */
-    --accent-foreground: 36 14% 85%; /* #E0DDD4 */
-    --secondary: 215 26% 14%;       /* #1A2030 */
-    --secondary-foreground: 36 14% 85%; /* #E0DDD4 */
+    /* Text — warm off-white primary; neutral grey secondary for labels/timestamps.
+     * WHY keep warm foreground: pure #FFF is harsh on terminal black. #E4E4E7
+     * (zinc-200) is the standard institutional off-white — slightly warm without
+     * being parchment-tinted like the old #E0DDD4. */
+    --foreground: 240 5% 90%;       /* #E4E4E7 — zinc-200 off-white */
+    --card-foreground: 240 5% 90%;  /* #E4E4E7 */
+    --popover-foreground: 240 5% 90%; /* #E4E4E7 */
+    --muted-foreground: 240 4% 46%; /* #71717A — zinc-500, neutral grey (no blue tint) */
+    --accent-foreground: 240 5% 90%; /* #E4E4E7 */
+    --secondary: 240 4% 11%;        /* #18181B */
+    --secondary-foreground: 240 5% 90%; /* #E4E4E7 */
 
-    /* Interactive — amber/gold accent (#E8A317), Bloomberg-signature warm gold */
-    --primary: 40 83% 50%;          /* #E8A317 — amber/gold accent */
-    --primary-foreground: 210 38% 6%; /* #0A0E14 — dark text on gold button */
+    /* Interactive — Bloomberg-signature bright trading yellow.
+     * WHY #FFD60A (not amber #E8A317): The old amber was warm/orange, reading as
+     * "notification" or "app accent". #FFD60A is the canonical Bloomberg Terminal
+     * yellow — high chroma, 100% saturation, pure hue 48° (almost pure yellow).
+     * On near-black it achieves ~14:1 contrast ratio (AAA). The sharp yellow also
+     * signals "price / alert" — the mental model finance users bring to this hue.
+     * --primary-foreground must be pure black (#000000): yellow text needs maximum
+     * contrast background; the old #0A0E14 was too dark-blue, not true black. */
+    --primary: 48 100% 52%;         /* #FFD60A — Bloomberg-signature trading yellow */
+    --primary-foreground: 0 0% 0%;  /* #000000 — pure black text on yellow CTA */
 
-    /* Structural */
-    --border: 210 22% 19%;          /* #243040 — dividers, table borders */
-    --input: 210 22% 19%;           /* #243040 */
-    --ring: 40 83% 50%;             /* #E8A317 — focus rings match accent */
+    /* Structural — borders are MORE visible now (not hidden).
+     * WHY brighter border: #27272A (zinc-800) vs old #243040. Dense terminal layouts
+     * need clearly visible grid lines between panels. The old border was too subtle
+     * and blended into the background — panels looked undefined. #27272A gives a
+     * crisp 1px edge without glowing. */
+    --border: 240 4% 16%;           /* #27272A — zinc-800, visible panel edges */
+    --input: 240 4% 16%;            /* #27272A */
+    --ring: 48 100% 52%;            /* #FFD60A — focus rings match primary */
 
     /* Destructive actions (delete, error states) */
     --destructive: 0 63% 62%;       /* #EF5350 — muted red */
-    --destructive-foreground: 36 14% 85%; /* #E0DDD4 */
+    --destructive-foreground: 240 5% 90%; /* #E4E4E7 */
 
     /* ── Financial domain tokens (no Tailwind equivalent) ────────── */
     --positive: 174 42% 40%;        /* #26A69A — teal-green (price up) */
     --negative: 0 63% 62%;          /* #EF5350 — price down / loss */
     --warning: 38 92% 50%;          /* #F59E0B — amber-500 alerts/warnings */
 
-    /* Border radius — slightly rounded for professional feel */
-    --radius: 0.375rem;
+    /* Border radius — near-zero for hard terminal edges.
+     * WHY 0.125rem (2px): Bloomberg Terminal uses zero-radius sharp rectangles.
+     * tastytrade uses 2px for a barely-there softening that prevents harsh pixel
+     * corners without looking "app-like". 0.375rem (6px) was too rounded — it
+     * made the dashboard look like a consumer app card grid, not a terminal.
+     * At 2px, panels feel like instrument/grid cells, not floating cards. */
+    --radius: 0.125rem;
+
+    /* ── Structural density tokens ─────────────────────────────────
+     * WHY fixed px values (not rem): Panel chrome heights must be pixel-precise
+     * for grid alignment. rem values shift if the user's browser zoom changes,
+     * breaking alignment. Bloomberg Terminal uses fixed 32px panel headers and
+     * 44px top chrome — these match that standard. */
+    --panel-header-height: 32px;    /* compact panel headers — leaves more room for data */
+    --topbar-height: 44px;          /* 4px tighter than old h-12 (48px); denser chrome */
   }
 
   /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work */
   .dark {
-    --background: 210 38% 6%;
-    --card: 212 31% 9%;
-    --muted: 215 26% 14%;
-    --popover: 210 38% 6%;
-    --accent: 215 26% 14%;
-    --surface-2: 215 26% 14%;
-    --surface-3: 210 22% 19%;
-    --foreground: 36 14% 85%;
-    --card-foreground: 36 14% 85%;
-    --popover-foreground: 36 14% 85%;
-    --muted-foreground: 215 8% 47%;
-    --accent-foreground: 36 14% 85%;
-    --secondary: 215 26% 14%;
-    --secondary-foreground: 36 14% 85%;
-    --primary: 40 83% 50%;
-    --primary-foreground: 210 38% 6%;
-    --border: 210 22% 19%;
-    --input: 210 22% 19%;
-    --ring: 40 83% 50%;
+    --background: 240 10% 4%;
+    --card: 270 2% 7%;
+    --muted: 240 4% 11%;
+    --popover: 240 10% 4%;
+    --accent: 240 4% 11%;
+    --surface-2: 240 4% 11%;
+    --surface-3: 240 4% 16%;
+    --foreground: 240 5% 90%;
+    --card-foreground: 240 5% 90%;
+    --popover-foreground: 240 5% 90%;
+    --muted-foreground: 240 4% 46%;
+    --accent-foreground: 240 5% 90%;
+    --secondary: 240 4% 11%;
+    --secondary-foreground: 240 5% 90%;
+    --primary: 48 100% 52%;
+    --primary-foreground: 0 0% 0%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 48 100% 52%;
     --destructive: 0 63% 62%;
-    --destructive-foreground: 36 14% 85%;
+    --destructive-foreground: 240 5% 90%;
     --positive: 174 42% 40%;
     --negative: 0 63% 62%;
     --warning: 38 92% 50%;
-    --radius: 0.375rem;
+    --radius: 0.125rem;
+    --panel-header-height: 32px;
+    --topbar-height: 44px;
   }
 }
 
