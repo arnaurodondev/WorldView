@@ -6,10 +6,11 @@ Tests cover:
 - Filter: non-macro_indicator dataset_type silently skipped.
 - Hash guard: no update when data is unchanged.
 - Symbol parsing: indicator code + ISO3 country extracted correctly.
+  Symbol format is ``ISO3.indicator_code`` (e.g. "USA.gdp_current_usd").
 - ISO3 → ISO2 mapping.
 - Missing country entity: returns early, no update.
 - Empty payload: no DB calls.
-- Storage failure: handled gracefully.
+- Storage failure: transient errors re-raised; JSON decode errors skipped.
 - Prometheus counter.
 - Producer called with correct topic + payload.
 - _sha256_hex and _parse_symbol helpers.
@@ -110,7 +111,7 @@ def _make_envelope(payload: list[dict[str, Any]], dataset_type: str, symbol: str
 
 
 def _make_message(
-    symbol: str = "gdp_current_usd.USA",
+    symbol: str = "USA.gdp_current_usd",  # Real S2 format: ISO3.indicator_code
     dataset_type: str = "macro_indicator",
     bucket: str = "canonical",
     key: str = "macro_indicator/usa/gdp_current_usd.ndjson",
@@ -162,7 +163,7 @@ class TestMacroIndicatorConsumerHappyPath:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -183,7 +184,7 @@ class TestMacroIndicatorConsumerHappyPath:
         producer = MagicMock()
         consumer, entity_repo, _ = _make_consumer(old_hash=None, direct_producer=producer)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -201,7 +202,7 @@ class TestMacroIndicatorConsumerHappyPath:
         """session.commit() called when metadata is updated."""
         consumer, entity_repo, session = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -230,7 +231,7 @@ class TestMacroIndicatorConsumerNoChange:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -246,20 +247,31 @@ class TestMacroIndicatorConsumerNoChange:
 
 class TestParseSymbol:
     def test_standard_symbol_parsed(self) -> None:
+        """S2 sends "ISO3.indicator_code" — country comes first."""
         from knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer import (
             _parse_symbol,
         )
 
-        code, iso3 = _parse_symbol("gdp_current_usd.USA")
+        code, iso3 = _parse_symbol("USA.gdp_current_usd")
         assert code == "gdp_current_usd"
         assert iso3 == "USA"
 
-    def test_uppercase_code_normalised_to_lower(self) -> None:
+    def test_eur_symbol_parsed(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer import (
             _parse_symbol,
         )
 
-        code, iso3 = _parse_symbol("GDPCAP.USA")
+        code, iso3 = _parse_symbol("EUR.inflation_consumer_prices_annual")
+        assert code == "inflation_consumer_prices_annual"
+        assert iso3 == "EUR"
+
+    def test_indicator_code_normalised_to_lower(self) -> None:
+        """Indicator portion is lower-cased; country preserved as-is."""
+        from knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer import (
+            _parse_symbol,
+        )
+
+        code, iso3 = _parse_symbol("USA.GDPCAP")
         assert code == "gdpcap"
         assert iso3 == "USA"
 
@@ -272,13 +284,12 @@ class TestParseSymbol:
         assert code == "nodotsymbol"
         assert iso3 == ""
 
-    def test_multiple_dots_uses_last_segment_as_country(self) -> None:
+    def test_gbr_symbol_parsed(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer import (
             _parse_symbol,
         )
 
-        # rsplit on last dot only
-        code, iso3 = _parse_symbol("current_account_balance_bop_usd.GBR")
+        code, iso3 = _parse_symbol("GBR.current_account_balance_bop_usd")
         assert code == "current_account_balance_bop_usd"
         assert iso3 == "GBR"
 
@@ -291,30 +302,42 @@ class TestMacroIndicatorConsumerIso3Mapping:
         """USA → US mapping used for entity lookup."""
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
-            asyncio.run(consumer.process_message(None, _make_message(symbol="gdp_current_usd.USA"), {}))
+            asyncio.run(consumer.process_message(None, _make_message(symbol="USA.gdp_current_usd"), {}))
 
         entity_repo.find_country_entity.assert_awaited_once_with("US")
 
     def test_gbr_mapped_to_gb(self) -> None:
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.GBR")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "GBR.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
             asyncio.run(
                 consumer.process_message(
                     None,
-                    _make_message(symbol="gdp_current_usd.GBR", key="macro_indicator/gbr/gdp.ndjson"),
+                    _make_message(symbol="GBR.gdp_current_usd", key="macro_indicator/gbr/gdp.ndjson"),
                     {},
                 )
             )
 
         entity_repo.find_country_entity.assert_awaited_once_with("GB")
+
+    def test_unknown_iso3_falls_back_to_first_two_chars(self) -> None:
+        """Unknown ISO3 code falls back to first 2 chars for entity lookup."""
+        consumer, entity_repo, _ = _make_consumer(old_hash=None)
+        consumer._storage.get_bytes = AsyncMock(
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "ZAF.gdp_current_usd")
+        )
+
+        with patch(_ENTITY_REPO, return_value=entity_repo):
+            asyncio.run(consumer.process_message(None, _make_message(symbol="ZAF.gdp_current_usd"), {}))
+
+        entity_repo.find_country_entity.assert_awaited_once_with("ZA")
 
 
 # ── Test: missing country entity ──────────────────────────────────────────────
@@ -330,7 +353,7 @@ class TestMacroIndicatorConsumerMissingCountry:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -349,7 +372,7 @@ class TestMacroIndicatorConsumerEmptyPayload:
         """Empty payload list → no DB calls."""
         consumer, entity_repo, _ = _make_consumer()
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope([], "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope([], "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -381,9 +404,21 @@ class TestMacroIndicatorConsumerEmptyPayload:
 
 
 class TestMacroIndicatorConsumerStorageError:
-    def test_storage_exception_does_not_crash(self) -> None:
-        """Storage failure → returns cleanly, no DB calls."""
+    def test_transient_storage_exception_propagates(self) -> None:
+        """Transient storage error (e.g. network) re-raised so offset is NOT committed."""
         consumer, entity_repo, _ = _make_consumer(storage_error=RuntimeError("minio down"))
+
+        with patch(_ENTITY_REPO, return_value=entity_repo):
+            with pytest.raises(RuntimeError, match="minio down"):
+                asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        entity_repo.update_metadata.assert_not_awaited()
+
+    def test_malformed_json_skipped_gracefully(self) -> None:
+        """JSON decode error (bad envelope) → skipped without raise."""
+        import json as json_mod
+
+        consumer, entity_repo, _ = _make_consumer(storage_error=json_mod.JSONDecodeError("bad json", "", 0))
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
             asyncio.run(consumer.process_message(None, _make_message(), {}))
@@ -399,7 +434,7 @@ class TestMacroIndicatorConsumerNoProducer:
         """Update proceeds even without a direct_producer configured."""
         consumer, entity_repo, _ = _make_consumer(old_hash=None, direct_producer=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -418,7 +453,7 @@ class TestMacroIndicatorConsumerPrometheus:
 
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         before = s7_macro_indicator_updates_total.labels(country="US")._value.get()
@@ -440,7 +475,7 @@ class TestMacroIndicatorConsumerPrometheus:
 
         consumer, entity_repo, _ = _make_consumer(old_hash=existing_hash, stored_macro_data=merged)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "gdp_current_usd.USA")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
         )
 
         before = s7_macro_indicator_updates_total.labels(country="US")._value.get()

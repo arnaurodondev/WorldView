@@ -17,7 +17,8 @@ class EODHDProviderSettings(BaseModel):
     # OPT-3: Cap pages fetched per fetch_all_pages() call to avoid runaway credit
     # consumption on busy news days. Each page costs 5 EODHD API credits; default 3
     # yields at most 3 x page_size articles per cycle, which covers all normal cases.
-    max_pages_per_cycle: int = 3
+    # ge=1 prevents a zero/negative value from silently truncating all ingestion.
+    max_pages_per_cycle: int = Field(default=3, ge=1, le=50)
     rate_limit_per_second: float = 10.0
 
 
@@ -174,7 +175,7 @@ class Settings(BaseSettings):
         if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
-                "Set APP_ENV != 'production' or remove the flag."
+                "Set APP_ENV != 'production' or remove the flag.",
             )
         if "postgres:postgres" in self.db_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]

@@ -358,8 +358,8 @@ class TestEconomicEventsConsumerEmptyPayload:
 
 
 class TestEconomicEventsConsumerStorageErrors:
-    def test_storage_exception_does_not_crash(self) -> None:
-        """Storage failure → process_message returns cleanly, no DB calls."""
+    def test_transient_storage_exception_propagates(self) -> None:
+        """Transient storage error re-raised so BaseKafkaConsumer does NOT commit offset."""
         consumer, event_repo, exposure_repo, entity_repo = _make_consumer(
             storage_error=RuntimeError("minio connection refused")
         )
@@ -368,6 +368,7 @@ class TestEconomicEventsConsumerStorageErrors:
             patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
             patch(_EXPOSURE_REPO, return_value=exposure_repo),
             patch(_ENTITY_REPO, return_value=entity_repo),
+            pytest.raises(RuntimeError, match="minio connection refused"),
         ):
             asyncio.run(consumer.process_message(None, _make_message(), {}))
 
@@ -399,18 +400,23 @@ class TestExtractCountryFromSymbol:
 
         assert _extract_country_from_symbol("EVENTS.US") == "US"
 
-    def test_alpha3_symbol(self) -> None:
+    def test_alpha3_symbol_mapped_to_alpha2(self) -> None:
+        """Alpha-3 codes are mapped to alpha-2 for entity lookups."""
         from knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer import (
             _extract_country_from_symbol,
         )
 
-        assert _extract_country_from_symbol("EVENTS.USA") == "USA"
+        assert _extract_country_from_symbol("EVENTS.USA") == "US"
+        assert _extract_country_from_symbol("EVENTS.JPN") == "JP"
+        assert _extract_country_from_symbol("EVENTS.CHN") == "CN"
+        assert _extract_country_from_symbol("EVENTS.GBR") == "GB"
 
     def test_eu_symbol(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer import (
             _extract_country_from_symbol,
         )
 
+        # EU is non-standard but is in the mapping (euro area)
         assert _extract_country_from_symbol("EVENTS.EU") == "EU"
 
     def test_no_dot_returns_symbol_unchanged(self) -> None:

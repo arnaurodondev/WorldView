@@ -50,8 +50,10 @@ class EntityRepository:
         No-op if the entity does not exist.
 
         Args:
+        ----
             entity_id: Target canonical entity UUID.
             updates:   Key/value pairs to merge into the existing metadata JSONB.
+
         """
         await self._session.execute(
             text("""
@@ -77,8 +79,10 @@ WHERE entity_id = :entity_id
         (hash mismatch → update triggered).
 
         Args:
+        ----
             entity_id: Target canonical entity UUID.
             key:       Top-level key inside the ``metadata`` JSONB column.
+
         """
         result = await self._session.execute(
             text("""
@@ -109,7 +113,9 @@ WHERE entity_id = :entity_id
         been seeded or the ISO-2 code is not tracked).
 
         Args:
+        ----
             iso2: ISO-3166 alpha-2 country code (e.g. ``"US"``, ``"DE"``).
+
         """
         result = await self._session.execute(
             text("""
@@ -130,8 +136,10 @@ LIMIT 1
         and ``ticker IS NOT NULL``.  Used by :class:`InsiderTransactionsWorker`
         to build the list of tickers to poll for SEC Form 4 filings.
 
-        Returns:
+        Returns
+        -------
             List of :class:`InstrumentRecord` sorted by canonical_name.
+
         """
         result = await self._session.execute(
             text("""
@@ -162,7 +170,9 @@ ORDER BY canonical_name
         Returns ``None`` if no instrument entity with that ticker is found.
 
         Args:
+        ----
             ticker: Base ticker symbol without exchange suffix (e.g. ``"AAPL"``).
+
         """
         result = await self._session.execute(
             text("""
@@ -190,8 +200,10 @@ LIMIT 1
         Only call this method for JSONB keys that store dict values.
 
         Args:
+        ----
             entity_id: Target canonical entity UUID.
             key:       Top-level key inside the ``metadata`` JSONB column.
+
         """
         result = await self._session.execute(
             text("""
@@ -224,14 +236,20 @@ WHERE entity_id = :entity_id
         entity_id (SELECT finds the existing row on the second call).
 
         Args:
+        ----
             name:           Full name of the person (e.g. ``"Tim Cook"``).
             context_ticker: Ticker of the company where the person was discovered
                             (e.g. ``"AAPL"``); stored as ``metadata["context_ticker"]``.
 
         Returns:
+        -------
             The ``entity_id`` of the found or created person entity.
+
         """
         from common.ids import new_uuid7  # type: ignore[import-untyped]
+
+        # canonical_name is VARCHAR(500) — truncate before insert to avoid DataError.
+        name = name[:500]
 
         entity_id: UUID = new_uuid7()
         # INSERT … ON CONFLICT DO NOTHING + RETURNING eliminates the SELECT-then-INSERT

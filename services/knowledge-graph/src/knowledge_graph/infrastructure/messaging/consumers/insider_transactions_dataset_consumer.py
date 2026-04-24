@@ -76,10 +76,13 @@ def is_executive_title(title: str) -> bool:
     Replicated 1:1 from the former InsiderTransactionsWorker.
 
     Args:
+    ----
         title: Insider's reported title from the EODHD Form 4 filing.
 
     Returns:
+    -------
         ``True`` when the title is on the executive whitelist.
+
     """
     normalized_upper = title.strip().upper()
 
@@ -101,7 +104,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -127,10 +130,12 @@ class InsiderTransactionsDatasetConsumer(BaseKafkaConsumer[None]):
     5. Find instrument entity by ticker; upsert ``has_executive`` (company → person).
 
     Args:
+    ----
         config:          Consumer configuration.
         session_factory: async_sessionmaker for intelligence_db (read/write).
         storage_client:  Object storage client for MinIO claim-check downloads.
         dedup_client:    Optional Valkey dedup client.
+
     """
 
     def __init__(
@@ -312,7 +317,19 @@ class InsiderTransactionsDatasetConsumer(BaseKafkaConsumer[None]):
                 return None
             envelope: dict[str, Any] = json.loads(line)
             return envelope
+        except json.JSONDecodeError as exc:
+            # Malformed JSON is a data quality issue — log and skip (non-retryable).
+            logger.warning(  # type: ignore[no-any-return]
+                "insider_transactions_consumer_malformed_envelope",
+                bucket=bucket,
+                object_key=object_key,
+                symbol=symbol,
+                error=str(exc),
+            )
+            return None
         except Exception as exc:
+            # Transient storage errors (network, timeout) — re-raise so BaseKafkaConsumer
+            # does NOT commit the offset.  The message will be redelivered on restart.
             logger.warning(  # type: ignore[no-any-return]
                 "insider_transactions_consumer_storage_error",
                 bucket=bucket,
@@ -320,7 +337,7 @@ class InsiderTransactionsDatasetConsumer(BaseKafkaConsumer[None]):
                 symbol=symbol,
                 error=str(exc),
             )
-            return None
+            raise
 
     # ------------------------------------------------------------------
     # Idempotency
@@ -336,7 +353,9 @@ class InsiderTransactionsDatasetConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        # TTL = 7 days (604,800 s) — matches the insider_transactions polling interval
+        # so a dedup key never expires before the next identical message could arrive.
+        await self._dedup_client.set(key, "1", ex=7 * 86400)
 
     # ------------------------------------------------------------------
     # Failure tracking
@@ -348,7 +367,6 @@ class InsiderTransactionsDatasetConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
