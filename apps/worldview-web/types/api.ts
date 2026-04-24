@@ -44,15 +44,19 @@ export interface WsTokenResponse {
 
 export interface Instrument {
   instrument_id: string;
-  entity_id: string; // WHY separate: entity_id ≠ instrument_id (ADR-F-12)
-  ticker: string;    // e.g., "AAPL"
-  name: string;      // e.g., "Apple Inc."
-  exchange: string;  // e.g., "NASDAQ"
-  currency: string;  // e.g., "USD"
+  entity_id: string;    // WHY separate: entity_id ≠ instrument_id (ADR-F-12)
+  ticker: string;       // e.g., "AAPL"
+  name: string;         // e.g., "Apple Inc."
+  exchange: string;     // e.g., "NASDAQ"
+  currency: string;     // e.g., "USD"
   gics_sector: string | null;
   gics_industry: string | null;
   isin: string | null;
   country: string | null;
+  // WHY description optional (not required): older instruments populated before the
+  // company-profile ingestion wave may not have a description in company_profiles.
+  // The UI handles null gracefully (shows nothing). EODHD "General.Description" field.
+  description: string | null;
 }
 
 export interface OHLCVBar {
@@ -79,6 +83,24 @@ export interface Quote {
   change_pct: number;   // percentage change
   timestamp: string;    // ISO 8601 UTC
   volume: number | null;
+  // WHY optional: freshness fields added in PLAN-0036 Wave 1 — backward compatible
+  // during rollout. Once all S9 quote routes call the new PriceSnapshot endpoint,
+  // these will be populated on every response.
+  freshness_status?: "live" | "recent" | "delayed" | "stale" | "unavailable";
+  source?: "fresh_quote" | "bulk_quote" | "intraday_5m_close" |
+           "intraday_1h_close" | "daily_close" | "stale_snapshot" | "unavailable";
+  data_as_of?: string;          // ISO 8601 UTC — when the price was valid (may differ from timestamp)
+  stale_reason?: string | null; // human-readable reason e.g. "No quote in last 15 min"
+  refresh_available?: boolean;  // whether a manual refresh can be triggered
+  refresh_cooldown_remaining_sec?: number; // seconds until next manual refresh is allowed
+}
+
+/** Response for POST /v1/instruments/{id}/refresh-price */
+export interface RefreshPriceResponse {
+  instrument_id: string;
+  status: "accepted" | "cooldown";
+  cooldown_remaining_sec?: number; // populated when status = "cooldown"
+  message: string;
 }
 
 export interface BatchQuoteResponse {
@@ -519,11 +541,34 @@ export interface EconomicCalendarResponse {
 
 // ── Briefings ─────────────────────────────────────────────────────────────
 
-export interface MorningBrief {
-  brief_id: string;
-  content: string;    // markdown
+/** Entity reference extracted from briefing context (portfolio, news, alerts) */
+export interface BriefingEntityMention {
+  entity_id: string;
+  name: string;
+  ticker: string | null;
+}
+
+/** Source that informed the briefing — deterministic, from gathered context (not LLM output) */
+export interface BriefingCitation {
+  source_type: "article" | "event" | "alert";
+  source_id: string;
+  title: string;
+  url: string | null;
+}
+
+/** Response from GET /api/v1/briefings/* — matches S8 PublicBriefingResponse */
+export interface BriefingResponse {
+  content: string;
+  risk_summary: {
+    concentration_score: number;
+    top_risk_signals: Array<{ signal_id: string; description: string }>;
+    sector_breakdown: Record<string, number>;
+  } | null;
+  entity_mentions: BriefingEntityMention[];
+  citations: BriefingCitation[];
   generated_at: string;
-  entity_mentions: Array<{ entity_id: string; name: string; ticker: string | null }>;
+  cached: boolean;
+  entity_id: string | null;
 }
 
 // ── Market Heatmap ────────────────────────────────────────────────────────

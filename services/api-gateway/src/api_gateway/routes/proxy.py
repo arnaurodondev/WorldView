@@ -16,12 +16,14 @@ from api_gateway.clients import (
     get_relevant_news,
     get_top_movers,
 )
-from api_gateway.jwt_utils import issue_public_jwt
+from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
+from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 router = APIRouter(prefix="/v1")
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _clients(request: Request) -> ServiceClients:
@@ -30,20 +32,31 @@ def _clients(request: Request) -> ServiceClients:
 
 
 def _auth_headers(request: Request) -> dict[str, str]:
-    """Extract auth headers for downstream services.
+    """Issue a fresh RS256 internal JWT for a single downstream call.
 
-    Forwards only ``X-Internal-JWT`` set by ``InternalJWTIssuerMiddleware``.
-    Backends extract tenant_id/user_id from the JWT payload via their own
-    InternalJWTMiddleware (PRD-0025). Legacy X-Tenant-Id / X-User-Id headers
-    are no longer forwarded (F-MAJOR-013 remediation).
+    Called once per downstream request (not shared across parallel calls) so
+    that each JWT has a unique JTI — this prevents ``InternalJWTMiddleware``
+    on backend services from raising "Token replay detected" when a single
+    gateway request fans out to multiple backend calls in parallel.
+
+    Falls back to reading the pre-issued ``X-Internal-JWT`` header if RSA keys
+    are not configured (e.g. unit tests that don't run the full lifespan).
     """
-    headers: dict[str, str] = {}
-    # Forward RS256 internal JWT issued by InternalJWTIssuerMiddleware
-    # F-014: Starlette headers are case-insensitive; single lookup suffices
+    user = getattr(request.state, "user", None)
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid = getattr(request.app.state, "rsa_kid", None)
+    if user is not None and private_key is not None and kid is not None:
+        token = issue_user_jwt(
+            user_id=user.get("user_id", ""),
+            tenant_id=user.get("tenant_id", ""),
+            oidc_sub=user.get("sub", ""),
+            private_key=private_key,
+            kid=kid,
+        )
+        return {"X-Internal-JWT": token}
+    # Fallback: read the pre-issued JWT (tests without RSA keys / system routes)
     internal_jwt = request.headers.get("X-Internal-JWT")
-    if internal_jwt:
-        headers["X-Internal-JWT"] = internal_jwt
-    return headers
+    return {"X-Internal-JWT": internal_jwt} if internal_jwt else {}
 
 
 def _system_headers(request: Request) -> dict[str, str]:
@@ -70,13 +83,17 @@ def _system_headers(request: Request) -> dict[str, str]:
 
 @router.get("/companies/{company_id}/overview")
 async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
-    """Composed endpoint: fundamentals + OHLCV chart + latest news.
+    """Composed endpoint: instrument + quote + OHLCV + (optional) fundamentals.
 
-    Forwards ``X-Internal-JWT`` to all downstream calls so S3 and S5 can
-    authenticate the request via InternalJWTMiddleware.
+    Passes a JWT factory so each of the 4 parallel downstream calls gets a fresh
+    JWT with a unique JTI, preventing replay detection on market-data.
     """
     try:
-        return await get_company_overview(_clients(request), company_id, headers=_auth_headers(request))
+        return await get_company_overview(
+            _clients(request),
+            company_id,
+            make_headers=lambda: _auth_headers(request),
+        )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -560,56 +577,331 @@ def _portfolio_headers(request: Request) -> dict[str, str]:
 async def get_ohlcv(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/ohlcv/{instrument_id} → S3 Market Data.
 
-    Requires authentication. Forwards query parameters (period, from, to, etc.)
-    to S3 for OHLCV bar data retrieval.
+    Requires authentication. Forwards query parameters to S3 for OHLCV bar
+    data retrieval.
+
+    Default ``start`` date injection: S3 accepts ``start``/``end`` date params
+    (not a bare row-count limit).  When the frontend omits ``start``, we inject
+    a sensible look-back window based on the requested timeframe so the chart
+    always gets enough history without returning the entire multi-year dataset:
+
+      - 1m / 5m intraday  → 3 days back
+      - 1h hourly          → 30 days back
+      - 1d / 1w / 1M daily → 90 days back  (default when timeframe is absent)
+
+    The frontend can always override by passing an explicit ``start`` parameter.
     """
+    from datetime import UTC, datetime, timedelta
+
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+
+    params = dict(request.query_params)
+
+    # Inject a default start date only when the caller has not supplied one.
+    # This prevents returning the entire historical dataset (potentially thousands
+    # of bars) when the frontend just wants a chart view.
+    # Use UTC-aware datetime per project UTC-only convention (CLAUDE.md Rule 7).
+    if "start" not in params:
+        timeframe = params.get("timeframe", "1d")
+        if timeframe in ("1m", "5m"):
+            lookback_days = 3
+        elif timeframe == "1h":
+            lookback_days = 30
+        else:
+            # 1d, 1w, 1M and any unknown timeframe: 90 calendar days ≈ 63 trading days
+            lookback_days = 90
+        params["start"] = (datetime.now(tz=UTC) - timedelta(days=lookback_days)).date().isoformat()
+
     resp = await clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params=dict(request.query_params),
+        params=params,
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> dict[str, Any]:
+    """Map a S3 PriceSnapshotResponse → frontend Quote shape.
+
+    WHY here and not in S3: S9 owns the frontend contract. S3 returns its domain
+    model (PriceSnapshot); S9 shapes it to the Quote interface the frontend expects.
+
+    WHY price from snapshot.price not snap.last: PriceSnapshotResolver already
+    chose the best available price via the fallback chain (FRESH_QUOTE →
+    BULK_QUOTE → INTRADAY → DAILY_CLOSE → STALE). We trust that resolution.
+    """
+
+    price_str = snap.get("price") or "0"
+    try:
+        price = float(price_str)
+    except (ValueError, TypeError):
+        price = 0.0
+
+    change_str = snap.get("price_change")
+    try:
+        change = float(change_str) if change_str is not None else 0.0
+    except (ValueError, TypeError):
+        change = 0.0
+
+    change_pct_str = snap.get("price_change_pct")
+    try:
+        change_pct = float(change_pct_str) if change_pct_str is not None else 0.0
+    except (ValueError, TypeError):
+        change_pct = 0.0
+
+    return {
+        "instrument_id": snap.get("instrument_id", instrument_id),
+        "ticker": snap.get("symbol", ""),
+        "price": price,
+        "change": change,
+        "change_pct": change_pct,
+        "timestamp": snap.get("timestamp", ""),
+        "volume": None,  # PriceSnapshot does not carry volume — that's in OHLCV
+        # Freshness fields (PLAN-0036 Wave 1 — optional on older clients)
+        "freshness_status": snap.get("freshness_status"),
+        "source": snap.get("source"),
+        "data_as_of": snap.get("timestamp"),  # alias for clarity in the frontend
+        "stale_reason": snap.get("stale_reason"),
+        "refresh_available": snap.get("refresh_available", True),
+        "refresh_cooldown_remaining_sec": snap.get("refresh_cooldown_remaining_sec", 0),
+    }
+
+
+async def _get_enriched_quote(
+    instrument_id: str,
+    clients: Any,
+    headers: dict[str, str],
+) -> tuple[bytes, int]:
+    """Try S3's PriceSnapshot endpoint; fall back to legacy quote endpoint.
+
+    Returns (response_body_bytes, http_status_code).
+
+    WHY try/fallback: PriceSnapshot endpoint (GET /internal/v1/price/{id}) is
+    new in Wave 1.  During rollout, or if S3 has not yet ingested the instrument,
+    it returns 404 or 503.  We fall back to the legacy /api/v1/quotes/{id} route
+    so the UI is never left with an empty response.
+    """
+    import json as _json
+
+    # 1. Try the new PriceSnapshot endpoint (PLAN-0036 W1-9)
+    snap_resp = await clients.market_data.get(
+        f"/internal/v1/price/{instrument_id}",
+        headers=headers,
+    )
+    if snap_resp.status_code == 200:
+        try:
+            snap = snap_resp.json()
+            quote = _map_price_snapshot_to_quote(snap, instrument_id)
+            return _json.dumps(quote).encode(), 200
+        except Exception as exc:
+            logger.warning("price_snapshot_parse_failed", instrument_id=instrument_id, error=str(exc))
+            # fall through to legacy path
+
+    # 2. Fall back to legacy quote endpoint (backward compat during rollout)
+    legacy_resp = await clients.market_data.get(
+        f"/api/v1/quotes/{instrument_id}",
+        headers=headers,
+    )
+    return legacy_resp.content, legacy_resp.status_code
 
 
 @router.get("/quotes/{instrument_id}")
 async def get_quote(instrument_id: str, request: Request) -> Any:
-    """Proxy GET /api/v1/quotes/{instrument_id} → S3 Market Data.
+    """Proxy GET /api/v1/quotes/{instrument_id} → S3 PriceSnapshot (with fallback).
 
-    Requires authentication. Returns the latest quote snapshot for the instrument.
+    Requires authentication. Returns the latest quote enriched with freshness fields
+    when the S3 PriceSnapshot endpoint is available (PLAN-0036 Wave 1). Falls back
+    to the legacy S3 quote endpoint during rollout or if no snapshot exists yet.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.market_data.get(
-        f"/api/v1/quotes/{instrument_id}",
-        headers=headers,
-    )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    body, status = await _get_enriched_quote(instrument_id, clients, headers)
+    return Response(content=body, status_code=status, media_type="application/json")
 
 
 @router.post("/quotes/batch")
 async def get_quotes_batch(request: Request) -> Any:
-    """Proxy POST /api/v1/quotes/batch → S3 Market Data.
+    """Proxy POST /api/v1/quotes/batch → S3 PriceSnapshot batch (with fallback).
 
-    Requires authentication. Forwards the request body containing a list of
-    instrument_ids to S3 for batch quote retrieval.
+    Requires authentication. Fetches enriched quotes for each instrument_id,
+    attempting the PriceSnapshot endpoint first (PLAN-0036 Wave 1) with graceful
+    fallback to the legacy batch quote endpoint.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
-    body = await request.body()
+    import json as _json
+
+    body_bytes = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.market_data.post(
-        "/api/v1/quotes/batch",
-        content=body,
+
+    # 1. Try the new PriceSnapshot batch endpoint
+    snap_resp = await clients.market_data.post(
+        "/internal/v1/price/batch",
+        content=body_bytes,
         headers={"Content-Type": "application/json", **headers},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    if snap_resp.status_code == 200:
+        try:
+            snap_list = snap_resp.json()
+            # The batch endpoint returns a JSON array of PriceSnapshotResponse objects.
+            # If the response is not a list (e.g., legacy error dict), fall through.
+            if isinstance(snap_list, list):
+                quotes: dict[str, Any] = {}
+                for snap in snap_list:
+                    if not isinstance(snap, dict):
+                        continue
+                    iid = snap.get("instrument_id", "")
+                    if iid:
+                        quotes[iid] = _map_price_snapshot_to_quote(snap, iid)
+                return Response(
+                    content=_json.dumps({"quotes": quotes}).encode(),
+                    status_code=200,
+                    media_type="application/json",
+                )
+        except Exception as exc:
+            logger.warning("price_snapshot_batch_parse_failed", error=str(exc))
+            # fall through to legacy path
+
+    # 2. Fall back to legacy batch endpoint
+    legacy_resp = await clients.market_data.post(
+        "/api/v1/quotes/batch",
+        content=body_bytes,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(
+        content=legacy_resp.content,
+        status_code=legacy_resp.status_code,
+        media_type="application/json",
+    )
+
+
+# ── Manual price refresh (PLAN-0036 W1-11) ────────────────────────────────────
+
+# WHY 300s cooldown: prevents a single user from hammering EODHD via the manual
+# refresh button. Each instrument gets a per-instrument 5-minute gate. This is
+# independent of the automatic cadence — a user pressing refresh ALSO counts
+# against the monthly quota (quota check happens in S2's ExecuteTaskUseCase).
+_REFRESH_COOLDOWN_SECONDS = 300
+
+
+@router.post("/instruments/{instrument_id}/refresh-price", status_code=200)
+async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
+    """Trigger a manual price refresh for a single instrument.
+
+    Requires authentication. Enforces a per-instrument 5-minute cooldown via
+    Valkey (key: ``refresh_cooldown:{instrument_id}``) to prevent EODHD credit
+    exhaustion from rapid user clicks.
+
+    Returns 202 when the refresh is accepted (S2 will fetch soon).
+    Returns 429 when on cooldown, with ``cooldown_remaining_sec`` in the body.
+
+    WHY proxy to S2: market-ingestion (S2) owns the EODHD fetch pipeline.
+    S9 just gates the request and delegates; S9 has no EODHD credentials.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    import json as _json
+    import time
+
+    clients = _clients(request)
+    headers = _auth_headers(request)
+
+    # ── Cooldown check via Valkey ─────────────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    cooldown_key = f"refresh_cooldown:{instrument_id}"
+
+    if valkey is not None:
+        try:
+            cooldown_val = await valkey.get(cooldown_key)
+        except Exception as exc:
+            logger.warning("refresh_cooldown_check_failed", instrument_id=instrument_id, error=str(exc))
+            cooldown_val = None  # fail-open: if Valkey is down, allow the refresh
+
+        if cooldown_val is not None:
+            # Decode remaining TTL: we stored epoch of expiry
+            try:
+                expiry_ts = int(cooldown_val)
+                remaining = max(0, expiry_ts - int(time.time()))
+            except (ValueError, TypeError):
+                remaining = _REFRESH_COOLDOWN_SECONDS  # conservative default
+
+            if remaining > 0:
+                return Response(
+                    content=_json.dumps(
+                        {
+                            "instrument_id": instrument_id,
+                            "status": "cooldown",
+                            "cooldown_remaining_sec": remaining,
+                            "message": f"Manual refresh available in {remaining}s",
+                        }
+                    ).encode(),
+                    status_code=429,
+                    media_type="application/json",
+                )
+
+    # ── Resolve instrument symbol for S2 trigger ─────────────────────────────
+    # S2's trigger endpoint needs symbol + exchange; resolve from S3.
+    instr_resp = await clients.market_data.get(
+        f"/api/v1/instruments/{instrument_id}",
+        headers=headers,
+    )
+    if instr_resp.status_code != 200:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument {instrument_id} not found",
+        )
+
+    instr = instr_resp.json()
+    symbol = instr.get("symbol", "")
+    exchange = instr.get("exchange", "")
+
+    # ── Trigger S2 fetch ──────────────────────────────────────────────────────
+    trigger_body = _json.dumps(
+        {
+            "symbols": [symbol],
+            "exchange": exchange or None,
+            "dataset_types": ["quotes"],
+            "priority": "high",
+        }
+    ).encode()
+
+    s2_resp = await clients.market_ingestion.post(
+        "/api/v1/ingest/trigger",
+        content=trigger_body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+
+    # ── Set cooldown regardless of S2 outcome ────────────────────────────────
+    # WHY set cooldown even on S2 failure: prevents hammering S2 when it's down.
+    if valkey is not None:
+        try:
+            expiry_ts = int(time.time()) + _REFRESH_COOLDOWN_SECONDS
+            await valkey.set(cooldown_key, str(expiry_ts), ttl=_REFRESH_COOLDOWN_SECONDS)
+        except Exception as exc:
+            logger.warning("refresh_cooldown_set_failed", instrument_id=instrument_id, error=str(exc))
+            # fail-open: cooldown is best-effort
+
+    if s2_resp.status_code >= 500:
+        raise HTTPException(status_code=503, detail="Ingestion service unavailable")
+
+    return Response(
+        content=_json.dumps(
+            {
+                "instrument_id": instrument_id,
+                "status": "accepted",
+                "message": "Price refresh queued — data will update within 30 seconds",
+            }
+        ).encode(),
+        status_code=202,
+        media_type="application/json",
+    )
 
 
 # NOTE: /fundamentals/economic-calendar MUST be registered before /fundamentals/{instrument_id}
@@ -660,12 +952,87 @@ async def get_fundamentals(instrument_id: str, request: Request) -> Any:
 # ── Entity Graph + Contradictions (PRD-0028 Wave S9-1) ───────────────────────
 
 
+def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
+    """Transform S7 GraphNeighborhoodResponse → frontend EntityGraph format.
+
+    S7 returns: {center, relations, entities}
+    Frontend expects: {entity_id, nodes, edges}
+
+    WHY transform here (not in S7): S7 owns the domain model; S9 owns the
+    presentation contract. This transformation is a BFF (Backend For Frontend)
+    concern — S9 is the composition layer whose job is to shape data for the UI.
+    Changing S7's response would couple the knowledge-graph domain to a single
+    frontend's rendering requirements.
+
+    Resilience: all field accesses use .get() with safe defaults so partial or
+    missing fields from S7 never raise KeyError / TypeError in the gateway.
+    """
+    center = raw.get("center") or {}
+    relations = raw.get("relations") or []
+    entities = raw.get("entities") or {}
+
+    entity_id = str(center.get("entity_id") or "")
+
+    # Build nodes: center node first (size=2 makes it visually prominent in the
+    # Cytoscape.js graph), then all related entities (size=1).
+    nodes: list[dict[str, Any]] = []
+    if entity_id:
+        nodes.append(
+            {
+                "id": entity_id,
+                "label": center.get("canonical_name") or "",
+                "type": center.get("entity_type") or "unknown",
+                "size": 2,  # Center node rendered larger than neighbors
+            }
+        )
+
+    for eid, entity_data in entities.items():
+        if eid == entity_id:
+            # Skip if S7 also includes the center in the entities dict
+            continue
+        nodes.append(
+            {
+                "id": str(entity_data.get("entity_id") or eid),
+                "label": entity_data.get("canonical_name") or "",
+                "type": entity_data.get("entity_type") or "unknown",
+                "size": 1,
+            }
+        )
+
+    # Build edges from S7 relations; skip any relation missing required fields
+    # (relation_id / subject / object) rather than emitting a malformed edge.
+    edges: list[dict[str, Any]] = []
+    for rel in relations:
+        rel_id = str(rel.get("relation_id") or "")
+        src = str(rel.get("subject_entity_id") or "")
+        tgt = str(rel.get("object_entity_id") or "")
+        if not rel_id or not src or not tgt:
+            continue
+        edges.append(
+            {
+                "id": rel_id,
+                "source": src,
+                "target": tgt,
+                "label": rel.get("canonical_type") or "",
+                "weight": float(rel.get("confidence") or 0.5),
+            }
+        )
+
+    return {"entity_id": entity_id, "nodes": nodes, "edges": edges}
+
+
 @router.get("/entities/{entity_id}/graph")
 async def get_entity_graph(entity_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
     Requires authentication. Forwards query parameters (depth, etc.) for
     entity relationship graph traversal.
+
+    WHY transform instead of raw proxy: S7 returns GraphNeighborhoodResponse
+    {center, relations, entities} but the frontend Cytoscape.js renderer
+    expects EntityGraph {entity_id, nodes, edges}. _transform_graph_response()
+    bridges the mismatch at the BFF layer so neither S7 nor the frontend needs
+    to change.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -676,7 +1043,18 @@ async def get_entity_graph(entity_id: str, request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    # Pass non-2xx responses through unchanged (404 = entity not found, etc.)
+    if resp.status_code >= 400:
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    import json as _json
+
+    raw: dict[str, Any] = resp.json()
+    transformed = _transform_graph_response(raw)
+    return Response(
+        content=_json.dumps(transformed).encode(),
+        status_code=resp.status_code,
+        media_type="application/json",
+    )
 
 
 @router.get("/entities/{entity_id}/contradictions")
@@ -1033,7 +1411,7 @@ async def market_heatmap(request: Request) -> dict[str, Any]:
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        return await get_market_heatmap(_clients(request), headers=_auth_headers(request))
+        return await get_market_heatmap(_clients(request), make_headers=lambda: _auth_headers(request))
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 

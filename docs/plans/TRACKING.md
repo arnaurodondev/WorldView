@@ -11,7 +11,7 @@
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
-| PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | feat/content-ingestion-wave-a1 | in-progress | 1/4 | Wave 0 done (43 tests pass) | 2026-04-24 |
+| PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | feat/content-ingestion-wave-a1 | in-progress | 2/4 | Wave 1 done (49 tests pass, circuit breaker + PriceSnapshot + S9 enrichment) | 2026-04-24 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     )
     from market_data.application.use_cases.query_quotes import GetQuotesBatchUseCase, GetQuoteUseCase
     from market_data.application.use_cases.query_securities import GetSecurityUseCase, ListSecuritiesUseCase
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
 
 
 # ── Core infrastructure deps ──────────────────────────────────────────────────
@@ -73,6 +74,11 @@ async def get_quote_cache(request: Request) -> QuoteCachePort:
 async def get_screen_fields_cache(request: Request) -> ScreenFieldsCachePort:
     """Return the ScreenFieldsCachePort bound to this application instance."""
     return request.app.state.screen_fields_cache  # type: ignore[no-any-return]
+
+
+async def get_price_snapshot_cache(request: Request) -> PriceSnapshotCache:
+    """Return the PriceSnapshotCache bound to this application instance."""
+    return request.app.state.price_snapshot_cache  # type: ignore[no-any-return]
 
 
 # ── Instrument use case deps ──────────────────────────────────────────────────
