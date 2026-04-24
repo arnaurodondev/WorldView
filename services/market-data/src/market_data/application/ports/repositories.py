@@ -175,6 +175,30 @@ class OHLCVRepository(ABC):
     async def get_date_range(self, instrument_id: str, timeframe: Timeframe) -> tuple[date, date] | None:
         """Return ``(min_date, max_date)`` for the instrument/timeframe, or ``None``."""
 
+    @abstractmethod
+    async def bulk_upsert_derived(self, bars: list[OHLCVBar]) -> None:
+        """Upsert derived bars (is_derived=True) unconditionally.
+
+        Derived bars are computed locally from finer-grained bars (e.g. weekly
+        aggregated from daily).  They are always overwritten on recalculation
+        regardless of provider_priority — the local derivation IS the source of
+        truth for these timeframes (PLAN-0036 W2-4).
+        """
+
+    @abstractmethod
+    async def find_derived(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        *,
+        limit: int = 200,
+    ) -> list[OHLCVBar]:
+        """Return derived bars for the given instrument/timeframe, sorted descending.
+
+        Used by ``GetOrDeriveOHLCVBarsUseCase`` to serve pre-computed weekly /
+        monthly bars without an EODHD call (PLAN-0036 W2-5).
+        """
+
 
 class QuoteRepository(ABC):
     """Read/write access to the ``quotes`` table."""

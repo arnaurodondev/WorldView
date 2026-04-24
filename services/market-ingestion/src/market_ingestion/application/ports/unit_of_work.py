@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         TaskRepository,
         WatermarkRepository,
     )
+    from market_ingestion.application.ports.symbol_tier_repository import SymbolTierRepositoryPort
 
 
 class ReadOnlyUnitOfWork(ABC):
@@ -99,6 +100,11 @@ class UnitOfWork(ABC):
     @abstractmethod
     def outbox(self) -> OutboxRepository:
         """Outbox repository."""
+
+    @property
+    @abstractmethod
+    def symbol_tiers(self) -> SymbolTierRepositoryPort:
+        """Symbol tier repository."""
 
     async def __aenter__(self) -> UnitOfWork:
         return self
