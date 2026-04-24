@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # could be attacker-controlled; it must not appear in the default allowlist.
     cors_origins: str = "http://localhost:5173,http://localhost:3001"
 
+    # Environment guard — SEC-003: dev-login is blocked when app_env="production"
+    # regardless of OIDC configuration, preventing accidental exposure in prod.
+    # Valid values: "development", "staging", "production"
+    app_env: str = "development"
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"
     log_level: str = "INFO"

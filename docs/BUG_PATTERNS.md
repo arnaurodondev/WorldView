@@ -23,9 +23,21 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-192](#bp-192) | Kafka / enriched event | S6 `_enqueue_enriched` sends only counts (relation_count, claim_count) in `nlp.article.enriched.v1` — NOT actual extracted data arrays; S7 reads empty lists, graph materialization is a no-op | `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py:759`; S7 enriched_consumer |
+| [BP-193](#bp-193) | Frontend / SSE parsing | Frontend SSE token parser reads `parsed.token` but S8 emitter sends `{"text": ...}` — chat streaming produces blank output | `apps/worldview-web/components/shell/AskAiPanel.tsx`; `app/(app)/chat/page.tsx`; `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` |
+| [BP-194](#bp-194) | Frontend / API contract | Chat page sends `{ question }` but S8 `ChatRequestSchema` expects `{ message }` — 422 validation error on every chat submission | `apps/worldview-web/app/(app)/chat/page.tsx:452`; `services/rag-chat/src/rag_chat/api/schemas.py` |
+| [BP-195](#bp-195) | Auth / middleware bypass | Alert service `/admin` in `_SKIP_PREFIXES` bypasses InternalJWTMiddleware — admin endpoints accessible without JWT from any network-reachable client | `services/alert/src/alert/infrastructure/middleware/internal_jwt.py:40` |
+| [BP-196](#bp-196) | Frontend / WebSocket | `isMountedRef` in AlertStreamContext set to false in cleanup but never reset to true on effect re-run — after first token refresh, WebSocket reconnection permanently broken for rest of session | `apps/worldview-web/contexts/AlertStreamContext.tsx:102,222` |
+| [BP-197](#bp-197) | Test / JWKS drift | PRD-0025 added JWKS readiness check to `/readyz` (F-003B) but health tests not updated — tests fail because `_internal_jwt_public_key` is not set on `app.state` | `services/portfolio/tests/test_health.py`; `services/nlp-pipeline/tests/conftest.py`; any service health test after PRD-0025 |
+| [BP-198](#bp-198) | Test / JWT middleware | Setting `app.state._internal_jwt_public_key = "fake-test-key"` globally in test fixture breaks `skip_verification=True` path — middleware finds non-None key and tries RS256 decode with invalid key → 401 on all protected routes | `services/market-ingestion/tests/api/test_routes.py` fixture; any service with `InternalJWTMiddleware` and `skip_verification=True` |
 | [BP-184](#bp-184) | Scheduler / provider registry | S2 scheduler creates tasks for providers whose adapters are not registered (`ProviderRegistry`) — tasks burn all retries and permanently FAIL; creates noise in failed-task counts | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py`; any service whose scheduler creates tasks without validating provider registration |
 | [BP-185](#bp-185) | Content ingestion / rate limiting | S4 `TokenBucket` built fresh per `_build_adapter()` call — in-memory, not shared across worker processes; multiple workers multiply effective rate limit (N workers × 55 req/min for Finnhub = N×55 effective) | `services/content-ingestion/src/content_ingestion/infrastructure/workers/worker.py:_build_adapter()`; any service with per-call rate limiter construction under concurrent workers |
 | [BP-186](#bp-186) | Content ingestion / startup | S4 missing startup validators for `finnhub_api_key`, `newsapi_key`, `eodhd_api_key` — empty keys: task creation succeeds, HTTP 401 at runtime, task retries then FAILS with no early operator warning | `services/content-ingestion/src/content_ingestion/config.py`; any service with optional API keys whose absence silently degrades ingestion |
+| [BP-187](#bp-187) | Auth / config safety | `skip_verification=True` has no production safety guard — disables JWT signature validation entirely when JWKS also fails | All 9 service `config.py` files with `internal_jwt_skip_verification` field |
+| [BP-188](#bp-188) | Auth / startup | JWKS startup failure creates zombie pods — service starts with `_public_key=None`, all authenticated requests return 503 but readyz passes | All 9 backend services with `InternalJWTMiddleware.startup()` |
+| [BP-189](#bp-189) | Canonical serializer / OHLCV | `CanonicalOHLCVBar.volume` coerces `None` to `0` — null volume signal permanently lost; downstream analytics contaminated | `libs/contracts/src/contracts/canonical/ohlcv.py`; `services/market-data/` storage boundary |
+| [BP-190](#bp-190) | Tenant isolation / NLP | `entity_mentions` table has no `tenant_id` column — cross-tenant entity intelligence leakage when multi-tenancy is active | `services/nlp-pipeline/` entity_mentions table + news query layer |
+| [BP-191](#bp-191) | Tenant isolation / API | `GET /entities/{id}/articles` accepts arbitrary UUID with no watchlist ownership check — cross-tenant entity enumeration | `services/nlp-pipeline/src/nlp_pipeline/api/routes/signals.py`; any endpoint accepting entity_id without tenant scoping |
 | [BP-182](#bp-182) | Canonical serializer / OHLCV | `int() argument must be a string, a bytes-like object or a real number, not 'NoneType'` — EODHD `volume: null` bars crash `CanonicalOHLCVBar.from_dict()`, task marked FAILED | `libs/contracts/src/contracts/canonical/ohlcv.py`; any `from_dict` with `int(d["volume"])` |
 | [BP-176](#bp-176) | Observability / Alertmanager | Alertmanager receiver has no notification channels — all alerts fire and are silently discarded | `infra/alertmanager/alertmanager.yml` default receiver; any new Alertmanager config |
 | [BP-175](#bp-175) | Observability / Prometheus | Prometheus scrape target uses host-mapped port instead of container-internal port — `target: "service:8001"` fails because within Docker network containers expose their internal port, not the host-mapped one | `infra/prometheus/prometheus.yml` scrape targets; any new service added to Prometheus scrape config |
@@ -5915,3 +5927,119 @@ When adding a new lib import to a service, check the service Dockerfile immediat
 - Every service with an optional external API key that enables a data source MUST emit a WARNING at startup if the key is empty or equals a known-placeholder value (`""`, `"demo"`, `"YOUR_KEY_HERE"`).
 - Pattern: `@model_validator(mode="after")` in `Settings` — same pattern as `_warn_default_db_credentials` already used in S2 and S4.
 - See also: BP-140 (settings fields defined but never read — operators believe they can tune behaviour via env vars but the code ignores them).
+
+---
+
+## BP-187 — `skip_verification` Has No Production Safety Guard
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (QA finding F-007) |
+| **Severity** | HIGH — when `internal_jwt_skip_verification=True` AND `_public_key` is `None`, `jwt.decode()` runs with `verify_signature=False`, accepting any token regardless of signature, issuer, or expiry. Effectively disables authentication. |
+| **Affected areas** | All 9 backend service `config.py` files: `alert`, `rag-chat`, `market-data`, `content-ingestion`, `market-ingestion`, `portfolio`, `nlp-pipeline`, `content-store`, `knowledge-graph` |
+| **Root cause** | `internal_jwt_skip_verification: bool = False` exists in all 9 service configs with no environment-aware guard. An operator could set it to `True` in production (e.g. during a JWKS outage), fully disabling auth. The flag was intended for local development and test environments only. |
+| **Symptom** | No visible symptom — silent auth bypass. Any JWT (expired, wrong issuer, forged) is accepted. Only detectable by security audit or auth boundary testing. |
+| **Fix** | Added `@model_validator(mode="after")` named `_guard_skip_verification` to all 9 service `config.py` files. When `APP_ENV=production` and `internal_jwt_skip_verification=True`, the validator raises `ValueError` at startup, preventing the service from starting with an unsafe configuration. Tests use `Settings(internal_jwt_skip_verification=True)` directly without setting `APP_ENV`, so they are unaffected. |
+
+### Prevention
+
+- Any boolean flag that bypasses a security control MUST have an environment-aware guard that rejects the unsafe value in production.
+- Pattern: `@model_validator(mode="after")` that reads `os.getenv("APP_ENV")` and raises `ValueError` for unsafe combinations.
+- See also: BP-161 (unannotated path parameters allowing tenant impersonation — same theme of auth bypass via misconfiguration).
+
+---
+
+## BP-188 — JWKS Startup Failure Creates Zombie Pods
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (QA finding F-003) |
+| **Severity** | HIGH — service starts and passes readiness probes but cannot authenticate any request. All authenticated endpoints return 503. Operators see a "healthy" service that is fully non-functional. |
+| **Affected areas** | All 9 backend services with `InternalJWTMiddleware.startup()`: `alert`, `rag-chat`, `market-data`, `content-ingestion`, `market-ingestion`, `portfolio`, `nlp-pipeline`, `content-store`, `knowledge-graph` |
+| **Root cause** | `InternalJWTMiddleware.startup()` retries 3 times to fetch the JWKS public key from S9 (`GET /internal/jwks`). After all retries fail, it logs an ERROR and **returns without raising** — `_public_key` remains `None`. Health endpoints (`/healthz`, `/readyz`) do not check JWKS state, so readiness probes pass. Docker restart policies are not triggered because the process is running. |
+| **Symptom** | Service appears healthy in Docker/K8s. All authenticated API requests return `503 Service Unavailable` (the middleware sees `_public_key is None` and returns 503). No crash, no restart, no alert — a zombie pod. |
+| **Fix** | Two changes: (1) `startup()` now raises `RuntimeError` after all retries are exhausted, crashing the process and triggering Docker's restart policy. (2) `/readyz` endpoints in all 9 services now check that `app.state._internal_jwt_public_key` is not `None` and return 503 if JWKS is not loaded. |
+
+### Prevention
+
+- Any middleware that loads external state at startup (keys, certificates, config) MUST raise on failure — never log-and-continue.
+- `/readyz` endpoints MUST check all critical runtime dependencies, including cryptographic key availability.
+- Long-term: extract `InternalJWTMiddleware` from 9 copy-pasted files into `libs/auth-middleware` to ensure fixes are applied once.
+- See also: BP-159 (middleware instance mismatch — `app.add_middleware()` creates a different instance than the one calling `startup()`).
+
+---
+
+## BP-189 — Null Volume Coercion in CanonicalOHLCVBar
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (QA finding F-002; extends BP-182) |
+| **Severity** | MEDIUM — `volume=0` is semantically different from `volume=None` (no reported volume). Coercing `None` to `0` contaminates average daily volume calculations, abnormal volume signals (PRD-0020 Block 5 price_impact), and backtesting across international ETFs with data gaps. |
+| **Affected areas** | `libs/contracts/src/contracts/canonical/ohlcv.py:CanonicalOHLCVBar`; `services/market-data/` storage layer (`PgOHLCVRepository.bulk_upsert_with_priority`); any downstream consumer that distinguishes zero-volume from unreported-volume bars |
+| **Root cause** | BP-182 fixed the crash (`int(None)` → `TypeError`) by coercing `None` to `0`. This preserved the bar but permanently lost the null-volume signal. `CanonicalQuote` already used `volume: int | None` — an internal inconsistency. |
+| **Symptom** | No crash (BP-182 is fixed). Instead, silent data quality degradation: zero-height volume bars on charts; `PriceImpactLabellingWorker` receives `Decimal(0)` instead of `None` for unreported volume; average volume deflated by false zeros. |
+| **Fix** | Changed `CanonicalOHLCVBar.volume` type from `int` to `int | None`. `from_dict()` now returns `None` when the source provides null volume. DB column `ohlcv_bars.volume` remains `NOT NULL server_default="0"` (avoids high-risk hypertable migration). `None → 0` coercion is localized to `PgOHLCVRepository.bulk_upsert_with_priority` at the storage boundary. `OHLCVBarResponse.volume` on the API surface is `int | None`. |
+
+### Prevention
+
+- When a provider field can be absent or null, the canonical model MUST preserve the null signal (use `T | None`). Coercion to a default value should happen at the storage boundary, not in the canonical model.
+- Follow the existing `CanonicalQuote.volume: int | None` pattern.
+- Document historical data caveats: bars coerced to `volume=0` before this fix are permanently ambiguous — they may represent true zero-volume or unreported volume.
+- See also: BP-182 (the original crash fix), BP-138 (same `float(None)` pattern in Kafka consumers).
+
+---
+
+## BP-190 — Missing tenant_id Filter in NLP Pipeline News Queries
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (QA finding F-009) |
+| **Severity** | CRITICAL (multi-tenancy) — `get_entity_articles()` queries `entity_mentions` with zero `WHERE tenant_id` predicate. When multi-tenancy is active, any authenticated user can access articles linked to any entity, revealing other tenants' watchlist composition. |
+| **Affected areas** | `services/nlp-pipeline/` — `entity_mentions` table, `news_query.py` query layer, `signals.py` entity articles route |
+| **Root cause** | PRD-0025 introduced `tenant_id` to all services, but the NLP pipeline's `entity_mentions` table predates multi-tenancy and had no `tenant_id` column. The query layer was never updated to filter by tenant. |
+| **Symptom** | No visible symptom in single-tenant mode. In multi-tenant mode: cross-tenant data leakage via `GET /api/v1/entities/{id}/articles`. |
+| **Fix** | Added nullable `tenant_id UUID` column to `entity_mentions` (Alembic migration). Updated the article consumer to stamp `tenant_id` from the Kafka event envelope. Updated `get_entity_articles()` to filter `AND (em.tenant_id IS NULL OR em.tenant_id = :tenant_id)` — the `IS NULL` fallback ensures legacy rows remain visible. Added index on `(tenant_id, resolved_entity_id)`. See ADR-TENANT-001 for the full scoping decision. |
+
+### Prevention
+
+- When introducing `tenant_id` to a platform (PRD-0025), audit ALL tables and queries in ALL services for tenant isolation gaps — not just the tables being migrated.
+- Tables that reveal tenant-specific relationships (watchlists, preferences, entity associations) MUST have `tenant_id` even if the underlying data (articles) is platform-global.
+- See also: BP-161 (unannotated tenant_id path parameters), BP-191 (missing watchlist ownership check).
+
+---
+
+## BP-191 — No Entity Ownership Check in Entity Articles Endpoint
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (QA finding F-010) |
+| **Severity** | CRITICAL (multi-tenancy) — `GET /api/v1/entities/{entity_id}/articles` accepts an arbitrary UUID and returns all linked articles. Entity IDs are UUIDv7 (time-ordered, partially predictable), making enumeration feasible. Combined with F-009, any authenticated user can access all entities and all articles across the entire platform. |
+| **Affected areas** | `services/nlp-pipeline/src/nlp_pipeline/api/routes/signals.py` — entity articles endpoint; any endpoint accepting `entity_id` without verifying tenant ownership |
+| **Root cause** | The endpoint was designed in single-tenant mode where all entities belong to the same tenant. PRD-0025 introduced multi-tenancy but the entity articles route was not updated with a watchlist ownership guard. |
+| **Symptom** | No visible symptom in single-tenant mode. In multi-tenant mode: cross-tenant entity intelligence enumeration. |
+| **Fix** | Added watchlist membership check at the route level: before querying articles, the endpoint checks `WatchlistCache.is_watched(tenant_id, entity_id)`. Returns 404 (not 403) if the entity is not in the requesting tenant's watchlist, preventing entity ID enumeration. Fail-open if Valkey is unavailable (logged for ops visibility). |
+
+### Prevention
+
+- Every endpoint that accepts an `entity_id` path parameter MUST verify that the requesting tenant owns or watches that entity. Use the `WatchlistCache` (Valkey-backed) for fast lookups.
+- Return 404 (not 403) on failed ownership checks to prevent ID enumeration attacks.
+- See also: BP-161 (unannotated UUID parameters), BP-190 (missing tenant_id filter on entity_mentions).
+
+---
+
+## BP-198 — Setting `_internal_jwt_public_key` in Shared Test Fixture Breaks `skip_verification=True`
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (remediation wave — market-ingestion readyz test drift) |
+| **Severity** | LOW (test-only) — all protected routes return 401 when fixture sets a fake key |
+| **Affected areas** | `services/market-ingestion/tests/api/test_routes.py` `app_with_overrides` fixture; any service whose test fixture sets `app.state._internal_jwt_public_key` to a non-RSA string while `InternalJWTMiddleware` is in the middleware stack with `skip_verification=True` |
+| **Root cause** | `InternalJWTMiddleware.dispatch()` reads `_internal_jwt_public_key` from `app.state` first. When non-None (even a fake string), it bypasses the `skip_verification` branch and calls `jwt.decode(token, "fake-test-key", algorithms=["RS256"])`. PyJWT raises `InvalidKeyError` since the key is not a valid RSA PEM — the middleware returns 401. |
+| **Symptom** | Tests that send `X-Internal-JWT` headers to protected routes receive unexpected 401 responses after the shared fixture adds a fake JWKS key. Unprotected paths (e.g. `/readyz`) are unaffected because they are in `_SKIP_PREFIXES`. |
+| **Fix** | Set `app.state._internal_jwt_public_key` ONLY in the specific test that needs the JWKS readiness check (e.g. `test_readyz_returns_200_when_all_ok`), not in the shared fixture. The `skip_verification=True` path requires `_internal_jwt_public_key is None` to activate. |
+
+### Prevention
+
+- Never set `app.state._internal_jwt_public_key` to a non-RSA string in a shared test fixture — doing so silently disables `skip_verification` for all protected routes.
+- For tests that check `/readyz` JWKS readiness: set the key locally inside the test, not in the fixture.
+- See also: BP-197 (JWKS readiness drift), BP-187 (skip_verification safety guard).

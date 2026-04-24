@@ -13,7 +13,7 @@ from market_ingestion.config import Settings
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import CanonicalSerializer, ObjectStoreAdapter
-    from market_ingestion.application.ports.unit_of_work import UnitOfWork
+    from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
 
@@ -38,6 +38,23 @@ async def get_uow(
         request.app.state.read_session_factory,
     )
     async with uow:
+        yield uow
+
+
+async def get_read_uow(
+    request: Request,
+) -> AsyncGenerator[ReadOnlyUnitOfWork, None]:
+    """Provide a read-only UnitOfWork for query routes (R27).
+
+    Uses the read replica session factory so readyz/ingest_status/list_policies
+    never hold a write-session connection during read-only traffic.
+    Falls back to the write factory when no dedicated read URL is configured.
+    """
+    from market_ingestion.infrastructure.db.unit_of_work import SqlAlchemyReadOnlyUnitOfWork
+
+    # read_session_factory falls back to write_session_factory when no replica URL is set.
+    read_factory = request.app.state.read_session_factory
+    async with SqlAlchemyReadOnlyUnitOfWork(read_factory) as uow:
         yield uow
 
 

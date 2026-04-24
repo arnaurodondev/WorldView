@@ -34,3 +34,10 @@ class MessageRole(StrEnum):
 
     user = "user"
     assistant = "assistant"
+
+
+class BriefingType(StrEnum):
+    """Type of AI briefing — drives prompt selection and context gathering."""
+
+    MORNING = "MORNING"
+    INSTRUMENT = "INSTRUMENT"

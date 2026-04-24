@@ -13,6 +13,7 @@ Implements the PKCE auth flow (F-01..F-07) from PRD-0025:
 
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any
 
@@ -441,22 +442,18 @@ async def logout(request: Request) -> Response:
         except Exception as exc:  # — best-effort; log and continue
             logger.warning("logout_revoke_failed", action="logout", error=str(exc))
 
-    # Extract sub from Authorization header to invalidate Valkey cache
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer ") and oidc_config:
-        access_token = auth_header[7:]
-        try:
-            # Decode without verification for sub extraction only
-            unverified: dict[str, Any] = jwt.decode(  # type: ignore[no-any-return]
-                access_token,
-                options={"verify_signature": False},
-                algorithms=["RS256"],
-            )
-            sub = unverified.get("sub")
-            if sub and valkey:
+    # SEC-002 fix: extract sub from the VERIFIED request.state.user (set by
+    # OIDCAuthMiddleware) instead of decoding an unverified JWT.  Using
+    # verify_signature=False allowed an attacker to forge a JWT with any sub
+    # and invalidate another user's Valkey cache entry.  If the access token
+    # was expired, request.state.user is None and we skip cache invalidation
+    # — acceptable because the cache entry has its own TTL and will expire.
+    user = getattr(request.state, "user", None)
+    if user and valkey:
+        sub = user.get("sub")
+        if sub:
+            with contextlib.suppress(Exception):
                 await valkey.delete(f"auth:user:{sub}")
-        except Exception:  # noqa: S110 — best-effort; token may be expired/malformed
-            pass
 
     logger.info("logout_success", action="logout", result="success")
 
@@ -625,7 +622,23 @@ async def dev_login(request: Request) -> Response:
 
     logger = get_logger("api_gateway.auth")
 
-    # ── Guard: only allow when Zitadel is NOT configured ──────────────────
+    # ── Guard 1: production environment hard-block (SEC-003) ──────────────
+    # Block dev-login in production regardless of OIDC configuration.
+    # This prevents accidental exposure if OIDC_DISCOVERY_OPTIONAL is ever
+    # mistakenly set to true in a production deployment.
+    settings = getattr(request.app.state, "settings", None)
+    app_env: str = getattr(settings, "app_env", "development") if settings else "development"
+    if app_env == "production":
+        logger.warning("dev_login_blocked_production", action="dev_login", app_env=app_env, result="error")
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "dev_login_disabled",
+                "detail": "Dev login is not available in production",
+            },
+        )
+
+    # ── Guard 2: only allow when Zitadel is NOT configured ────────────────
     oidc_config = getattr(request.app.state, "oidc_config", None)
     if oidc_config is not None:
         logger.warning("dev_login_blocked", action="dev_login", result="error")
