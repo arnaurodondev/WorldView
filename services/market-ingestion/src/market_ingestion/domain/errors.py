@@ -27,7 +27,20 @@ class RetryableDomainError(DomainError):
 
 
 class ProviderRateLimited(RetryableDomainError):  # noqa: N818
-    """Provider has returned a rate-limit response (HTTP 429)."""
+    """Provider has returned a rate-limit response (HTTP 429).
+
+    Args:
+        message:     Human-readable description of the rate-limit event.
+        retry_after: Seconds until the provider allows a retry, parsed from
+                     the ``Retry-After`` response header (``None`` if absent or
+                     unparseable).
+    """
+
+    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        # How long to wait before retrying (seconds).  None means use the
+        # caller's default exponential backoff.
+        self.retry_after: float | None = retry_after
 
 
 class ProviderUnavailable(RetryableDomainError):  # noqa: N818

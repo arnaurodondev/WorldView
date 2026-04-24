@@ -182,6 +182,11 @@ and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (a
 everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
 the other 5 endpoints require a paid subscription.
 
+**Retry-After parsing (PLAN-0036 W0)**: `_parse_retry_after(header_value)` at module level
+handles RFC 7231 §7.1.3 format — integer/float seconds or HTTP-date. Returns `float | None`.
+`ProviderRateLimited` now carries a `retry_after: float | None` attribute set from this header.
+API keys are never exposed in error messages — `_endpoint_slug(url)` strips host + query params.
+
 **Provider configuration (env vars):**
 
 | Env var | Default | Purpose |
@@ -247,6 +252,22 @@ Polling policies are seeded for **64 symbols** across 6 categories. Each symbol 
 
 **Steady-state API budget (after migration 0005)**: ~6,300 credits/day vs. ~23,000 before optimisation.
 
+**Monthly quota enforcement (PLAN-0036 W0)**: `EodhdQuotaService` (in `libs/messaging/eodhd_quota`)
+enforces a shared 100,000-credit/month hard cap via Valkey INCRBY (atomic, multi-replica safe).
+Soft limit fires at 80% (warning only). Hard limit blocks the provider call and retries the task.
+`ExecuteTaskUseCase` checks quota before every provider fetch — cost derived from `domain/freshness.py`
+`EODHD_CREDIT_COST` + `EODHD_INTRADAY_COST`. Valkey keys: `eodhd:v1:quota:{YYYY-MM}:credits_used`,
+with service and per-symbol attribution sub-keys. 32-day TTL auto-resets each month.
+
+**Pre-fetch freshness gate (PLAN-0036 W0)**: `watermarks.last_success_at` is now written on every
+successful fetch. `domain/freshness.py` declares `FRESHNESS_TTL_SECONDS` per dataset type.
+The scheduler gate (Wire 1) uses these TTLs to skip enqueuing tasks whose watermarks are still fresh.
+
+**Observability (PLAN-0036 W0)**: `infrastructure/metrics/eodhd.py` exposes 12 Prometheus counters/
+gauges/histograms under the `s2_eodhd_*` namespace: `requests_total`, `credits_used_total`,
+`rate_limited_total`, `errors_total`, `cache_hits_total`, `cache_misses_total`, `quota_blocked_total`,
+`request_duration_seconds`, `circuit_breaker_state`, `monthly_credits_used`, `monthly_credits_limit`.
+
 | Category | Symbols | Exchange |
 |----------|---------|----------|
 | US Equities (30) | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, BRK-B, JNJ, V, WMT, JPM, PG, XOM, MA, UNH, HD, COST, MRK, BA, PFE, LLY, AXP, MS, DIS, IBM, EXC, CAT, KO, CVX | US |
@@ -266,13 +287,16 @@ Polling policies are seeded for **64 symbols** across 6 categories. Each symbol 
 - `0006_weekly_insider_transactions.py` — OPT-10: insider_transactions interval changed from daily (86400 s) to weekly (604800 s); SEC Form 4 is already delayed 2 business days so daily polling adds no value.
 - `0007_expand_economic_event_countries.py` — D-W2: adds economic event polling policies for JPN, CHN, EU (joins existing USA, EUR, GBR from 0002). S7 consumers read from `market.dataset.fetched` so new country events are immediately processed.
 
+Note: PLAN-0036 Wave 0 does NOT add a new migration. The `watermarks.last_success_at` column already exists in the schema; it was simply never written by `save()` — fixed in this wave.
+
 **Canonical passthrough serialization (D-W1)**: 7 dataset types now use `serialize_passthrough()` in `DefaultCanonicalSerializer` instead of bespoke canonical models. Each MinIO object is a single NDJSON line: `{"dataset_type": "...", "symbol": "...", "source": "eodhd", "payload": <raw>, "fetched_at": "..."}`. Types: `economic_events`, `macro_indicator`, `insider_transactions`, `earnings_calendar`, `news_sentiment`, `yield_curve`, `market_cap`.
 
 ---
 
 ## Error Handling
 
-- **Rate limit exceeded**: mark task as `rate_limited`, exponential backoff, decrement budget
+- **Rate limit exceeded (429)**: `ProviderRateLimited` raised with `retry_after` parsed from header. Task retried, budget decremented. `s2_eodhd_rate_limited_total` counter incremented.
+- **Quota exhausted (monthly hard limit)**: `ExecuteTaskUseCase` calls `EodhdQuotaService.try_consume()` before fetch. On `HARD_LIMIT_EXCEEDED`, task is retried (not failed) so it can run next month. Provider is never called.
 - **Provider 5xx**: retry up to max_attempts with backoff
 - **Malformed response**: mark task as `failed`, log error, no retry (FatalError)
 - **MinIO unavailable**: RetryableError, backoff
