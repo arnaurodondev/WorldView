@@ -15,9 +15,8 @@ Processing:
      - Link to country canonical entity via ``entity_event_exposures``.
 
 Symbol format from S2: ``EVENTS.USA`` or ``EVENTS.US`` — the country code
-is the suffix after the first dot.  Both 2-letter (alpha-2) and 3-letter
-(alpha-3) suffixes are handled; alpha-3 codes are trimmed to their first
-2 chars as a fallback (EODHD economic-events API uses alpha-2).
+is the suffix after the first dot.  Alpha-3 codes (e.g. "USA", "JPN") are
+normalised to alpha-2 via ``_ISO3_TO_ISO2`` before entity lookups.
 """
 
 from __future__ import annotations
@@ -53,6 +52,22 @@ _RESIDUAL_IMPACT_DAYS = 30
 # EODHD structured data has full confidence (no NLP uncertainty)
 _EODHD_CONFIDENCE = 1.0
 
+# Map EODHD 3-letter country codes (used in S2 symbols like "EVENTS.USA") to the
+# alpha-2 codes stored in canonical_entities.metadata['country_iso'].
+# Covers all seeds from 0002_initial_seeds + 0007_expand_economic_event_countries.
+_ISO3_TO_ISO2: dict[str, str] = {
+    "USA": "US",
+    "GBR": "GB",
+    "EUR": "EU",  # Euro Area — "EU" is non-standard but consistent with seeds
+    "JPN": "JP",
+    "CHN": "CN",
+    "CAN": "CA",
+    "AUS": "AU",
+    "DEU": "DE",
+    "FRA": "FR",
+    "ITA": "IT",
+}
+
 
 def _parse_event_date(date_str: str) -> datetime | None:
     """Parse an EODHD date string to a UTC-aware datetime.
@@ -74,24 +89,26 @@ def _parse_event_date(date_str: str) -> datetime | None:
 
 
 def _extract_country_from_symbol(symbol: str) -> str:
-    """Extract the country code from a market-ingestion symbol.
+    """Extract the alpha-2 country code from a market-ingestion symbol.
 
-    S2 uses symbol format ``EVENTS.USA`` or ``EVENTS.US``.
-    The country code is everything after the first dot.
+    S2 uses symbol format ``EVENTS.USA`` or ``EVENTS.US``.  The suffix is
+    mapped to alpha-2 via ``_ISO3_TO_ISO2``; unknown codes fall back to the
+    first two characters.  The returned value is used for entity lookups in
+    ``canonical_entities.metadata['country_iso']`` which stores alpha-2 codes.
 
-    Examples:
-    - ``"EVENTS.USA"`` → ``"USA"`` (alpha-3, passed through as-is)
-    - ``"EVENTS.US"``  → ``"US"``  (alpha-2)
+    Examples
+    --------
+    - ``"EVENTS.USA"`` → ``"US"``
+    - ``"EVENTS.JPN"`` → ``"JP"``
+    - ``"EVENTS.US"``  → ``"US"`` (already alpha-2)
 
-    The EODHD economic-events API uses alpha-2 codes.  S2 sends the
-    same symbol it used when calling the API, so this is normally alpha-2.
-    If an alpha-3 is encountered, it is returned unchanged — callers use
-    it for entity lookups which may handle both.
     """
-    parts = symbol.split(".", 1)
-    if len(parts) == 2:
-        return parts[1]
-    return symbol  # Fallback: return symbol as-is
+    _, sep, code = symbol.partition(".")
+    if not sep:
+        return symbol  # Fallback: malformed symbol
+    # Normalise alpha-3 → alpha-2 using the lookup table; if not found fall back
+    # to the first 2 chars (handles any future EODHD codes not yet in the map).
+    return _ISO3_TO_ISO2.get(code, code[:2] if len(code) >= 2 else code)
 
 
 class _NoOpUoW:
@@ -100,7 +117,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -125,10 +142,12 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
     4. Upsert each released event into ``temporal_events``; link to country entity.
 
     Args:
+    ----
         config:          Consumer configuration (bootstrap servers, group ID, topics).
         session_factory: async_sessionmaker for intelligence_db (read/write).
         storage_client:  Object storage client for MinIO claim-check downloads.
         dedup_client:    Optional Valkey dedup client (idempotency across restarts).
+
     """
 
     def __init__(
@@ -283,7 +302,7 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
             except (TypeError, ValueError):
                 pass
 
-        description = "; ".join(description_parts)
+        description = "; ".join(description_parts)[:2000]  # guard against malformed payloads
 
         # Parse event date — skip if unparseable
         active_from = _parse_event_date(str(ev.get("date", "")))
@@ -353,7 +372,19 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
                 return None
             envelope: dict[str, Any] = json.loads(line)
             return envelope
+        except json.JSONDecodeError as exc:
+            # Malformed JSON is a data quality issue — log and skip (non-retryable).
+            logger.warning(  # type: ignore[no-any-return]
+                "economic_events_consumer_malformed_envelope",
+                bucket=bucket,
+                object_key=object_key,
+                symbol=symbol,
+                error=str(exc),
+            )
+            return None
         except Exception as exc:
+            # Transient storage errors (network, timeout) — re-raise so BaseKafkaConsumer
+            # does NOT commit the offset.  The message will be redelivered on restart.
             logger.warning(  # type: ignore[no-any-return]
                 "economic_events_consumer_storage_error",
                 bucket=bucket,
@@ -361,7 +392,7 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
                 symbol=symbol,
                 error=str(exc),
             )
-            return None
+            raise
 
     # ------------------------------------------------------------------
     # Idempotency
@@ -377,7 +408,10 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        # TTL = 7 days (604,800 s) — covers the longest polling interval in the
+        # system (insider_transactions weekly) to prevent dedup-key expiry causing
+        # a re-delivered offset to be processed twice.
+        await self._dedup_client.set(key, "1", ex=7 * 86400)
 
     # ------------------------------------------------------------------
     # Failure tracking
@@ -389,7 +423,6 @@ class EconomicEventsDatasetConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]

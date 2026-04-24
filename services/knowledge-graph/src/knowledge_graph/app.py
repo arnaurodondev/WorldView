@@ -13,6 +13,10 @@ Background processes run as standalone entry points (R22 / PLAN-0011 Wave C-3):
   - knowledge_graph.infrastructure.messaging.consumers.entity_consumer_main
   - knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer_main
   - knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main
+  - knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer_main
+  - knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer_main
+  - knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer_main
+  - knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer_main
 """
 
 from __future__ import annotations
@@ -147,12 +151,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
     app.state._jwt_middleware = jwt_middleware
     app.add_middleware(
         InternalJWTMiddleware,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
 
     # Middleware (must be registered before app starts)

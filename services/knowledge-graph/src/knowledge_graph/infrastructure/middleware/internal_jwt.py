@@ -35,7 +35,7 @@ _SKIP_PATHS: frozenset[str] = frozenset(
         "/ready",
         "/readyz",
         "/internal/v1/health",
-    }
+    },
 )
 _SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz")
 
@@ -56,12 +56,15 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     middleware instance.
     """
 
-    def __init__(self, app: Any, jwks_url: str, *, skip_verification: bool = False) -> None:
+    def __init__(
+        self, app: Any, jwks_url: str, *, skip_verification: bool = False, service_name: str = "unknown"
+    ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
         self._public_key: RSAPublicKey | None = None
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
+        self._service_name = service_name
 
         if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
@@ -217,7 +220,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                     # max(1, ...) prevents a zero-or-negative TTL on an about-to-expire token.
                     ttl = max(1, int(exp - time.time()) + 60)
                     try:
-                        was_new = await valkey.set_nx(f"jti:{jti}", "1", ex=ttl)
+                        was_new = await valkey.set_nx(f"jti:{self._service_name}:{jti}", "1", ex=ttl)
                         if not was_new:
                             logger.warning("jti_replay_detected", jti=jti)  # type: ignore[no-any-return]
                             return Response(

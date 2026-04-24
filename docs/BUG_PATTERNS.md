@@ -6151,3 +6151,51 @@ When adding a new lib import to a service, check the service Dockerfile immediat
 
 - **Checklist when adding a lib dep**: grep for all Dockerfiles that build services importing the lib (`grep -r "lib_name" services/*/src`). For each Dockerfile, add: COPY, uv pip install -e, PYTHONPATH entry.
 - Consider a CI step that runs `python -c "import <lib>"` inside each Docker image as a startup smoke test.
+
+---
+
+## BP-215 — Consumer `_parse_symbol()` Format Inversion
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 QA of commit f0a031f (MacroIndicatorDatasetConsumer) |
+| **Severity** | BLOCKING — macro indicator metadata never written |
+| **Root cause** | Consumer assumed `INDICATOR.COUNTRY` symbol format but S2 seeds/emits `COUNTRY.INDICATOR`. `rsplit(".", 1)` on `"USA.gdp_current_usd"` returned `("usa", "gdp_current_usd")` — indicator_code and country completely swapped. Entity lookup always returned None; no metadata ever updated. |
+| **Symptom** | No macro indicator data in knowledge graph despite successful Kafka consumption |
+| **Fix** | Use `symbol.partition(".")` and unpack as `country, _, indicator_code` then return `(indicator_code.lower(), country)`. Verify against seed format before writing. |
+
+### Prevention
+
+Before writing a `_parse_symbol()` helper: grep actual seed data to confirm the symbol format. Write a test with the literal seed value (e.g. `"USA.gdp_current_usd"`) and assert the expected return order.
+
+---
+
+## BP-216 — ISO3 Country Codes Passed to Alpha-2 Entity Lookups
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 QA of commit f0a031f (EconomicEventsDatasetConsumer) |
+| **Severity** | CRITICAL — entity-event exposure links never created |
+| **Root cause** | S2 symbol suffix is alpha-3 (`"USA"`, `"JPN"`). `find_country_entity()` queries `WHERE metadata->>'country_iso' = :iso2` — seeded with alpha-2. No normalization → always returns None → exposure link skipped. |
+| **Symptom** | Events upserted but no `entity_event_exposures` rows created for any country |
+| **Fix** | Add `_ISO3_TO_ISO2` dict in consumer. Call `_ISO3_TO_ISO2.get(code, code[:2])` before passing to entity repo. |
+
+### Prevention
+
+Whenever a consumer receives a country code from a Kafka message, check whether the entity lookup field uses alpha-2 or alpha-3. Add an explicit normalization step and test it with seeded values.
+
+---
+
+## BP-217 — Standalone Consumer Entry Point Not Added to docker-compose
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 QA of commit f0a031f (D-W3 consumers) |
+| **Severity** | BLOCKING — consumers never run in any deployed environment |
+| **Root cause** | New `_main.py` entry points committed + legacy workers tombstoned (D-W5), but docker-compose.yml not updated. Complete data gap for 3 dataset types. |
+| **Symptom** | Kafka topic has messages; no consumer lag; no DB rows written |
+| **Fix** | Add service definition to docker-compose.yml in the same commit that creates the entry point. |
+
+### Prevention
+
+Add a check in the pre-commit hook or CI: for every `*_main.py` under `consumers/`, assert there is a matching `command:` entry in docker-compose.yml. Or add to the `/implement` skill checklist: "For each new entrypoint, add docker-compose service."

@@ -440,11 +440,16 @@ class TestInsiderTransactionsConsumerInstrumentNotFound:
 
 
 class TestInsiderTransactionsConsumerStorageError:
-    def test_storage_exception_does_not_crash(self) -> None:
-        """Storage failure → returns cleanly, no relations."""
+    def test_transient_storage_exception_propagates(self) -> None:
+        """Transient storage error re-raised so BaseKafkaConsumer does NOT commit offset."""
         consumer, entity_repo, relation_repo = _make_consumer(storage_error=RuntimeError("minio unavailable"))
 
-        _run(consumer, entity_repo, relation_repo, _make_message())
+        with (
+            patch(_ENTITY_REPO, return_value=entity_repo),
+            patch(_RELATION_REPO, return_value=relation_repo),
+            pytest.raises(RuntimeError, match="minio unavailable"),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
 
         relation_repo.upsert_relation.assert_not_awaited()
 

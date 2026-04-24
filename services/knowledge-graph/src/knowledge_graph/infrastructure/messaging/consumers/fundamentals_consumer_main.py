@@ -74,7 +74,9 @@ async def main() -> None:
 
     llm_client = FallbackChainClient()
     definition_worker = DefinitionRefreshWorker(
-        write_factory, llm_client, embedding_model_id=settings.embedding_model_id
+        write_factory,
+        llm_client,
+        embedding_model_id=settings.embedding_model_id,
     )
 
     config = ConsumerConfig(

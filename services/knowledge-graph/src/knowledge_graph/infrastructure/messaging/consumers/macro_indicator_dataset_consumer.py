@@ -97,17 +97,17 @@ def _sha256_hex(s: str) -> str:
 def _parse_symbol(symbol: str) -> tuple[str, str]:
     """Parse a macro indicator symbol into (indicator_code, iso3_country).
 
-    S2 uses the format ``INDICATOR_CODE.ISO3_COUNTRY``, e.g.:
-    - ``"GDPCAP.USA"`` → ``("GDPCAP", "USA")``
-    - ``"gdp_current_usd.USA"`` → ``("gdp_current_usd", "USA")``
+    S2 uses the format ``ISO3_COUNTRY.INDICATOR_CODE``, e.g.:
+    - ``"USA.gdp_current_usd"`` → ``("gdp_current_usd", "USA")``
+    - ``"EUR.inflation_consumer_prices_annual"`` → ``("inflation_consumer_prices_annual", "EUR")``
 
     The indicator code is normalised to lower-case to match MACRO_INDICATORS.
     If parsing fails, returns the full symbol as the indicator_code and an
     empty string for the country.
     """
-    parts = symbol.rsplit(".", 1)
-    if len(parts) == 2:
-        return parts[0].lower(), parts[1]
+    country, sep, indicator_code = symbol.partition(".")
+    if sep:
+        return indicator_code.lower(), country
     return symbol.lower(), ""
 
 
@@ -117,7 +117,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -145,12 +145,14 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
     7. Produce ``entity.dirtied.v1`` (best-effort, non-blocking).
 
     Args:
+    ----
         config:               Consumer configuration.
         session_factory:      async_sessionmaker for intelligence_db (read/write).
         storage_client:       Object storage client for MinIO claim-check downloads.
         direct_producer:      Optional Kafka producer for entity.dirtied.v1.
         entity_dirtied_topic: Topic name for entity.dirtied.v1 events.
         dedup_client:         Optional Valkey dedup client.
+
     """
 
     def __init__(
@@ -294,7 +296,7 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
                         "dirty_reason": "macro_indicators_updated",
                         "source_doc_id": None,
                         "correlation_id": None,
-                    }
+                    },
                 ).encode(),
             )
 
@@ -324,7 +326,19 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
                 return None
             envelope: dict[str, Any] = json.loads(line)
             return envelope
+        except json.JSONDecodeError as exc:
+            # Malformed JSON is a data quality issue — log and skip (non-retryable).
+            logger.warning(  # type: ignore[no-any-return]
+                "macro_indicator_consumer_malformed_envelope",
+                bucket=bucket,
+                object_key=object_key,
+                symbol=symbol,
+                error=str(exc),
+            )
+            return None
         except Exception as exc:
+            # Transient storage errors (network, timeout) — re-raise so BaseKafkaConsumer
+            # does NOT commit the offset.  The message will be redelivered on restart.
             logger.warning(  # type: ignore[no-any-return]
                 "macro_indicator_consumer_storage_error",
                 bucket=bucket,
@@ -332,7 +346,7 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
                 symbol=symbol,
                 error=str(exc),
             )
-            return None
+            raise
 
     # ------------------------------------------------------------------
     # Idempotency
@@ -348,7 +362,10 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        # TTL = 7 days (604,800 s) — covers the longest polling interval in the
+        # system to prevent dedup-key expiry causing re-delivered offsets to be
+        # processed twice.
+        await self._dedup_client.set(key, "1", ex=7 * 86400)
 
     # ------------------------------------------------------------------
     # Failure tracking
@@ -360,7 +377,6 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
