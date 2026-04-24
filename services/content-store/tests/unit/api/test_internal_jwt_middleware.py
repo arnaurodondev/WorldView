@@ -6,10 +6,9 @@ import pytest
 from content_store.app import create_app
 from httpx import ASGITransport, AsyncClient
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+pytestmark = pytest.mark.unit
 
 
-@pytest.mark.asyncio
 async def test_middleware_rejects_missing_jwt() -> None:
     """No X-Internal-JWT header → 401."""
     app = create_app()
@@ -18,7 +17,6 @@ async def test_middleware_rejects_missing_jwt() -> None:
     assert resp.status_code == 401
 
 
-@pytest.mark.asyncio
 async def test_middleware_skips_health_path() -> None:
     """GET /healthz passes without X-Internal-JWT (skip-list path)."""
     app = create_app()
@@ -27,7 +25,6 @@ async def test_middleware_skips_health_path() -> None:
     assert resp.status_code in (200, 503)
 
 
-@pytest.mark.asyncio
 async def test_middleware_returns_503_when_no_public_key_fail_closed() -> None:
     """F-001: No JWKS public key + skip_verification=False (default) → 503 fail-closed.
 
@@ -52,7 +49,6 @@ async def test_middleware_returns_503_when_no_public_key_fail_closed() -> None:
     assert "JWKS not loaded" in resp.text
 
 
-@pytest.mark.asyncio
 async def test_internal_jwt_rejects_wrong_issuer() -> None:
     """JWT with wrong issuer returns 401 (F-015).
 
@@ -112,7 +108,6 @@ async def test_internal_jwt_rejects_wrong_issuer() -> None:
     assert not called  # route handler must NOT have been called
 
 
-@pytest.mark.asyncio
 async def test_jti_first_use_accepted() -> None:
     """F-012: First request with a unique jti is accepted (Valkey SET NX returns True)."""
     from unittest.mock import AsyncMock
@@ -144,7 +139,7 @@ async def test_jti_first_use_accepted() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=True)  # SET NX succeeded → new key
+    mock_valkey.set_nx = AsyncMock(return_value=True)  # SET NX succeeded → new key
     mock_app.state.valkey_client = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -170,7 +165,6 @@ async def test_jti_first_use_accepted() -> None:
     assert called
 
 
-@pytest.mark.asyncio
 async def test_jti_replay_rejected() -> None:
     """F-012: Second request with same jti returns 401 (Valkey SET NX returns None = key existed)."""
     from unittest.mock import AsyncMock
@@ -202,7 +196,7 @@ async def test_jti_replay_rejected() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → key already present
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → key already present
     mock_app.state.valkey_client = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -229,7 +223,6 @@ async def test_jti_replay_rejected() -> None:
     assert not called
 
 
-@pytest.mark.asyncio
 async def test_middleware_passes_through_with_skip_verification() -> None:
     """F-001: No JWKS public key + skip_verification=True → unverified decode (test-only path).
 

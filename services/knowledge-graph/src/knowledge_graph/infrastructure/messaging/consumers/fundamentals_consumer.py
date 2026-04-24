@@ -13,6 +13,7 @@ Processing:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -33,6 +34,9 @@ if TYPE_CHECKING:
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+_DATASET_FETCHED_SCHEMA_PATH = str(_SCHEMA_DIR / "market.dataset.fetched.avsc")
 
 
 def _extract_metadata_updates(payload: dict[str, Any]) -> dict[str, object]:
@@ -241,9 +245,21 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Deserialise Confluent Avro wire-format or fall back to JSON.
+
+        BP-122: market.dataset.fetched messages are produced with the Confluent
+        Avro wire format (5-byte header: magic 0x00 + 4-byte schema ID).
+        Fall back to JSON for plain payloads.
+        """
+        if raw and raw[0:1] == b"\x00" and schema_path:
+            from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+            return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == "market.dataset.fetched":
+            return _DATASET_FETCHED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

@@ -179,7 +179,7 @@ async def test_jti_first_use_accepted() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=True)  # SET NX succeeded → new key
+    mock_valkey.set_nx = AsyncMock(return_value=True)  # SET NX succeeded → new key
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -235,7 +235,7 @@ async def test_jti_replay_rejected() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → key already present
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → key already present
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -260,6 +260,20 @@ async def test_jti_replay_rejected() -> None:
     assert result.status_code == 401
     assert b"replay" in result.body
     assert not called
+
+
+async def test_startup_raises_on_jwks_failure() -> None:
+    """F-003: startup() raises RuntimeError after 3 failed JWKS fetch attempts."""
+    from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+    from starlette.applications import Starlette
+
+    mock_app = Starlette()
+    middleware = InternalJWTMiddleware(
+        mock_app,
+        jwks_url="http://unreachable:9999/internal/jwks",
+    )
+    with pytest.raises(RuntimeError, match="JWKS startup failed"):
+        await middleware.startup()
 
 
 async def test_middleware_passes_through_with_well_formed_jwt_skip_verification() -> None:

@@ -38,6 +38,12 @@ def _make_app(**settings_kwargs: object) -> object:
     mock_factory.return_value = session
     app.state.session_factory = mock_factory
     app.state.read_factory = mock_factory
+
+    # R27: read_uow_factory — used by get_pending_alerts_uc dependency.
+    from alert.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork
+
+    app.state.read_uow_factory = lambda: SqlaReadOnlyUnitOfWork(mock_factory)
+
     app.state.ws_manager = ConnectionManager()
     return app
 
@@ -194,7 +200,7 @@ async def test_jti_first_use_accepted() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=True)  # SET NX succeeded → new key
+    mock_valkey.set_nx = AsyncMock(return_value=True)  # SET NX succeeded → new key
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -252,7 +258,7 @@ async def test_jti_replay_rejected() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → key already present
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → key already present
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -311,7 +317,7 @@ async def test_jti_check_skipped_when_valkey_unavailable() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(side_effect=ConnectionError("Valkey is down"))
+    mock_valkey.set_nx = AsyncMock(side_effect=ConnectionError("Valkey is down"))
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -369,7 +375,7 @@ async def test_jti_check_skipped_when_no_jti() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock()  # should never be called
+    mock_valkey.set_nx = AsyncMock()  # should never be called
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -394,8 +400,22 @@ async def test_jti_check_skipped_when_no_jti() -> None:
     # No jti → Valkey never consulted, request passes through → 200
     assert result.status_code == 200
     assert called
-    # Confirm Valkey.set was not called at all
-    mock_valkey.set.assert_not_called()
+    # Confirm Valkey.set_nx was not called at all
+    mock_valkey.set_nx.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_raises_on_jwks_failure() -> None:
+    """F-003: startup() raises RuntimeError after 3 failed JWKS fetch attempts."""
+    from starlette.applications import Starlette
+
+    mock_app = Starlette()
+    middleware = InternalJWTMiddleware(
+        mock_app,
+        jwks_url="http://unreachable:9999/internal/jwks",
+    )
+    with pytest.raises(RuntimeError, match="JWKS startup failed"):
+        await middleware.startup()
 
 
 @pytest.mark.asyncio

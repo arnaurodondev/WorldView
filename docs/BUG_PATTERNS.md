@@ -6097,3 +6097,57 @@ When adding a new lib import to a service, check the service Dockerfile immediat
 ### Prevention
 
 - For systems with per-call API costs, implement startup jitter: spread the initial load over N minutes by checking `(now - policy.created_at).total_seconds() % policy.base_interval_seconds` instead of treating `last_run_at=NULL` as always due.
+
+---
+
+## BP-200 — ValkeyClient.set() ex=/nx= Kwargs Not Forwarded
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (live-stack certification: jti_check_valkey_unavailable on all services) |
+| **Severity** | HIGH — JTI replay protection silently disabled; consumer deduplication broken |
+| **Affected areas** | `libs/messaging/src/messaging/valkey/client.py`, all `internal_jwt.py` middleware copies, all KG/alert/nlp consumer `mark_processed()` methods |
+| **Root cause** | `ValkeyClient.set(key, value, ttl=None)` uses `ttl=` but callers passed `ex=` (Redis API convention) or `nx=True`. `TypeError` was caught by `except Exception` in JTI middleware → silently logged as `jti_check_valkey_unavailable`; consumer dedup called with `ex=86400` → crash → all messages retried without dedup. |
+| **Symptom** | All services logging `jti_check_valkey_unavailable`; consumer dead-letters for ValkeyClient.set TypeError |
+| **Fix** | Added `ValkeyClient.set_nx(key, value, ex)` method for atomic SET NX. Updated `ValkeyClient.set` to accept both `ttl=` and `ex=` kwargs. Updated all `internal_jwt.py` to call `set_nx`. Updated all `test_internal_jwt_middleware.py` to mock `set_nx`. |
+
+### Prevention
+
+- When implementing wrapper APIs over redis.asyncio, always map native Redis kwargs (`ex=`, `nx=`, `px=`) to named parameters — or expose them directly. Don't introduce a different parameter name (`ttl=`) without aliasing the native one.
+- Before writing any `except Exception: log_warning("service_unavailable")` pattern, verify the code path does not silently swallow `TypeError`/`AttributeError` caused by a programming error (API mismatch), not a runtime failure.
+
+---
+
+## BP-201 — WS JWT sub=oidc_sub Instead of UUID user_id
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (live-stack certification: alert WebSocket 403) |
+| **Severity** | HIGH — all WebSocket alert stream connections rejected with 403 |
+| **Affected areas** | `services/api-gateway/src/api_gateway/routes/auth.py:ws_token` |
+| **Root cause** | `ws_token` used `user.get("sub") or user.get("user_id")`. Valkey user profile caches `sub="dev-user"` (oidc_sub). `OIDCAuthMiddleware` reads the cache and sets `user["sub"] = oidc_sub` (truthy string). `or` short-circuit prevents fallback to `user_id` (UUID). WS JWT issued with `sub:"dev-user"` → alert `UUID("dev-user")` → ValueError → close(4001) → HTTP 403. |
+| **Symptom** | All `/v1/alerts/stream` WebSocket connections immediately return HTTP 403 |
+| **Fix** | Changed to `user_id = user.get("user_id") or user.get("sub")` — prefer UUID field over oidc_sub. |
+
+### Prevention
+
+- When building user profile dicts, always include a `user_id` field containing the UUID identity. Never use `sub` as the UUID — it may contain an oidc_sub string in dev mode or external OIDC providers.
+- Prefer `user.get("user_id")` over `user.get("sub")` for UUID-dependent operations (DB lookups, WebSocket user IDs, etc.).
+
+---
+
+## BP-202 — New Shared Lib Not Added to All Consuming Service Dockerfiles
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (rag-chat container exit on startup: ModuleNotFoundError: No module named 'prompts') |
+| **Severity** | CRITICAL — container crash on startup |
+| **Affected areas** | `services/rag-chat/Dockerfile` (missing `libs/prompts`), similar for knowledge-graph and nlp-pipeline local venvs |
+| **Root cause** | `libs/prompts` was added as a dependency to multiple services (commit 3f1cba6), but the Dockerfiles for those services were not updated to COPY + install + add to PYTHONPATH. The lib works locally (via .pth files) but fails in Docker. |
+| **Symptom** | Container exits immediately with `ModuleNotFoundError: No module named 'prompts'` |
+| **Fix** | Added `COPY libs/prompts`, `uv pip install -e /build/libs/prompts`, and `/app/libs/prompts/src` to PYTHONPATH in rag-chat Dockerfile. Created `.pth` files for knowledge-graph and nlp-pipeline local venvs. |
+
+### Prevention
+
+- **Checklist when adding a lib dep**: grep for all Dockerfiles that build services importing the lib (`grep -r "lib_name" services/*/src`). For each Dockerfile, add: COPY, uv pip install -e, PYTHONPATH entry.
+- Consider a CI step that runs `python -c "import <lib>"` inside each Docker image as a startup smoke test.

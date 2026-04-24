@@ -576,7 +576,8 @@ async def ws_token(request: Request) -> Response:
         return JSONResponse(status_code=503, content={"error": "jwt_signing_unavailable"})
 
     # Validate required claims before issuing token (F-004: reject incomplete auth state)
-    user_id = user.get("sub") or user.get("user_id")
+    # Prefer user_id (UUID) over sub (which may be an oidc_sub string like "dev-user").
+    user_id = user.get("user_id") or user.get("sub")
     tenant_id = user.get("tenant_id")
     if not user_id or not tenant_id:
         logger.warning("ws_token_incomplete_claims", action="ws_token", result="error")

@@ -37,7 +37,9 @@ _SKIP_PATHS: frozenset[str] = frozenset(
         "/internal/v1/health",
     }
 )
-_SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz", "/admin")
+# SEC-001 fix: /admin MUST NOT bypass JWT — admin endpoints need both
+# InternalJWT auth AND the X-Admin-Token check.
+_SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz")
 
 _JWKS_REFRESH_INTERVAL_SECONDS = 3600  # 1 hour
 
@@ -102,6 +104,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             jwks_url=self._jwks_url,
             detail="Service will return 503 on all authenticated requests until JWKS is fetched.",
         )
+        raise RuntimeError(f"JWKS startup failed after 3 attempts — cannot start without public key ({self._jwks_url})")
 
     async def _background_refresh(self) -> None:
         """Refresh the public key every hour in the background."""
@@ -182,7 +185,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
             )
             try:
-                payload = jwt.decode(token, options={"verify_signature": False})
+                payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256"])
                 request.state.tenant_id = payload.get("tenant_id", "")
                 request.state.user_id = payload.get("sub", "")
                 request.state.role = payload.get("role", "")
@@ -218,7 +221,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                     # max(1, ...) prevents a zero-or-negative TTL on an about-to-expire token.
                     ttl = max(1, int(exp - time.time()) + 60)
                     try:
-                        was_new = await valkey.set(f"jti:{jti}", "1", ex=ttl, nx=True)
+                        was_new = await valkey.set_nx(f"jti:{jti}", "1", ex=ttl)
                         if not was_new:
                             logger.warning("jti_replay_detected", jti=jti)  # type: ignore[no-any-return]
                             return Response(
