@@ -134,9 +134,26 @@ class ValkeyClient:
         """Return the string value stored at *key*, or ``None`` if missing."""
         return await self._redis.get(key)  # type: ignore[no-any-return]
 
-    async def set(self, key: str, value: str, ttl: int | None = None) -> None:
-        """Set *key* to *value*, optionally with a TTL in seconds."""
-        await self._redis.set(key, value, ex=ttl)
+    async def set(self, key: str, value: str, ttl: int | None = None, *, ex: int | None = None) -> None:
+        """Set *key* to *value*, optionally with a TTL in seconds.
+
+        The TTL may be specified as either ``ttl`` (wrapper convention) or
+        ``ex`` (Redis/valkey convention). ``ex`` takes priority if both are given.
+        """
+        expire = ex if ex is not None else ttl
+        await self._redis.set(key, value, ex=expire)
+
+    async def set_nx(self, key: str, value: str, ex: int) -> bool:
+        """Set *key* to *value* with TTL *ex* only if the key does not exist.
+
+        Wraps Redis ``SET key value EX ex NX``.
+
+        Returns:
+            ``True``  — key was newly created (was not present before).
+            ``False`` — key already existed; no change was made.
+        """
+        result = await self._redis.set(key, value, ex=ex, nx=True)
+        return result is not None
 
     async def delete(self, key: str) -> int:
         """Delete *key* and return the number of keys removed."""

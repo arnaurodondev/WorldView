@@ -104,6 +104,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             jwks_url=self._jwks_url,
             detail="Service will return 503 on all authenticated requests until JWKS is fetched.",
         )
+        raise RuntimeError(f"JWKS startup failed after 3 attempts — cannot start without public key ({self._jwks_url})")
 
     async def _background_refresh(self) -> None:
         """Refresh the public key every hour in the background."""

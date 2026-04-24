@@ -228,7 +228,7 @@ async def test_jti_first_use_accepted() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=True)  # SET NX succeeded → new key
+    mock_valkey.set_nx = AsyncMock(return_value=True)  # SET NX succeeded → new key
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
@@ -285,7 +285,7 @@ async def test_jti_replay_rejected() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → key already present
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → key already present
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)

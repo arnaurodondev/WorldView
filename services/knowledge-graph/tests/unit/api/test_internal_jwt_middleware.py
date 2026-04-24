@@ -238,7 +238,7 @@ async def test_jti_replay_rejected() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
     mock_valkey = AsyncMock()
-    mock_valkey.set = AsyncMock(return_value=None)  # SET NX failed → replay detected
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → replay detected
     mock_app.state.valkey = mock_valkey
 
     mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
