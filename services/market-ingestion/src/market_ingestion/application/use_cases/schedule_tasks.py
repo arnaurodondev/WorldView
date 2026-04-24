@@ -24,6 +24,29 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# EODHD charges different API-credit amounts per endpoint type.
+# The budget system consumes this many tokens per task so that the provider
+# budget actually reflects real API cost rather than task count.
+# Source: https://eodhd.com/financial-apis/api-limits
+_EODHD_CREDIT_COST: dict[str, float] = {
+    DatasetType.FUNDAMENTALS.value: 10.0,  # /api/fundamentals/:ticker = 10 credits
+    DatasetType.OHLCV.value: 1.0,  # /api/eod/:ticker = 1 credit
+    DatasetType.QUOTES.value: 1.0,  # /api/real-time/:ticker = 1 credit
+    # Intraday endpoints (/api/intraday/:ticker) cost 5 credits each.
+    # These use DatasetType.OHLCV with timeframe ∈ {"1h","5m","1m"}.
+    # The per-task cost is overridden in _apply_budgets for intraday timeframes.
+    DatasetType.NEWS_SENTIMENT.value: 5.0,  # /api/news = 5 credits
+    DatasetType.EARNINGS_CALENDAR.value: 1.0,
+    DatasetType.ECONOMIC_EVENTS.value: 1.0,
+    DatasetType.MACRO_INDICATOR.value: 1.0,
+    DatasetType.INSIDER_TRANSACTIONS.value: 1.0,
+    DatasetType.YIELD_CURVE.value: 1.0,
+    DatasetType.MARKET_CAP.value: 1.0,
+}
+
+# Intraday timeframes that hit /api/intraday (5 credits each).
+_INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
+
 
 @dataclass
 class SchedulerTickResult:
@@ -325,13 +348,21 @@ class ScheduleDueTasksUseCase:
                 budget.refill(elapsed)
 
             for task in ptasks:
-                if budget.try_consume(1.0):
+                # Consume credits proportional to the EODHD endpoint cost so
+                # the budget accurately throttles expensive endpoints (e.g.
+                # fundamentals = 10 credits) not just task count (BP-183).
+                cost = _EODHD_CREDIT_COST.get(str(task.dataset_type), 1.0)
+                # Intraday timeframes hit a different EODHD endpoint (5 credits).
+                if str(task.dataset_type) == DatasetType.OHLCV.value and task.timeframe in _INTRADAY_TIMEFRAMES:
+                    cost = 5.0
+                if budget.try_consume(cost):
                     kept.append(task)
                 else:
                     logger.debug(
                         "scheduler_budget_exhausted",
                         provider=provider_str,
                         remaining_tasks=len(ptasks),
+                        credit_cost=cost,
                     )
                     break  # budget exhausted for this provider
 

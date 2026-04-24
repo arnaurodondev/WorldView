@@ -233,7 +233,19 @@ sequenceDiagram
 
 ## Ticker Coverage (64 symbols — migration 0002 + 0004)
 
-Polling policies are seeded for **64 symbols** across 6 categories. Each symbol gets 5 policies: `quotes` (5 min, adaptive), `ohlcv 1d/1w/1mo`, and `fundamentals` (daily). The `quotes` policies have `market_hours_only=true` (added by migration 0003) to suppress overnight polling.
+Polling policies are seeded for **64 symbols** across 6 categories. Each symbol gets 5 policies: `quotes` (5 min, adaptive, `market_hours_only=true`), `ohlcv 1d` (6 h), `ohlcv 1w` (7 days after migration 0005), `ohlcv 1mo` (30 days after 0005), and `fundamentals` (7 days after 0005, disabled for crypto/indices/commodity ETFs). The `market_hours_only` flag is enforced in `PollingPolicy.is_due()` via `_is_market_hours_now()` (Mon-Fri 13:30-20:00 UTC).
+
+**EODHD credit costs per endpoint** (budget tokens are scaled accordingly — BP-183):
+
+| Endpoint | EODHD Credits | Used for |
+|----------|--------------|---------|
+| `/api/fundamentals/:ticker` | 10 | fundamentals dataset |
+| `/api/intraday/:ticker` | 5 | ohlcv with timeframe 1m/5m/1h |
+| `/api/news` | 5 | news_sentiment dataset |
+| `/api/eod/:ticker` | 1 | ohlcv 1d/1w/1mo |
+| `/api/real-time/:ticker` | 1 | quotes dataset |
+
+**Steady-state API budget (after migration 0005)**: ~6,300 credits/day vs. ~23,000 before optimisation.
 
 | Category | Symbols | Exchange |
 |----------|---------|----------|
@@ -241,14 +253,16 @@ Polling policies are seeded for **64 symbols** across 6 categories. Each symbol 
 | Sector ETFs (9) | XLK, XLV, XLE, XLY, VTV, QQQ, IBIT, MSTR, PPA | US |
 | Broad Market ETFs (4) | SPY, IVV, VOO, VTI | US |
 | Fixed Income ETFs (4) | IEF, TLT, AGG, SHY | US |
-| Commodity ETFs (3) | GLD, SLV, USO | US |
-| Major Indices (5) | GSPC, CCMP, INDU, RUT, VIX | INDX |
-| Crypto Top-10 (10) | BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, MATIC-USD, LTC-USD | CC |
+| Commodity ETFs (3) | GLD, SLV, USO | US (fundamentals disabled — no fin. statements) |
+| Major Indices (5) | GSPC, CCMP, INDU, RUT, VIX | INDX (fundamentals disabled) |
+| Crypto Top-10 (10) | BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, MATIC-USD, LTC-USD | CC (fundamentals disabled) |
 | Forex (1) | EURUSD | FOREX |
 
 **Migration history**:
-- `0002_initial_seeds.py` — seeds all 64 symbols on fresh databases (rewritten 2026-04-24 to use deterministic hash IDs instead of positional `_SEED_IDS` to scale beyond the original 6-ticker list).
-- `0004_expand_ticker_coverage.py` — for live systems that already ran the original `0002`, adds the 58 new symbols via `INSERT … ON CONFLICT DO NOTHING` (safe to run even if `0002` was already updated).
+- `0002_initial_seeds.py` — seeds all 64 symbols on fresh databases.
+- `0003_add_market_hours_only.py` — adds `market_hours_only` column; sets `true` for all quote policies.
+- `0004_expand_ticker_coverage.py` — for live systems with original 6-symbol `0002`, adds 58 new symbols via `INSERT … ON CONFLICT DO NOTHING`.
+- `0005_api_call_optimization.py` — fundamentals weekly (not daily), disabled for crypto/indices/commodity ETFs; 1w/1mo OHLCV extended intervals; 5m/1h intraday gated to market hours; budget recalibrated to match EODHD 100K credits/day limit.
 
 ---
 
