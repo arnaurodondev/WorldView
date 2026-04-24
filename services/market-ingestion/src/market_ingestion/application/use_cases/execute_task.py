@@ -1,6 +1,7 @@
 """ExecuteTaskUseCase — 5-step ingestion pipeline.
 
 Pipeline order (critical — do NOT reorder):
+  0. Quota check — block if monthly EODHD limit is exhausted (optional).
   1. Fetch raw data from provider (outside DB transaction).
   2. Store raw bytes as bronze object in object storage (outside transaction).
   3. Canonicalize raw data (outside transaction).
@@ -32,6 +33,7 @@ from market_ingestion.domain.errors import (
     WatermarkViolation,
 )
 from market_ingestion.domain.events import MarketDatasetFetched
+from market_ingestion.domain.freshness import EODHD_CREDIT_COST, EODHD_INTRADAY_COST, INTRADAY_TIMEFRAMES
 from market_ingestion.domain.value_objects import ObjectRef
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -45,12 +47,23 @@ if TYPE_CHECKING:
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
     from market_ingestion.infrastructure.adapters.providers import ProviderRegistry
+    from messaging.eodhd_quota.quota_service import EodhdQuotaService
 
 logger = get_logger(__name__)
 
 
 class ExecuteTaskUseCase:
-    """Execute a single claimed ingestion task through the 5-step pipeline."""
+    """Execute a single claimed ingestion task through the 5-step pipeline.
+
+    Optional dependencies (passed as constructor arguments when available):
+
+    ``quota_service``
+        When provided, the monthly EODHD credit quota is checked *before* any
+        provider call.  Tasks that would exceed the hard limit are retried at the
+        next scheduler tick rather than failing permanently, and the worker logs
+        a ``quota_hard_limit_exceeded`` event.  When ``None``, quota enforcement
+        is bypassed (useful in tests or non-EODHD provider contexts).
+    """
 
     def __init__(
         self,
@@ -60,6 +73,8 @@ class ExecuteTaskUseCase:
         serializer: CanonicalSerializer,
         bronze_bucket: str = "market-bronze",
         canonical_bucket: str = "market-canonical",
+        quota_service: EodhdQuotaService | None = None,
+        service_name: str = "market-ingestion",
     ) -> None:
         self._uow = uow
         self._registry = provider_registry
@@ -67,11 +82,15 @@ class ExecuteTaskUseCase:
         self._serializer = serializer
         self._bronze_bucket = bronze_bucket
         self._canonical_bucket = canonical_bucket
+        # Optional shared monthly quota enforcer (Valkey-backed, multi-replica safe).
+        self._quota_service = quota_service
+        self._service_name = service_name
 
     async def execute(self, task: IngestionTask) -> None:
         """Run the pipeline for *task*.
 
-        Raises:
+        Raises
+        ------
             ProviderRateLimited / ProviderUnavailable / StorageUnavailable /
             WatermarkViolation:
                 Retryable errors — task.retry() called before re-raise.
@@ -79,14 +98,50 @@ class ExecuteTaskUseCase:
                 re-queued via retry() so the worker loop picks it up again.
             ProviderAuthError / ProviderDataError / InvalidStateTransition:
                 Fatal errors — task.fail() called before re-raise.
+
         """
         log = logger.bind(
             task_id=task.id,
             provider=str(task.provider),
             symbol=task.symbol,
+            dataset_type=str(task.dataset_type),
         )
 
         adapter = self._registry.get(task.provider)
+
+        # ── Step 0: Monthly quota check ──────────────────────────────────────
+        # Only enforced when a shared EodhdQuotaService is wired in.
+        # This check is intentionally placed *before* claiming the provider so
+        # we don't burn a budget token then immediately reject the call.
+        if self._quota_service is not None:
+            cost = _task_credit_cost(task)
+            from messaging.eodhd_quota.quota_service import QuotaCheckResult
+
+            quota_result = await self._quota_service.try_consume(
+                cost=cost,
+                service=self._service_name,
+                symbol=task.symbol,
+            )
+            if quota_result == QuotaCheckResult.HARD_LIMIT_EXCEEDED:
+                log.warning(
+                    "quota_hard_limit_exceeded",
+                    cost=cost,
+                    monthly_quota_limit=self._quota_service._hard_limit,
+                )
+                # Treat quota exhaustion as a retryable error so the task is
+                # re-queued for the next month rather than permanently failed.
+                exc = ProviderRateLimited("Monthly EODHD quota exhausted — task deferred")
+                await self._persist_retry(task, exc)
+                from market_ingestion.infrastructure.metrics.eodhd import eodhd_quota_blocked_total
+
+                eodhd_quota_blocked_total.labels(dataset_type=str(task.dataset_type)).inc()
+                raise exc
+            elif quota_result == QuotaCheckResult.SOFT_LIMIT_EXCEEDED:
+                log.warning(
+                    "quota_soft_limit_exceeded",
+                    cost=cost,
+                )
+                # Soft limit: log and proceed — do not block the call.
 
         # ── Step 1: Fetch ────────────────────────────────────────────────────
         try:
@@ -534,3 +589,14 @@ def _map_fundamentals_sections(raw: dict, symbol: str, source: str) -> dict:
     _add("insider_transactions_snapshot", raw.get("InsiderTransactions"))  # FIX-F7
 
     return sections
+
+
+def _task_credit_cost(task: IngestionTask) -> int:
+    """Return the EODHD credit cost for *task*.
+
+    Uses the canonical EODHD_CREDIT_COST table from the domain freshness module.
+    Intraday timeframes (1m/5m/1h) hit the /intraday endpoint which costs 5 credits.
+    """
+    if task.dataset_type == DatasetType.OHLCV and task.timeframe in INTRADAY_TIMEFRAMES:
+        return EODHD_INTRADAY_COST
+    return EODHD_CREDIT_COST.get(str(task.dataset_type), 1)

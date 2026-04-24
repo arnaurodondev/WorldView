@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, cast
+from urllib.parse import urlparse
 
 from market_ingestion.application.ports.adapters import ProviderAdapter, ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType, Provider
@@ -20,6 +21,50 @@ if TYPE_CHECKING:
     import httpx
 
 logger = get_logger(__name__)
+
+
+def _endpoint_slug(url: str) -> str:
+    """Extract a safe endpoint label for metrics/logs (no query params, no secrets).
+
+    Examples:
+        "https://eodhd.com/api/real-time/AAPL.US" → "real-time"
+        "https://eodhd.com/api/eod/MSFT.US"       → "eod"
+        "https://eodhd.com/api/fundamentals/TSLA"  → "fundamentals"
+    """
+    path = urlparse(url).path
+    # Split on "/" and take the first non-empty segment after "api".
+    segments = [p for p in path.split("/") if p and p != "api"]
+    return segments[0] if segments else "unknown"
+
+
+def _parse_retry_after(header_value: str | None) -> float | None:
+    """Parse a ``Retry-After`` HTTP header value into seconds.
+
+    Supports two formats defined in RFC 7231 §7.1.3:
+    - Integer delta-seconds: ``"120"``
+    - HTTP-date: ``"Wed, 01 Jan 2026 12:00:00 GMT"``
+
+    Returns:
+        Seconds to wait (≥ 0.0), or ``None`` if the header is absent or
+        unparseable.  Does NOT clamp to a maximum — callers apply their own cap.
+    """
+    if header_value is None:
+        return None
+    # Try integer/float delta-seconds first (most common).
+    try:
+        return max(0.0, float(header_value.strip()))
+    except ValueError:
+        pass
+    # Try HTTP-date format.
+    from email.utils import parsedate_to_datetime
+
+    try:
+        target = parsedate_to_datetime(header_value)
+        delta = (target - datetime.now(tz=UTC)).total_seconds()
+        return max(0.0, delta)
+    except Exception:
+        return None
+
 
 _TIMEFRAME_MAP = {
     "1m": "1m",
@@ -384,8 +429,10 @@ class EODHDProviderAdapter(ProviderAdapter):
     ) -> ProviderFetchResult:
         """Fetch US Treasury yield curve data for *series_symbol*.
 
-        Raises:
+        Raises
+        ------
             ProviderDataError: If *series_symbol* is not a recognised series key.
+
         """
         path = self._YIELD_SERIES_MAP.get(series_symbol)
         if path is None:
@@ -454,25 +501,48 @@ class EODHDProviderAdapter(ProviderAdapter):
     async def _get(self, url: str, params: dict[str, Any]) -> bytes:
         """Execute a GET request and return the raw response bytes.
 
-        Raises:
+        The API key is passed via *params* (a separate query-param dict) and is
+        **never** included in error messages or logs — only the URL path is used.
+
+        Raises
+        ------
             ProviderAuthError: HTTP 401/403.
-            ProviderRateLimited: HTTP 429.
+            ProviderRateLimited: HTTP 429; carries ``retry_after`` seconds when
+                the ``Retry-After`` header is present.
             ProviderUnavailable: HTTP 5xx or network error.
             ProviderDataError: Non-JSON response when JSON is expected.
+
         """
+        # Use the endpoint slug (no host, no query-params) so API key never leaks.
+        slug = _endpoint_slug(url)
         try:
             response = await self._client.get(url, params=params)
         except Exception as exc:
-            raise ProviderUnavailable(f"EODHD connection error: {exc}") from exc
+            logger.warning(
+                "eodhd_connection_error",
+                endpoint=slug,
+                error=str(exc),
+            )
+            raise ProviderUnavailable(f"EODHD connection error on {slug}: {exc}") from exc
 
-        if response.status_code in (401, 403):
-            raise ProviderAuthError(f"EODHD auth failed: HTTP {response.status_code} for {url}")
-        if response.status_code == 429:
-            raise ProviderRateLimited(f"EODHD rate limited: HTTP 429 for {url}")
-        if response.status_code >= 500:
-            raise ProviderUnavailable(f"EODHD server error: HTTP {response.status_code} for {url}")
-        if response.status_code >= 400:
-            raise ProviderDataError(f"EODHD client error: HTTP {response.status_code} for {url}")
+        status = response.status_code
+        if status in (401, 403):
+            raise ProviderAuthError(f"EODHD auth failed: HTTP {status} for endpoint '{slug}'")
+        if status == 429:
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            logger.warning(
+                "eodhd_rate_limited",
+                endpoint=slug,
+                retry_after_seconds=retry_after,
+            )
+            raise ProviderRateLimited(
+                f"EODHD rate limited: HTTP 429 for endpoint '{slug}'",
+                retry_after=retry_after,
+            )
+        if status >= 500:
+            raise ProviderUnavailable(f"EODHD server error: HTTP {status} for endpoint '{slug}'")
+        if status >= 400:
+            raise ProviderDataError(f"EODHD client error: HTTP {status} for endpoint '{slug}'")
 
         return cast("bytes", response.content)
 

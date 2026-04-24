@@ -30,6 +30,7 @@ def _to_domain(row: WatermarkModel) -> Watermark:
         current_bar_ts=row.last_success_bar_ts,
         content_hash=row.last_success_sha256,
         backfill_status=BackfillStatus(row.backfill_phase),
+        last_success_at=row.last_success_at,
         updated_at=row.updated_at,
     )
 
@@ -100,7 +101,7 @@ class SqlaWatermarkRepository(WatermarkRepository):
                     "symbol",
                     "exchange",
                     "timeframe",
-                ]
+                ],
             )
         )
         await self._w.execute(stmt)
@@ -164,6 +165,10 @@ class SqlaWatermarkRepository(WatermarkRepository):
             update(WatermarkModel)
             .where(WatermarkModel.id == watermark.id)
             .values(
+                # Record the wall-clock time of this successful save so the
+                # scheduler's pre-fetch freshness gate can compare it against
+                # the dataset's freshness TTL (BP-185 fix).
+                last_success_at=now,
                 last_success_bar_ts=watermark.current_bar_ts,
                 last_success_sha256=watermark.content_hash,
                 backfill_phase=watermark.backfill_status.value,

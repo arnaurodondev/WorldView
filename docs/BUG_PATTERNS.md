@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-218](#bp-218) | Market ingestion / quota | `ingestion_watermarks.last_success_at` column exists in schema since migration 0001 but `watermark_repository.save()` never writes it — pre-fetch freshness gate always skips (perpetually "fresh"), causing redundant EODHD calls | `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/watermark_repository.py:save()`; `domain/entities/watermark.py` |
+| [BP-219](#bp-219) | Market ingestion / quota | Monthly EODHD quota enforced in-process only (legacy provider_budgets table, per-replica) — 4 worker replicas each believe they have 100K credits; effective monthly budget = 400K; exceeded at ~25K symbols per replica | `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/`; any service using DB-backed in-process quota instead of Valkey INCRBY shared counter |
 | [BP-192](#bp-192) | Kafka / enriched event | S6 `_enqueue_enriched` sends only counts (relation_count, claim_count) in `nlp.article.enriched.v1` — NOT actual extracted data arrays; S7 reads empty lists, graph materialization is a no-op | `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py:759`; S7 enriched_consumer |
 | [BP-193](#bp-193) | Frontend / SSE parsing | Frontend SSE token parser reads `parsed.token` but S8 emitter sends `{"text": ...}` — chat streaming produces blank output | `apps/worldview-web/components/shell/AskAiPanel.tsx`; `app/(app)/chat/page.tsx`; `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` |
 | [BP-194](#bp-194) | Frontend / API contract | Chat page sends `{ question }` but S8 `ChatRequestSchema` expects `{ message }` — 422 validation error on every chat submission | `apps/worldview-web/app/(app)/chat/page.tsx:452`; `services/rag-chat/src/rag_chat/api/schemas.py` |
@@ -6199,3 +6201,39 @@ Whenever a consumer receives a country code from a Kafka message, check whether 
 ### Prevention
 
 Add a check in the pre-commit hook or CI: for every `*_main.py` under `consumers/`, assert there is a matching `command:` entry in docker-compose.yml. Or add to the `/implement` skill checklist: "For each new entrypoint, add docker-compose service."
+
+---
+
+## BP-218 — Dead Watermark `last_success_at` Column Never Written
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 — PLAN-0036 W0 audit |
+| **Severity** | HIGH — pre-fetch freshness gate inoperable; every task treated as stale regardless of recent fetch |
+| **Root cause** | `ingestion_watermarks.last_success_at` was added in migration `0001_initial.py` but `SqlaWatermarkRepository.save()` only wrote `last_success_bar_ts`, `last_success_sha256`, `backfill_phase`, and `updated_at`. The domain entity `Watermark` also lacked the field. The scheduler gate compared against a perpetually-`None` column, so the freshness check always evaluated as "stale" → task always enqueued. |
+| **Symptom** | No task is ever skipped by the pre-fetch gate; EODHD credit consumption equals the theoretical maximum (no skip savings). Watermark records have `last_success_at = NULL` even after hundreds of successful fetches. |
+| **Fix** | Add `last_success_at: datetime \| None = None` to `Watermark` entity. Add `last_success_at=now` to `save()` UPDATE statement. No migration needed — column already exists. Covered by `test_watermark_save_writes_last_success_at`. |
+
+### Prevention
+
+When adding a new column to an existing table, immediately add it to:
+1. The domain entity dataclass (`entities/<entity>.py`)
+2. The repo `_to_domain()` mapping
+3. The repo `save()` UPDATE statement
+4. A unit test verifying the UPDATE statement includes the new column
+
+---
+
+## BP-219 — Per-Replica In-Process Monthly Quota Counter (Market Ingestion)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 — PLAN-0036 W0 investigation |
+| **Severity** | HIGH — monthly quota 4× underenforced under typical 4-replica deployment |
+| **Root cause** | `provider_budgets` table tracks daily credits per provider but each worker process holds its own in-memory counter. The DB column is never incremented atomically; multiple replicas each think the budget is fresh. With 4 replicas and a 100K/month budget, the effective combined spend can reach 400K/month before any process blocks. |
+| **Symptom** | `s2_eodhd_quota_blocked_total` is always 0 despite credit overruns; EODHD API key reaches monthly limit mid-month with no platform-side block. |
+| **Fix** | Replace per-process budget check with `EodhdQuotaService` in `libs/messaging/eodhd_quota`. Uses Valkey `INCRBY` (atomic, cross-replica) for monthly key `eodhd:v1:quota:{YYYY-MM}:credits_used`. Hard-limit pre-check (GET before INCRBY) blocks at exactly 100K. Post-increment check handles TOCTOU races near the boundary. 32-day TTL provides automatic monthly reset. |
+
+### Prevention
+
+Shared budgets (quota, rate limits, credit counters) that span multiple replicas MUST use a shared backing store (Valkey, Redis, Postgres advisory lock) — never in-process memory or per-replica DB rows. Use Valkey INCRBY for atomic increment with TTL. Document the replica-multiplication risk in the service `.claude-context.md`.
