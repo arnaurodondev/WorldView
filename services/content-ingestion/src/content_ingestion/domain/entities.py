@@ -35,7 +35,8 @@ class Source:
 class FetchResult:
     """Raw result of a single HTTP fetch attempt.
 
-    Attributes:
+    Attributes
+    ----------
         published_at: Publication datetime as reported by the source API, or None if not
             available. This is the article's *editorial* date, distinct from ``fetched_at``
             (when our crawler pulled it). Used as ``evidence_date`` when writing
@@ -43,6 +44,7 @@ class FetchResult:
         is_backfill: True when this result was produced during a boot-time historical
             backfill run (i.e. ``BACKFILL_ENABLED=true``).  Propagated through the
             pipeline so that S10 can suppress alert fan-out for historical documents.
+
     """
 
     source_id: UUID
@@ -60,12 +62,14 @@ class FetchResult:
 class RawArticle:
     """A raw article ready for storage and Kafka publish.
 
-    Attributes:
+    Attributes
+    ----------
         published_at: Source-reported publication datetime, or None.  When present, S7
             MUST use this as ``relation_evidence.evidence_date`` so the temporal decay
             formula reflects the article's *actual* age, not when it was ingested.
         is_backfill: True for documents ingested during a historical backfill run.
             Propagated through the Kafka event so S10 can suppress alert fan-out.
+
     """
 
     source_type: SourceType
@@ -116,6 +120,10 @@ class ContentIngestionTask:
     # Scheduling
     is_backfill: bool = False
     window_start: datetime | None = None
+
+    # Retry backoff — earliest time this task may be picked up by the scheduler.
+    # NULL means the task is ready to be claimed immediately.
+    next_attempt_at: datetime | None = None
 
     # Audit
     id: UUID = field(default_factory=common.ids.new_uuid7)
@@ -183,8 +191,18 @@ class ContentIngestionTask:
 
     @property
     def is_claimable(self) -> bool:
-        """True if the task can be claimed by a worker."""
-        return self.status in _CLAIMABLE_STATUSES
+        """True if the task can be claimed by a worker.
+
+        Returns False if ``next_attempt_at`` is set to a future time, meaning
+        the task is in a EODHD 429 backoff window and must not be dispatched.
+        The repository's ``claim_batch`` query enforces the same filter at the
+        SQL level; this property is here for use-case / unit-test assertions.
+        """
+        if self.status not in _CLAIMABLE_STATUSES:
+            return False
+        if self.next_attempt_at is not None and self.next_attempt_at > common.time.utc_now():
+            return False
+        return True
 
     def is_lease_expired(self, now: datetime) -> bool:
         """True if the current lease has passed its expiry time."""

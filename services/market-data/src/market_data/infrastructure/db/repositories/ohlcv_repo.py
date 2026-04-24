@@ -47,6 +47,7 @@ class PgOHLCVRepository(OHLCVRepository):
             adjusted_close=Decimal(str(row.adjusted_close)) if row.adjusted_close is not None else None,
             source=row.source or "",
             provider_priority=ProviderPriority(provider="unknown", priority=int(row.provider_priority)),
+            is_derived=bool(row.is_derived),
         )
 
     # ── commands ───────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ class PgOHLCVRepository(OHLCVRepository):
                 "high": bar.high,
                 "low": bar.low,
                 "close": bar.close,
-                "volume": bar.volume,
+                "volume": bar.volume if bar.volume is not None else 0,
                 "adjusted_close": bar.adjusted_close,
                 "source": bar.source,
                 "provider_priority": bar.provider_priority.priority,
@@ -145,3 +146,72 @@ class PgOHLCVRepository(OHLCVRepository):
         if min_date is None or max_date is None:
             return None
         return (min_date.date(), max_date.date())
+
+    async def bulk_upsert_derived(self, bars: list[OHLCVBar]) -> None:
+        """Upsert locally-derived bars unconditionally (no priority guard).
+
+        Derived bars are always the authoritative source for their timeframe —
+        no external provider will ever supply competing 1w/1M data via the
+        normal ingestion path after PLAN-0036.  The ON CONFLICT clause always
+        overwrites so that a fresh derivation pass replaces stale aggregates.
+        """
+        if not bars:
+            return
+
+        values = [
+            {
+                "instrument_id": bar.instrument_id,
+                "timeframe": str(bar.timeframe),
+                "bar_date": bar.bar_date,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume if bar.volume is not None else 0,
+                "adjusted_close": bar.adjusted_close,
+                "source": bar.source,
+                "provider_priority": bar.provider_priority.priority,
+                "is_derived": True,
+            }
+            for bar in bars
+        ]
+
+        stmt = (
+            insert(OHLCVBarModel)
+            .values(values)
+            .on_conflict_do_update(
+                index_elements=["instrument_id", "timeframe", "bar_date"],
+                set_={
+                    "open": insert(OHLCVBarModel).excluded.open,
+                    "high": insert(OHLCVBarModel).excluded.high,
+                    "low": insert(OHLCVBarModel).excluded.low,
+                    "close": insert(OHLCVBarModel).excluded.close,
+                    "volume": insert(OHLCVBarModel).excluded.volume,
+                    "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
+                    "source": insert(OHLCVBarModel).excluded.source,
+                    "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                    "is_derived": insert(OHLCVBarModel).excluded.is_derived,
+                },
+            )
+        )
+        await self._session.execute(stmt)
+
+    async def find_derived(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        *,
+        limit: int = 200,
+    ) -> list[OHLCVBar]:
+        """Return derived bars sorted by bar_date descending, capped at ``limit``."""
+        result = await self._session.execute(
+            select(OHLCVBarModel)
+            .where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == str(timeframe),
+                OHLCVBarModel.is_derived.is_(True),
+            )
+            .order_by(OHLCVBarModel.bar_date.desc())
+            .limit(limit)
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]

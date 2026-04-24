@@ -87,6 +87,11 @@ class OHLCVBar:
     column type and avoid float precision loss during DB round-trips.
     ``provider_priority`` is stored so the upsert logic can discard lower-
     priority data without re-querying.
+
+    ``is_derived`` marks bars that were computed locally (e.g. weekly/monthly
+    bars aggregated from daily bars) rather than ingested directly from an
+    external provider.  Derived bars are never overwritten by live ingestion
+    and do not consume EODHD API credits (PLAN-0036 W2-4/W2-5).
     """
 
     instrument_id: str = ""
@@ -96,11 +101,14 @@ class OHLCVBar:
     high: Decimal = Decimal("0")
     low: Decimal = Decimal("0")
     close: Decimal = Decimal("0")
-    volume: int = 0
+    volume: int | None = 0
     adjusted_close: Decimal | None = None
     source: str = ""
     provider_priority: ProviderPriority = field(default_factory=_default_provider_priority)
     ingested_at: datetime = field(default_factory=_utc_now)
+    # True for bars derived locally from finer-grained bars (e.g. 1w/1M from 1d).
+    # Forward-compatible addition: defaults to False so existing code is unaffected.
+    is_derived: bool = False
 
 
 @dataclass

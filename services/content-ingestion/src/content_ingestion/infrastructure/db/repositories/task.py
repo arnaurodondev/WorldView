@@ -39,6 +39,7 @@ def _to_domain(row: ContentIngestionTaskModel) -> ContentIngestionTask:
         error_detail=row.error_detail,
         is_backfill=row.is_backfill,
         window_start=row.window_start,
+        next_attempt_at=row.next_attempt_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -71,6 +72,7 @@ class TaskRepository:
                 error_detail=task.error_detail,
                 is_backfill=task.is_backfill,
                 window_start=task.window_start,
+                next_attempt_at=task.next_attempt_at,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
             ),
@@ -101,6 +103,7 @@ class TaskRepository:
                     error_detail=task.error_detail,
                     is_backfill=task.is_backfill,
                     window_start=task.window_start,
+                    next_attempt_at=task.next_attempt_at,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                 )
@@ -131,7 +134,14 @@ class TaskRepository:
 
         cte = (
             select(ContentIngestionTaskModel.id)
-            .where(ContentIngestionTaskModel.status.in_(claimable_statuses))
+            .where(
+                ContentIngestionTaskModel.status.in_(claimable_statuses),
+                # Exclude tasks that are still in an EODHD 429 backoff window.
+                # A NULL next_attempt_at means "no backoff" — eligible immediately.
+                # A non-NULL value only becomes claimable once it is <= NOW().
+                (ContentIngestionTaskModel.next_attempt_at.is_(None))
+                | (ContentIngestionTaskModel.next_attempt_at <= now),
+            )
             .order_by(ContentIngestionTaskModel.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
@@ -192,13 +202,16 @@ class TaskRepository:
         another worker.
 
         Args:
+        ----
             now: Current UTC timestamp (avoids clock skew inside the transaction).
             lease_timeout_seconds: Grace period in seconds beyond ``lease_expires``
                 before a task is considered abandoned.  Zero = recover immediately
                 when ``lease_expires < now``.
 
         Returns:
+        -------
             Number of tasks recovered.
+
         """
         cutoff = now - dt.timedelta(seconds=lease_timeout_seconds)
         recoverable_statuses = ("claimed", "running")

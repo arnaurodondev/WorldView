@@ -55,6 +55,12 @@ class PollingPolicy:
     # When True the scheduler skips this policy outside US equity market hours
     # (13:30-20:00 UTC, Mon-Fri). Saves ~74% of quote API credits.
     market_hours_only: bool = False
+    # Tier-aware scheduling (W2-2): minimum TierLevel required to run this policy.
+    # Default T2 keeps the scheduler quota-safe for unknown symbols.
+    tier: int = 2
+    # When True, suppress scheduling during market hours — only fire post-close.
+    # Useful for EOD tasks that should not compete with intraday quote polling.
+    post_market_only: bool = False
     backfill_enabled: bool = False
     backfill_days: int | None = None
     backfill_start_date: date | datetime | None = None
@@ -76,6 +82,9 @@ class PollingPolicy:
         Respects market_hours_only - returns False outside US market hours.
         """
         if self.market_hours_only and not _is_market_hours_now():
+            return False
+        # post_market_only: suppress during NYSE session (fire only after close)
+        if self.post_market_only and _is_market_hours_now():
             return False
         if last_run_at is None:
             return True

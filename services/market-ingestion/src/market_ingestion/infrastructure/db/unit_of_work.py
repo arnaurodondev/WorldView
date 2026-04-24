@@ -13,6 +13,7 @@ from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, 
 from market_ingestion.infrastructure.db.repositories.budget_repository import SqlaProviderBudgetRepository
 from market_ingestion.infrastructure.db.repositories.outbox_repository import SqlaOutboxRepository
 from market_ingestion.infrastructure.db.repositories.policy_repository import SqlaPollingPolicyRepository
+from market_ingestion.infrastructure.db.repositories.symbol_tier_repository import SqlaSymbolTierRepository
 from market_ingestion.infrastructure.db.repositories.task_repository import SqlaTaskRepository
 from market_ingestion.infrastructure.db.repositories.watermark_repository import SqlaWatermarkRepository
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -33,7 +34,9 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
     Never opens a write session; no commit or rollback.
 
     Args:
+    ----
         read_factory: ``async_sessionmaker`` for the replica (or primary) engine.
+
     """
 
     def __init__(self, read_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -115,6 +118,7 @@ class SqlaUnitOfWork(UnitOfWork):
         self._policies: SqlaPollingPolicyRepository | None = None
         self._budgets: SqlaProviderBudgetRepository | None = None
         self._outbox: SqlaOutboxRepository | None = None
+        self._symbol_tiers: SqlaSymbolTierRepository | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -143,6 +147,11 @@ class SqlaUnitOfWork(UnitOfWork):
         assert self._outbox is not None, "UnitOfWork not entered"
         return self._outbox
 
+    @property
+    def symbol_tiers(self) -> SqlaSymbolTierRepository:
+        assert self._symbol_tiers is not None, "UnitOfWork not entered"
+        return self._symbol_tiers
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlaUnitOfWork:
@@ -157,6 +166,7 @@ class SqlaUnitOfWork(UnitOfWork):
         self._policies = SqlaPollingPolicyRepository(self._write_session, self._read_session)
         self._budgets = SqlaProviderBudgetRepository(self._write_session, self._read_session)
         self._outbox = SqlaOutboxRepository(self._write_session, self._read_session)
+        self._symbol_tiers = SqlaSymbolTierRepository(self._write_session, self._read_session)
         self._callbacks = []
         self._outbox_events_added = False
         return self

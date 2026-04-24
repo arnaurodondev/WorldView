@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -35,7 +36,7 @@ def _to_bar_response(bar: OHLCVBar) -> OHLCVBarResponse:
         high=str(bar.high),
         low=str(bar.low),
         close=str(bar.close),
-        volume=bar.volume,
+        volume=bar.volume,  # type: ignore[arg-type]  # Pydantic v2 plugin strict on int | None
         adjusted_close=str(bar.adjusted_close) if bar.adjusted_close is not None else None,
         source=bar.source,
     )
@@ -46,6 +47,18 @@ def _resolve_timeframe(timeframe_str: str) -> Timeframe:
         return Timeframe(timeframe_str)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid timeframe: {timeframe_str}")  # noqa: B904
+
+
+def _validate_instrument_id(instrument_id: str) -> str:
+    """Validate instrument_id is a UUID; raise 422 if not (prevents asyncpg DataError)."""
+    try:
+        UUID(instrument_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(  # noqa: B904
+            status_code=422,
+            detail=f"Invalid instrument_id format: '{instrument_id}' — must be a UUID",
+        )
+    return instrument_id
 
 
 # IMPORTANT: literal-path routes must come BEFORE {instrument_id} route
@@ -82,6 +95,7 @@ async def get_available_timeframes(
     uc: Annotated[GetAvailableTimeframesUseCase, Depends(get_available_timeframes_uc)] = ...,  # type: ignore[assignment]
 ) -> list[str]:
     """Return all timeframes with stored bars for the given instrument."""
+    _validate_instrument_id(instrument_id)
     timeframes = await uc.execute(instrument_id)
     return [str(tf) for tf in timeframes]
 
@@ -93,6 +107,7 @@ async def get_ohlcv_range(
     uc: Annotated[GetOHLCVRangeUseCase, Depends(get_ohlcv_range_uc)] = ...,  # type: ignore[assignment]
 ) -> OHLCVRangeResponse:
     """Return the min/max date range for the instrument/timeframe combination."""
+    _validate_instrument_id(instrument_id)
     tf = _resolve_timeframe(timeframe)
     result = await uc.execute(instrument_id, tf)
     if result is None:
@@ -119,9 +134,20 @@ async def get_ohlcv_bars(
     timeframe: str = "1d",
     start: date | None = None,
     end: date | None = None,
+    # limit: return only the last N bars (most recent) within the date range.
+    # Default 200 covers ~10 months of daily data and is well above any
+    # practical chart window. Capped at 1000 to prevent runaway queries.
+    limit: int = Query(default=200, ge=1, le=1000),
     uc: Annotated[GetOHLCVBarsUseCase, Depends(get_ohlcv_bars_uc)] = ...,  # type: ignore[assignment]
 ) -> OHLCVListResponse:
-    """Return OHLCV bars for an instrument within an optional date range."""
+    """Return OHLCV bars for an instrument within an optional date range.
+
+    ``limit`` trims the result to the last N bars (chronologically newest)
+    after the date-range filter has been applied.  This is consistent with
+    financial chart conventions where callers specify a look-back window
+    (e.g. 30 bars for a 30-day chart) rather than a precise date range.
+    """
+    _validate_instrument_id(instrument_id)
     tf = _resolve_timeframe(timeframe)
     if start is not None and end is not None and start > end:
         raise HTTPException(status_code=422, detail="start must not be after end")
@@ -129,7 +155,7 @@ async def get_ohlcv_bars(
     effective_start = start or date(2000, 1, 1)
     effective_end = end or date(9999, 12, 31)
 
-    bars = await uc.execute(instrument_id, tf, effective_start, effective_end)
+    bars = await uc.execute(instrument_id, tf, effective_start, effective_end, limit=limit)  # type: ignore[call-arg]
     return OHLCVListResponse(
         items=[_to_bar_response(b) for b in bars],
         total=len(bars),

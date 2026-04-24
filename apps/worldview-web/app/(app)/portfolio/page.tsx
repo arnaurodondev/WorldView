@@ -36,7 +36,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Plus, TrendingUp, TrendingDown, Link2 } from "lucide-react";
+import { ChevronDown, Plus, TrendingUp, TrendingDown, Link2, RefreshCw } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -161,6 +161,34 @@ function PnlSummaryRow({
   );
 }
 
+// ── Staleness-aware price formatter ─────────────────────────────────────────
+
+/**
+ * formatStalenessAwarePrice — format a price with optional "~" prefix for stale data
+ *
+ * PLAN-0036 W2-9: When a holding's quote freshness is not "live", the current
+ * price is prefixed with "~" to indicate it is a delayed or end-of-day price.
+ * This signals to the trader that live EODHD data is unavailable (circuit breaker
+ * open, or EODHD quota exhausted) — so the P&L numbers may be slightly off.
+ *
+ * WHY a dedicated helper (not inline): the logic appears in both the current-price
+ * column and the total-value column. A helper ensures the prefix is applied
+ * consistently in both places without duplicating the freshness check.
+ *
+ * @param price    — the numeric price value
+ * @param freshness — the freshness_status from the Quote (optional, undefined = treat as live)
+ * @returns formatted string like "$185.42" (live) or "~$185.42" (stale/eod/etc.)
+ */
+function formatStalenessAwarePrice(price: number, freshness?: string): string {
+  // WHY check for "live" explicitly: all other states (delayed, stale, eod, unavailable)
+  // mean the price is NOT current. A missing freshness field (old S9 response with no
+  // PriceSnapshot support yet) is treated optimistically — no ~ prefix shown.
+  const isStale = freshness != null && freshness !== "live";
+  const formatted = formatPrice(price);
+  // Prepend ~ to the dollar sign if stale, e.g. "$185.42" → "~$185.42"
+  return isStale ? `~${formatted}` : formatted;
+}
+
 // ── Holdings Table ────────────────────────────────────────────────────────────
 
 /**
@@ -177,7 +205,10 @@ function PnlSummaryRow({
  */
 interface HoldingsTableProps {
   holdings: Holding[];
-  quotes: Record<string, { price: number; change: number; change_pct: number }>;
+  // WHY include freshness_status: the Quote type now carries a freshness field
+  // (PLAN-0036 Wave 1). We pass the full shape so HoldingsTable can read
+  // freshness_status without a separate prop or an additional API call.
+  quotes: Record<string, { price: number; change: number; change_pct: number; freshness_status?: string }>;
   onRowClick: (entityId: string) => void;
 }
 
@@ -212,6 +243,9 @@ function HoldingsTable({ holdings, quotes, onRowClick }: HoldingsTableProps) {
           // WHY fallback chain: quote.price → h.current_price → h.average_cost
           // If market data isn't available, we at least show cost basis (break even = 0% P&L).
           const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
+          // WHY read freshness_status: the Quote type now includes it (PLAN-0036 Wave 1).
+          // We pass it through so the stale indicator can be shown without an extra fetch.
+          const quoteFreshness = quote?.freshness_status;
           const holdingValue = livePrice * h.quantity;
           const pnl = (livePrice - h.average_cost) * h.quantity;
           const pnlPct = h.average_cost > 0
@@ -256,9 +290,20 @@ function HoldingsTable({ holdings, quotes, onRowClick }: HoldingsTableProps) {
                 {formatPrice(h.average_cost)}
               </span>
 
-              {/* Current Price */}
-              <span className="text-right font-mono text-xs tabular-nums text-foreground">
-                {formatPrice(livePrice)}
+              {/* Current Price
+                  WHY formatStalenessAwarePrice: when the EODHD circuit breaker is open
+                  (PLAN-0036) the backend returns a cached/EOD snapshot instead of a live
+                  quote. The "~" prefix tells the trader "this price may be hours old —
+                  the live feed is temporarily unavailable." The title tooltip explains. */}
+              <span
+                className="text-right font-mono text-xs tabular-nums text-foreground"
+                title={
+                  quoteFreshness && quoteFreshness !== "live"
+                    ? "Delayed or end-of-day price — live feed unavailable"
+                    : undefined
+                }
+              >
+                {formatStalenessAwarePrice(livePrice, quoteFreshness)}
               </span>
 
               {/* Total Value */}
@@ -502,6 +547,10 @@ export default function PortfolioPage() {
     data: portfolios,
     isLoading: portfoliosLoading,
     isError: portfoliosError,
+    // WHY refetch: exposed so the error recovery UI can retry the query on demand
+    // without a full page reload. Users get a faster recovery path (re-fetches
+    // only the failed query, not the whole page).
+    refetch: refetchPortfolios,
   } = useQuery({
     queryKey: ["portfolios"],
     queryFn: () => createGateway(accessToken).getPortfolios(),
@@ -641,16 +690,46 @@ export default function PortfolioPage() {
   }
 
   // ── Error state ──────────────────────────────────────────────────────────
+  // WHY recovery buttons (not just a message): without an escape hatch, a transient
+  // network error or failed brokerage callback permanently bricks this page until
+  // the user manually refreshes. The Retry button re-fetches only the failed
+  // query (fast); "Reload page" is the nuclear option for deeper state corruption.
   if (portfoliosError || holdingsError) {
     return (
-      <div className="flex h-64 items-center justify-center p-6">
+      <div className="flex h-64 flex-col items-center justify-center gap-4 p-6">
         <div className="text-center">
           <p className="text-sm font-medium text-destructive">
             Failed to load portfolio data
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Check your connection and try refreshing.
+            Check your connection and try again.
           </p>
+        </div>
+
+        {/* Recovery actions — give the user a way out without a full page reload */}
+        <div className="flex gap-2">
+          {/* Retry: re-fires the portfolios query (and holdings will follow once
+              portfolios resolves, since it is gated on activePortfolioId). */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void refetchPortfolios()}
+            className="gap-1.5"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Retry
+          </Button>
+
+          {/* Reload page: fallback for cases where client state is corrupted
+              (e.g., stale auth token, broken React Query cache). */}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => window.location.reload()}
+            className="text-xs text-muted-foreground"
+          >
+            Reload page
+          </Button>
         </div>
       </div>
     );

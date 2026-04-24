@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, SmallInteger, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, SmallInteger, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,3 +42,6 @@ class OHLCVBarModel(Base):
     adjusted_close: Mapped[float | None] = mapped_column(Numeric(18, 8), nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     provider_priority: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    # True for bars derived locally from daily bars (PLAN-0036 W2-4).
+    # server_default="false" ensures forward-compat with existing rows.
+    is_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

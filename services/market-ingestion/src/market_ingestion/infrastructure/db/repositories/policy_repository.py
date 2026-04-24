@@ -28,6 +28,8 @@ def _to_domain(row: PollingPolicyModel) -> PollingPolicy:
         priority=row.priority,
         is_enabled=row.enabled,
         market_hours_only=row.market_hours_only,
+        tier=row.tier,
+        post_market_only=row.post_market_only,
         backfill_enabled=row.backfill_enabled,
         backfill_days=row.backfill_chunk_days,
         backfill_start_date=row.backfill_start_date,
@@ -85,7 +87,7 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
                 filters.append(or_(PollingPolicyModel.timeframe == timeframe, PollingPolicyModel.timeframe.is_(None)))
             if variant is not None:
                 filters.append(
-                    or_(PollingPolicyModel.dataset_variant == variant, PollingPolicyModel.dataset_variant.is_(None))
+                    or_(PollingPolicyModel.dataset_variant == variant, PollingPolicyModel.dataset_variant.is_(None)),
                 )
             stmt = select(PollingPolicyModel).where(*filters).order_by(PollingPolicyModel.priority.desc()).limit(1)
             row = (await self._r.execute(stmt)).scalar_one_or_none()
@@ -106,6 +108,8 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
             priority=policy.priority,
             enabled=policy.is_enabled,
             market_hours_only=policy.market_hours_only,
+            tier=policy.tier,
+            post_market_only=policy.post_market_only,
             backfill_enabled=policy.backfill_enabled,
             backfill_start_date=policy.backfill_start_date,
             backfill_chunk_days=policy.backfill_days,
@@ -120,6 +124,8 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
             .values(
                 enabled=policy.is_enabled,
                 market_hours_only=policy.market_hours_only,
+                tier=policy.tier,
+                post_market_only=policy.post_market_only,
                 priority=policy.priority,
                 base_interval_sec=int(policy.base_interval_seconds),
                 adaptive_k=policy.k,

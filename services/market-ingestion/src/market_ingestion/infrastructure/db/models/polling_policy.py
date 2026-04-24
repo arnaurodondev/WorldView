@@ -48,6 +48,10 @@ class PollingPolicyModel(Base):
     # Market-hours gate (domain: market_hours_only) — added by migration 0003
     market_hours_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Tier-aware scheduling (domain: tier / post_market_only) — added by migration 0008
+    tier: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    post_market_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Backfill configuration (domain: backfill_days / backfill_start_date)
     backfill_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     backfill_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -56,7 +60,10 @@ class PollingPolicyModel(Base):
     # Audit
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     __table_args__ = (
