@@ -40,7 +40,8 @@ _SYSTEM_PROMPT = (
     "0.6 = moderately relevant (sector news, indirect exposure)\n"
     "0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
     "1.0 = critical (halted trading, major earnings miss, bankruptcy)\n"
-    'Respond with ONLY valid JSON: {"score": <float 0.0-1.0>, "reason": "<max 10 words>"}'
+    "If the title is absent, vague, or ambiguous, return score 0.3 as a conservative default.\n"
+    'Respond with ONLY valid JSON: {"score": <float 0.0-1.0>, "reason": "<max 10 words in English>"}'
 )
 
 

@@ -17,6 +17,7 @@ import json
 from typing import TYPE_CHECKING
 
 import structlog
+from prompts.retrieval.hyde import HYDE_EXPANSION  # type: ignore[import-untyped]
 
 from rag_chat.domain.enums import QueryIntent
 
@@ -37,10 +38,6 @@ _HYDE_INTENTS: frozenset[QueryIntent] = frozenset(
 )
 
 _HYDE_TTL_SECONDS = 1800  # 30 minutes
-
-_HYDE_PROMPT_TEMPLATE = (
-    "Write a factual 80-120 word answer paragraph as if it appeared in a financial report:\n\n{query}"
-)
 
 
 def _hyde_cache_key(rephrased_query: str) -> str:
@@ -88,8 +85,9 @@ class HydeExpander:
                 data = json.loads(cached)
                 return data["text"], data["embedding"]
 
-            # Generate hypothesis paragraph
-            prompt = _HYDE_PROMPT_TEMPLATE.format(query=rephrased_query)
+            # Generate hypothesis paragraph — use centralized HYDE_EXPANSION template
+            # which prohibits inventing specific financial figures (prevents embedding poisoning)
+            prompt = HYDE_EXPANSION.render(query=rephrased_query)
             hypothesis = ""
             async for chunk in self._llm.stream(prompt, max_tokens=200, temperature=0.1):
                 hypothesis += chunk
