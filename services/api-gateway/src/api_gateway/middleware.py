@@ -290,8 +290,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         try:
             current = await valkey.incr(key)
-            if current == 1:
-                await valkey.expire(key, self.window_seconds)
+            # SEC-009 fix: always set EXPIRE (idempotent) to prevent orphaned
+            # keys if a crash occurred between INCR and EXPIRE on a previous
+            # request.  expire() is a no-op if the TTL is already set and the
+            # remaining time is still within the window.
+            await valkey.expire(key, self.window_seconds)
             if current > limit:
                 return Response(
                     content='{"detail":"Rate limit exceeded"}',

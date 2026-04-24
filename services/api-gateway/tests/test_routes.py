@@ -28,33 +28,127 @@ def _inject_rsa_keys(application) -> None:
 
 @pytest.mark.asyncio
 async def test_company_overview_composes_responses(client, mock_clients) -> None:
-    """GET /v1/companies/:id/overview merges market-data + content-store."""
-    # Mock market-data fundamentals
-    fund_resp = MagicMock(spec=httpx.Response)
-    fund_resp.status_code = 200
-    fund_resp.json.return_value = {"pe_ratio": 25.0}
+    """GET /v1/companies/:id/overview returns {instrument, quote, ohlcv, fundamentals}.
 
-    # Mock market-data OHLCV
-    ohlcv_resp = MagicMock(spec=httpx.Response)
-    ohlcv_resp.status_code = 200
-    ohlcv_resp.json.return_value = {"bars": []}
+    Four parallel market-data calls are made (instrument, company-profile, ohlcv, quote).
+    Each call gets its own fresh JWT via make_headers factory to avoid JTI replay.
+    The mock dispatches by URL so asyncio.gather ordering doesn't affect the test.
+    """
+    _entity_id = "01900000-0000-7000-8000-000000001001"
 
-    # Mock content-store articles
-    news_resp = MagicMock(spec=httpx.Response)
-    news_resp.status_code = 200
-    news_resp.json.return_value = {"articles": []}
+    inst_data = {"id": _entity_id, "symbol": "AAPL", "exchange": "NASDAQ", "is_active": True}
+    profile_data = {
+        "records": [{"data": {"Name": "Apple Inc.", "Currency": "USD", "GicSector": "Information Technology"}}]
+    }
+    # Use the real S3 OHLCVListResponse format: items/bar_date/string-values.
+    # get_company_overview normalizes this to bars/timestamp/numeric for the frontend.
+    ohlcv_data = {
+        "items": [
+            {
+                "instrument_id": _entity_id,
+                "timeframe": "1d",
+                "bar_date": "2026-04-23T00:00:00",
+                "open": "168.00",
+                "high": "173.00",
+                "low": "167.00",
+                "close": "172.00",
+                "volume": 900_000,
+                "adjusted_close": None,
+                "source": "eodhd",
+            },
+            {
+                "instrument_id": _entity_id,
+                "timeframe": "1d",
+                "bar_date": "2026-04-24T00:00:00",
+                "open": "170.00",
+                "high": "175.00",
+                "low": "169.00",
+                "close": "174.00",
+                "volume": 1_000_000,
+                "adjusted_close": None,
+                "source": "eodhd",
+            },
+        ],
+        "total": 2,
+        "timeframe": "1d",
+    }
+    quote_data = {
+        "instrument_id": _entity_id,
+        "last": "174.00",
+        "volume": 1_000_000,
+        "timestamp": "2026-04-24T16:00:00Z",
+    }
+    # All-sections fundamentals response: S3 returns records with a "section" field.
+    # S9 extracts highlights (market_cap/pe_ratio) and technicals_snapshot (52w range).
+    all_fundamentals_data = {
+        "security_id": _entity_id,
+        "records": [
+            {
+                "section": "highlights",
+                "period_type": "ttm",
+                "period_end_date": "2026-03-31",
+                "data": {"MarketCapitalization": 2_500_000_000_000, "PERatio": 28.5},
+            },
+            {
+                "section": "technicals_snapshot",
+                "period_type": "daily",
+                "period_end_date": "2026-04-24",
+                "data": {"52WeekHigh": 195.0, "52WeekLow": 130.0},
+            },
+        ],
+    }
 
-    mock_clients.market_data.get = AsyncMock(side_effect=[fund_resp, ohlcv_resp])
-    mock_clients.content_store.get = AsyncMock(return_value=news_resp)
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
 
-    response = await client.get("/v1/companies/AAPL/overview")
+    async def _dispatch(path: str, **kwargs: object) -> MagicMock:
+        """Route mock responses by URL path so gather ordering doesn't matter."""
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "fundamentals" in path and "company-profile" in path:
+            return _make_resp(profile_data)
+        if "fundamentals" in path:
+            # General all-sections endpoint (/api/v1/fundamentals/{id})
+            # returns highlights + technicals_snapshot records.
+            return _make_resp(all_fundamentals_data)
+        return _make_resp(inst_data)  # /api/v1/instruments/...
+
+    mock_clients.market_data.get = AsyncMock(side_effect=_dispatch)
+
+    response = await client.get(f"/v1/companies/{_entity_id}/overview")
     assert response.status_code == 200
 
     body = response.json()
-    assert body["company_id"] == "AAPL"
-    assert "fundamentals" in body
+    assert "instrument" in body
+    assert "quote" in body
     assert "ohlcv" in body
-    assert "latest_news" in body
+    assert "fundamentals" in body
+    assert body["instrument"]["ticker"] == "AAPL"
+    assert body["instrument"]["name"] == "Apple Inc."
+    # Overview fundamentals are now populated from highlights + technicals sections.
+    # WHY not None: S9 now fetches highlights (market_cap, pe_ratio) and
+    # technicals_snapshot (52w range) in a 5th parallel call so the instrument
+    # detail header can render stats without waiting for a FundamentalsTab request.
+    assert body["fundamentals"] is not None
+    assert body["fundamentals"]["market_cap"] == 2_500_000_000_000.0
+    assert body["fundamentals"]["pe_ratio"] == 28.5
+    assert body["fundamentals"]["week_52_high"] == 195.0
+    assert body["fundamentals"]["week_52_low"] == 130.0
+    # daily_return computed from last 2 OHLCV bars: (174 - 172) / 172 ≈ 0.01163
+    assert body["fundamentals"]["daily_return"] is not None
+    assert abs(body["fundamentals"]["daily_return"] - (174.0 - 172.0) / 172.0) < 1e-6
+    # Verify OHLCV normalized from S3 format (items/bar_date/str) → frontend format (bars/timestamp/float)
+    assert body["ohlcv"] is not None
+    assert "bars" in body["ohlcv"], "OHLCV should be normalized to 'bars' key"
+    assert len(body["ohlcv"]["bars"]) == 2
+    bar = body["ohlcv"]["bars"][1]
+    assert bar["timestamp"] == "2026-04-24T00:00:00"
+    assert bar["close"] == 174.0  # string "174.00" parsed to float
 
 
 @pytest.mark.asyncio
@@ -386,3 +480,167 @@ async def test_similar_entities_sends_system_jwt(app, mock_clients) -> None:
     assert response.status_code == 200
     call_kwargs = mock_clients.knowledge_graph.post.call_args[1]
     assert "X-Internal-JWT" in call_kwargs["headers"]
+
+
+# ── Entity graph transformation (schema mismatch fix) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_transforms_s7_response(authed_client, authed_mock_clients) -> None:
+    """GET /v1/entities/{id}/graph transforms S7 GraphNeighborhoodResponse → EntityGraph.
+
+    S7 returns {center, relations, entities}; the frontend Cytoscape.js renderer
+    expects {entity_id, nodes, edges}.  The gateway must bridge this mismatch via
+    _transform_graph_response() so the knowledge graph actually renders in the UI.
+
+    This test covers the full happy-path transformation:
+    - center node included in nodes with size=2
+    - related entities included in nodes with size=1
+    - relations mapped to edges (relation_id → id, subject/object → source/target,
+      canonical_type → label, confidence → weight)
+    """
+
+    _center_id = "01900000-0000-7000-8000-000000001001"
+    _neighbor_id = "01900000-0000-7000-8000-000000001002"
+    _relation_id = "01900000-0000-7000-8000-000000009001"
+
+    # Simulate the exact payload S7's GraphNeighborhoodResponse returns
+    s7_payload = {
+        "center": {
+            "entity_id": _center_id,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "financial_instrument",
+        },
+        "relations": [
+            {
+                "relation_id": _relation_id,
+                "subject_entity_id": _center_id,
+                "object_entity_id": _neighbor_id,
+                "canonical_type": "COMPETES_WITH",
+                "confidence": 0.85,
+            }
+        ],
+        "entities": {
+            _neighbor_id: {
+                "entity_id": _neighbor_id,
+                "canonical_name": "Microsoft Corp.",
+                "entity_type": "financial_instrument",
+            }
+        },
+    }
+
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.json.return_value = s7_payload
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=downstream_resp)
+
+    # Use a real JWT in the Authorization header so the auth guard passes
+    import jwt as pyjwt
+
+    token = pyjwt.encode(
+        {"sub": "user-1", "user_id": "user-1", "tenant_id": "tenant-1"},
+        "test-secret",
+        algorithm="HS256",
+    )
+    response = await authed_client.get(
+        f"/v1/entities/{_center_id}/graph",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    # Top-level shape must be EntityGraph, not GraphNeighborhoodResponse
+    assert "entity_id" in body, "Response must have 'entity_id' (EntityGraph format)"
+    assert "nodes" in body, "Response must have 'nodes' (EntityGraph format)"
+    assert "edges" in body, "Response must have 'edges' (EntityGraph format)"
+    assert "center" not in body, "S7 'center' key must NOT appear in the transformed response"
+    assert "relations" not in body, "S7 'relations' key must NOT appear in the transformed response"
+
+    assert body["entity_id"] == _center_id
+
+    # Nodes: center (size=2) + 1 neighbor (size=1)
+    assert len(body["nodes"]) == 2, f"Expected 2 nodes, got {len(body['nodes'])}"
+    center_node = next(n for n in body["nodes"] if n["id"] == _center_id)
+    neighbor_node = next(n for n in body["nodes"] if n["id"] == _neighbor_id)
+    assert center_node["label"] == "Apple Inc."
+    assert center_node["type"] == "financial_instrument"
+    assert center_node["size"] == 2, "Center node must have size=2"
+    assert neighbor_node["label"] == "Microsoft Corp."
+    assert neighbor_node["size"] == 1, "Neighbor nodes must have size=1"
+
+    # Edges: relation mapped correctly
+    assert len(body["edges"]) == 1
+    edge = body["edges"][0]
+    assert edge["id"] == _relation_id
+    assert edge["source"] == _center_id
+    assert edge["target"] == _neighbor_id
+    assert edge["label"] == "COMPETES_WITH"
+    assert edge["weight"] == pytest.approx(0.85)
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_passes_through_s7_errors(authed_client, authed_mock_clients) -> None:
+    """GET /v1/entities/{id}/graph passes S7 4xx responses through unchanged.
+
+    No transformation is attempted on error responses — the status code and body
+    are forwarded as-is so the frontend can display a meaningful error state.
+    """
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 404
+    downstream_resp.content = b'{"detail": "Entity not found"}'
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=downstream_resp)
+
+    import jwt as pyjwt
+
+    token = pyjwt.encode(
+        {"sub": "user-1", "user_id": "user-1", "tenant_id": "tenant-1"},
+        "test-secret",
+        algorithm="HS256",
+    )
+    response = await authed_client.get(
+        "/v1/entities/00000000-0000-0000-0000-000000000099/graph",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_resilient_to_missing_fields(authed_client, authed_mock_clients) -> None:
+    """GET /v1/entities/{id}/graph handles partial/empty S7 responses without crashing.
+
+    If S7 returns an empty or partially-formed response (e.g., isolated entity with
+    no relations), the transformation must still return a valid EntityGraph shape
+    rather than raising KeyError / TypeError.
+    """
+    # Minimal payload: center only, no relations, no neighbor entities
+    s7_minimal = {
+        "center": {"entity_id": "abc-123", "canonical_name": "Lonely Corp.", "entity_type": "company"},
+        "relations": [],
+        "entities": {},
+    }
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.json.return_value = s7_minimal
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=downstream_resp)
+
+    import jwt as pyjwt
+
+    token = pyjwt.encode(
+        {"sub": "user-1", "user_id": "user-1", "tenant_id": "tenant-1"},
+        "test-secret",
+        algorithm="HS256",
+    )
+    response = await authed_client.get(
+        "/v1/entities/abc-123/graph",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entity_id"] == "abc-123"
+    assert len(body["nodes"]) == 1  # center only
+    assert body["nodes"][0]["size"] == 2
+    assert body["edges"] == []
