@@ -460,6 +460,35 @@ async def test_dev_login_returns_403_when_oidc_configured() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dev_login_returns_403_in_production_env() -> None:
+    """POST /v1/auth/dev-login returns 403 when app_env=production (SEC-003).
+
+    Even if OIDC is not configured (e.g. OIDC_DISCOVERY_OPTIONAL=true was
+    accidentally left on), dev-login must refuse when APP_ENV=production.
+    Guard 1 (APP_ENV check) fires before Guard 2 (OIDC check).
+    """
+    # Use the shared helper which wires all required app.state fields, then
+    # override app.state.settings.app_env to simulate a production deployment.
+    app = _make_auth_app(oidc_config=None)
+
+    # Replace the settings object with one that has app_env="production".
+    # The dev_login handler reads: settings = getattr(request.app.state, "settings", None)
+    # and then: app_env = getattr(settings, "app_env", "development")
+    # We patch app.state.settings.app_env directly — pydantic Settings allows
+    # attribute override in unit tests (no frozen=True).
+    app.state.settings.app_env = "production"  # type: ignore[assignment]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/v1/auth/dev-login")
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["error"] == "dev_login_disabled"
+    assert "production" in body["detail"]
+
+
+@pytest.mark.asyncio
 async def test_dev_login_caches_user_in_valkey() -> None:
     """POST /v1/auth/dev-login stores user identity in Valkey cache."""
     valkey = _make_mock_valkey()

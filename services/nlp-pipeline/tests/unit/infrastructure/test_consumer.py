@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     ArticleProcessingConsumer,
+    _build_raw_claims,
     _compute_chunk_mention_pairs,
     _enqueue_enriched,
     _enqueue_signal_events,
@@ -380,6 +381,17 @@ class TestEnqueueEnriched:
         assert payload["doc_id"] == str(doc_id)
         assert payload["routing_tier"] == "medium"
         assert payload["event_type"] == "nlp.article.enriched"
+        # KG-001 / KG-002 closure: enriched payload MUST include the actual extracted
+        # data arrays so S7 can materialise relations, events, and claims.
+        # KG-002 (dedicated claim.extracted consumer) is closed because claims now
+        # flow via this enriched event's raw_claims array.
+        assert "raw_relations" in payload, "KG-001: raw_relations must be present in enriched payload"
+        assert "raw_events" in payload, "KG-001: raw_events must be present in enriched payload"
+        assert "raw_claims" in payload, "KG-002 closure: raw_claims must be present in enriched payload"
+        # With empty extraction_result, all arrays must be empty lists (not missing/None).
+        assert payload["raw_relations"] == []
+        assert payload["raw_events"] == []
+        assert payload["raw_claims"] == []
 
 
 # ── D-004: nlp commit failure logging (T-A-2-04) ─────────────────────────────
@@ -1016,3 +1028,103 @@ class TestEnqueueSignalEvents:
                     p.stop()
 
         enqueue_signal_spy.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# KG-002 closure: _build_raw_claims() unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestBuildRawClaims:
+    """Validate that _build_raw_claims() correctly converts LLM extraction
+    claims into the dict format S7 expects, resolving entity refs and skipping
+    unresolved ones."""
+
+    def test_basic_claim_conversion(self) -> None:
+        """A claim with a resolvable entity_ref produces the correct dict."""
+        entity_id = str(uuid.uuid4())
+        claims = [
+            {
+                "entity_ref": "AAPL",
+                "claim_type": "analyst_rating",
+                "polarity": "positive",
+                "evidence_text": "Analyst upgraded AAPL to Buy",
+                "confidence": 0.92,
+            },
+        ]
+        entity_id_by_ref = {"aapl": entity_id}
+
+        result = _build_raw_claims(claims, entity_id_by_ref)
+
+        assert len(result) == 1
+        claim = result[0]
+        assert claim["subject_entity_id"] == entity_id
+        assert claim["claim_type"] == "analyst_rating"
+        assert claim["polarity"] == "positive"
+        assert claim["claim_text"] == "Analyst upgraded AAPL to Buy"
+        assert claim["extraction_confidence"] == pytest.approx(0.92)
+
+    def test_unresolved_entity_ref_is_skipped(self) -> None:
+        """Claims whose entity_ref is not in the resolution map are dropped."""
+        claims = [
+            {
+                "entity_ref": "UNKNOWN_TICKER",
+                "claim_type": "revenue_guidance",
+                "polarity": "negative",
+                "evidence_text": "Revenue missed expectations",
+                "confidence": 0.7,
+            },
+        ]
+        entity_id_by_ref = {"aapl": str(uuid.uuid4())}
+
+        result = _build_raw_claims(claims, entity_id_by_ref)
+
+        assert len(result) == 0
+
+    def test_multiple_claims_mixed_resolution(self) -> None:
+        """Only claims with resolved entity refs are included in the output."""
+        entity_id_a = str(uuid.uuid4())
+        entity_id_b = str(uuid.uuid4())
+        claims = [
+            {"entity_ref": "AAPL", "claim_type": "buy_rating", "confidence": 0.9},
+            {"entity_ref": "UNKNOWN", "claim_type": "sell_rating", "confidence": 0.8},
+            {"entity_ref": "MSFT", "claim_type": "hold_rating", "confidence": 0.85},
+        ]
+        entity_id_by_ref = {"aapl": entity_id_a, "msft": entity_id_b}
+
+        result = _build_raw_claims(claims, entity_id_by_ref)
+
+        assert len(result) == 2
+        assert result[0]["subject_entity_id"] == entity_id_a
+        assert result[1]["subject_entity_id"] == entity_id_b
+
+    def test_defaults_for_missing_optional_fields(self) -> None:
+        """Missing polarity defaults to 'neutral', confidence to 0.5, etc."""
+        entity_id = str(uuid.uuid4())
+        claims = [{"entity_ref": "AAPL", "claim_type": "general"}]
+        entity_id_by_ref = {"aapl": entity_id}
+
+        result = _build_raw_claims(claims, entity_id_by_ref)
+
+        assert len(result) == 1
+        claim = result[0]
+        assert claim["polarity"] == "neutral"
+        assert claim["extraction_confidence"] == pytest.approx(0.5)
+        assert claim["claim_text"] == ""
+
+    def test_entity_ref_case_insensitive(self) -> None:
+        """Entity ref lookup is case-insensitive (lowered before lookup)."""
+        entity_id = str(uuid.uuid4())
+        claims = [{"entity_ref": "AaPl", "claim_type": "rating"}]
+        entity_id_by_ref = {"aapl": entity_id}
+
+        result = _build_raw_claims(claims, entity_id_by_ref)
+
+        assert len(result) == 1
+        assert result[0]["subject_entity_id"] == entity_id
+
+    def test_empty_claims_returns_empty_list(self) -> None:
+        """Empty input produces empty output."""
+        result = _build_raw_claims([], {"aapl": str(uuid.uuid4())})
+        assert result == []

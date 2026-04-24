@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
-from market_ingestion.api.dependencies import get_object_store, get_settings, get_uow
+from market_ingestion.api.dependencies import get_object_store, get_read_uow, get_settings, get_uow
 from market_ingestion.app import create_app
 
 pytestmark = pytest.mark.unit
@@ -79,8 +79,13 @@ def app_with_overrides():
     async def override_get_uow():
         yield mock_uow
 
+    # get_read_uow now drives readyz / ingest_status / list_policies (R27).
+    async def override_get_read_uow():
+        yield mock_uow
+
     app.dependency_overrides[get_settings] = override_get_settings
     app.dependency_overrides[get_uow] = override_get_uow
+    app.dependency_overrides[get_read_uow] = override_get_read_uow
     app.dependency_overrides[get_object_store] = _make_mock_object_store
     try:
         yield app, mock_uow
@@ -125,9 +130,17 @@ async def test_healthz_returns_200(client):
 
 
 @pytest.mark.asyncio
-async def test_readyz_returns_200_when_all_ok(client):
-    ac, _ = client
-    resp = await ac.get("/readyz")
+async def test_readyz_returns_200_when_all_ok(app_with_overrides):
+    app, _ = app_with_overrides
+    # F-003B: readyz checks _internal_jwt_public_key to confirm JWKS was loaded.
+    # Set a sentinel here (not in the shared fixture) so only this test sees it;
+    # other tests must NOT have this set or the JWT middleware will attempt RS256
+    # verification with an invalid key on protected routes (skip_verification path
+    # is only taken when public_key is None — see middleware dispatch logic).
+    app.state._internal_jwt_public_key = "fake-test-key"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.get("/readyz")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"

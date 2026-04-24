@@ -18,14 +18,40 @@ _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
 
 async def get_nlp_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Yield an AsyncSession from the nlp_db session factory."""
+    """Yield a write-side AsyncSession from the nlp_db session factory."""
     async with request.app.state.nlp_session_factory() as session:
         yield session
 
 
+async def get_read_nlp_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a read-replica AsyncSession from the nlp_db read factory (R27).
+
+    Falls back to the write factory when no dedicated read URL is configured.
+    Used by query routes (signals, news, chunk search) to avoid routing reads
+    through the primary write connection pool.
+    """
+    # nlp_read_factory is set in lifespan and falls back to nlp_session_factory
+    # when DATABASE_READ_URL is not configured (see app.py lifespan).
+    factory = getattr(request.app.state, "nlp_read_factory", request.app.state.nlp_session_factory)
+    async with factory() as session:
+        yield session
+
+
 async def get_intelligence_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Yield an AsyncSession from the intelligence_db session factory."""
+    """Yield a write-side AsyncSession from the intelligence_db session factory."""
     async with request.app.state.intelligence_session_factory() as session:
+        yield session
+
+
+async def get_read_intelligence_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a read-replica AsyncSession from the intelligence_db read factory (R27).
+
+    Falls back to the write factory when no dedicated read URL is configured.
+    Used by query routes (entity resolver, chunk search) that only read from
+    the intelligence DB.
+    """
+    factory = getattr(request.app.state, "intel_read_factory", request.app.state.intelligence_session_factory)
+    async with factory() as session:
         yield session
 
 
@@ -68,8 +94,10 @@ def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_nlp_session)])
 DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
 
 
-def get_signals_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> SignalsQueryPort:
-    """Build a SqlaSignalsQueryRepo for the current request session (R25-compliant)."""
+def get_signals_query_repo(
+    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> SignalsQueryPort:
+    """Build a SqlaSignalsQueryRepo backed by the read replica (R27 — query-only)."""
     from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 
     return SqlaSignalsQueryRepo(session)
@@ -78,8 +106,10 @@ def get_signals_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_sess
 SignalsQueryRepoDep = Annotated[SignalsQueryPort, Depends(get_signals_query_repo)]
 
 
-def get_news_query_repo(session: Annotated[AsyncSession, Depends(get_nlp_session)]) -> NewsQueryPort:
-    """Build a SqlaNewsQueryRepo for the current request session (R25-compliant)."""
+def get_news_query_repo(
+    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> NewsQueryPort:
+    """Build a SqlaNewsQueryRepo backed by the read replica (R27 — query-only)."""
     from nlp_pipeline.infrastructure.nlp_db.repositories.news_query import SqlaNewsQueryRepo
 
     return SqlaNewsQueryRepo(session)
@@ -90,7 +120,7 @@ NewsQueryRepoDep = Annotated[NewsQueryPort, Depends(get_news_query_repo)]
 
 def get_entity_resolver_use_case(
     request: Request,
-    intel_session: Annotated[AsyncSession, Depends(get_intelligence_session)],
+    intel_session: Annotated[AsyncSession, Depends(get_read_intelligence_session)],  # R27: read replica
 ) -> QueryEntityResolverUseCase:
     """Build QueryEntityResolverUseCase for the current request.
 
@@ -121,8 +151,8 @@ EntityResolverDep = Annotated[QueryEntityResolverUseCase, Depends(get_entity_res
 
 def get_chunk_search_use_case(
     request: Request,
-    nlp_session: Annotated[AsyncSession, Depends(get_nlp_session)],
-    intel_session: Annotated[AsyncSession, Depends(get_intelligence_session)],
+    nlp_session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+    intel_session: Annotated[AsyncSession, Depends(get_read_intelligence_session)],  # R27: read replica
 ) -> EnhancedChunkSearchUseCase:
     """Build EnhancedChunkSearchUseCase for the current request.
 

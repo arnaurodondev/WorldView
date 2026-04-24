@@ -16,10 +16,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import prometheus_client
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from market_ingestion.api.dependencies import (
     get_object_store,
+    get_read_uow,
     get_settings,
     get_uow,
 )
@@ -41,7 +42,7 @@ from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import ObjectStoreAdapter
-    from market_ingestion.application.ports.unit_of_work import UnitOfWork
+    from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from market_ingestion.config import Settings
 
 logger = get_logger(__name__)
@@ -67,13 +68,21 @@ async def healthz() -> HealthResponse:
 
 @router.get("/readyz", response_model=ReadyResponse, tags=["probes"])
 async def readyz(
+    request: Request,
     settings: Settings = Depends(get_settings),
-    uow: UnitOfWork = Depends(get_uow),
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),  # R27: read-only check
     object_store: ObjectStoreAdapter = Depends(get_object_store),
 ) -> ReadyResponse:
     """Readiness probe — checks DB connectivity and storage availability."""
     checks: dict[str, str] = {}
     all_ok = True
+
+    # F-003B: JWKS public key must be loaded before accepting traffic.
+    if getattr(request.app.state, "_internal_jwt_public_key", None) is None:
+        checks["jwks"] = "not_loaded"
+        all_ok = False
+    else:
+        checks["jwks"] = "ok"
 
     # DB check — run a trivial query
     try:
@@ -201,7 +210,7 @@ async def trigger_backfill(
     tags=["ingestion"],
 )
 async def ingest_status(
-    uow: UnitOfWork = Depends(get_uow),
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),  # R27: read-only query
 ) -> TaskStatusResponse:
     """Return task counts grouped by status."""
     counts = await uow.tasks.count_by_status()
@@ -219,7 +228,7 @@ async def ingest_status(
     tags=["policies"],
 )
 async def list_policies(
-    uow: UnitOfWork = Depends(get_uow),
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),  # R27: read-only query
 ) -> PolicyListResponse:
     """List all enabled polling policies."""
     policies = await uow.policies.list_enabled()

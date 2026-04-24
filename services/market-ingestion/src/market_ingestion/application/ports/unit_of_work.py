@@ -1,6 +1,10 @@
-"""Unit of Work port for the market-ingestion bounded context.
+"""Unit of Work ports for the market-ingestion bounded context.
 
-The UoW defines the transaction boundary for application use cases.
+Two variants:
+- ``ReadOnlyUnitOfWork`` — read replica session, no mutations (R27).
+  Read-only routes (readyz, ingest_status, list_policies) MUST use this type.
+- ``UnitOfWork`` — extends ``ReadOnlyUnitOfWork`` with commit/rollback.
+  Use cases that trigger ingestion depend on this type.
 """
 
 from __future__ import annotations
@@ -18,6 +22,41 @@ if TYPE_CHECKING:
         TaskRepository,
         WatermarkRepository,
     )
+
+
+class ReadOnlyUnitOfWork(ABC):
+    """Read-only Unit of Work — uses the read replica session (R27).
+
+    Query-only routes MUST use this type (not ``UnitOfWork``) to avoid
+    accidentally holding write-session connections during read traffic and
+    to enable routing reads to a replica when one is configured.
+
+    Usage::
+
+        async with read_uow:
+            counts = await read_uow.tasks.count_by_status()
+    """
+
+    @property
+    @abstractmethod
+    def tasks(self) -> TaskRepository:
+        """Task repository (read session — count/status queries only)."""
+
+    @property
+    @abstractmethod
+    def policies(self) -> PollingPolicyRepository:
+        """Polling policy repository (read session — list/inspect only)."""
+
+    async def __aenter__(self) -> ReadOnlyUnitOfWork:
+        return self
+
+    async def __aexit__(  # noqa: B027
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        """Close the read session — no rollback needed (read-only)."""
 
 
 class UnitOfWork(ABC):

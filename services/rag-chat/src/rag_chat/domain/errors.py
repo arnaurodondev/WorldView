@@ -74,3 +74,15 @@ class BriefingAuthError(DomainError):
     """Auth failed on the /internal/v1/briefings endpoint (PRD-0025: InternalJWTMiddleware)."""
 
     error_code = "BRIEFING_AUTH_FAILED"
+
+
+class ContextGatheringError(DomainError):
+    """All upstream context sources failed during briefing generation."""
+
+    error_code = "CONTEXT_GATHERING_FAILED"
+
+
+class EntityNotFoundError(DomainError):
+    """Entity not found in knowledge graph."""
+
+    error_code = "ENTITY_NOT_FOUND"
