@@ -231,6 +231,27 @@ sequenceDiagram
 
 ---
 
+## Ticker Coverage (64 symbols — migration 0002 + 0004)
+
+Polling policies are seeded for **64 symbols** across 6 categories. Each symbol gets 5 policies: `quotes` (5 min, adaptive), `ohlcv 1d/1w/1mo`, and `fundamentals` (daily). The `quotes` policies have `market_hours_only=true` (added by migration 0003) to suppress overnight polling.
+
+| Category | Symbols | Exchange |
+|----------|---------|----------|
+| US Equities (30) | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, BRK-B, JNJ, V, WMT, JPM, PG, XOM, MA, UNH, HD, COST, MRK, BA, PFE, LLY, AXP, MS, DIS, IBM, EXC, CAT, KO, CVX | US |
+| Sector ETFs (9) | XLK, XLV, XLE, XLY, VTV, QQQ, IBIT, MSTR, PPA | US |
+| Broad Market ETFs (4) | SPY, IVV, VOO, VTI | US |
+| Fixed Income ETFs (4) | IEF, TLT, AGG, SHY | US |
+| Commodity ETFs (3) | GLD, SLV, USO | US |
+| Major Indices (5) | GSPC, CCMP, INDU, RUT, VIX | INDX |
+| Crypto Top-10 (10) | BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, MATIC-USD, LTC-USD | CC |
+| Forex (1) | EURUSD | FOREX |
+
+**Migration history**:
+- `0002_initial_seeds.py` — seeds all 64 symbols on fresh databases (rewritten 2026-04-24 to use deterministic hash IDs instead of positional `_SEED_IDS` to scale beyond the original 6-ticker list).
+- `0004_expand_ticker_coverage.py` — for live systems that already ran the original `0002`, adds the 58 new symbols via `INSERT … ON CONFLICT DO NOTHING` (safe to run even if `0002` was already updated).
+
+---
+
 ## Error Handling
 
 - **Rate limit exceeded**: mark task as `rate_limited`, exponential backoff, decrement budget
