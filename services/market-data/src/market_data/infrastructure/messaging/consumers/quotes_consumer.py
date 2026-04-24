@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from market_data.application.ports.uow import UnitOfWork
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
     from market_data.infrastructure.cache.quote_cache import QuoteCache
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
@@ -48,6 +49,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         valkey_client: Any = None,
         config: ConsumerConfig | None = None,
         metrics: Any = None,
+        price_snapshot_cache: Any = None,  # PriceSnapshotCache | None
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -56,6 +58,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         self._object_storage = object_storage
         self._valkey_client = valkey_client
         self._quote_cache: QuoteCache | None = None
+        self._price_snapshot_cache: PriceSnapshotCache | None = price_snapshot_cache
         self._current_uow: UnitOfWork | None = None
 
         # Build QuoteCache lazily if we have a valkey client
@@ -248,6 +251,27 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         # caching stale data into Valkey until TTL expiry.
         if self._quote_cache is not None:
             uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
+
+        # After DB commit: resolve a PriceSnapshot from the fresh quote and write
+        # it to Valkey.  This hot-caches the snapshot so the first API read is
+        # served from cache (O(1)) rather than triggering a full DB resolution.
+        # We pass ohlcv_bars=[] here because OHLCV bars arrive via a separate
+        # consumer topic — the quote is the only source available at this stage.
+        # The full fallback chain (including OHLCV) is exercised in the API router.
+        if self._price_snapshot_cache is not None:
+            from market_data.domain.price_snapshot import PriceSnapshotResolver
+
+            resolved_at = datetime.now(tz=UTC)
+            resolver = PriceSnapshotResolver()
+            snapshot = resolver.resolve(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                quote=quote,
+                ohlcv_bars=[],  # OHLCV not available at consumer stage (see above)
+                resolved_at=resolved_at,
+            )
+            uow.schedule_post_commit(self._price_snapshot_cache.set(instrument.id, snapshot))
 
         logger.info(
             "quotes_consumer.materialized",

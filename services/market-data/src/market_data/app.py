@@ -253,6 +253,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app,
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
     await jwt_middleware.startup()
 
@@ -275,11 +276,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     valkey_client = create_valkey_client_from_url(settings.valkey_url)
     app.state.valkey_client = valkey_client
 
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
     from market_data.infrastructure.cache.quote_cache import QuoteCache
     from market_data.infrastructure.cache.screen_fields_cache import ScreenFieldsCache
 
     app.state.quote_cache = QuoteCache(valkey_client)
     app.state.screen_fields_cache = ScreenFieldsCache(valkey_client)
+    # PriceSnapshotCache: 2-hour TTL cache for resolved price snapshots (W1-6)
+    app.state.price_snapshot_cache = PriceSnapshotCache(valkey_client)
 
     # 6. Object storage
     object_storage = None
@@ -338,6 +342,7 @@ def create_app() -> FastAPI:
         InternalJWTMiddleware,
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
@@ -358,6 +363,13 @@ def create_app() -> FastAPI:
         _log = get_logger("market_data.app")
         checks: dict[str, str] = {}
         all_ok = True
+
+        # F-003B: JWKS public key must be loaded before accepting traffic.
+        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+            checks["jwks"] = "not_loaded"
+            all_ok = False
+        else:
+            checks["jwks"] = "ok"
 
         # DB check
         try:
@@ -425,6 +437,7 @@ def create_app() -> FastAPI:
         instruments,
         ohlcv,
         prediction_markets,
+        price_snapshot,
         quotes,
         securities,
     )
@@ -440,5 +453,8 @@ def create_app() -> FastAPI:
     # prediction_markets: /prediction-markets/{market_id}/history registered
     # before /{market_id} inside the router to avoid path-param conflicts
     app.include_router(prediction_markets.router, prefix="/api/v1")
+    # price_snapshot: internal endpoints — only S9 (api-gateway) calls these
+    # via the internal JWT mechanism (PRD-0025)
+    app.include_router(price_snapshot.router, prefix="/internal/v1")
 
     return app

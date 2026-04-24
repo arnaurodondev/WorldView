@@ -28,9 +28,18 @@ def _make_jwt() -> str:
 
 
 def _mock_response(status: int, content: bytes = b"{}") -> MagicMock:
+    import json as _json
+
     resp = MagicMock(spec=httpx.Response)
     resp.status_code = status
     resp.content = content
+    # WHY: proxy code calls resp.json() to parse the body; MagicMock.spec=httpx.Response
+    # creates a stub that returns another MagicMock by default. Provide the actual
+    # parsed dict so JSON serialisation in the proxy doesn't fail.
+    try:
+        resp.json = MagicMock(return_value=_json.loads(content.decode()))
+    except Exception:
+        resp.json = MagicMock(return_value={})
     return resp
 
 
@@ -107,10 +116,70 @@ async def test_ohlcv_proxy_authenticated(authed_app, authed_mock_clients) -> Non
 
 
 @pytest.mark.asyncio
-async def test_quotes_single_proxy(authed_app, authed_mock_clients) -> None:
-    """GET /v1/quotes/{id} proxied correctly to S3."""
+async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> None:
+    """GET /v1/quotes/{id} falls back to legacy S3 quote endpoint when PriceSnapshot returns 404.
+
+    PLAN-0036 W1-10: the route first tries /internal/v1/price/{id}; on 404 it
+    falls back to /api/v1/quotes/{id}. When PriceSnapshot is not yet deployed
+    (or no snapshot exists), the user still gets a valid response from the
+    legacy path.
+    """
+
+    def _side_effect(path: str, **kwargs: object) -> object:
+        if "/internal/v1/price/" in path:
+            return _mock_response(404, b'{"detail": "not found"}')
+        # legacy quote path
+        legacy = (
+            b'{"instrument_id": "instr-1", "last": "150.0", "bid": null,'
+            b' "ask": null, "volume": null, "timestamp": "2026-04-24T00:00:00Z",'
+            b' "updated_at": "2026-04-24T00:00:00Z"}'
+        )
+        return _mock_response(200, legacy)
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_side_effect)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/quotes/instr-1",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Two calls: first to PriceSnapshot (404), then to legacy quote endpoint
+    assert authed_mock_clients.market_data.get.call_count == 2
+    calls = [c[0][0] for c in authed_mock_clients.market_data.get.call_args_list]
+    assert any("/internal/v1/price/instr-1" in c for c in calls)
+    assert any("/api/v1/quotes/instr-1" in c for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_quotes_single_proxy_price_snapshot(authed_app, authed_mock_clients) -> None:
+    """GET /v1/quotes/{id} returns enriched quote when PriceSnapshot succeeds.
+
+    PLAN-0036 W1-10: when S3 /internal/v1/price/{id} returns a valid
+    PriceSnapshotResponse, the enriched quote (with freshness_status, source,
+    etc.) is returned directly — the legacy endpoint is NOT called.
+    """
+    import json
+
+    snapshot = {
+        "instrument_id": "instr-1",
+        "symbol": "AAPL",
+        "exchange": "US",
+        "price": "150.00",
+        "price_change": "2.50",
+        "price_change_pct": "1.69",
+        "timestamp": "2026-04-24T15:00:00Z",
+        "fetched_at": "2026-04-24T15:01:00Z",
+        "source": "fresh_quote",
+        "freshness_status": "live",
+        "stale_reason": None,
+        "refresh_available": True,
+        "refresh_cooldown_remaining_sec": 0,
+    }
     authed_mock_clients.market_data.get = AsyncMock(
-        return_value=_mock_response(200, b'{"price": 150.0}'),
+        return_value=_mock_response(200, json.dumps(snapshot).encode()),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -121,17 +190,32 @@ async def test_quotes_single_proxy(authed_app, authed_mock_clients) -> None:
         )
 
     assert resp.status_code == 200
+    body = resp.json()
+    # Enriched freshness fields must be present
+    assert body["freshness_status"] == "live"
+    assert body["source"] == "fresh_quote"
+    assert body["price"] == 150.0
+    # Only one call (PriceSnapshot succeeded — no fallback needed)
     authed_mock_clients.market_data.get.assert_called_once()
-    call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert "/api/v1/quotes/instr-1" in call_args[0]
 
 
 @pytest.mark.asyncio
 async def test_quotes_batch_body_forwarded(authed_app, authed_mock_clients) -> None:
-    """POST /v1/quotes/batch forwards request body to S3."""
-    authed_mock_clients.market_data.post = AsyncMock(
-        return_value=_mock_response(200, b'{"quotes": []}'),
-    )
+    """POST /v1/quotes/batch forwards request body to the S3 legacy endpoint.
+
+    PLAN-0036 W1-10: the route first tries /internal/v1/price/batch (PriceSnapshot
+    batch). When that returns 404 (not yet deployed), it falls back to the legacy
+    /api/v1/quotes/batch endpoint. This test verifies the body is forwarded correctly
+    to the legacy endpoint on the fallback path.
+    """
+
+    def _side_effect(path: str, **kwargs: object) -> object:
+        if "/internal/v1/price/batch" in path:
+            return _mock_response(404, b'{"detail": "not found"}')
+        # legacy batch quote path
+        return _mock_response(200, b'{"quotes": []}')
+
+    authed_mock_clients.market_data.post = AsyncMock(side_effect=_side_effect)
 
     body = b'{"instrument_ids": ["instr-1", "instr-2"]}'
     transport = ASGITransport(app=authed_app)
@@ -146,9 +230,12 @@ async def test_quotes_batch_body_forwarded(authed_app, authed_mock_clients) -> N
         )
 
     assert resp.status_code == 200
-    authed_mock_clients.market_data.post.assert_called_once()
-    call_kwargs = authed_mock_clients.market_data.post.call_args[1]
-    assert call_kwargs["content"] == body
+    # Two calls: PriceSnapshot batch (404) then legacy batch endpoint
+    assert authed_mock_clients.market_data.post.call_count == 2
+    calls = authed_mock_clients.market_data.post.call_args_list
+    # Verify the body was forwarded to both endpoints (same body used in fallback)
+    legacy_call = next(c for c in calls if "/api/v1/quotes/batch" in c[0][0])
+    assert legacy_call[1]["content"] == body
 
 
 # ── Fundamentals ─────────────────────────────────────────────────────────────
@@ -193,12 +280,27 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
 
 @pytest.mark.asyncio
 async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None:
-    """GET /v1/entities/{id}/graph?depth=2 forwards depth param to S7."""
-    authed_mock_clients.knowledge_graph.get = AsyncMock(
-        return_value=_mock_response(200, b'{"nodes": [], "edges": []}'),
-    )
+    """GET /v1/entities/{id}/graph?depth=2 forwards depth param to S7.
 
+    The response is transformed from S7's GraphNeighborhoodResponse to the
+    frontend EntityGraph format by _transform_graph_response() in the route
+    handler. The mock must return a valid S7 payload so the transform succeeds.
+    """
     entity_id = "00000000-0000-0000-0000-000000000001"
+
+    # Provide a minimal but valid S7 GraphNeighborhoodResponse so the gateway's
+    # _transform_graph_response() can parse it without raising TypeError.
+    s7_payload = {
+        "center": {"entity_id": entity_id, "canonical_name": "Test Corp.", "entity_type": "company"},
+        "relations": [],
+        "entities": {},
+    }
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = s7_payload
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=mock_resp)
+
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
@@ -208,11 +310,17 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
         )
 
     assert resp.status_code == 200
+    # Verify downstream was called with depth forwarded
     authed_mock_clients.knowledge_graph.get.assert_called_once()
     call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
     assert call_kwargs["params"].get("depth") == "2"
     call_args = authed_mock_clients.knowledge_graph.get.call_args[0]
     assert f"/api/v1/entities/{entity_id}/graph" in call_args[0]
+    # Verify response is transformed to EntityGraph format (not raw S7 shape)
+    body = resp.json()
+    assert "entity_id" in body
+    assert "nodes" in body
+    assert "edges" in body
 
 
 @pytest.mark.asyncio
