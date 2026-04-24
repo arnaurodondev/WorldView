@@ -27,6 +27,7 @@ def _to_domain(row: PollingPolicyModel) -> PollingPolicy:
         k=row.adaptive_k,
         priority=row.priority,
         is_enabled=row.enabled,
+        market_hours_only=row.market_hours_only,
         backfill_enabled=row.backfill_enabled,
         backfill_days=row.backfill_chunk_days,
         backfill_start_date=row.backfill_start_date,
@@ -104,6 +105,7 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
             adaptive_k=policy.k,
             priority=policy.priority,
             enabled=policy.is_enabled,
+            market_hours_only=policy.market_hours_only,
             backfill_enabled=policy.backfill_enabled,
             backfill_start_date=policy.backfill_start_date,
             backfill_chunk_days=policy.backfill_days,
@@ -117,6 +119,7 @@ class SqlaPollingPolicyRepository(PollingPolicyRepository):
             .where(PollingPolicyModel.id == policy.id)
             .values(
                 enabled=policy.is_enabled,
+                market_hours_only=policy.market_hours_only,
                 priority=policy.priority,
                 base_interval_sec=int(policy.base_interval_seconds),
                 adaptive_k=policy.k,

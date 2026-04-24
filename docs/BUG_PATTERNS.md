@@ -6043,3 +6043,57 @@ When adding a new lib import to a service, check the service Dockerfile immediat
 - Never set `app.state._internal_jwt_public_key` to a non-RSA string in a shared test fixture — doing so silently disables `skip_verification` for all protected routes.
 - For tests that check `/readyz` JWKS readiness: set the key locally inside the test, not in the fixture.
 - See also: BP-197 (JWKS readiness drift), BP-187 (skip_verification safety guard).
+
+
+---
+
+## BP-182 — `market_hours_only` DB Flag Never Enforced by Scheduler
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (EODHD API call explosion investigation) |
+| **Severity** | CRITICAL (cost) — quote polling fires 24/7 for all 64 symbols instead of market hours only |
+| **Affected areas** | `services/market-ingestion/src/market_ingestion/domain/entities/polling_policy.py`, `schedule_tasks.py`, `db/repositories/policy_repository.py`, `db/models/polling_policy.py` |
+| **Root cause** | Migration 0003 added `market_hours_only` column to `polling_policies` and set it `true` for all quote policies. Migration 0004 also sets it for new quote policies. However, the `PollingPolicy` domain entity had no `market_hours_only` field, the repository's `_to_domain` did not map it, and `schedule_tasks.py` never checked it. The column existed in the DB but was completely ignored at runtime. |
+| **Symptom** | 18,432 quote API calls/day instead of intended ~4,992 (74% waste). No application error — the calls succeed, the excess credits are silently consumed. |
+| **Fix** | Added `market_hours_only: bool = False` to `PollingPolicy` domain entity; added `_is_market_hours_now()` helper; `is_due()` checks this flag before the watermark comparison. Wired `market_hours_only` through ORM model, `_to_domain`, `add`, and `save` in the repository. |
+
+### Prevention
+
+- When adding a DB column that controls runtime scheduling behavior, always update the domain entity, repository mapper, AND the use case that reads it. DB-only column additions that aren't propagated to the domain layer are silent no-ops.
+- Add a test verifying that `market_hours_only=True` policies return `is_due()=False` outside market hours.
+
+---
+
+## BP-183 — Budget System Ignores EODHD Per-Endpoint Credit Costs
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (EODHD API call explosion investigation) |
+| **Severity** | HIGH (cost) — fundamentals endpoint costs 10 credits each but budget charges 1 token |
+| **Affected areas** | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py:_apply_budgets` |
+| **Root cause** | `_apply_budgets()` calls `budget.try_consume(1.0)` for every task regardless of dataset type. EODHD charges: fundamentals=10 credits, intraday=5 credits, EOD/quotes=1 credit. Additionally, the budget `refill_rate_per_second=10.0` equates to 864,000 tokens/day — effectively unlimited, meaning the budget never actually throttled anything. |
+| **Symptom** | Provider budget always had tokens available; the throttle was never invoked. Fundamentals tasks consumed 10x their "fair share" of credits without detection. |
+| **Fix** | Added `_EODHD_CREDIT_COST` dict mapping `dataset_type → credit_cost` and `_INTRADAY_TIMEFRAMES` set. `_apply_budgets` now computes `cost` per task and calls `budget.try_consume(cost)`. Migration 0005 lowers `refill_rate_per_second` from 10.0 to 1.157 (matching EODHD's 100,000 credits/day limit). |
+
+### Prevention
+
+- When integrating with a pay-per-call API, always model the budget in terms of the API's credit unit, not request count. Different endpoints have different costs — the budget token cost must reflect this.
+- Validate budget calibration: `max_tokens × 24 / refill_rate_per_second` should equal the API's daily limit.
+
+---
+
+## BP-184 — Cold-Start Thundering Herd: All Policies Due Simultaneously
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-24 (EODHD API call explosion investigation) |
+| **Severity** | HIGH (cost) — entire cold-start burst of ~1,000 EODHD credits in the first scheduler tick |
+| **Affected areas** | `services/market-ingestion/src/market_ingestion/domain/entities/polling_policy.py:is_due` |
+| **Root cause** | On a fresh DB (after `alembic upgrade`), all `ingestion_watermarks` have `last_success_at=NULL`. `is_due(None)` returns `True` unconditionally, so all 361 policies trigger in the first scheduler tick simultaneously. |
+| **Symptom** | Large API credit burst immediately after platform startup. |
+| **Mitigation** | Addressed indirectly: BP-183 fix makes the budget correctly account for fundamentals (10 credits) so the budget cap takes effect on cold start. Migration 0005 raises `max_tokens` to 2,000 which is still finite. True fix would be startup staggering (e.g., add `created_at`-based jitter), tracked separately. |
+
+### Prevention
+
+- For systems with per-call API costs, implement startup jitter: spread the initial load over N minutes by checking `(now - policy.created_at).total_seconds() % policy.base_interval_seconds` instead of treating `last_run_at=NULL` as always due.

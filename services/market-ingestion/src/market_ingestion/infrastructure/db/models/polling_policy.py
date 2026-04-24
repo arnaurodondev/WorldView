@@ -45,6 +45,9 @@ class PollingPolicyModel(Base):
     # Enabled flag (domain: is_enabled)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Market-hours gate (domain: market_hours_only) — added by migration 0003
+    market_hours_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # Backfill configuration (domain: backfill_days / backfill_start_date)
     backfill_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     backfill_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
