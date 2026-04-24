@@ -1,4 +1,4 @@
-"""Unit tests for _parse_event_date helper (EconomicEventsWorker, PRD-0018 §6 Worker 13D-6)."""
+"""Unit tests for _parse_event_date helper (EconomicEventsDatasetConsumer, PRD-0018 §6 Worker 13D-6)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ pytestmark = pytest.mark.unit
 
 
 def _parse(date_str: str):  # type: ignore[no-untyped-def]
-    from knowledge_graph.infrastructure.workers.economic_events_worker import _parse_event_date
+    # D-W5: _parse_event_date was moved from the retired economic_events_worker
+    # to the new Kafka-driven consumer.
+    from knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer import _parse_event_date
 
     return _parse_event_date(date_str)
 

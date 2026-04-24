@@ -263,6 +263,10 @@ Polling policies are seeded for **64 symbols** across 6 categories. Each symbol 
 - `0003_add_market_hours_only.py` — adds `market_hours_only` column; sets `true` for all quote policies.
 - `0004_expand_ticker_coverage.py` — for live systems with original 6-symbol `0002`, adds 58 new symbols via `INSERT … ON CONFLICT DO NOTHING`.
 - `0005_api_call_optimization.py` — fundamentals weekly (not daily), disabled for crypto/indices/commodity ETFs; 1w/1mo OHLCV extended intervals; 5m/1h intraday gated to market hours; budget recalibrated to match EODHD 100K credits/day limit.
+- `0006_weekly_insider_transactions.py` — OPT-10: insider_transactions interval changed from daily (86400 s) to weekly (604800 s); SEC Form 4 is already delayed 2 business days so daily polling adds no value.
+- `0007_expand_economic_event_countries.py` — D-W2: adds economic event polling policies for JPN, CHN, EU (joins existing USA, EUR, GBR from 0002). S7 consumers read from `market.dataset.fetched` so new country events are immediately processed.
+
+**Canonical passthrough serialization (D-W1)**: 7 dataset types now use `serialize_passthrough()` in `DefaultCanonicalSerializer` instead of bespoke canonical models. Each MinIO object is a single NDJSON line: `{"dataset_type": "...", "symbol": "...", "source": "eodhd", "payload": <raw>, "fetched_at": "..."}`. Types: `economic_events`, `macro_indicator`, `insider_transactions`, `earnings_calendar`, `news_sentiment`, `yield_curve`, `market_cap`.
 
 ---
 

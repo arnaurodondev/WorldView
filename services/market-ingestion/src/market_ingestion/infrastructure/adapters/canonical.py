@@ -76,3 +76,38 @@ class DefaultCanonicalSerializer(CanonicalSerializer):
         """
         fund = CanonicalFundamentals.from_dict(data)
         return (json.dumps(fund.to_dict()) + "\n").encode("utf-8")
+
+    def serialize_passthrough(
+        self,
+        raw_data: Any,
+        dataset_type: str,
+        symbol: str,
+        source: str,
+    ) -> bytes:
+        """Wrap raw provider data in a canonical envelope for passthrough dataset types.
+
+        Used for dataset types that have no domain-specific canonical model
+        (economic_events, macro_indicator, insider_transactions,
+        earnings_calendar, news_sentiment, yield_curve, market_cap). The
+        envelope is self-describing so downstream consumers can identify and
+        parse it without additional context.
+
+        Args:
+            raw_data: The parsed JSON payload from the provider (dict or list).
+            dataset_type: String value of the DatasetType enum (e.g. "economic_events").
+            symbol: The task symbol (e.g. "EVENTS.USA", "AAPL").
+            source: String value of the Provider enum (e.g. "eodhd").
+
+        Returns:
+            UTF-8 NDJSON — one envelope line, newline-terminated.
+        """
+        from datetime import UTC, datetime
+
+        envelope = {
+            "dataset_type": dataset_type,
+            "symbol": symbol,
+            "source": source,
+            "payload": raw_data,
+            "fetched_at": datetime.now(tz=UTC).isoformat(),
+        }
+        return (json.dumps(envelope) + "\n").encode("utf-8")
