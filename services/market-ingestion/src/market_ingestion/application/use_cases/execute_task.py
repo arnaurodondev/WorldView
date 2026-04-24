@@ -363,6 +363,28 @@ class ExecuteTaskUseCase:
             lines = [line for line in canon.split(b"\n") if line.strip()]
             return canon, len(lines)
 
+        # Passthrough dataset types — no domain-specific canonical model exists.
+        # Wrap raw JSON in a self-describing envelope so downstream consumers
+        # (e.g. S7 knowledge-graph) can identify and parse the payload without
+        # needing provider-specific parsing logic.  Returns row_count=1 because
+        # each task produces exactly one envelope record regardless of payload size.
+        if task.dataset_type in {
+            DatasetType.ECONOMIC_EVENTS,
+            DatasetType.MACRO_INDICATOR,
+            DatasetType.INSIDER_TRANSACTIONS,
+            DatasetType.EARNINGS_CALENDAR,
+            DatasetType.NEWS_SENTIMENT,
+            DatasetType.YIELD_CURVE,
+            DatasetType.MARKET_CAP,
+        }:
+            canon = self._serializer.serialize_passthrough(
+                raw_data=raw_data,
+                dataset_type=str(task.dataset_type),
+                symbol=task.symbol,
+                source=str(task.provider),
+            )
+            return canon, 1
+
         # FUNDAMENTALS
         # Map raw provider response to the section-keyed canonical format expected
         # by the FundamentalsConsumer in market-data.

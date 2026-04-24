@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
 from sqlalchemy import text
@@ -152,6 +152,66 @@ ORDER BY canonical_name
             )
             for row in rows
         ]
+
+    async def find_instrument_by_ticker(self, ticker: str) -> InstrumentRecord | None:
+        """Find a US-listed financial instrument by ticker symbol.
+
+        Looks up ``canonical_entities`` where ``entity_type = 'financial_instrument'``
+        and ``ticker = :ticker``.
+
+        Returns ``None`` if no instrument entity with that ticker is found.
+
+        Args:
+            ticker: Base ticker symbol without exchange suffix (e.g. ``"AAPL"``).
+        """
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, ticker, canonical_name
+FROM canonical_entities
+WHERE entity_type = 'financial_instrument'
+  AND ticker = :ticker
+LIMIT 1
+"""),
+            {"ticker": ticker},
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        return InstrumentRecord(
+            entity_id=UUID(str(row[0])),
+            ticker=str(row[1]),
+            canonical_name=str(row[2]),
+        )
+
+    async def get_metadata_field(self, entity_id: UUID, key: str) -> dict[str, Any] | None:
+        """Return the parsed JSONB value at ``metadata[key]`` for *entity_id*.
+
+        Returns ``None`` when the entity does not exist or the key is absent.
+        Only call this method for JSONB keys that store dict values.
+
+        Args:
+            entity_id: Target canonical entity UUID.
+            key:       Top-level key inside the ``metadata`` JSONB column.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT metadata->:key FROM canonical_entities
+WHERE entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id), "key": key},
+        )
+        row = result.fetchone()
+        if not row or row[0] is None:
+            return None
+        try:
+            import json as _json
+
+            parsed = _json.loads(row[0])
+            if not isinstance(parsed, dict):
+                return None
+            return parsed  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            return None
 
     async def find_or_create_person(self, name: str, context_ticker: str) -> UUID:
         """Find or create a person canonical entity by name.

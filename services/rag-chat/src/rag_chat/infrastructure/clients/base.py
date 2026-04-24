@@ -23,10 +23,16 @@ class BaseUpstreamClient:
     def __init__(self, base_url: str, timeout: float = 5.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
 
-    async def _post(self, path: str, payload: dict) -> dict:
+    async def _post(
+        self,
+        path: str,
+        payload: dict,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict:
         """POST *path* with JSON *payload*.  Returns ``{}`` on any error."""
         try:
-            resp = await self._client.post(path, json=payload)
+            resp = await self._client.post(path, json=payload, headers=extra_headers or {})
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
         except httpx.TimeoutException:
@@ -43,10 +49,16 @@ class BaseUpstreamClient:
             logger.warning("upstream_request_error", path=path, error=str(exc))
             return {}
 
-    async def _get(self, path: str, params: dict | None = None) -> dict:
+    async def _get(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict:
         """GET *path* with optional query *params*.  Returns ``{}`` on any error."""
         try:
-            resp = await self._client.get(path, params=params)
+            resp = await self._client.get(path, params=params, headers=extra_headers or {})
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
         except httpx.TimeoutException:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +14,10 @@ class EODHDProviderSettings(BaseModel):
 
     base_url: str = "https://eodhd.com/api/news"
     page_size: int = 100
+    # OPT-3: Cap pages fetched per fetch_all_pages() call to avoid runaway credit
+    # consumption on busy news days. Each page costs 5 EODHD API credits; default 3
+    # yields at most 3 x page_size articles per cycle, which covers all normal cases.
+    max_pages_per_cycle: int = 3
     rate_limit_per_second: float = 10.0
 
 
@@ -164,6 +170,12 @@ class Settings(BaseSettings):
         Uses structlog so the warning is captured by the structured log pipeline
         in production log aggregators (F-SEC-001).
         """
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
         if "postgres:postgres" in self.db_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

@@ -172,3 +172,29 @@ class CanonicalSerializer(ABC):
         ``data`` must contain fields required by ``CanonicalFundamentals``.
         Returns UTF-8-encoded JSONL with a single record.
         """
+
+    @abstractmethod
+    def serialize_passthrough(
+        self,
+        raw_data: Any,
+        dataset_type: str,
+        symbol: str,
+        source: str,
+    ) -> bytes:
+        """Wrap raw provider data in a self-describing canonical envelope.
+
+        Used for dataset types that have no domain-specific canonical model
+        (economic_events, macro_indicator, insider_transactions,
+        earnings_calendar, news_sentiment, yield_curve, market_cap).
+        The envelope is self-describing so downstream consumers (e.g. S7)
+        can identify and parse it without additional context.
+
+        Args:
+            raw_data: The parsed JSON payload from the provider (dict or list).
+            dataset_type: String value of the DatasetType enum (e.g. "economic_events").
+            symbol: The task symbol (e.g. "EVENTS.USA", "AAPL").
+            source: String value of the Provider enum (e.g. "eodhd").
+
+        Returns:
+            UTF-8-encoded NDJSON with a single envelope record, newline-terminated.
+        """

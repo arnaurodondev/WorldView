@@ -127,6 +127,7 @@ def _make_serializer() -> MagicMock:
     s.serialize_ohlcv = MagicMock(return_value=b'{"bar": 1}\n')
     s.serialize_quotes = MagicMock(return_value=b'{"bid": 1.0}\n')
     s.serialize_fundamentals = MagicMock(return_value=b'{"revenue": 1000}\n')
+    s.serialize_passthrough = MagicMock(return_value=b'{"dataset_type": "economic_events", "payload": []}\n')
     return s
 
 
@@ -141,6 +142,15 @@ def _make_registry(*, raw_data: bytes | None = None, fetch_side_effect=None) -> 
         adapter.fetch_ohlcv = AsyncMock(return_value=fr)
         adapter.fetch_quotes = AsyncMock(return_value=fr)
         adapter.fetch_fundamentals = AsyncMock(return_value=fr)
+    # Extended fetch methods used by passthrough dataset types — must be AsyncMock
+    # so that `await adapter.fetch_*()` works in _fetch().
+    adapter.fetch_economic_events = AsyncMock(return_value=fr)
+    adapter.fetch_macro_indicator = AsyncMock(return_value=fr)
+    adapter.fetch_insider_transactions = AsyncMock(return_value=fr)
+    adapter.fetch_earnings_calendar = AsyncMock(return_value=fr)
+    adapter.fetch_news_sentiment = AsyncMock(return_value=fr)
+    adapter.fetch_yield_curve = AsyncMock(return_value=fr)
+    adapter.fetch_historical_market_cap = AsyncMock(return_value=fr)
     registry = MagicMock()
     registry.get = MagicMock(return_value=adapter)
     return registry
@@ -953,3 +963,137 @@ async def test_canonicalize_type_error_marks_failed() -> None:
     # task.fail() must be called — task transitions to FAILED, not stuck in RUNNING
     task.fail.assert_called_once()
     task.retry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# D-W1: Passthrough dataset type routing tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "dataset_type",
+    [
+        DatasetType.ECONOMIC_EVENTS,
+        DatasetType.MACRO_INDICATOR,
+        DatasetType.INSIDER_TRANSACTIONS,
+        DatasetType.EARNINGS_CALENDAR,
+        DatasetType.NEWS_SENTIMENT,
+        DatasetType.YIELD_CURVE,
+        DatasetType.MARKET_CAP,
+    ],
+)
+async def test_passthrough_types_use_serialize_passthrough(dataset_type: DatasetType) -> None:
+    """D-W1: Passthrough dataset types call serialize_passthrough(), NOT serialize_fundamentals().
+
+    Before D-W1 these types fell through to the FUNDAMENTALS branch, producing
+    garbage output (CanonicalFundamentals.from_dict() applied to non-fundamentals
+    data).  After D-W1 they are routed to the correct passthrough serializer.
+    """
+    raw_payload = json.dumps({"data": "test"}).encode()
+    task = _make_task(dataset_type=dataset_type, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    # Must call passthrough, not fundamentals
+    serializer.serialize_passthrough.assert_called_once()
+    serializer.serialize_fundamentals.assert_not_called()
+    serializer.serialize_ohlcv.assert_not_called()
+    serializer.serialize_quotes.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_passthrough_returns_row_count_one() -> None:
+    """D-W1: Passthrough canonicalization always returns row_count=1.
+
+    Each task produces exactly one envelope record regardless of how many
+    entries the raw payload contains.
+    """
+    # Large payload — but row_count must still be 1
+    raw_payload = json.dumps([{"event": i} for i in range(50)]).encode()
+    task = _make_task(dataset_type=DatasetType.ECONOMIC_EVENTS, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    serializer.serialize_passthrough = MagicMock(return_value=b'{"dataset_type": "economic_events"}\n')
+    uc, uow, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    # The MarketDatasetFetched event should record row_count=1
+    uow.outbox.add.assert_awaited_once()
+    call_kwargs = uow.outbox.add.call_args.kwargs
+    event = call_kwargs["events"][0]
+    assert event.row_count == 1
+
+
+@pytest.mark.unit
+async def test_passthrough_serialize_called_with_correct_args() -> None:
+    """D-W1: serialize_passthrough() receives raw_data, dataset_type, symbol, source."""
+    raw_payload = json.dumps({"gdp": 25000.0}).encode()
+    task = _make_task(
+        dataset_type=DatasetType.MACRO_INDICATOR,
+        symbol="USA.gdp_current_usd",
+        provider=Provider.EODHD,
+    )
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    call_kwargs = serializer.serialize_passthrough.call_args.kwargs
+    assert call_kwargs["dataset_type"] == str(DatasetType.MACRO_INDICATOR)
+    assert call_kwargs["symbol"] == "USA.gdp_current_usd"
+    assert call_kwargs["source"] == str(Provider.EODHD)
+    # raw_data is the parsed JSON (dict), not raw bytes
+    assert call_kwargs["raw_data"] == {"gdp": 25000.0}
+
+
+@pytest.mark.unit
+async def test_fundamentals_not_affected_by_passthrough_change() -> None:
+    """D-W1: FUNDAMENTALS dataset type still routes to serialize_fundamentals() (no regression)."""
+    task = _make_task(dataset_type=DatasetType.FUNDAMENTALS, variant="annual")
+    registry = _make_registry(raw_data=_fundamentals_json())
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    serializer.serialize_fundamentals.assert_called_once()
+    serializer.serialize_passthrough.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_passthrough_real_serializer_economic_events() -> None:
+    """D-W1 integration: DefaultCanonicalSerializer.serialize_passthrough() produces valid envelope.
+
+    Uses the real serializer (not a mock) to verify the end-to-end passthrough
+    path for economic events produces correctly-structured NDJSON.
+    """
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    events_payload = [{"date": "2026-04-24", "event": "CPI", "actual": 3.2, "country": "USA"}]
+    raw_data = json.dumps(events_payload).encode()
+
+    task = _make_task(dataset_type=DatasetType.ECONOMIC_EVENTS, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_data)
+    real_serializer = DefaultCanonicalSerializer()
+    store = _make_store()
+    uow = _make_uow()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    # Must not raise — passthrough path handles list payload cleanly
+    await uc.execute(task)
+    task.succeed.assert_called_once()
+    task.fail.assert_not_called()

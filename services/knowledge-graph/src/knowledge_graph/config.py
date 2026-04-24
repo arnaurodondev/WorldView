@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -97,15 +99,6 @@ class Settings(BaseSettings):
     # Market data service (used by Worker 13D-3)
     market_data_base_url: str = "http://market-data:8003"
 
-    # EODHD API (Workers 13D-6, 13D-7, 13D-8)
-    eodhd_api_key: SecretStr = SecretStr("")
-    eodhd_base_url: str = "https://eodhd.com/api"
-    # Comma-separated ISO-3166 alpha-2 country codes for economic event polling (Worker 13D-6)
-    economic_event_countries: str = "US,DE,GB,JP,CN,EU"
-    # Comma-separated ISO-3166 alpha-3 country codes for macro indicator enrichment (Worker 13D-7)
-    # Note: Macro Indicator API uses alpha-3 (USA/GBR/DEU/JPN/CHN), not alpha-2
-    macro_indicator_countries: str = "USA,GBR,DEU,JPN,CHN"
-
     # AGE Cypher shadow sync (Worker 13F — PRD-0018)
     # Feature flag: set to true after AGE backfill is verified.
     cypher_enabled: bool = False
@@ -129,6 +122,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:
         """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

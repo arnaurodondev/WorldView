@@ -234,6 +234,7 @@ API keys remain as flat fields mapped from `Secret` manifests.
 |---------|---------|-------------|
 | `CONTENT_INGESTION_EODHD__BASE_URL` | `https://eodhd.com/api/news` | EODHD news endpoint |
 | `CONTENT_INGESTION_EODHD__PAGE_SIZE` | `100` | Results per page |
+| `CONTENT_INGESTION_EODHD__MAX_PAGES_PER_CYCLE` | `3` | OPT-3: max pages fetched per `fetch_all_pages()` call (each page = 5 EODHD credits); prevents runaway credit consumption on busy news days |
 | `CONTENT_INGESTION_EODHD__RATE_LIMIT_PER_SECOND` | `10.0` | Token-bucket capacity + refill |
 | `CONTENT_INGESTION_FINNHUB__BASE_URL` | `https://finnhub.io/api/v1` | Finnhub API root |
 | `CONTENT_INGESTION_FINNHUB__RATE_LIMIT_PER_MINUTE` | `55` | Token-bucket capacity |
