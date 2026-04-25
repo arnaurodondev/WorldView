@@ -68,16 +68,6 @@ interface ColDef {
   render: (row: ScreenerResult) => React.ReactNode;
 }
 
-/** formatPct — change percentage with sign and color class */
-function formatPct(val: number | null | undefined): { text: string; cls: string } {
-  if (val == null) return { text: "—", cls: "text-muted-foreground" };
-  const pct = val * 100;
-  return {
-    text: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
-    cls: pct > 0 ? "text-positive" : pct < 0 ? "text-negative" : "text-muted-foreground",
-  };
-}
-
 /** formatCap — market cap abbreviated (e.g. 2.3T, 450B, 8.5M) */
 function formatCap(val: number | null | undefined): string {
   if (val == null) return "—";
