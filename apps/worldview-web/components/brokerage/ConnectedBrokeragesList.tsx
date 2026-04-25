@@ -37,7 +37,6 @@ import {
   CheckCircle2,
   Clock,
   WifiOff,
-  Link2,
 } from "lucide-react";
 import {
   useBrokerageConnections,
@@ -181,7 +180,7 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
     <div className="space-y-2">
       {/* WHY px-2 py-1.5: matches Holdings table row density (CompactTable pattern).
           The original px-3 py-2.5 looked out of place next to the tight holdings grid. */}
-      <div className="flex flex-wrap items-center gap-3 rounded-md border border-border/50 bg-card px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-3 rounded-[2px] border border-border/50 bg-card px-2 py-1.5">
 
         {/* ── Brokerage identity ──────────────────────────────────────────── */}
         <div className="min-w-0 flex-1">
@@ -236,7 +235,11 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
             </Button>
           )}
 
-          {/* Disconnect — AlertDialog requires confirmation before destructive action */}
+          {/* Disconnect — AlertDialog requires confirmation before destructive action.
+              WHY show "Disconnect" text for error status: an error-state connection
+              shows only the icon by default, which is easy to miss. When the connection
+              is in error, the disconnect path IS the recovery path — so we make it
+              explicit with a text label so users understand the action available to them. */}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -250,6 +253,13 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
                   <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                 ) : (
                   <Trash2 className="h-3 w-3" aria-hidden="true" />
+                )}
+                {/* WHY show label only on error: for active connections the icon
+                    alone is clear enough ("trash = delete"). For error connections,
+                    the user may not know what action to take; the text makes the
+                    recovery path unambiguous. */}
+                {connection.status === "error" && !disconnectPending && (
+                  <span className="ml-1">Disconnect</span>
                 )}
               </Button>
             </AlertDialogTrigger>
@@ -281,6 +291,20 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
         </div>
       </div>
 
+      {/* WHY recovery hint for error status: users seeing the red ERROR badge
+          often don't know what action to take. This hint directs them toward
+          either the Sync Now button (for transient failures that may self-heal)
+          or the Disconnect button (to remove and reconnect with fresh credentials).
+          It's rendered between the row and the SyncErrorsBanner so it reads as
+          part of the error context, not a generic help text. */}
+      {connection.status === "error" && (
+        <p className="px-2 text-[11px] text-muted-foreground">
+          Connection failed —{" "}
+          <span style={{ color: "#0EA5E9" }}>Sync Now</span> to retry, or{" "}
+          <span className="text-destructive">Disconnect</span> and reconnect with fresh credentials.
+        </p>
+      )}
+
       {/* Sync errors banner — rendered beneath the row, only when errors exist */}
       <SyncErrorsBanner connectionId={connection.connection_id} />
     </div>
@@ -306,7 +330,7 @@ export function ConnectedBrokeragesList({ portfolioId }: ConnectedBrokeragesList
         {Array.from({ length: 3 }).map((_, i) => (
           <div
             key={i}
-            className="flex items-center gap-3 rounded-md border border-border/50 px-2 py-1.5"
+            className="flex items-center gap-3 rounded-[2px] border border-border/50 px-2 py-1.5"
           >
             <div className="flex-1 space-y-1.5">
               <Skeleton className="h-4 w-40" />
@@ -324,7 +348,7 @@ export function ConnectedBrokeragesList({ portfolioId }: ConnectedBrokeragesList
   // ── Error state ──────────────────────────────────────────────────────────
   if (isError) {
     return (
-      <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3">
+      <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 px-4 py-3">
         <div className="flex items-center gap-2">
           <AlertCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
           <p className="text-sm text-destructive">
@@ -338,18 +362,9 @@ export function ConnectedBrokeragesList({ portfolioId }: ConnectedBrokeragesList
   // ── Empty state ──────────────────────────────────────────────────────────
   if (!connections || connections.length === 0) {
     return (
-      // WHY py-6 not py-8: finance UIs are compact; excessive vertical space
-      // in an empty state reads as "consumer app", not terminal UI.
-      <div className="rounded-md border border-border/50 bg-muted/20 px-4 py-6 text-center">
-        {/* WHY Link2 not WifiOff: WifiOff implies a connectivity problem.
-            Link2 communicates "link two accounts together" — the correct
-            mental model for a first-time brokerage connection. */}
-        <Link2 className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
-        <p className="text-sm text-muted-foreground">No brokerages connected.</p>
-        <p className="mt-1 text-xs text-muted-foreground/70">
-          Click &apos;Connect Brokerage&apos; to import your transaction history.
-        </p>
-      </div>
+      <p className="py-3 text-xs text-muted-foreground">
+        No brokerages connected. Click &apos;Connect Brokerage&apos; to import your transaction history.
+      </p>
     );
   }
 

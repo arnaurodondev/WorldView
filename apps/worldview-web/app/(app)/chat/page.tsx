@@ -741,20 +741,16 @@ export default function ChatPage() {
             welcome card. The panel is part of a split layout — excessive padding
             creates a consumer-app feel. */}
         {!activeThreadId && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-6 text-center">
-            <Bot className="h-8 w-8 text-primary/60" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">
-                Intelligence Chat
-              </p>
-              <p className="mt-0.5 max-w-sm text-xs text-muted-foreground">
-                Ask research-grade questions about markets, companies, and news.
-              </p>
-            </div>
+          // WHY p-4 (was p-6): tighter padding for terminal panel welcome state
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-background p-4 text-center">
+            <p className="text-sm font-semibold text-foreground">Intelligence Chat</p>
+            <p className="max-w-sm text-xs text-muted-foreground">
+              Ask research-grade questions about markets, companies, and news.
+            </p>
             <Button
               size="sm"
               onClick={handleNewChat}
-              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+              className="mt-1 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
             >
               <Plus className="h-3.5 w-3.5" />
               Start a conversation

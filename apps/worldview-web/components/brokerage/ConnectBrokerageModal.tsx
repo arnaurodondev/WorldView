@@ -137,7 +137,7 @@ export function ConnectBrokerageModal({
           </div>
 
           {/* ToS notice — regulatory requirement: explicit consent before SnapTrade API call */}
-          <p className="rounded-md border border-border/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+          <p className="rounded-[2px] border border-border/50 bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
             By connecting, you agree to{" "}
             {/* WHY target="_blank" rel="noopener noreferrer": opens in new tab so the
                 user doesn't lose their place in the app. noopener prevents the opened
@@ -180,7 +180,7 @@ export function ConnectBrokerageModal({
 
           {/* Error state — shown only when the mutation fails */}
           {error && (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2">
+            <div className="flex items-start gap-2 rounded-[2px] border border-destructive/30 bg-destructive/10 px-3 py-2">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
               <p className="text-xs text-destructive">
                 {/* WHY error.message fallback: GatewayError always has a message;

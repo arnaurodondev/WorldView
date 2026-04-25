@@ -133,7 +133,7 @@ export function SyncErrorsBanner({ connectionId }: SyncErrorsBannerProps) {
 
   return (
     <div
-      className="rounded-md border px-3 py-2"
+      className="rounded-[2px] border px-3 py-2"
       // WHY inline styles for amber: the amber palette isn't in the standard
       // Tailwind config (which has destructive/red for errors). These exact
       // hex values match the design system's warning amber specification.

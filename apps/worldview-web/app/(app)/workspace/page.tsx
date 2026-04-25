@@ -36,6 +36,8 @@
 // Each embedded component manages its own TanStack Query data-fetching.
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   TrendingUp,
@@ -55,10 +57,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { AlertsList } from "@/components/alerts/AlertsList";
+import { createGateway } from "@/lib/gateway";
+import { useAuth } from "@/hooks/useAuth";
+import { formatRelativeTime, formatMarketCap, safeExternalUrl } from "@/lib/utils";
 
 // ── Panel type catalogue ───────────────────────────────────────────────────────
 
@@ -200,6 +206,220 @@ const DEFAULT_PANELS_CONFIG: ActivePanel[] = [
   { id: "default-alerts", type: "alerts" },
 ];
 
+// ── Workspace panel sub-components ────────────────────────────────────────────
+
+/**
+ * WorkspaceNewsPanel — compact top-news feed for the workspace News panel.
+ *
+ * WHY compact rows (not ArticleCard): ArticleCard is designed for full-width
+ * article pages with spacious padding. In a 2×2 workspace grid, each panel
+ * is ~400px wide. A compact row (title + source + time) shows 8-10 articles
+ * in the same space ArticleCard would use for 2-3 — much better information
+ * density for a terminal-style layout.
+ *
+ * WHY getTopNews (not getRelevantNews): getTopNews uses PRD-0026 ranked scoring.
+ * Top articles are pre-sorted by composite signal (market impact + LLM relevance
+ * + routing), so the most market-moving stories appear first without user filtering.
+ */
+function WorkspaceNewsPanel() {
+  const { accessToken } = useAuth();
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["workspace-top-news"],
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 15, offset: 0 }),
+    enabled: !!accessToken,
+    // WHY 5min staleTime: news changes constantly but workspace shouldn't hammer S9.
+    // 5 minutes is fresh enough to show recent catalysts without excessive polling.
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-3">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="space-y-1">
+            <Skeleton className="h-3.5 w-full" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-2.5 w-1/3" style={{ animationDelay: `${i * 50 + 25}ms` }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return <p className="px-3 py-3 text-xs text-muted-foreground">News unavailable.</p>;
+  }
+
+  const articles = data.articles ?? [];
+
+  if (articles.length === 0) {
+    return <p className="px-3 py-3 text-xs text-muted-foreground">No news articles yet.</p>;
+  }
+
+  return (
+    <div className="divide-y divide-border/30 overflow-auto">
+      {articles.map((article) => (
+        <a
+          key={article.article_id}
+          href={safeExternalUrl(article.url)}
+          target="_blank"
+          rel="noopener noreferrer"
+          // WHY group: enables group-hover to highlight the external link icon
+          className="group flex flex-col gap-0.5 px-3 py-2 hover:bg-muted/30"
+        >
+          {/* Article title — 2-line clamp */}
+          <span className="line-clamp-2 text-xs font-medium leading-snug text-foreground group-hover:text-primary">
+            {article.title}
+          </span>
+          {/* Source + time row */}
+          <div className="flex items-center gap-1.5">
+            <span className="truncate font-mono text-[10px] tabular-nums text-muted-foreground">
+              {article.source_name ?? "—"}
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+            <time
+              dateTime={article.published_at ?? undefined}
+              className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
+            >
+              {formatRelativeTime(article.published_at)}
+            </time>
+            {/* Relevance score if available */}
+            {article.display_relevance_score != null && article.display_relevance_score >= 0.7 && (
+              <span className="ml-auto shrink-0 rounded-[2px] bg-positive/10 px-1 text-[9px] font-semibold tabular-nums text-positive">
+                {Math.round(article.display_relevance_score * 100)}
+              </span>
+            )}
+          </div>
+        </a>
+      ))}
+
+      {/* Footer link to full news page */}
+      <div className="p-2 text-center">
+        <Link
+          href="/alerts"
+          className="text-[10px] text-muted-foreground hover:text-foreground"
+        >
+          View all news →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * WorkspacePortfolioPanel — compact portfolio holdings summary for the workspace.
+ *
+ * WHY holdings over portfolio list: Traders using the workspace want to see
+ * their P&L at a glance — which positions they hold and how they're doing.
+ * Listing portfolio names is useless without the underlying holdings data.
+ *
+ * WHY fetch first portfolio only: workspace MVP shows one portfolio. A future
+ * wave adds a portfolio picker per panel so users with multiple portfolios
+ * can choose which one to display.
+ */
+function WorkspacePortfolioPanel() {
+  const { accessToken } = useAuth();
+
+  const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
+    queryKey: ["portfolios"],
+    queryFn: () => createGateway(accessToken).getPortfolios(),
+    enabled: !!accessToken,
+    staleTime: 5 * 60_000,
+  });
+
+  // Fetch holdings for the first portfolio only (workspace MVP)
+  const firstPortfolioId = portfolios?.[0]?.portfolio_id;
+
+  const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
+    queryKey: ["holdings", firstPortfolioId],
+    queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
+    enabled: !!accessToken && !!firstPortfolioId,
+    staleTime: 5 * 60_000,
+  });
+
+  const isLoading = portfoliosLoading || holdingsLoading;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 p-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="flex items-center justify-between gap-2">
+            <Skeleton className="h-3 w-16" style={{ animationDelay: `${i * 50}ms` }} />
+            <Skeleton className="h-3 w-20" style={{ animationDelay: `${i * 50 + 25}ms` }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (!portfolios?.length) {
+    return (
+      <p className="px-3 py-3 text-xs text-muted-foreground">
+        No portfolio yet.{" "}
+        <Link href="/portfolio" className="text-primary hover:underline">Set up →</Link>
+      </p>
+    );
+  }
+
+  const holdings = holdingsResp?.holdings ?? [];
+
+  if (holdings.length === 0) {
+    return <p className="px-3 py-3 text-xs text-muted-foreground">No holdings in portfolio.</p>;
+  }
+
+  return (
+    <div className="overflow-auto">
+      {/* Portfolio name header */}
+      <div className="border-b border-border/40 px-3 py-1.5">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {portfolios[0].name}
+        </p>
+      </div>
+
+      {/* Holdings table */}
+      <div className="divide-y divide-border/30">
+        {holdings.slice(0, 12).map((h) => {
+          const unrealizedPnl = h.unrealised_pnl ?? 0;
+          const pnlColor = unrealizedPnl > 0 ? "text-positive" : unrealizedPnl < 0 ? "text-negative" : "text-muted-foreground";
+
+          return (
+            <div key={h.holding_id} className="flex items-center justify-between gap-2 px-3 py-1.5">
+              {/* Ticker */}
+              <span className="shrink-0 font-mono text-xs font-medium tabular-nums text-foreground">
+                {h.ticker}
+              </span>
+              {/* Quantity */}
+              <span className="flex-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                {h.quantity}
+              </span>
+              {/* Market value = current_price * quantity */}
+              {h.current_price != null && (
+                <span className="shrink-0 font-mono text-[10px] tabular-nums text-foreground">
+                  {formatMarketCap(h.current_price * h.quantity)}
+                </span>
+              )}
+              {/* P&L */}
+              {h.unrealised_pnl != null && (
+                <span className={`shrink-0 font-mono text-[10px] tabular-nums ${pnlColor}`}>
+                  {unrealizedPnl >= 0 ? "+" : ""}
+                  {unrealizedPnl.toFixed(0)}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer link */}
+      <div className="border-t border-border/40 p-2 text-center">
+        <Link href="/portfolio" className="text-[10px] text-muted-foreground hover:text-foreground">
+          Full portfolio →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 // ── Panel content component ────────────────────────────────────────────────────
 
 /**
@@ -260,11 +480,10 @@ function PanelContent({ type }: { type: PanelType; id: string }) {
       return <AlertsList />;
 
     case "news":
-      // WHY inline placeholder (not importing NewsPage): The news feed is a
-      // standalone page. Embedding the full page in a workspace panel would
-      // duplicate the header/toolbar. A future wave creates a NewsPanel
-      // component specifically for workspace embedding.
-      return <WorkspacePlaceholder type="news" />;
+      // WHY WorkspaceNewsPanel: compact top-news feed with terminal-density rows.
+      // Shows top 15 articles ranked by composite signal (PRD-0026), 2-line title
+      // clamp, source + relative time, and relevance score badge for high-signal stories.
+      return <WorkspaceNewsPanel />;
 
     case "screener":
       // WHY inline placeholder: ScreenerPage has a complex filter form that
@@ -279,10 +498,11 @@ function PanelContent({ type }: { type: PanelType; id: string }) {
       return <WorkspacePlaceholder type="chat" />;
 
     case "portfolio":
-      // WHY inline placeholder: The PortfolioSummary dashboard widget could
-      // be reused here. Wiring it in is a 2-line change — deferred to keep
-      // this wave focused on the workspace scaffold.
-      return <WorkspacePlaceholder type="portfolio" />;
+      // WHY WorkspacePortfolioPanel: fetches holdings for the first portfolio
+      // and renders a compact ticker/qty/value/P&L table — the right density
+      // for a workspace panel. Clicking "Full portfolio →" navigates to the
+      // full portfolio page.
+      return <WorkspacePortfolioPanel />;
 
     default:
       // TypeScript exhaustiveness guard — should never reach here
@@ -302,19 +522,13 @@ function PanelContent({ type }: { type: PanelType; id: string }) {
  */
 function WorkspacePlaceholder({ type }: { type: PanelType }) {
   const def = PANEL_CATALOGUE.find((p) => p.type === type);
-  const Icon = def?.icon ?? LayoutDashboard;
 
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
-      {/* Panel type icon for visual context */}
-      <Icon className="h-8 w-8 text-muted-foreground/30" aria-hidden="true" />
-      <p className="text-sm font-medium text-muted-foreground">
-        {def?.label ?? type} panel
-      </p>
-      <p className="max-w-[200px] text-xs text-muted-foreground/60">
-        {/* WHY this message: users need to know this is a planned feature, not a bug */}
-        Compact workspace layout coming in a future wave. Navigate to the full{" "}
-        {def?.label ?? type} page for the complete experience.
+    // WHY inline text (not centered icon): terminal empty states are compact.
+    // The sidebar link provides full-page access — this panel just signals where to go.
+    <div className="px-3 py-3">
+      <p className="text-xs text-muted-foreground">
+        {def?.label ?? type} — use the sidebar for the full-page experience.
       </p>
     </div>
   );
@@ -516,17 +730,11 @@ function WorkspacePanel({
  */
 function EmptyWorkspace() {
   return (
-    <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-      <LayoutDashboard className="h-12 w-12 text-muted-foreground/20" aria-hidden="true" />
-      <div>
-        <p className="text-sm font-medium text-muted-foreground">
-          No panels open
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground/60">
-          Use the panel selector above to add up to {MAX_PANELS} panels.
-        </p>
-      </div>
-    </div>
+    // WHY inline text (not centered icon+text block): terminal UIs keep empty states compact.
+    // py-24 with a large icon reads as consumer SaaS; a single text line is terminal style.
+    <p className="px-3 py-4 text-xs text-muted-foreground">
+      No panels open. Use the selector above to add up to {MAX_PANELS} panels.
+    </p>
   );
 }
 

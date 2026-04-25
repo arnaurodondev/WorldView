@@ -169,7 +169,7 @@ export function GlobalSearch() {
     <div ref={containerRef} className="relative w-64">
       {/* WHY Command (not a plain input): gives us keyboard navigation and selection
           semantics that users expect from a Bloomberg-like interface */}
-      <Command className="rounded-md border border-border bg-background shadow-none" shouldFilter={false}>
+      <Command className="rounded-[2px] border border-border bg-background shadow-none" shouldFilter={false}>
         <CommandInput
           placeholder="Search instruments… ⌘K"
           value={query}
