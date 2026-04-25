@@ -187,6 +187,14 @@ handles RFC 7231 §7.1.3 format — integer/float seconds or HTTP-date. Returns 
 `ProviderRateLimited` now carries a `retry_after: float | None` attribute set from this header.
 API keys are never exposed in error messages — `_endpoint_slug(url)` strips host + query params.
 
+**BaseProviderAdapter (PLAN-0038 W A-1)**: `EODHDProviderAdapter` now extends `BaseProviderAdapter`
+(`infrastructure/adapters/providers/base.py`) instead of `ProviderAdapter` directly. After each
+successful fetch, all 11 methods call `self._record_api_call()` which:
+- emits a `provider_api_call` structlog event with fields: `provider`, `dataset_type`, `symbol`,
+  `exchange`, `timeframe`, `bars_returned`, `latency_ms`, `credit_cost`, `status`
+- increments generic `s2_mi_provider_*` Prometheus metrics (see below)
+`ProviderFetchResult.bars_returned` (new field, default `0`) carries the count of records returned.
+
 **Provider configuration (env vars):**
 
 | Env var | Default | Purpose |
@@ -267,6 +275,17 @@ The scheduler gate (Wire 1) uses these TTLs to skip enqueuing tasks whose waterm
 gauges/histograms under the `s2_eodhd_*` namespace: `requests_total`, `credits_used_total`,
 `rate_limited_total`, `errors_total`, `cache_hits_total`, `cache_misses_total`, `quota_blocked_total`,
 `request_duration_seconds`, `circuit_breaker_state`, `monthly_credits_used`, `monthly_credits_limit`.
+
+**Generic provider metrics (PLAN-0038 W A-1)**: `infrastructure/metrics/providers.py` exposes 5 metrics
+under the `s2_mi_provider_*` namespace that work across ALL providers (EODHD, Finnhub, Yahoo Finance):
+- `s2_mi_provider_requests_total` — labels: `provider`, `dataset_type`, `timeframe`, `status_code`
+- `s2_mi_provider_credits_total` — labels: `provider`, `dataset_type` (skipped for free providers)
+- `s2_mi_provider_latency_seconds` — histogram, labels: `provider`, `dataset_type`
+- `s2_mi_provider_rate_limited_total` — labels: `provider`
+- `s2_mi_provider_errors_total` — labels: `provider`, `reason`
+
+Grafana dashboard `infra/grafana/dashboards/api-usage-analytics.json` (uid: `api-usage-analytics-v1`)
+provides 8 panels combining these Prometheus metrics with Loki `provider_api_call` log queries.
 
 | Category | Symbols | Exchange |
 |----------|---------|----------|
