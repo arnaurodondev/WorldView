@@ -57,7 +57,7 @@ import type {
   SearchResult,
   SearchResponse,
   AiSignalsResponse,
-  MorningBrief,
+  BriefingResponse,
   PaginationParams,
   BrokerageConnection,
   InitiateBrokerageConnectionResponse,
@@ -287,19 +287,66 @@ export function createGateway(token?: string | null) {
 
     /**
      * getOHLCV — candlestick bars for lightweight-charts
-     * timeframe: "1D" | "1H" | "5M"
+     * timeframe: "5M" | "1H" | "1D" | "1W" | "1M" (frontend convention: uppercase)
+     *
+     * WHY transform: S3 market-data returns OHLCVListResponse with `items` (not `bars`),
+     * `bar_date` (not `timestamp`), and string OHLCV values (not numbers). The frontend
+     * OHLCVBar type expects `timestamp: string` and numeric open/high/low/close. Transform
+     * here at the gateway boundary so components stay decoupled from S3's schema.
+     *
+     * WHY lowercase timeframe before sending: S3 accepts "1d"/"1h"/"5m"/"1w" (lowercase)
+     * BUT "1M" (uppercase M) for monthly — S3's Timeframe.ONE_MONTH = "1M" is
+     * case-sensitive. Simple toLowerCase() would produce "1m" which S3 rejects.
+     * The chart sends "5M"/"1H"/"1D"/"1W"/"1M" (uppercase frontend convention).
+     * Normalize here so S3 doesn't return 422.
      */
-    getOHLCV(
+    async getOHLCV(
       instrumentId: string,
       params: { timeframe?: string; start?: string; end?: string } = {},
     ): Promise<OHLCVResponse> {
+      // WHY special-case "1M": S3's Timeframe enum is case-sensitive.
+      // All timeframes are lowercase EXCEPT ONE_MONTH which is "1M" (uppercase M).
+      // Frontend sends "1M" (its own uppercase convention), which happens to match
+      // S3's expected casing — so we preserve it. Everything else lowercases normally.
+      const normalizeTimeframe = (tf: string): string =>
+        tf === "1M" ? "1M" : tf.toLowerCase();
+
+      const normalized = {
+        ...params,
+        ...(params.timeframe ? { timeframe: normalizeTimeframe(params.timeframe) } : {}),
+      };
       const qs = new URLSearchParams(
-        Object.entries(params).filter(([, v]) => v != null) as [string, string][],
+        Object.entries(normalized).filter(([, v]) => v != null) as [string, string][],
       ).toString();
-      return apiFetch<OHLCVResponse>(
-        `/v1/ohlcv/${encodeURIComponent(instrumentId)}${qs ? `?${qs}` : ""}`,
-        { token: t },
-      );
+
+      // WHY raw type: apiFetch would cast to OHLCVResponse directly, bypassing transform
+      const raw = await apiFetch<{
+        items: Array<{
+          bar_date: string;
+          open: string;
+          high: string;
+          low: string;
+          close: string;
+          volume: number | null;
+        }>;
+        total: number;
+        timeframe: string;
+      }>(`/v1/ohlcv/${encodeURIComponent(instrumentId)}${qs ? `?${qs}` : ""}`, { token: t });
+
+      return {
+        instrument_id: instrumentId,
+        ticker: "",
+        // Keep the frontend's uppercase convention in the response
+        timeframe: (params.timeframe ?? "1D").toUpperCase(),
+        bars: (raw.items ?? []).map((item) => ({
+          timestamp: item.bar_date,
+          open: parseFloat(item.open),
+          high: parseFloat(item.high),
+          low: parseFloat(item.low),
+          close: parseFloat(item.close),
+          volume: item.volume ?? 0,
+        })),
+      };
     },
 
     /**
@@ -1043,15 +1090,15 @@ export function createGateway(token?: string | null) {
     /**
      * getMorningBrief — AI-generated morning brief (24h Valkey cache)
      */
-    getMorningBrief(): Promise<MorningBrief> {
-      return apiFetch<MorningBrief>("/v1/briefings/morning", { token: t });
+    getMorningBrief(): Promise<BriefingResponse> {
+      return apiFetch<BriefingResponse>("/v1/briefings/morning", { token: t });
     },
 
     /**
      * getInstrumentBrief — per-instrument AI brief
      */
-    getInstrumentBrief(entityId: string): Promise<MorningBrief> {
-      return apiFetch<MorningBrief>(
+    getInstrumentBrief(entityId: string): Promise<BriefingResponse> {
+      return apiFetch<BriefingResponse>(
         `/v1/briefings/instrument/${encodeURIComponent(entityId)}`,
         { token: t },
       );

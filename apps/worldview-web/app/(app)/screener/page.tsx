@@ -257,6 +257,13 @@ export default function ScreenerPage() {
   // ── Sort state ────────────────────────────────────────────────────────────
   const [sort, setSort] = useState<SortState>({ key: null, dir: "desc" });
 
+  // ── Filter panel collapse state ───────────────────────────────────────────
+  // WHY default false (collapsed): terminal UIs maximize data density by default.
+  // The filter panel is secondary chrome — the results table is primary.
+  // A collapsed default shows more data rows on first load, matching the
+  // Bloomberg screener UX where filters are revealed on demand.
+  const [filtersVisible, setFiltersVisible] = useState(false);
+
   // ── S9 screener query ─────────────────────────────────────────────────────
   const request: ScreenerRequest = {
     filters: buildFilters(appliedFilters),
@@ -375,21 +382,35 @@ export default function ScreenerPage() {
     // We want the table to scroll independently, not the whole page.
     <div className="flex h-full overflow-hidden">
 
-      {/* ── Filter Panel (left, fixed width) ───────────────────────────────── */}
+      {/* ── Filter Panel (left, collapsible) ──────────────────────────────── */}
       {/*
-        WHY w-64: narrower than the spec's w-72 — the filter panel has only 3
-        controls. w-64 gives the results table more breathing room.
-        shrink-0 prevents the panel from collapsing when the table grows.
+        WHY grid-based collapse (not display:none): `display:none` removes the
+        element from the layout entirely, causing the results table to jump.
+        `grid-template-columns` animates the width smoothly while `overflow-hidden`
+        clips the content during the transition. This is the approved §0.5 animation
+        for filter bar collapse — no width animation directly on the aside element.
+        WHY transition-[grid-template-columns]: only grid structural properties
+        animate; no layout reflow on data panels. duration-200 ease-out matches
+        the sidebar collapse animation (§0.5).
       */}
-      <aside
-        className="flex w-64 shrink-0 flex-col gap-3 border-r border-border bg-card p-3 overflow-y-auto"
-        aria-label="Filter panel"
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: filtersVisible ? "256px" : "0px",
+          transition: "grid-template-columns 200ms ease-out",
+        }}
+        className="overflow-hidden shrink-0"
       >
-        {/* Panel heading */}
-        <div>
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Filters
-          </h2>
+      <aside
+        className="flex w-64 shrink-0 flex-col gap-3 border-r border-border bg-card p-3 overflow-y-auto overflow-x-hidden"
+        aria-label="Filter panel"
+        aria-hidden={!filtersVisible}
+      >
+        {/* Panel heading — §0.9 terminal section header pattern */}
+        <div className="flex items-center justify-between border-b border-border pb-1">
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+            FILTERS
+          </span>
         </div>
 
         {/* ── Search input ────────────────────────────────────────────────── */}
@@ -528,21 +549,34 @@ export default function ScreenerPage() {
           </Button>
         </div>
       </aside>
+      </div>{/* end grid collapse wrapper */}
 
       {/* ── Results Area (right, flex-1) ─────────────────────────────────────── */}
       <main className="flex flex-1 flex-col overflow-hidden">
 
         {/* ── Results header bar ────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-2">
-          <h1 className="text-sm font-semibold tracking-tight text-foreground">
+        {/* WHY h-9: §0.2 filter bar height — matches the approved header row height */}
+        <div className="flex items-center gap-2 border-b border-border px-3 h-9 shrink-0">
+          {/* Filters toggle button — collapses/expands the left filter panel */}
+          {/* WHY text-[10px] uppercase: §0.1 label typography for UI controls */}
+          <button
+            onClick={() => setFiltersVisible((prev) => !prev)}
+            aria-expanded={filtersVisible}
+            aria-controls="screener-filter-panel"
+            className="flex items-center gap-1 rounded-[2px] border border-border px-2 h-6 text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors duration-0 shrink-0"
+          >
+            FILTERS {filtersVisible ? "▴" : "▾"}
+          </button>
+
+          <h1 className="text-xs font-semibold tracking-tight text-foreground">
             Instrument Screener
           </h1>
-          {/* WHY show count even during fetch: keeps the user oriented.
-              "Loading…" is shown only when there are no accumulated results yet. */}
-          <span className="text-xs text-muted-foreground font-mono tabular-nums">
+          {/* WHY ml-auto: pushes count to the right edge — clear separation of
+              navigation from metadata, matching Bloomberg panel header pattern. */}
+          <span className="ml-auto text-[11px] text-muted-foreground font-mono tabular-nums">
             {isLoading && allResults.length === 0
               ? "Loading…"
-              : `${totalCount.toLocaleString()} instruments found`}
+              : `${totalCount.toLocaleString()} instruments`}
           </span>
         </div>
 

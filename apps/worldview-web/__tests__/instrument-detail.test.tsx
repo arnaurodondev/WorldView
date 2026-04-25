@@ -189,6 +189,17 @@ vi.mock("@/lib/gateway", () => ({
         { id: "e-1", source: "ent-001", target: "ent-002", label: "CEO_OF", weight: 1.0 },
       ],
     }),
+    // WHY getInstrumentBrief: InstrumentBriefSection (PLAN-0034) now fetches live
+    // AI briefs via S8. All IntelligenceTab tests need this mock to avoid TypeError.
+    getInstrumentBrief: vi.fn().mockResolvedValue({
+      content: "**Apple** reported strong Q4 results above expectations.",
+      risk_summary: null,
+      entity_mentions: [{ entity_id: "ent-001", name: "Apple", ticker: "AAPL" }],
+      citations: [],
+      generated_at: new Date().toISOString(),
+      cached: false,
+      entity_id: "ent-001",
+    }),
     getOHLCV: vi.fn().mockResolvedValue({
       instrument_id: "ins-001",
       ticker: "AAPL",
@@ -331,13 +342,23 @@ describe("IntelligenceTab", () => {
     const emptyGateway = {
       getContradictions: vi.fn().mockResolvedValue({ entity_id: "ent-001", contradictions: [] }),
       getEntityGraph: vi.fn().mockResolvedValue({ entity_id: "ent-001", nodes: [], edges: [] }),
+      // WHY getInstrumentBrief: InstrumentBriefSection (added PLAN-0034) makes this call.
+      // Without it the gateway factory throws TypeError on the missing method.
+      getInstrumentBrief: vi.fn().mockResolvedValue({
+        content: "", entity_mentions: [], citations: [], generated_at: new Date().toISOString(),
+        risk_summary: null, cached: false, entity_id: "ent-001",
+      }),
       refreshToken: vi.fn().mockResolvedValue({ access_token: "tok", user: {}, expires_in: 900 }),
       logout: vi.fn(),
     } as unknown as ReturnType<typeof createGateway>;
 
-    // WHY two mockReturnValueOnce: the first call is for getEntityGraph (depth=2),
-    // the second call is for getContradictions. Both must return the empty mock.
-    vi.mocked(createGateway).mockReturnValueOnce(emptyGateway).mockReturnValueOnce(emptyGateway);
+    // WHY three mockReturnValueOnce: IntelligenceTab creates gateway instances for
+    // getEntityGraph (depth=2), getInstrumentBrief, and getContradictions queries.
+    // All three must return the empty mock to avoid TypeError on missing methods.
+    vi.mocked(createGateway)
+      .mockReturnValueOnce(emptyGateway)
+      .mockReturnValueOnce(emptyGateway)
+      .mockReturnValueOnce(emptyGateway);
 
     render(<IntelligenceTab entityId="ent-001" />, { wrapper });
 
@@ -367,9 +388,9 @@ describe("IntelligenceTab", () => {
     });
   });
 
-  it("renders AI intelligence brief placeholder", async () => {
-    // WHY: verifies the placeholder section is present before the real brief
-    // implementation lands in a future wave.
+  it("renders AI intelligence brief section heading", async () => {
+    // WHY: verifies the AI brief section header is visible. PLAN-0034 replaced
+    // the static placeholder with a live InstrumentBriefSection component.
     render(<IntelligenceTab entityId="ent-001" />, { wrapper });
 
     await waitFor(() => {
@@ -433,10 +454,15 @@ describe("OHLCVChart", () => {
   it("renders timeframe selector buttons", () => {
     render(<OHLCVChart instrumentId="ins-001" />, { wrapper });
 
-    // Three timeframe options must always be visible
+    // All five timeframe options must always be visible.
+    // WHY 1W and 1M: S3 ingests weekly (Timeframe.ONE_WEEK="1w") and monthly
+    // (Timeframe.ONE_MONTH="1M") EODHD bars. The gateway normalizes "1W"→"1w"
+    // and preserves "1M" as-is (uppercase M required by S3 enum).
     expect(screen.getByText("5M")).toBeInTheDocument();
     expect(screen.getByText("1H")).toBeInTheDocument();
     expect(screen.getByText("1D")).toBeInTheDocument();
+    expect(screen.getByText("1W")).toBeInTheDocument();
+    expect(screen.getByText("1M")).toBeInTheDocument();
   });
 
   it("shows 'Chart unavailable' fallback when dynamic import fails", async () => {
