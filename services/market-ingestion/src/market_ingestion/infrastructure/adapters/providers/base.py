@@ -51,7 +51,6 @@ class BaseProviderAdapter(ProviderAdapter):
         latency_ms: int,
         credit_cost: int = 0,
         status: str = "success",
-        status_code: int = 200,
     ) -> None:
         """Emit provider_api_call log event and increment shared Prometheus metrics."""
         logger.info(
@@ -70,7 +69,6 @@ class BaseProviderAdapter(ProviderAdapter):
             provider=self.provider.value,
             dataset_type=dataset_type,
             timeframe=timeframe,
-            status_code=status_code,
             duration_seconds=latency_ms / 1000.0,
             credit_cost=credit_cost,
         )

@@ -157,7 +157,12 @@ class ExecuteTaskUseCase:
                 # re-queued for the next month rather than permanently failed.
                 exc = ProviderRateLimited("Monthly EODHD quota exhausted — task deferred")
                 await self._persist_retry(task, exc)
-                from market_ingestion.infrastructure.metrics.eodhd import eodhd_quota_blocked_total
+                # NOTE: metric increment intentionally lives here rather than in an
+                # infrastructure callback to keep the quota-block -> persist-retry ->
+                # increment -> raise sequence atomic.  Accepted layer violation (F-010).
+                from market_ingestion.infrastructure.metrics.eodhd import (
+                    eodhd_quota_blocked_total,
+                )
 
                 eodhd_quota_blocked_total.labels(dataset_type=str(task.dataset_type)).inc()
                 raise exc
@@ -174,9 +179,16 @@ class ExecuteTaskUseCase:
         # the circuit can self-heal after the cooldown period.
         # Only applies to EODHD — free providers have their own rate-limit
         # handling and the CB is EODHD-specific infrastructure.
+        # F-004: Valkey errors are caught so a Valkey outage does not crash
+        # the task — we assume CLOSED (let the fetch proceed) on failure.
         if self._circuit_breaker is not None and preferred == Provider.EODHD:
             endpoint = str(task.dataset_type)
-            if await self._circuit_breaker.is_open(endpoint):
+            try:
+                cb_open = await self._circuit_breaker.is_open(endpoint)
+            except Exception as cb_exc:
+                log.warning("circuit_breaker_unavailable", error=str(cb_exc))
+                cb_open = False
+            if cb_open:
                 log.warning("circuit_breaker_open", endpoint=endpoint)
                 exc = ProviderRateLimited("EODHD circuit breaker OPEN — task deferred")
                 await self._persist_retry(task, exc)
@@ -188,14 +200,20 @@ class ExecuteTaskUseCase:
             # Record success after a clean fetch so the circuit can close after
             # a HALF_OPEN probe or reset the failure counter in CLOSED state.
             if self._circuit_breaker is not None:
-                await self._circuit_breaker.record_success(str(task.dataset_type))
+                try:
+                    await self._circuit_breaker.record_success(str(task.dataset_type))
+                except Exception as cb_exc:
+                    log.warning("circuit_breaker_unavailable", error=str(cb_exc))
         except (ProviderRateLimited, ProviderUnavailable, TaskLeaseLost) as exc:
             log.warning("fetch_retryable_error", error=str(exc))
             # Count rate-limit and unavailability errors toward the circuit
             # breaker threshold.  TaskLeaseLost is a local scheduling issue
             # (not a provider error) so we skip it.
             if self._circuit_breaker is not None and not isinstance(exc, TaskLeaseLost):
-                await self._circuit_breaker.record_failure(str(task.dataset_type))
+                try:
+                    await self._circuit_breaker.record_failure(str(task.dataset_type))
+                except Exception as cb_exc:
+                    log.warning("circuit_breaker_unavailable", error=str(cb_exc))
             await self._persist_retry(task, exc)
             raise
         except (ProviderAuthError, ProviderDataError) as exc:
@@ -209,14 +227,21 @@ class ExecuteTaskUseCase:
         # re-route to the next provider in the priority chain.
         # Dataset gate: only list-type datasets can have meaningful zero-bar
         # counts; FUNDAMENTALS/MACRO always return bars_returned=1.
+        # F-004: Valkey errors in the zero-bar tracker are caught so a Valkey
+        # outage does not crash the task.  On record_zero failure we default
+        # streak=0 (skip failover); on reset failure we log and continue.
         if self._zero_bar_tracker is not None and task.dataset_type in _ZERO_BAR_DATASET_TYPES:
             if fetch_result.bars_returned == 0:
-                streak = await self._zero_bar_tracker.record_zero(
-                    provider=preferred.value,
-                    symbol=task.symbol,
-                    timeframe=task.timeframe or "",
-                    dataset_type=str(task.dataset_type),
-                )
+                try:
+                    streak = await self._zero_bar_tracker.record_zero(
+                        provider=preferred.value,
+                        symbol=task.symbol,
+                        timeframe=task.timeframe or "",
+                        dataset_type=str(task.dataset_type),
+                    )
+                except Exception as zbt_exc:
+                    log.warning("zero_bar_tracker_unavailable", error=str(zbt_exc))
+                    streak = 0  # cannot determine streak — skip failover
                 log.debug("zero_bar_streak_recorded", streak=streak, provider=preferred.value)
                 if self._zero_bar_tracker.should_failover(streak):
                     fallback = _fallback_provider(task.dataset_type, task.timeframe, preferred, self._registry)
@@ -248,12 +273,15 @@ class ExecuteTaskUseCase:
                             dataset_type=str(task.dataset_type),
                         )
             else:
-                await self._zero_bar_tracker.reset(
-                    provider=preferred.value,
-                    symbol=task.symbol,
-                    timeframe=task.timeframe or "",
-                    dataset_type=str(task.dataset_type),
-                )
+                try:
+                    await self._zero_bar_tracker.reset(
+                        provider=preferred.value,
+                        symbol=task.symbol,
+                        timeframe=task.timeframe or "",
+                        dataset_type=str(task.dataset_type),
+                    )
+                except Exception as zbt_exc:
+                    log.warning("zero_bar_tracker_unavailable", error=str(zbt_exc))
 
         # ── Step 2: Store bronze ─────────────────────────────────────────────
         try:

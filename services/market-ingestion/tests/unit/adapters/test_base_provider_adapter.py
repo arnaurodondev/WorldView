@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import structlog.testing
 from market_ingestion.domain.enums import DatasetType, Provider
+from market_ingestion.infrastructure.adapters.providers.base import BaseProviderAdapter
 from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
 
 pytestmark = pytest.mark.unit
@@ -97,7 +98,6 @@ def test_record_api_call_calls_record_provider_request():
             provider=Provider.EODHD.value,
             dataset_type="ohlcv",
             timeframe="1d",
-            status_code=200,
             duration_seconds=0.2,
             credit_cost=1,
         )
@@ -194,3 +194,70 @@ def test_record_api_call_credit_cost_zero():
         mock_rpr.assert_called_once()
         call_kwargs = mock_rpr.call_args[1]
         assert call_kwargs["credit_cost"] == 0
+
+
+# ---------------------------------------------------------------------------
+# F-011c: _sanitize_url_slug edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit()
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://finnhub.io/api/v1/company-news?token=SECRET", "company-news"),
+        ("https://eodhd.com/api/eod/AAPL.US?api_token=SECRET", "eod"),
+        ("https://example.com", "unknown"),
+        ("https://example.com/api/v1/", "unknown"),
+        ("", "unknown"),
+    ],
+)
+def test_sanitize_url_slug(url: str, expected: str) -> None:
+    """_sanitize_url_slug must strip query params and extract a safe endpoint label."""
+    assert BaseProviderAdapter._sanitize_url_slug(url) == expected
+
+
+# ---------------------------------------------------------------------------
+# F-011d: _record_rate_limited and _record_error log events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit()
+def test_record_rate_limited_emits_event() -> None:
+    """_record_rate_limited must emit a 'provider_rate_limited' structlog event and increment metric."""
+    adapter, _ = _make_adapter()
+    with (
+        structlog.testing.capture_logs() as cap,
+        patch("market_ingestion.infrastructure.adapters.providers.base.record_provider_rate_limited") as mock_metric,
+    ):
+        adapter._record_rate_limited(endpoint="company-news")
+
+    # Verify structlog event
+    events = [e for e in cap if e.get("event") == "provider_rate_limited"]
+    assert len(events) == 1
+    assert events[0]["provider"] == Provider.EODHD.value
+    assert events[0]["endpoint"] == "company-news"
+
+    # Verify Prometheus metric incremented
+    mock_metric.assert_called_once_with(provider=Provider.EODHD.value)
+
+
+@pytest.mark.unit()
+def test_record_error_emits_event() -> None:
+    """_record_error must emit a 'provider_error' structlog event and increment metric."""
+    adapter, _ = _make_adapter()
+    with (
+        structlog.testing.capture_logs() as cap,
+        patch("market_ingestion.infrastructure.adapters.providers.base.record_provider_error") as mock_metric,
+    ):
+        adapter._record_error(reason="timeout", endpoint="eod")
+
+    # Verify structlog event
+    events = [e for e in cap if e.get("event") == "provider_error"]
+    assert len(events) == 1
+    assert events[0]["provider"] == Provider.EODHD.value
+    assert events[0]["reason"] == "timeout"
+    assert events[0]["endpoint"] == "eod"
+
+    # Verify Prometheus metric incremented
+    mock_metric.assert_called_once_with(provider=Provider.EODHD.value, reason="timeout")

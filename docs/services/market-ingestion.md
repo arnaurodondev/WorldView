@@ -125,7 +125,7 @@ CREATE TABLE watermarks (
 ## Internal Modules
 
 ```
-services/market-ingestion/src/app/
+services/market-ingestion/src/market_ingestion/
 ├── api/
 │   ├── main.py              # FastAPI app, health/ready, ingest routes
 │   ├── lifespan.py          # Startup/shutdown (dispatcher init)
@@ -133,7 +133,7 @@ services/market-ingestion/src/app/
 │   ├── schemas.py
 │   └── routes/ingest.py
 ├── application/
-│   ├── ports/               # Abstract repos, adapters, UoW
+│   ├── ports/               # Abstract repos, adapters, UoW, zero_bar_tracker
 │   └── use_cases/
 │       ├── trigger_ingestion.py
 │       ├── backfill.py
@@ -145,12 +145,17 @@ services/market-ingestion/src/app/
 │   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus (re-export from contracts), etc.
 │   ├── events.py            # MarketDatasetFetched (pointer event)
 │   ├── errors.py
+│   ├── freshness.py         # FRESHNESS_TTL_SECONDS, EODHD_CREDIT_COST
 │   └── value_objects.py     # Timeframe, ObjectRef (claim-check pointer), InstrumentKey, DateRange
 ├── infrastructure/
 │   ├── adapters/
-│   │   ├── providers/       # eodhd.py, alpha_vantage.py, polygon.py, yahoo.py
+│   │   ├── providers/       # base.py, eodhd.py, finnhub.py, yahoo.py, registry.py
 │   │   ├── canonical.py     # Raw → canonical transformation
-│   │   └── object_store.py  # MinIO adapter
+│   │   ├── object_store.py  # MinIO adapter
+│   │   └── zero_bar_tracker.py  # ValkeyZeroBarTracker (Valkey-backed streak counter)
+│   ├── metrics/
+│   │   ├── eodhd.py         # EODHD-specific Prometheus metrics (s2_eodhd_*)
+│   │   └── providers.py     # Generic provider metrics (s2_mi_provider_*)
 │   ├── config/settings.py
 │   ├── db/                  # models, repos, session, UoW
 │   └── messaging/           # dispatcher, kafka/ (mapper, serialization, schemas/)

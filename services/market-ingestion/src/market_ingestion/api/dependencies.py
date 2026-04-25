@@ -6,7 +6,6 @@ from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
-import httpx
 from fastapi import Depends, Request
 
 from market_ingestion.config import Settings
@@ -72,8 +71,8 @@ def get_object_store(
 
     storage_settings = StorageSettings(
         endpoint=settings.storage_endpoint,
-        access_key=settings.storage_access_key,
-        secret_key=settings.storage_secret_key,
+        access_key=settings.storage_access_key.get_secret_value(),
+        secret_key=settings.storage_secret_key.get_secret_value(),
     )
     storage = S3ObjectStorage(storage_settings)
     return S3ObjectStoreAdapter(storage=storage, default_bucket=settings.storage_bucket)
@@ -82,17 +81,10 @@ def get_object_store(
 def get_provider_registry(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ProviderRegistry:
-    """Provide the provider registry (EODHD + stubs)."""
-    from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
+    """Provide the provider registry (all configured providers)."""
+    from market_ingestion.infrastructure.adapters.providers import build_provider_registry
 
-    registry = ProviderRegistry()
-    from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
-
-    client = httpx.AsyncClient()
-    registry.register(
-        EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client, base_url=settings.eodhd_base_url),
-    )
-    return registry
+    return build_provider_registry(settings)
 
 
 def get_canonical_serializer() -> CanonicalSerializer:

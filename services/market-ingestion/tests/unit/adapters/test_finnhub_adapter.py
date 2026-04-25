@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import structlog.testing
 from market_ingestion.domain.enums import DatasetType, Provider
@@ -90,7 +91,10 @@ async def test_429_raises_provider_rate_limited():
     adapter = _make_adapter()
     adapter._client.get.return_value = _mock_response(status_code=429)
 
-    with pytest.raises(ProviderRateLimited):
+    with (
+        pytest.raises(ProviderRateLimited),
+        patch("market_ingestion.infrastructure.adapters.providers.finnhub.asyncio.sleep"),
+    ):
         await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
 
 
@@ -100,7 +104,10 @@ async def test_401_raises_provider_auth_error():
     adapter = _make_adapter()
     adapter._client.get.return_value = _mock_response(status_code=401)
 
-    with pytest.raises(ProviderAuthError):
+    with (
+        pytest.raises(ProviderAuthError),
+        patch("market_ingestion.infrastructure.adapters.providers.finnhub.asyncio.sleep"),
+    ):
         await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
 
 
@@ -127,3 +134,76 @@ async def test_provider_api_call_log_event_emitted():
     assert evt["bars_returned"] == 2
     # API key must NEVER appear in logs
     assert "test-key" not in str(evt)
+
+
+# ---------------------------------------------------------------------------
+# F-011b: Error path coverage
+# ---------------------------------------------------------------------------
+
+_SLEEP_PATCH = "market_ingestion.infrastructure.adapters.providers.finnhub.asyncio.sleep"
+
+
+@pytest.mark.asyncio
+async def test_500_raises_provider_unavailable():
+    """HTTP 500 server error → ProviderUnavailable."""
+    adapter = _make_adapter()
+    adapter._client.get.return_value = _mock_response(status_code=500)
+
+    with (
+        pytest.raises(ProviderUnavailable, match="server error"),
+        patch(_SLEEP_PATCH),
+    ):
+        await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
+
+
+@pytest.mark.asyncio
+async def test_connect_error_raises_provider_unavailable():
+    """httpx.ConnectError → ProviderUnavailable with 'connection error' message."""
+    adapter = _make_adapter()
+    adapter._client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    with pytest.raises(ProviderUnavailable, match="connection error"):
+        await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
+
+
+@pytest.mark.asyncio
+async def test_timeout_raises_provider_unavailable():
+    """httpx.TimeoutException → ProviderUnavailable with 'timeout' message."""
+    adapter = _make_adapter()
+    adapter._client.get = AsyncMock(side_effect=httpx.ReadTimeout("read timed out"))
+
+    with pytest.raises(ProviderUnavailable, match="timeout"):
+        await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_parsed():
+    """429 with Retry-After: 120 → ProviderRateLimited.retry_after == 120.0."""
+    adapter = _make_adapter()
+    resp = _mock_response(status_code=429)
+    resp.headers = {"Retry-After": "120"}
+    adapter._client.get.return_value = resp
+
+    with (
+        pytest.raises(ProviderRateLimited) as exc_info,
+        patch(_SLEEP_PATCH),
+    ):
+        await adapter.fetch_news_sentiment("AAPL", from_date="2024-01-01", to_date="2024-01-07")
+
+    assert exc_info.value.retry_after == 120.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_quotes_raises_provider_unavailable():
+    """fetch_quotes must raise ProviderUnavailable — not in scope for free tier."""
+    adapter = _make_adapter()
+    with pytest.raises(ProviderUnavailable, match="quotes"):
+        await adapter.fetch_quotes("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_fetch_fundamentals_raises_provider_unavailable():
+    """fetch_fundamentals must raise ProviderUnavailable — not in scope."""
+    adapter = _make_adapter()
+    with pytest.raises(ProviderUnavailable, match="fundamentals"):
+        await adapter.fetch_fundamentals("AAPL")

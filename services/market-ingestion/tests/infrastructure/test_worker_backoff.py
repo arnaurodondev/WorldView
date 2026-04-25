@@ -10,18 +10,18 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 _PATCH_FACTORIES = "market_ingestion.infrastructure.workers.worker._build_factories"
-_PATCH_EODHD = "market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"
-_PATCH_REGISTRY = "market_ingestion.infrastructure.workers.worker.ProviderRegistry"
+_PATCH_BUILD_REGISTRY = "market_ingestion.infrastructure.workers.worker.build_provider_registry"
 
 
 def _make_settings() -> MagicMock:
     s = MagicMock()
-    s.eodhd_api_key = "test-key"
+    s.eodhd_api_key = SecretStr("test-key")
     s.storage_endpoint = "http://localhost:9000"
-    s.storage_access_key = "key"
-    s.storage_secret_key = "secret"  # noqa: S105
+    s.storage_access_key = SecretStr("key")
+    s.storage_secret_key = SecretStr("secret")
     s.storage_bucket = "test-bucket"
     s.worker_concurrency = 2
     s.worker_batch_size = 10
@@ -34,8 +34,7 @@ def _make_worker(idle_sleep: float = 5.0) -> object:
 
     with (
         patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
-        patch(_PATCH_EODHD),
-        patch(_PATCH_REGISTRY),
+        patch(_PATCH_BUILD_REGISTRY),
     ):
         return WorkerProcess(
             settings=_make_settings(),
@@ -49,8 +48,8 @@ def _make_worker(idle_sleep: float = 5.0) -> object:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_backoff_increases_on_repeated_failures() -> None:
     """Three consecutive DB failures must produce increasing sleep durations.
 
@@ -91,8 +90,8 @@ async def test_backoff_increases_on_repeated_failures() -> None:
     assert sleep_calls[2] == pytest.approx(35.0)
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_backoff_capped_at_60_seconds() -> None:
     """Backoff must not exceed 60 s regardless of how many consecutive failures occur."""
     worker = _make_worker(idle_sleep=5.0)
@@ -120,8 +119,8 @@ async def test_backoff_capped_at_60_seconds() -> None:
     assert sleep_calls[-1] == pytest.approx(60.0)
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_backoff_resets_on_success() -> None:
     """After a successful claim the backoff must reset to 0.
 
