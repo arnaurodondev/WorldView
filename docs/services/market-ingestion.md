@@ -215,6 +215,31 @@ only when `finnhub_api_key` is non-empty (graceful degradation). Provider enum: 
 
 ---
 
+## Provider Coverage
+
+Routing is handled by `_preferred_provider()` in `execute_task.py`. The cheapest registered
+provider is selected at execution time — the stored `task.provider` is not changed.
+
+| Dataset Type | Primary Provider | Fallback | Credit Cost | Notes |
+|---|---|---|---|---|
+| OHLCV (1d/1w/1M) | Yahoo Finance | EODHD | 0 / 1 | Preferred when `yfinance` registered |
+| OHLCV (intraday) | EODHD | — | 5 | Yahoo only supports EOD |
+| QUOTES | EODHD | — | 1 | |
+| FUNDAMENTALS | EODHD | — | 10 | Most expensive; no free alternative yet |
+| NEWS_SENTIMENT | Finnhub | EODHD | 0 / 5 | Preferred when `finnhub_api_key` set |
+| EARNINGS_CALENDAR | Finnhub | EODHD | 0 / 5 | |
+| INSIDER_TRANSACTIONS | Finnhub | EODHD | 0 / 5 | |
+| ECONOMIC_EVENTS | EODHD | — | 5 | |
+| MACRO_INDICATOR | EODHD | — | 5 | |
+| YIELD_CURVE | EODHD | — | 5 | |
+| MARKET_CAP | EODHD | — | 1 | |
+
+**Zero-bar failover**: After 5 consecutive zero-bar responses from a free provider, the system
+falls back to EODHD. Streaks are tracked in Valkey (24h TTL auto-expiry). Controlled by
+`ValkeyZeroBarTracker` — disabled when Valkey is unavailable (graceful degradation).
+
+---
+
 ## Runtime Processes (4)
 
 | Process | Entry Point | Purpose |

@@ -2,11 +2,11 @@
 id: PLAN-0038
 title: Free Provider Integration + Loki API Usage Observability
 prd: investigation-2026-04-25
-status: in-progress
+status: completed
 created: 2026-04-25
-updated: 2026-04-25
+updated: 2026-04-26
 service: market-ingestion
-waves: 4
+waves: 5
 ---
 
 # PLAN-0038 — Free Provider Integration + Loki API Usage Observability
@@ -38,6 +38,10 @@ Wave A-2 (Finnhub adapter — NEWS/EARNINGS/INSIDER)  ← can run in parallel wi
 Wave A-3 (Yahoo Finance adapter — OHLCV daily/weekly/monthly)   ← can run in parallel with A-2
     ↓
 Wave A-4 (Provider routing strategy + Prometheus timeframe label)
+    ↓
+Wave A-5 (Zero-bar failover — Valkey streak counter + _fallback_provider() chain)
+
+Appendix A (Primary Provider Reclaim Worker + Intraday Provider Research — deferred, pick up separately)
 ```
 
 ---
@@ -680,7 +684,9 @@ Use `pytest-httpx` and `structlog.testing.capture_logs()`.
 
 ---
 
-## Wave A-3: Yahoo Finance Provider Adapter
+## Wave A-3: Yahoo Finance Provider Adapter ✅
+
+**Status**: **DONE** — 2026-04-25 · 507 unit tests pass · ruff + mypy clean
 
 **Goal**: Implement the `YahooFinanceProviderAdapter` using the `yfinance` library to serve `OHLCV` daily/weekly/monthly data without consuming EODHD credits.
 
@@ -845,11 +851,11 @@ Use `unittest.mock.patch("yfinance.Ticker")` to mock the yfinance API.
 ---
 
 ### Validation Gate
-- [ ] `ruff check` passes
-- [ ] `mypy` passes
-- [ ] 5 unit tests pass
-- [ ] `yfinance` in `pyproject.toml`
-- [ ] No blocking I/O in async path (uses `run_in_executor`)
+- [x] `ruff check` passes
+- [x] `mypy` passes
+- [x] 5 unit tests pass (507 total)
+- [x] `yfinance` in `pyproject.toml`
+- [x] No blocking I/O in async path (uses `run_in_executor`)
 
 ### Break Impact
 
@@ -863,7 +869,9 @@ Use `unittest.mock.patch("yfinance.Ticker")` to mock the yfinance API.
 
 ---
 
-## Wave A-4: Provider Routing Strategy + Prometheus Timeframe Label
+## Wave A-4: Provider Routing Strategy + Prometheus Timeframe Label ✅
+
+**Status**: **DONE** — 2026-04-26 · 118 unit tests pass · ruff + mypy clean
 
 **Goal**: Add routing logic so that `NEWS_SENTIMENT`, `EARNINGS_CALENDAR`, `INSIDER_TRANSACTIONS` prefer Finnhub when configured, and `OHLCV` daily/weekly/monthly prefers Yahoo Finance. Add `timeframe` label to EODHD Prometheus metrics for lower-cost breakdowns without per-ticker cardinality explosion.
 
@@ -1034,12 +1042,12 @@ if self._circuit_breaker is not None and preferred == Provider.EODHD:
 ---
 
 ### Validation Gate
-- [ ] `ruff check` passes
-- [ ] `mypy` passes
-- [ ] 8 routing + quota-bypass unit tests pass
-- [ ] All prior unit tests (Wave A-1..A-3) still pass
-- [ ] `execute_task.py` quota/CB checks gated on `preferred == Provider.EODHD`
-- [ ] Documentation updated
+- [x] `ruff check` passes
+- [x] `mypy` passes
+- [x] 8 routing + quota-bypass unit tests pass
+- [x] All prior unit tests (Wave A-1..A-3) still pass
+- [x] `execute_task.py` quota/CB checks gated on `preferred == Provider.EODHD`
+- [x] Documentation updated
 
 ### Break Impact
 
@@ -1050,6 +1058,406 @@ if self._circuit_breaker is not None and preferred == Provider.EODHD:
 ### Regression Guardrails
 - **BP-027 (Silent metric label mismatch)**: Adding a label dimension to an existing counter resets all historical series in Prometheus. This is acceptable in dev but must be documented. For production, note in the commit message: "Prometheus label addition — expect time series gap for `s2_eodhd_requests_total`".
 - **BP-023 (pre-commit ruff divergence)**: Run `ruff format` on all modified `.py` files before committing.
+
+---
+
+## Wave A-5: Zero-Bar Failover — Valkey Streak Counter ✅
+
+**Status**: **DONE** — 2026-04-26 · 118 unit tests pass · ruff + mypy clean
+
+**Goal**: After a provider returns `bars_returned=0` for 5 consecutive executions on the same (provider, symbol, timeframe, dataset_type), automatically re-route to the next provider in the priority chain. Resets on any non-zero response. Does not replace the circuit breaker (zero bars ≠ network error).
+
+**Depends on**: Wave A-4 (requires `_preferred_provider()`, `_YAHOO_TIMEFRAMES`, `_FINNHUB_TYPES` from that wave)
+**Estimated effort**: 60–90 minutes
+**Architecture layer**: application + infrastructure
+
+### Pre-read
+- `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py` — Step 1 fetch block (line ~165)
+- `services/market-ingestion/src/market_ingestion/infrastructure/adapters/circuit_breaker.py` — pattern for Valkey-backed port+adapter
+- `services/market-ingestion/src/market_ingestion/application/ports/circuit_breaker.py` — port ABC pattern to follow
+
+### Tasks
+
+#### T-A-5-01: `ZeroBarTrackerPort` + `ValkeyZeroBarTracker`
+
+**Type**: impl
+**depends_on**: none
+**blocks**: [T-A-5-02]
+**Target files**:
+- `services/market-ingestion/src/market_ingestion/application/ports/zero_bar_tracker.py` (NEW)
+- `services/market-ingestion/src/market_ingestion/infrastructure/adapters/zero_bar_tracker.py` (NEW)
+
+**What to build**: A port ABC and a Valkey-backed implementation for tracking consecutive zero-bar responses per (provider, symbol, timeframe, dataset_type) tuple.
+
+**Port (`application/ports/zero_bar_tracker.py`)**:
+```python
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from typing import ClassVar
+
+class ZeroBarTrackerPort(ABC):
+    """Tracks consecutive zero-bar API responses per (provider, symbol, timeframe, dataset_type).
+
+    Used by ExecuteTaskUseCase to decide when to failover to the next provider.
+    Zero-bar responses are not errors (e.g., weekend, holiday, new listing), so
+    the circuit breaker doesn't apply — this tracker handles soft data-quality signals.
+    """
+
+    FAILOVER_THRESHOLD: ClassVar[int] = 5
+
+    @abstractmethod
+    async def record_zero(
+        self, provider: str, symbol: str, timeframe: str, dataset_type: str
+    ) -> int:
+        """Record a zero-bar result. Returns new consecutive streak count."""
+
+    @abstractmethod
+    async def reset(
+        self, provider: str, symbol: str, timeframe: str, dataset_type: str
+    ) -> None:
+        """Reset the zero-bar streak after a successful non-zero fetch."""
+
+    def should_failover(self, streak: int) -> bool:
+        """Return True when streak has reached FAILOVER_THRESHOLD."""
+        return streak >= self.FAILOVER_THRESHOLD
+```
+
+**Adapter (`infrastructure/adapters/zero_bar_tracker.py`)**:
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+from market_ingestion.application.ports.zero_bar_tracker import ZeroBarTrackerPort
+
+if TYPE_CHECKING:
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+class ValkeyZeroBarTracker(ZeroBarTrackerPort):
+    """Valkey-backed zero-bar streak counter.
+
+    Key schema: ``neg:prov:{provider}:{symbol}:{timeframe}:{dataset_type}:zbs``
+    TTL: 86400 seconds (24h) — stale streaks from weekends auto-expire.
+
+    Thread-safe: INCR is atomic in Valkey. Last-writer-wins for concurrent
+    resets is acceptable (matches circuit breaker design philosophy).
+    """
+
+    _KEY_PREFIX: str = "neg:prov"
+    _STREAK_TTL: int = 86_400  # 24h
+
+    def __init__(self, valkey: ValkeyClient) -> None:
+        self._valkey = valkey
+
+    def _key(self, provider: str, symbol: str, timeframe: str, dataset_type: str) -> str:
+        return f"{self._KEY_PREFIX}:{provider}:{symbol}:{timeframe}:{dataset_type}:zbs"
+
+    async def record_zero(self, provider: str, symbol: str, timeframe: str, dataset_type: str) -> int:
+        key = self._key(provider, symbol, timeframe, dataset_type)
+        streak = await self._valkey.incr(key)
+        await self._valkey.expire(key, self._STREAK_TTL)
+        return int(streak)
+
+    async def reset(self, provider: str, symbol: str, timeframe: str, dataset_type: str) -> None:
+        key = self._key(provider, symbol, timeframe, dataset_type)
+        await self._valkey.delete(key)
+```
+
+**Acceptance criteria**:
+- [ ] `ZeroBarTrackerPort` is abstract — no concrete I/O
+- [ ] `ValkeyZeroBarTracker.record_zero()` uses INCR + EXPIRE atomically per call
+- [ ] TTL is 24h (stale weekend streaks auto-clear)
+- [ ] Key schema follows `neg:prov:` prefix convention (matches existing negative cache keys)
+- [ ] mypy passes
+
+---
+
+#### T-A-5-02: `_fallback_provider()` + zero-bar failover logic in `execute_task.py`
+
+**Type**: impl
+**depends_on**: [T-A-5-01]
+**blocks**: [T-A-5-03]
+**Target files**: `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py`
+
+**What to build**:
+
+1. Add `zero_bar_tracker: ZeroBarTrackerPort | None = None` parameter to `ExecuteTaskUseCase.__init__()`. Store as `self._zero_bar_tracker`.
+
+2. Add `_fallback_provider()` module-level function (after `_preferred_provider()`):
+
+```python
+def _fallback_provider(
+    dataset_type: DatasetType,
+    timeframe: str | None,
+    current_provider: Provider,
+    registry: ProviderRegistry,
+) -> Provider | None:
+    """Return the next provider in the priority chain after current_provider returns zero bars.
+
+    Chain (matches _preferred_provider() inverse):
+      OHLCV daily/weekly/monthly: Yahoo Finance → EODHD → None
+      NEWS_SENTIMENT / EARNINGS_CALENDAR / INSIDER_TRANSACTIONS: Finnhub → EODHD → None
+      OHLCV intraday / all others: EODHD → None  (no free intraday alternative)
+
+    Returns None when no fallback is registered or dataset has no alternative.
+    """
+    if dataset_type == DatasetType.OHLCV and timeframe in _YAHOO_TIMEFRAMES:
+        if current_provider == Provider.YAHOO_FINANCE:
+            return Provider.EODHD  # Yahoo empty → try EODHD
+    if dataset_type in _FINNHUB_TYPES:
+        if current_provider == Provider.FINNHUB:
+            return Provider.EODHD  # Finnhub empty → try EODHD
+    return None  # EODHD is the terminal fallback; no further chain
+```
+
+3. Insert zero-bar failover logic in `execute_task()` **immediately after** the `fetch_result = await self._fetch(adapter, task)` + circuit breaker `record_success` block, and **before** Step 2 (store bronze):
+
+```python
+# ── Zero-bar failover check ─────────────────────────────────────────────────
+# Tracks consecutive zero-bar responses per (provider, symbol, timeframe, dataset).
+# After FAILOVER_THRESHOLD (default 5) consecutive misses, reroute to fallback.
+# This handles soft data-quality failures (holiday, listing gap, provider lag)
+# that are NOT caught by the circuit breaker (which targets HTTP errors).
+# Dataset gate: only list-type datasets can have meaningful zero-bar counts;
+# FUNDAMENTALS / MACRO always return bars_returned=1 from the adapter.
+_ZERO_BAR_DATASET_TYPES: frozenset[DatasetType] = frozenset({
+    DatasetType.OHLCV,
+    DatasetType.NEWS_SENTIMENT,
+    DatasetType.EARNINGS_CALENDAR,
+    DatasetType.INSIDER_TRANSACTIONS,
+})
+if self._zero_bar_tracker is not None and task.dataset_type in _ZERO_BAR_DATASET_TYPES:
+    if fetch_result.bars_returned == 0:
+        streak = await self._zero_bar_tracker.record_zero(
+            provider=str(preferred),
+            symbol=task.symbol,
+            timeframe=task.timeframe or "",
+            dataset_type=str(task.dataset_type),
+        )
+        log.debug("zero_bar_streak_recorded", streak=streak, provider=str(preferred))
+        if self._zero_bar_tracker.should_failover(streak):
+            fallback = _fallback_provider(task.dataset_type, task.timeframe, preferred, self._registry)
+            if fallback is not None:
+                fallback_adapter = self._registry.get(fallback)
+                log.warning(
+                    "provider_zero_bar_failover",
+                    streak=streak,
+                    primary_provider=str(preferred),
+                    fallback_provider=fallback.value,
+                    symbol=task.symbol,
+                    timeframe=task.timeframe or "",
+                )
+                # Re-fetch with fallback; if this also returns 0 bars we proceed
+                # normally (no nested failover — one level deep is sufficient).
+                fetch_result = await self._fetch(fallback_adapter, task)
+            else:
+                log.warning(
+                    "provider_zero_bar_no_fallback",
+                    streak=streak,
+                    provider=str(preferred),
+                    dataset_type=str(task.dataset_type),
+                )
+    else:
+        # Non-zero result: reset streak for this provider/symbol/timeframe
+        await self._zero_bar_tracker.reset(
+            provider=str(preferred),
+            symbol=task.symbol,
+            timeframe=task.timeframe or "",
+            dataset_type=str(task.dataset_type),
+        )
+```
+
+**Note**: `_ZERO_BAR_DATASET_TYPES` can be a module-level constant (placed with other module-level constants after the function definitions at the bottom of the file). The `preferred` variable is introduced by Wave A-4 — this wave strictly depends on A-4 being implemented.
+
+**Acceptance criteria**:
+- [ ] `zero_bar_tracker=None` → zero-bar logic is completely bypassed (backward-compatible)
+- [ ] After 5 consecutive zero-bar OHLCV 1d responses from Yahoo → uses EODHD adapter for that tick
+- [ ] After 5 consecutive zero-bar NEWS from Finnhub → uses EODHD adapter
+- [ ] EODHD zero-bar OHLCV intraday → logs `provider_zero_bar_no_fallback` but does NOT failover
+- [ ] Streak resets on any non-zero `bars_returned`
+- [ ] `provider_zero_bar_failover` log event emitted on failover (with streak, primary, fallback)
+- [ ] mypy passes
+
+---
+
+#### T-A-5-03: Unit tests for zero-bar failover
+
+**Type**: test
+**depends_on**: [T-A-5-02]
+**blocks**: none
+**Target files**: `services/market-ingestion/tests/unit/use_cases/test_execute_task_zero_bar_failover.py` (NEW)
+
+**Tests to write**:
+| Test Name | What It Verifies | Type |
+|-----------|-----------------|------|
+| `test_zero_bar_ohlcv_increments_streak` | `bars_returned=0` → `record_zero()` called once | unit |
+| `test_nonzero_bar_resets_streak` | `bars_returned=5` → `reset()` called | unit |
+| `test_failover_fires_at_threshold_5` | streak=5 + Yahoo → EODHD re-fetch triggered | unit |
+| `test_failover_does_not_fire_below_threshold` | streak=4 → no re-fetch | unit |
+| `test_eodhd_intraday_no_fallback_logs_warning` | EODHD 1m zero → `provider_zero_bar_no_fallback` event, no re-fetch | unit |
+| `test_fallback_returns_none_for_eodhd_ohlcv_intraday` | `_fallback_provider(OHLCV, "1m", EODHD, registry)` → None | unit |
+| `test_fallback_returns_eodhd_for_yahoo_daily` | `_fallback_provider(OHLCV, "1d", YAHOO, registry)` → EODHD | unit |
+| `test_fallback_returns_eodhd_for_finnhub_news` | `_fallback_provider(NEWS_SENTIMENT, None, FINNHUB, registry)` → EODHD | unit |
+| `test_zero_bar_tracker_none_skips_logic` | `zero_bar_tracker=None` → no calls to record/reset | unit |
+| `test_fundamentals_not_tracked` | `dataset_type=FUNDAMENTALS` + zero bars → no `record_zero()` call | unit |
+
+**Acceptance criteria**:
+- [ ] 10 unit tests, all `pytest.mark.unit`
+- [ ] Mock `ZeroBarTrackerPort` using `AsyncMock`
+- [ ] ruff + mypy pass
+
+---
+
+#### T-A-5-04: Wire `ValkeyZeroBarTracker` into `app.py`
+
+**Type**: impl
+**depends_on**: [T-A-5-01, T-A-5-02]
+**blocks**: none
+**Target files**: `services/market-ingestion/src/market_ingestion/app.py`
+
+**What to build**: In the application factory, construct `ValkeyZeroBarTracker(valkey=valkey_client)` and pass it to `ExecuteTaskUseCase`. Should only be wired when a Valkey client is available (follows same conditional pattern as circuit breaker).
+
+```python
+# In app.py, alongside circuit_breaker construction:
+from market_ingestion.infrastructure.adapters.zero_bar_tracker import ValkeyZeroBarTracker
+
+zero_bar_tracker = ValkeyZeroBarTracker(valkey=valkey_client) if valkey_client is not None else None
+
+# Pass to ExecuteTaskUseCase:
+execute_use_case = ExecuteTaskUseCase(
+    ...,
+    circuit_breaker=circuit_breaker,
+    zero_bar_tracker=zero_bar_tracker,  # ← new
+)
+```
+
+**Acceptance criteria**:
+- [ ] `ValkeyZeroBarTracker` wired when Valkey is available
+- [ ] `None` passed when no Valkey (degraded mode — failover disabled, not crashed)
+- [ ] mypy passes
+
+---
+
+### Validation Gate
+- [x] `ruff check` passes on all changed files
+- [x] `mypy` passes on `market-ingestion` package
+- [x] 10 unit tests pass
+- [x] `ExecuteTaskUseCase(zero_bar_tracker=None)` → no behavior change (all prior tests still pass)
+- [x] `provider_zero_bar_failover` event present in structlog output on failover path
+
+### Break Impact
+
+| Broken File | Why It Breaks | Fix Required |
+|---|---|---|
+| `tests/unit/use_cases/test_execute_task.py` | New `zero_bar_tracker` parameter | Add `zero_bar_tracker=None` to all `ExecuteTaskUseCase(...)` constructors in test fixtures |
+
+### Regression Guardrails
+- **BP-034 (mark_processed before early return)**: The zero-bar failover adds a new early-exit-like path (re-fetch). Ensure `task.succeed()` is called once after the final `fetch_result` is known — never twice. The re-fetch only replaces `fetch_result`; all downstream steps (Steps 2–5) run once on the final result.
+- **BP-023 (pre-commit ruff divergence)**: Run `ruff format` on all modified files before committing.
+- **Zero-bar false-positive guard**: Weekends and market holidays legitimately return 0 bars. The 5-streak threshold prevents false positives from single-day gaps. Always test with a mock that returns 0 bars 4 times before testing failover at 5.
+
+---
+
+## Appendix A — Deferred Work
+
+These designs were investigated on 2026-04-25 but deferred to future plans. Document them here so they can be picked up without re-investigation.
+
+---
+
+### A.1 Intraday Provider Research (2026-04-25)
+
+**Context**: EODHD REST-based intraday polling (1m/5m) is credit-prohibitive at scale. A parallel provider search was conducted to find better alternatives.
+
+**Findings**:
+
+| Provider | REST Intraday | WebSocket | Free Tier | Paid (500-1k sym) | Python SDK | 1m History |
+|---|---|---|---|---|---|---|
+| **EODHD** | Yes (5 credits/call) | Ticks only (50 sym/conn) | 20 calls/day | €29.99/mo (100k credits/day) | Unofficial | 120 days |
+| **Polygon.io** | Yes | Real-time bar aggregates | 15-min delayed, unlimited REST, 2yr history | $29/mo Starter | `polygon-api-client` | 2+ years (paid) |
+| **Alpaca** | Yes | Real-time + SIP feed | Free: IEX feed, 1m bars, unlimited symbols | $99/mo for full SIP | `alpaca-py` | ~5 years |
+| **Alpha Vantage** | Yes | No | 25 calls/day (useless at scale) | $49.99/mo (75 req/min) | `alpha_vantage` | 20+ years |
+| **Twelve Data** | Yes | Real-time price events | 800 credits/day (~8 calls) | $29/mo Basic | `twelvedata-python` | ~1.5 years |
+| **IEX Cloud** | Yes | Yes | No free tier since 2023 | ~$9/mo (pay-per-use) | `pyEX` | ~5 years |
+
+**EODHD intraday credit analysis** (1000 symbols, 5m bars):
+- 1000 symbols × 5 credits/call × 78 poll cycles/trading day = **390,000 credits/day**
+- Hard limit on €29.99/mo plan: **100,000 credits/day**
+- → EODHD REST polling for 1000 symbols at 5m resolution is **not viable** (3.9× over limit)
+- For 500 symbols at 5m: ~195,000 credits/day (still 1.95× over limit)
+- EODHD WebSocket delivers tick/trade data only, not OHLCV bars; limited to 50 symbols/connection
+
+**Recommendation**: For intraday OHLCV at scale, use **Alpaca free tier** (WebSocket, unlimited symbols, 1m bars, 5-year history) as the primary intraday provider, with daily REST reconciliation to fill gaps. Polygon.io ($29/mo) is the best paid option.
+
+**WebSocket vs REST for intraday**:
+- REST polling at 1m/5m resolution for 1000 symbols is structurally infeasible with per-call billing models
+- WebSocket streaming (single connection, all symbols) is the correct architectural choice
+- Alpaca and Polygon both support subscribing to `*` (all symbols) on one connection — filter client-side
+- WebSocket feeds are not guaranteed complete; reconcile against REST at end of each trading session
+- Architecture: WebSocket producer → Kafka → market-ingestion consumer (maps to existing Kafka pattern)
+
+**Resampling viability**: Ingest at 1m, resample to 5m/15m/1h/4h using pandas/polars `resample().agg()`. Standard OHLCV agg: open=first, high=max, low=min, close=last, volume=sum. One ingestion source → multiple derived resolutions. This is the recommended approach.
+
+---
+
+### A.2 Primary Provider Reclaim Worker (Design Spec)
+
+**Status**: Deferred — implement when zero-bar failover (Wave A-5) is in production and data shows meaningful failover events that warrant back-filling.
+
+**Context**: When zero-bar failover routes OHLCV fetches to EODHD instead of Yahoo Finance, those dates are stored with EODHD data. When Yahoo Finance recovers, we want to overwrite those bars with Yahoo data (0-cost, higher frequency update cadence). The Reclaim Worker is the background healing mechanism.
+
+**Design**:
+
+**Step 1 — Track actual fetch provider** (migration required):
+
+Add `fetched_by_provider: str | None` column to `ingestion_tasks`:
+```sql
+ALTER TABLE ingestion_tasks ADD COLUMN fetched_by_provider VARCHAR(64);
+-- Backfill: assume EODHD for all historical tasks
+UPDATE ingestion_tasks SET fetched_by_provider = provider WHERE fetched_by_provider IS NULL;
+```
+
+In `ExecuteTaskUseCase.execute()`, after `fetch_result = await self._fetch(adapter, task)`, set:
+```python
+task.fetched_by_provider = fetch_result.provider.value
+```
+(Requires `fetched_by_provider: str | None = None` on `IngestionTask` entity and ORM model.)
+
+**Step 2 — Reclaim Worker process**:
+
+```
+PrimaryProviderReclaimWorker (new class in infrastructure/workers/reclaim_worker.py)
+Cadence: every 4 hours (configurable via MARKET_INGESTION_RECLAIM_INTERVAL_SECONDS)
+```
+
+Logic per tick:
+1. Query `ingestion_tasks` for rows where:
+   - `status = 'SUCCEEDED'`
+   - `completed_at > NOW() - INTERVAL '30 days'`  (configurable lookback window)
+   - `fetched_by_provider != <preferred_provider(dataset_type, timeframe)>`
+2. For each distinct (symbol, dataset_type, timeframe, exchange):
+   - Derive the full date range covered (min `range_start` → max `range_end`)
+   - Create one new `IngestionTask` with `provider=primary` for the full range
+   - Enqueue via `uow.tasks.add_many([task])` (ON CONFLICT DO NOTHING — idempotent)
+3. Tasks flow through normal `ExecuteTaskUseCase` pipeline
+4. New task overwrites the MinIO canonical ref via watermark advance
+
+**Key invariants**:
+- Bulk re-fetch (full date range, not per-day) — single task per symbol per reclaim tick
+- Idempotent: re-running the worker creates at most one task per symbol (dedupe_key collision on second run)
+- Old MinIO objects orphaned (acceptable — MinIO lifecycle policy can clean after 90 days)
+- Worker only runs when Valkey is available (requires `ValkeyCircuitBreaker` to be live, indicating infra is healthy)
+- Does NOT run during backfill mode (check watermark `backfill_enabled` flag)
+
+**New files needed** (future plan):
+- `services/market-ingestion/alembic/versions/<hash>_add_fetched_by_provider.py` — migration
+- `services/market-ingestion/src/market_ingestion/domain/entities/ingestion_task.py` — new field
+- `services/market-ingestion/src/market_ingestion/infrastructure/db/models/ingestion_task.py` — new column
+- `services/market-ingestion/src/market_ingestion/infrastructure/workers/reclaim_worker.py` — new worker
+- `services/market-ingestion/src/market_ingestion/app.py` — register worker process
+- `services/market-ingestion/tests/unit/workers/test_reclaim_worker.py` — tests
+
+**Open questions before implementing**:
+1. Should the reclaim window be 7 days (for recent failover events) or 30 days (for historical gaps)?
+2. Should the worker skip symbols that are still in zero-bar streak state (to avoid immediate re-failover)?
+3. What is the MinIO retention policy for orphaned objects?
 
 ---
 
@@ -1090,9 +1498,9 @@ No new Kafka topics or Avro schemas. The `provider_api_call` event is a log even
 | Prometheus label dimension reset (timeframe) | High | Low | Dev only; document in commit; no alarm rules use `s2_eodhd_requests_total` directly |
 | Loki LogQL panel expressions need tuning | Low | Low | Dashboards are advisory; broken panels don't affect data flow |
 
-**Critical path**: A-1 → A-2 (or A-3, parallel) → A-4
+**Critical path**: A-1 → A-2 (or A-3, parallel) → A-4 → A-5
 **Highest risk wave**: A-3 (yfinance async executor pattern, unofficial API)
-**Rollback**: All waves are additive (new files, new labels with defaults). Rolling back means removing the new adapters — EODHD continues to work unchanged.
+**Rollback**: All waves are additive (new files, new labels with defaults). Rolling back means removing the new adapters — EODHD continues to work unchanged. Wave A-5 is fully gated behind `zero_bar_tracker=None` — removing the wiring in `app.py` reverts to pre-A-5 behavior without any data impact.
 
 ---
 
@@ -1104,4 +1512,5 @@ No new Kafka topics or Avro schemas. The `provider_api_call` event is a log even
 | A-2 | 4 (T-A-2-01..04) | 45–60 min |
 | A-3 | 2 (T-A-3-01..02) | 30–45 min |
 | A-4 | 3 (T-A-4-01, T-A-4-03, T-A-4-04) | 45–60 min |
-| **Total** | **15** | **3–4 hours** |
+| A-5 | 4 (T-A-5-01..04) | 60–90 min |
+| **Total** | **19** | **4–5.5 hours** |
