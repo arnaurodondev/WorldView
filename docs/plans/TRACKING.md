@@ -12,7 +12,7 @@
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
-| PLAN-0039 | Terminal UI v3 Ground-Up Redesign — Bloomberg/CLI terminal quality: 48px icon rail, resizable panels, 12-col screener, 22px rows, §0 Terminal CLI Quality Standard (zero shadows/gradients/rounding, gap-px seams, 10px ALL CAPS headers) | PRD-0031 | in-progress | 7/8 | 2026-04-25 | 2026-04-25 |
+| PLAN-0039 | Terminal UI v3 Ground-Up Redesign — Bloomberg/CLI terminal quality: 48px icon rail, resizable panels, 12-col screener, 22px rows, §0 Terminal CLI Quality Standard (zero shadows/gradients/rounding, gap-px seams, 10px ALL CAPS headers) | PRD-0031 | **complete** | 8/8 | INSTITUTIONAL_DEMO_READY | 2026-04-25 |
 | PLAN-0040 | Multi-Provider OHLCV Routing and Intraday Resampling — Alpaca/Polygon adapters, DB-backed routing cache, intraday resampling worker (S2+S3) | PRD-0032 | draft | 0/10 | — | 2026-04-25 |
 <!-- New plans are appended here by the /plan skill -->
 
@@ -20,6 +20,7 @@
 
 | Date | Report | Scope | Result |
 |------|--------|-------|--------|
+| 2026-04-25 | [2026-04-25-plan-0039-wave8-acceptance-report.md](../audits/2026-04-25-plan-0039-wave8-acceptance-report.md) | PLAN-0039 Wave 8 final acceptance — 411/411 Vitest pass, 0 TypeScript errors, 0 ESLint errors; §0.10 Bloomberg benchmarks all 0; PRD §16 all criteria verified; Playwright E2E spec committed | INSTITUTIONAL_DEMO_READY |
 | 2026-04-25 | [2026-04-25-qa-ui-bloomberg-grade-report.md](../audits/2026-04-25-qa-ui-bloomberg-grade-report.md) | Bloomberg-grade UI audit — PLAN-0039 all waves; 7 fixes applied (avatar rounded-full, animate-pulse, p-8×3, inline hex colors×4, BriefWidget hex×7, text-amber-400×2); TypeCheck PASS, 367 tests PASS; 2 backend data gaps remain (sector alloc, realized P&L) | READY_WITH_POLISH_NEEDED |
 | 2026-04-25 | [2026-04-25-qa-terminal-redesign-report.md](../audits/2026-04-25-qa-terminal-redesign-report.md) | Terminal redesign gap audit (Waves A/B/C vs qa-frontend-design.md plan) — TypeCheck FAIL (5 errors), no screenshots, workspace placeholders still present, screener 7 cols not 8, SessionStatsStrip missing, Wave C/D/E not committed | NOT_READY |
 | 2026-04-13 | [2026-04-13-qa-e2e-live-stack-report.md](../audits/2026-04-13-qa-e2e-live-stack-report.md) | Pre-demo live-stack QA — 47 containers, 10 DBs, all migrations, 4,210 pass / 4 fail (BP-134 JWT gaps) / 56 skip; direct API endpoint testing via RS256 JWT | GO |
