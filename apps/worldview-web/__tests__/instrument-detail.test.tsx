@@ -18,6 +18,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
+import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
 import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { createGateway } from "@/lib/gateway";
@@ -189,8 +190,9 @@ vi.mock("@/lib/gateway", () => ({
         { id: "e-1", source: "ent-001", target: "ent-002", label: "CEO_OF", weight: 1.0 },
       ],
     }),
-    // WHY getInstrumentBrief: InstrumentBriefSection (PLAN-0034) now fetches live
-    // AI briefs via S8. All IntelligenceTab tests need this mock to avoid TypeError.
+    // WHY getInstrumentBrief: InstrumentBriefSection (PLAN-0034) and InstrumentAISubheader
+    // (Wave 5) now fetch live AI briefs via S8. All IntelligenceTab tests and
+    // InstrumentAISubheader tests need this mock to avoid TypeError.
     getInstrumentBrief: vi.fn().mockResolvedValue({
       content: "**Apple** reported strong Q4 results above expectations.",
       risk_summary: null,
@@ -207,6 +209,33 @@ vi.mock("@/lib/gateway", () => ({
       bars: [
         { timestamp: "2026-04-16T00:00:00Z", open: 185.0, high: 188.0, low: 184.0, close: 187.43, volume: 52000000 },
       ],
+    }),
+    // WHY getEntityNews: InstrumentTopNews (Wave 5 OverviewLayout center column)
+    // fetches top-4 articles. Tests that render OverviewLayout need this mock.
+    getEntityNews: vi.fn().mockResolvedValue({
+      articles: [
+        {
+          article_id: "art-001",
+          title: "Apple reports record Q4 revenue",
+          url: "https://example.com/1",
+          source: "Reuters",
+          published_at: new Date().toISOString(),
+          summary: null,
+          entity_ids: ["ent-001"],
+          tickers: ["AAPL"],
+          display_relevance_score: 0.9,
+          market_impact_score: 0.85,
+          sentiment: "positive",
+          impact_window_t0: null,
+          impact_window_t1: null,
+          impact_window_t2: null,
+          impact_window_t5: null,
+          routing_tier: "HIGH",
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 4,
     }),
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "tok",
@@ -291,6 +320,93 @@ describe("FundamentalsTab", () => {
     const emDashes = screen.getAllByText("—");
     expect(emDashes.length).toBeGreaterThan(0);
   });
+
+  // ── Wave 5: new FundamentalsTab sections ──────────────────────────────────
+
+  it("renders Analyst Consensus section", async () => {
+    // WHY: Wave 5 adds AnalystConsensusStrip as a full-width section above the grid.
+    // Verify the section header text is present after data loads.
+    render(<FundamentalsTab instrumentId="ins-001" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("ANALYST CONSENSUS")).toBeInTheDocument();
+    });
+  });
+
+  it("renders Debt & Credit section", async () => {
+    // WHY: Wave 5 adds a Debt & Credit section to the fundamentals grid.
+    // The section title uses &amp; which React renders as "&".
+    render(<FundamentalsTab instrumentId="ins-001" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Debt & Credit")).toBeInTheDocument();
+    });
+  });
+
+  it("renders Cash Flow section", async () => {
+    // WHY: Wave 5 adds a Cash Flow section to the fundamentals grid.
+    render(<FundamentalsTab instrumentId="ins-001" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Cash Flow")).toBeInTheDocument();
+    });
+  });
+
+  it("renders Revenue Trend section", async () => {
+    // WHY: Wave 5 adds RevenueTrendSparklines as a full-width section.
+    // It shows "REVENUE TREND" header and a pending message.
+    render(<FundamentalsTab instrumentId="ins-001" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("REVENUE TREND")).toBeInTheDocument();
+    });
+  });
+});
+
+// ── InstrumentAISubheader tests ───────────────────────────────────────────────
+
+describe("InstrumentAISubheader", () => {
+  it("renders collapsed row with AI BRIEF label", async () => {
+    // WHY: Verifies the collapsed state shows the label and brief preview.
+    render(<InstrumentAISubheader entityId="ent-001" />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("AI BRIEF")).toBeInTheDocument();
+    });
+  });
+
+  it("renders brief preview text in collapsed state", async () => {
+    // WHY: The collapsed row should show the first 120 chars of the brief content.
+    // WHY getAllByText (not getByText): other test renders IntelligenceTab's
+    // InstrumentBriefSection which also shows the same brief text from the shared
+    // query cache. getAllByText allows multiple matches and we just check ≥1 exists.
+    render(<InstrumentAISubheader entityId="ent-001" />, { wrapper });
+
+    await waitFor(() => {
+      // The mock brief content starts with "**Apple** reported strong Q4..."
+      // Preview shows first 120 chars.
+      const matches = screen.getAllByText(/Apple.*reported strong Q4/);
+      expect(matches.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("returns null when no brief is available", async () => {
+    // WHY: If no brief exists yet, the component should return null (no empty bar).
+    const noBriefGateway = {
+      getInstrumentBrief: vi.fn().mockResolvedValue(null),
+      refreshToken: vi.fn().mockResolvedValue({ access_token: "tok", user: {}, expires_in: 900 }),
+      logout: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>;
+
+    vi.mocked(createGateway).mockReturnValueOnce(noBriefGateway);
+
+    const { container } = render(<InstrumentAISubheader entityId="ent-001" />, { wrapper });
+
+    await waitFor(() => {
+      // When null is returned, the component renders nothing
+      expect(container.firstChild).toBeNull();
+    });
+  });
 });
 
 // ── IntelligenceTab tests ─────────────────────────────────────────────────────
@@ -323,9 +439,25 @@ describe("IntelligenceTab", () => {
     });
   });
 
-  it("renders source attribution", async () => {
+  it("renders source attribution when contradiction row is expanded", async () => {
+    // WHY update: Wave 5 makes ContradictionCard collapsible by default (22px row).
+    // Source attribution ("— Reuters 2026-04-15") is only visible in the expanded
+    // state. This test clicks the collapsed row to expand it, then checks source text.
+    // WHY not delete: R19 — never delete tests; update to match the new behavior.
+    const { userEvent } = await import("@testing-library/user-event");
+    const user = userEvent.setup();
     render(<IntelligenceTab entityId="ent-001" />, { wrapper });
 
+    // Wait for contradictions to load and collapsed rows to render
+    await waitFor(() => {
+      expect(screen.getByText(/Apple's supply chain is robust/)).toBeInTheDocument();
+    });
+
+    // Click the first collapsed row to expand it
+    const collapsedRow = screen.getByText(/Apple's supply chain is robust/).closest("div");
+    if (collapsedRow) await user.click(collapsedRow);
+
+    // Source attribution is now visible in the expanded card
     await waitFor(() => {
       expect(screen.getByText(/Reuters 2026-04-15/)).toBeInTheDocument();
     });
@@ -395,6 +527,34 @@ describe("IntelligenceTab", () => {
 
     await waitFor(() => {
       expect(screen.getByText("AI Intelligence Brief")).toBeInTheDocument();
+    });
+  });
+
+  // ── Wave 5: severity count strip tests ────────────────────────────────────
+
+  it("renders severity count buttons (HIGH, MEDIUM, LOW) when contradictions exist", async () => {
+    // WHY: Wave 5 adds a severity count strip above the contradiction list.
+    // MOCK_CONTRADICTIONS has 1 HIGH and 1 MEDIUM contradiction.
+    render(<IntelligenceTab entityId="ent-001" />, { wrapper });
+
+    await waitFor(() => {
+      // The severity strip shows "HIGH N" and "MEDIUM N" buttons
+      // and "LOW N" button (count may be 0 but button is still shown)
+      expect(screen.getByText(/HIGH 1/)).toBeInTheDocument();
+      expect(screen.getByText(/MEDIUM 1/)).toBeInTheDocument();
+      expect(screen.getByText(/LOW 0/)).toBeInTheDocument();
+    });
+  });
+
+  it("renders collapsed contradiction rows (22px single-line)", async () => {
+    // WHY: Wave 5 changes ContradictionCard to be collapsed by default (22px row).
+    // The claim text should be truncated (first 60 chars) in the collapsed state.
+    render(<IntelligenceTab entityId="ent-001" />, { wrapper });
+
+    await waitFor(() => {
+      // The first 60 chars of claim_a: "Apple's supply chain is robust and diversified"
+      // fits in 60 chars so it should appear without truncation
+      expect(screen.getByText(/Apple's supply chain is robust/)).toBeInTheDocument();
     });
   });
 });
