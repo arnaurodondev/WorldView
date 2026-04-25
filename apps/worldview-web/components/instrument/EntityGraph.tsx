@@ -86,15 +86,12 @@ class GraphErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-3 rounded-[2px] border border-border/40 bg-card/50 p-8 text-center">
-          <p className="text-sm font-medium text-muted-foreground">Graph unavailable</p>
-          <p className="text-xs text-muted-foreground/60">
-            WebGL is required for the entity graph visualization.
-          </p>
+        <div className="rounded-[2px] border border-border/40 bg-card/50 px-3 py-3">
+          <p className="text-xs text-muted-foreground">Graph unavailable — WebGL required.</p>
           {/* WHY window.location.reload: simplest recovery — no state to preserve */}
           <button
             onClick={() => window.location.reload()}
-            className="rounded-[2px] border border-border/40 px-3 py-1 text-xs text-muted-foreground hover:border-border hover:text-foreground"
+            className="mt-1.5 rounded-[2px] border border-border/40 px-3 py-1 text-xs text-muted-foreground hover:border-border hover:text-foreground"
           >
             Reload page
           </button>

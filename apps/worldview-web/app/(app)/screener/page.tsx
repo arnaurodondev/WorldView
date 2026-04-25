@@ -215,7 +215,12 @@ interface Column {
 const COLUMNS: Column[] = [
   { header: "Ticker",    sortKey: "ticker",             align: "left"  },
   { header: "Name",      sortKey: "name",               align: "left"  },
-  { header: "Price",     sortKey: null,                 align: "right" }, // no price in ScreenerResult
+  // WHY Sector (replaces blank Price): gics_sector is a filter field already sent
+  // by the backend — showing it in the results table closes the feedback loop (user
+  // can confirm the sector filter hit the right universe at a glance). Price was
+  // always "—" (ScreenerResult has no live quote), so it was pure visual noise.
+  { header: "Sector",    sortKey: "gics_sector",        align: "left"  },
+  { header: "P/E",       sortKey: "pe_ratio",           align: "right" },
   { header: "Change%",   sortKey: "daily_return",       align: "right" },
   { header: "Mkt Cap",   sortKey: "market_cap",         align: "right" },
   { header: "Score",     sortKey: "market_impact_score", align: "right" },
@@ -377,7 +382,7 @@ export default function ScreenerPage() {
         shrink-0 prevents the panel from collapsing when the table grows.
       */}
       <aside
-        className="flex w-64 shrink-0 flex-col gap-4 border-r border-border bg-card p-4 overflow-y-auto"
+        className="flex w-64 shrink-0 flex-col gap-3 border-r border-border bg-card p-3 overflow-y-auto"
         aria-label="Filter panel"
       >
         {/* Panel heading */}
@@ -485,8 +490,8 @@ export default function ScreenerPage() {
                 // users see which filter is selected at a glance.
                 className={
                   pendingFilters.capTier === tier.value
-                    ? "rounded-md px-2 py-1 text-xs font-medium bg-primary text-primary-foreground"
-                    : "rounded-md px-2 py-1 text-xs font-medium border border-border bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                    ? "rounded-[2px] px-2 py-1 text-xs font-medium bg-primary text-primary-foreground"
+                    : "rounded-[2px] px-2 py-1 text-xs font-medium border border-border bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
                 }
                 aria-pressed={pendingFilters.capTier === tier.value}
                 aria-label={`${tier.label} cap: ${tier.description}`}
@@ -498,7 +503,7 @@ export default function ScreenerPage() {
         </div>
 
         {/* ── Action buttons ───────────────────────────────────────────────── */}
-        <div className="mt-auto flex flex-col gap-2 pt-4">
+        <div className="mt-auto flex flex-col gap-2 pt-3">
           {/*
             WHY Apply first: primary action should have primary visual weight.
             Reset is secondary — it's destructive (clears filters) so it gets
@@ -546,15 +551,9 @@ export default function ScreenerPage() {
 
           {/* ── Error state ─────────────────────────────────────────────────── */}
           {isError && allResults.length === 0 && (
-            <div
-              className="flex h-32 items-center justify-center"
-              role="alert"
-              aria-live="assertive"
-            >
-              <p className="text-sm text-destructive">
-                Screener unavailable. Please try again.
-              </p>
-            </div>
+            <p className="px-3 py-3 text-xs text-destructive" role="alert" aria-live="assertive">
+              Screener unavailable. Please try again.
+            </p>
           )}
 
           {/* ── Results table ───────────────────────────────────────────────── */}
@@ -619,9 +618,11 @@ export default function ScreenerPage() {
                           <Skeleton
                             className={[
                               "h-4",
-                              col.header === "Name" ? "w-36" :
+                              col.header === "Name"   ? "w-36" :
                               col.header === "Ticker" ? "w-12" :
-                              col.header === "Score" ? "w-10" :
+                              col.header === "Sector" ? "w-28" :
+                              col.header === "Score"  ? "w-10" :
+                              col.header === "P/E"    ? "w-10" :
                               "w-20",
                             ].join(" ")}
                           />
@@ -644,15 +645,9 @@ export default function ScreenerPage() {
 
           {/* ── Empty state (no results, not loading, no error) ───────────────── */}
           {!isLoading && !isError && allResults.length === 0 && (
-            <div
-              className="flex h-32 items-center justify-center"
-              role="status"
-              aria-live="polite"
-            >
-              <p className="text-sm text-muted-foreground">
-                No instruments match the current filters
-              </p>
-            </div>
+            <p className="px-3 py-3 text-xs text-muted-foreground" role="status" aria-live="polite">
+              No instruments match the current filters.
+            </p>
           )}
 
           {/* ── Load more button ──────────────────────────────────────────────── */}
@@ -730,15 +725,17 @@ function ScreenerRow({ result, onClick }: ScreenerRowProps) {
         {result.name}
       </td>
 
-      {/*
-        Price — ScreenerResult does not include a live price field (the screener
-        returns fundamentals + scores, not real-time quotes). Show an em-dash.
-        WHY not fetch live prices here: fetching 20+ individual quotes per row
-        would create 20+ simultaneous requests on render — not acceptable.
-        The instrument detail page fetches the live quote when the user navigates.
-      */}
-      <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-muted-foreground">
-        —
+      {/* Sector — gics_sector, truncated for narrow columns */}
+      <td
+        className="max-w-[160px] truncate px-3 py-2 text-xs text-muted-foreground"
+        title={result.gics_sector ?? "—"}
+      >
+        {result.gics_sector ?? "—"}
+      </td>
+
+      {/* P/E ratio — fundamental metric, right-aligned mono */}
+      <td className="px-3 py-2 text-right font-mono text-xs tabular-nums text-foreground">
+        {result.pe_ratio != null ? result.pe_ratio.toFixed(1) : "—"}
       </td>
 
       {/* Change% (daily_return) — coloured positive/negative */}

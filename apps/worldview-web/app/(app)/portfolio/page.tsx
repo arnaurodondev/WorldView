@@ -702,12 +702,12 @@ export default function PortfolioPage() {
   // query (fast); "Reload page" is the nuclear option for deeper state corruption.
   if (portfoliosError || holdingsError) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-4 p-6">
-        <div className="text-center">
+      <div className="p-3">
+        <div>
           <p className="text-sm font-medium text-destructive">
             Failed to load portfolio data
           </p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             Check your connection and try again.
           </p>
         </div>

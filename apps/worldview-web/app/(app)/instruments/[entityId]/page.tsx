@@ -106,12 +106,11 @@ export default function InstrumentDetailPage() {
   // ── Not found state ────────────────────────────────────────────────────────
   if (!instrument) {
     return (
-      // WHY p-6 (was p-12): reduced empty state padding per terminal design rules
-      <div className="flex flex-col items-center gap-2 p-6 text-center">
-        <p className="text-sm text-muted-foreground">Instrument not found.</p>
+      <div className="p-3">
+        <p className="text-xs text-muted-foreground">Instrument not found.</p>
         <button
           onClick={() => router.back()}
-          className="text-xs text-primary hover:underline"
+          className="mt-1 text-xs text-primary hover:underline"
         >
           ← Go back
         </button>

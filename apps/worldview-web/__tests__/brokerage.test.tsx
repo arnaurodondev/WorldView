@@ -324,7 +324,10 @@ describe("ConnectedBrokeragesList", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Sync Now")).toBeInTheDocument();
+      // WHY getByRole not getByText: the recovery hint paragraph also contains the
+      // text "Sync Now" as a styled span. getByRole('button') targets the actionable
+      // element specifically, avoiding the "Found multiple elements" ambiguity.
+      expect(screen.getByRole("button", { name: /Sync Now/i })).toBeInTheDocument();
     });
   });
 
@@ -337,7 +340,7 @@ describe("ConnectedBrokeragesList", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("No brokerages connected.")).toBeInTheDocument();
+      expect(screen.getByText(/No brokerages connected/)).toBeInTheDocument();
     });
   });
 
