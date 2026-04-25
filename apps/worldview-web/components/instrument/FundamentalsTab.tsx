@@ -1,10 +1,14 @@
 /**
- * components/instrument/FundamentalsTab.tsx — Fundamentals metrics grid
+ * components/instrument/FundamentalsTab.tsx — Fundamentals metrics grid (9 sections)
  *
  * WHY THIS EXISTS: Fundamental analysis is the primary due-diligence step for
  * portfolio managers. They need P/E, margins, debt ratios, and growth metrics
  * before making allocation decisions. Bloomberg users expect dense tabular
  * data — not summary cards with large whitespace.
+ *
+ * WHY 9 SECTIONS (was 6): Wave 5 adds Analyst Consensus + Revenue Trend (full-width
+ * above the grid) and Debt & Credit + Cash Flow (in the grid). This matches
+ * Bloomberg DES page density for institutional use.
  *
  * WHY SECTIONS: Finance data has natural groupings (Valuation / Profitability /
  * Growth / Dividends / Balance Sheet). Grouping reduces cognitive load for
@@ -12,7 +16,8 @@
  *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Fundamentals tab)
  * DATA SOURCE: S9 GET /v1/fundamentals/{instrumentId}
- * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail Fundamentals tab, State C-3
+ * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail Fundamentals tab, State C-3;
+ *                   PRD-0031 §9 Wave 5 FundamentalsTab 9 sections
  */
 
 "use client";
@@ -32,6 +37,8 @@ import {
   priceChangeClass,
 } from "@/lib/utils";
 import type { Fundamentals } from "@/types/api";
+import { AnalystConsensusStrip } from "@/components/instrument/AnalystConsensusStrip";
+import { RevenueTrendSparklines } from "@/components/instrument/RevenueTrendSparklines";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -219,7 +226,19 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
   // mobile which felt too sparse for dense financial data.
   return (
     <div className="flex flex-col">
-      {/* WHY gap-2 p-3 (was gap-6 p-4): tighter spacing increases data density.
+      {/* ── Full-width sections ABOVE the grid ────────────────────────────
+          WHY above the grid (not in it): Analyst Consensus and Revenue Trend
+          are macro-level summaries that should appear before the detail metrics.
+          Bloomberg DES page shows consensus ratings at the top. */}
+      <div className="border-b border-border">
+        <AnalystConsensusStrip fundamentals={fund} />
+      </div>
+      <div className="border-b border-border">
+        <RevenueTrendSparklines fundamentals={fund} />
+      </div>
+
+      {/* ── Metric grid ─────────────────────────────────────────────────────
+          WHY gap-2 p-3 (was gap-6 p-4): tighter spacing increases data density.
           gap-6 (24px) between sections is too wide for a terminal grid; gap-2 (8px)
           keeps sections close while the section border/header provides visual separation.
           p-3 (12px) is the standard terminal panel padding per design system. */}
@@ -398,6 +417,64 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
             ) : (
               <span className="text-muted-foreground">—</span>
             )}
+          </MetricRow>
+        </Section>
+
+        {/* ── Debt & Credit ────────────────────────────────────────────────
+            WHY add this section: debt sustainability is a key risk signal.
+            Interest coverage and Net Debt/EBITDA are the primary screens used
+            by credit analysts to assess default risk.
+            WHY most fields show "—": these fields are not yet in the Fundamentals
+            type. debt_to_equity is available and shown with directional coloring. */}
+        <Section title="Debt &amp; Credit">
+          {/* Interest Coverage: not in type — show pending */}
+          <MetricRow label="Interest Coverage">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+
+          {/* Net Debt/EBITDA: not in type — show pending */}
+          <MetricRow label="Net Debt / EBITDA">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+
+          {/* Debt/Equity: green <1.0, amber 1.0-2.0, red >2.0 */}
+          <MetricRow label="Debt / Equity">
+            <span className={getMetricClass(fund.debt_to_equity, 1.0, 2.0)}>
+              {formatRatio(fund.debt_to_equity)}
+            </span>
+          </MetricRow>
+
+          {/* Credit Rating: not in type — show pending */}
+          <MetricRow label="Credit Rating">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+        </Section>
+
+        {/* ── Cash Flow ────────────────────────────────────────────────────
+            WHY add this section: cash flow metrics are the most manipulation-
+            resistant fundamentals (earnings can be smoothed; cash flows are real).
+            FCF margin is Warren Buffett's preferred screening metric.
+            WHY all fields show "—": cash flow statement data is not yet in the
+            Fundamentals type. A future S3/S9 wave will add these fields. */}
+        <Section title="Cash Flow">
+          {/* Operating Cash Flow: not in type */}
+          <MetricRow label="Operating CF">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+
+          {/* Capital Expenditures: not in type */}
+          <MetricRow label="CapEx">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+
+          {/* Free Cash Flow: not in type */}
+          <MetricRow label="Free Cash Flow">
+            <span className="text-muted-foreground">—</span>
+          </MetricRow>
+
+          {/* FCF Margin: not in type */}
+          <MetricRow label="FCF Margin">
+            <span className="text-muted-foreground">—</span>
           </MetricRow>
         </Section>
       </div>

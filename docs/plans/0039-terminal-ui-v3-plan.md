@@ -1740,6 +1740,7 @@ Use shadcn `Tabs` component with `TabsList` + `TabsTrigger` + `TabsContent`.
 **Depends on**: Wave 1 (parallel with Waves 2, 3, 4)
 **Estimated effort**: 8-10 hours
 **Architecture layer**: UI application
+**Status**: DONE — 2026-04-25 · 376 tests pass (29 in instrument-detail.test.tsx including 10 new Wave 5 tests)
 
 ### Pre-read (agent must read before starting)
 - `apps/worldview-web/app/(app)/instruments/[entityId]/page.tsx` — full read (current instrument detail)

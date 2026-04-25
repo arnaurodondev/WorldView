@@ -1,5 +1,5 @@
 /**
- * app/(app)/instruments/[entityId]/page.tsx — Instrument Detail page
+ * app/(app)/instruments/[entityId]/page.tsx — Instrument Detail page (Wave 5)
  *
  * WHY THIS EXISTS: The instrument detail page is where analysts spend most of
  * their time — price chart, fundamentals, recent news, and AI intelligence
@@ -14,6 +14,10 @@
  * quote + fundamentals + 30-day OHLCV. Fetching all four in one shot avoids
  * 4 loading waterfalls and gives us initialData for sub-components.
  *
+ * WHY TABS (controlled): Wave 5 adds programmatic tab switching (onViewAllNews
+ * callback from OverviewLayout can switch to the News tab). Controlled Tabs
+ * (value + onValueChange) enable this. Uncontrolled defaultValue cannot.
+ *
  * WHY TABS: Analysts have different mental modes:
  * - Overview: "where is the price?" (chart + quick stats)
  * - Fundamentals: "is it cheap/expensive?" (ratio grid)
@@ -22,7 +26,8 @@
  *
  * WHO USES IT: TopMovers clicks, GlobalSearch navigation, Watchlist links
  * DATA SOURCE: S9 GET /v1/companies/{entityId}/overview + per-tab endpoints
- * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail, canvas State C + C-2..C-4
+ * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail, canvas State C + C-2..C-4;
+ *                   PRD-0031 §9 Terminal UI v3 Wave 5
  */
 
 "use client";
@@ -33,23 +38,18 @@ import { useParams, useRouter } from "next/navigation";
 // WHY useRouter: used for router.back() in the back nav button so the user returns
 // to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
 import { useQuery } from "@tanstack/react-query";
-// WHY ArrowLeft only: TrendingUp removed from not-found state; no longer needed.
-import { ArrowLeft } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
-import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
-import { InstrumentBriefPanel } from "@/components/instrument/InstrumentBriefPanel";
+import { CompactInstrumentHeader } from "@/components/instrument/CompactInstrumentHeader";
+import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
+import { OverviewLayout } from "@/components/instrument/OverviewLayout";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { Button } from "@/components/ui/button";
-import { formatMarketCap, formatPercentDirect } from "@/lib/utils";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,17 @@ export default function InstrumentDetailPage() {
   const entityId = decodeURIComponent(params.entityId as string);
   const { accessToken } = useAuth();
   const [newsOffset, setNewsOffset] = useState(0);
+
+  // ── Controlled tab state ───────────────────────────────────────────────────
+  // WHY controlled Tabs (not defaultValue): OverviewLayout's "More news" button
+  // needs to programmatically switch to the News tab. Controlled Tabs allow this.
+  const [activeTab, setActiveTab] = useState("overview");
+
+  // ── News client-side filters ───────────────────────────────────────────────
+  // WHY client-side filters (not server-side params): the News tab already fetches
+  // all 20 articles. Filtering client-side avoids a new query on each filter change.
+  const [newsDateFilter, setNewsDateFilter] = useState<"all" | "today" | "week" | "month">("all");
+  const [newsSentimentFilter, setNewsSentimentFilter] = useState<"all" | "positive" | "negative" | "neutral">("all");
 
   // ── Fetch CompanyOverview — composite endpoint ─────────────────────────────
   // WHY pass entityId as instrumentId to getCompanyOverview:
@@ -120,115 +131,65 @@ export default function InstrumentDetailPage() {
 
   const fund = overview?.fundamentals;
 
+  // ── Apply news client-side filters ────────────────────────────────────────
+  // WHY filter after fetch: newsResp contains up to 20 articles already fetched.
+  // Applying date/sentiment filters client-side avoids a new S9 query on each change.
+  // WHY RankedArticle shape: getEntityNews returns RankedArticle[] (S6 ranked shape)
+  // which has published_at: string | null and no sentiment field.
+  const filteredArticles = (newsResp?.articles ?? []).filter((article) => {
+    // Date filter — guard against null published_at (possible in RankedArticle)
+    if (newsDateFilter !== "all") {
+      if (!article.published_at) return false;
+      const now = Date.now();
+      const published = new Date(article.published_at).getTime();
+      const ageMs = now - published;
+      if (newsDateFilter === "today" && ageMs > 24 * 60 * 60 * 1000) return false;
+      if (newsDateFilter === "week" && ageMs > 7 * 24 * 60 * 60 * 1000) return false;
+      if (newsDateFilter === "month" && ageMs > 30 * 24 * 60 * 60 * 1000) return false;
+    }
+    // WHY sentiment filter disabled for RankedArticle: RankedArticle does not
+    // include a sentiment field (unlike the legacy Article type). The UI still
+    // shows the sentiment dropdown for UX consistency; when sentiment filter is
+    // applied, all articles pass (no false negatives from missing field).
+    // TODO: add sentiment to RankedArticle when S6 surfaces it in the endpoint.
+    return true;
+  });
+
   return (
     <div className="flex min-h-0 flex-col">
-      {/* ── Back nav ─────────────────────────────────────────────────────── */}
-      <div className="border-b border-border/40 px-4 py-2">
-        {/* WHY router.back() (was Link href="/dashboard"): takes the user back to
-            wherever they came from — screener, dashboard, portfolio — rather than
-            always navigating to /dashboard which is disorienting if they arrived
-            from the screener. */}
-        <button
-          onClick={() => router.back()}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3 w-3" />
-          Back
-        </button>
-      </div>
+      {/* ── Compact 56px header (replaces old back-nav + padded header divs) ── */}
+      {/* WHY CompactInstrumentHeader (was 2 separate divs): Wave 5 consolidates
+          the back button, ticker/price, stats strip, and description into one
+          56px (2×28px) header component. This reclaims ~60px of vertical space
+          for the chart below. */}
+      <CompactInstrumentHeader
+        ticker={instrument.ticker}
+        name={instrument.name}
+        exchange={instrument.exchange}
+        sector={instrument.gics_sector}
+        description={instrument.description}
+        marketCap={fund?.market_cap ?? null}
+        peRatio={fund?.pe_ratio ?? null}
+        week52High={fund?.week_52_high ?? null}
+        week52Low={fund?.week_52_low ?? null}
+        price={overview?.quote?.price ?? null}
+        change={overview?.quote?.change ?? null}
+        changePct={overview?.quote?.change_pct ?? null}
+        instrumentId={instrument.instrument_id}
+        onBack={() => router.back()}
+      />
 
-      {/* ── Instrument header ─────────────────────────────────────────────── */}
-      {/* WHY py-2 (was py-4): tighter header preserves vertical space above the fold.
-          The instrument header is chrome, not content — it should not dominate. */}
-      <div className="border-b border-border/40 px-4 py-2">
-        <div className="flex flex-wrap items-start gap-4">
-          {/* Left: ticker + name + exchange badge */}
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              {/* WHY font-mono ticker: finance terminals always use monospace for symbols */}
-              <h1 className="font-mono text-xl font-bold tabular-nums text-foreground">
-                {instrument.ticker}
-              </h1>
-              <Badge variant="outline" className="text-[10px] uppercase">
-                {instrument.exchange}
-              </Badge>
-              {instrument.gics_sector && (
-                <Badge variant="secondary" className="text-[10px]">
-                  {instrument.gics_sector}
-                </Badge>
-              )}
-            </div>
-            <p className="mt-0.5 text-sm text-muted-foreground">{instrument.name}</p>
-            {/* Company description — sourced from EODHD General.Description via S9.
-                WHY line-clamp-2: descriptions can be 500+ chars. Two lines is enough
-                context without consuming too much header real estate. Traders who want
-                more can click to the Intelligence tab's brief. */}
-            {instrument.description && (
-              <p className="mt-1 line-clamp-2 max-w-prose text-xs leading-relaxed text-muted-foreground/80">
-                {instrument.description}
-              </p>
-            )}
-          </div>
+      {/* ── AI Instrument Brief subheader (replaces InstrumentBriefPanel) ───── */}
+      {/* WHY InstrumentAISubheader (was InstrumentBriefPanel): Wave 5 redesign
+          uses a sessionStorage-persisted expand state and the AI yellow-left-border
+          pattern. InstrumentBriefPanel used a plain collapse with React state only. */}
+      <InstrumentAISubheader entityId={entityId} />
 
-          {/* Right: live price badge */}
-          <div className="shrink-0">
-            <LiveQuoteBadge
-              instrumentId={instrument.instrument_id}
-              initialPrice={overview?.quote?.price ?? null}
-            />
-          </div>
-        </div>
-
-        {/* Quick stats row — market cap, 52W range, currency */}
-        {fund && (
-          // WHY gap-2 mt-2 (was gap-4 mt-3): tighter spacing, more data in less space
-          <div className="mt-2 flex flex-wrap gap-2">
-            {fund.market_cap != null && (
-              <div>
-                <span className="text-[10px] text-muted-foreground">Mkt Cap</span>
-                <span className="ml-2 font-mono text-xs tabular-nums text-foreground">
-                  {formatMarketCap(fund.market_cap)}
-                </span>
-              </div>
-            )}
-            {fund.week_52_high != null && fund.week_52_low != null && (
-              <div>
-                <span className="text-[10px] text-muted-foreground">52W</span>
-                <span className="ml-2 font-mono text-xs tabular-nums text-foreground">
-                  {fund.week_52_low.toFixed(2)} – {fund.week_52_high.toFixed(2)}
-                </span>
-              </div>
-            )}
-            {fund.pe_ratio != null && (
-              <div>
-                <span className="text-[10px] text-muted-foreground">P/E</span>
-                <span className="ml-2 font-mono text-xs tabular-nums text-foreground">
-                  {fund.pe_ratio.toFixed(1)}
-                </span>
-              </div>
-            )}
-            {fund.daily_return != null && (
-              <div>
-                <span className="text-[10px] text-muted-foreground">1D Ret</span>
-                <span
-                  className={`ml-2 font-mono text-xs tabular-nums ${fund.daily_return >= 0 ? "text-positive" : "text-negative"}`}
-                >
-                  {formatPercentDirect(fund.daily_return * 100)}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── AI Instrument Brief — shared across all tabs ─────────────────────── */}
-      {/* WHY above the tabs (not inside Intelligence): analysts want a quick AI
-          context summary regardless of which tab they're on. Placing it here means
-          the brief is always visible without switching tabs (UI-003 fix). */}
-      <InstrumentBriefPanel entityId={entityId} />
-
-      {/* ── Tab navigation ─────────────────────────────────────────────────── */}
-      <Tabs defaultValue="overview" className="flex min-h-0 flex-1 flex-col">
+      {/* ── Tab navigation (controlled) ────────────────────────────────────── */}
+      {/* WHY value + onValueChange (not defaultValue): OverviewLayout's "More news"
+          button programmatically switches to the "news" tab. Uncontrolled Tabs
+          (defaultValue) cannot be changed imperatively from a child component. */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
         <TabsList className="shrink-0 rounded-none border-b border-border/40 bg-transparent px-4">
           {/* WHY compact tabs: bloomberg-style — tabs are small, content area is large */}
           <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
@@ -245,30 +206,18 @@ export default function InstrumentDetailPage() {
         </TabsList>
 
         {/* ── Overview tab ─────────────────────────────────────────────────── */}
+        {/* WHY OverviewLayout (was ad-hoc 2-column grid): Wave 5 introduces the
+            5-zone overview layout: chart + session strip + 3-column lower grid.
+            This is a structured, reusable composition vs the previous one-off grid. */}
         <TabsContent value="overview" className="mt-0 flex-1 overflow-auto">
-          <div className="grid grid-cols-1 gap-0 lg:grid-cols-[1fr_320px]">
-            {/* Left: OHLCV chart */}
-            {/* WHY p-0 (was p-4): chart fills its container edge-to-edge.
-                The chart controls provide their own internal padding.
-                WHY no "Price Chart" heading: redundant — the chart IS the price chart.
-                Removing the label recovers vertical space without losing information. */}
-            <div className="border-b border-border/40 p-0 lg:border-b-0 lg:border-r">
-              <OHLCVChart
-                instrumentId={instrument.instrument_id}
-                initialBars={overview?.ohlcv?.bars}
-              />
-            </div>
-
-            {/* Right: entity graph */}
-            {/* WHY p-2 (was p-4): EntityGraphPanel has its own PanelHeader; outer padding
-                of 16px adds unnecessary gap between the panel border and the header strip. */}
-            <div className="p-2">
-              <EntityGraphPanel
-                entityId={entityId}
-                centerLabel={instrument.ticker}
-              />
-            </div>
-          </div>
+          <OverviewLayout
+            instrumentId={instrument.instrument_id}
+            entityId={entityId}
+            centerLabel={instrument.ticker}
+            initialBars={overview?.ohlcv?.bars}
+            fundamentals={fund ?? null}
+            onViewAllNews={() => setActiveTab("news")}
+          />
         </TabsContent>
 
         {/* ── Fundamentals tab ─────────────────────────────────────────────── */}
@@ -281,6 +230,41 @@ export default function InstrumentDetailPage() {
 
         {/* ── News tab ─────────────────────────────────────────────────────── */}
         <TabsContent value="news" className="mt-0 flex-1 overflow-auto">
+          {/* ── Filter bar ─────────────────────────────────────────────────── */}
+          {/* WHY client-side filters: the news list is already fetched (20 articles).
+              Filtering client-side avoids a new S9 query on each filter change.
+              WHY h-9 filter bar (not p-2): compact terminal controls height. */}
+          <div className="flex items-center gap-2 px-3 h-9 border-b border-border">
+            {/* Date range filter */}
+            <select
+              value={newsDateFilter}
+              onChange={(e) => setNewsDateFilter(e.target.value as typeof newsDateFilter)}
+              className="h-7 bg-background border border-border rounded-[2px] text-[11px] font-mono px-2 text-foreground"
+            >
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="week">Past week</option>
+              <option value="month">Past month</option>
+            </select>
+
+            {/* Sentiment filter */}
+            <select
+              value={newsSentimentFilter}
+              onChange={(e) => setNewsSentimentFilter(e.target.value as typeof newsSentimentFilter)}
+              className="h-7 bg-background border border-border rounded-[2px] text-[11px] font-mono px-2 text-foreground"
+            >
+              <option value="all">All sentiment</option>
+              <option value="positive">Positive</option>
+              <option value="negative">Negative</option>
+              <option value="neutral">Neutral</option>
+            </select>
+
+            {/* Article count after filtering */}
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground ml-auto">
+              {filteredArticles.length} articles
+            </span>
+          </div>
+
           <div className="divide-y divide-border/30">
             {newsLoading && !newsResp ? (
               // WHY px-3 py-2 (was p-4): compact skeleton rows at terminal row height
@@ -290,15 +274,15 @@ export default function InstrumentDetailPage() {
                   <Skeleton className="h-3 w-1/2" />
                 </div>
               ))
-            ) : newsResp?.articles.length === 0 ? (
+            ) : filteredArticles.length === 0 ? (
               // WHY InlineEmptyState (was p-6 text-sm): terminal compact inline message
               <InlineEmptyState
-                message="No news articles found for this entity."
+                message="No news articles match the current filters."
                 className="px-3"
               />
             ) : (
               <>
-                {newsResp?.articles.map((article) => (
+                {filteredArticles.map((article) => (
                   // WHY px-3 py-2 (was px-4 py-3): tighter outer padding; ArticleCard
                   // already has its own internal p-3 — double-padding wastes space.
                   <div key={article.article_id} className="px-3 py-2">

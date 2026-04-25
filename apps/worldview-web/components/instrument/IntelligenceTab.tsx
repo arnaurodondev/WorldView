@@ -32,7 +32,7 @@
 import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
 // WHY CheckCircle removed: empty contradictions state now uses inline text only
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown } from "lucide-react";
 // WHY ReactMarkdown: S8 returns instrument briefs as markdown (headers, bold, lists).
 // ReactMarkdown renders these as proper HTML elements with semantic structure.
 import ReactMarkdown from "react-markdown";
@@ -41,8 +41,9 @@ import remarkGfm from "remark-gfm";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, cn } from "@/lib/utils";
 import type { BriefingResponse, Contradiction } from "@/types/api";
+import { useState } from "react";
 
 // ── EntityGraph dynamic import (ssr:false) ────────────────────────────────────
 // WHY next/dynamic with ssr:false: EntityGraph.tsx uses sigma.js which creates a
@@ -94,22 +95,81 @@ const SEVERITY_STYLES: Record<
 
 // ── ContradictionCard sub-component ───────────────────────────────────────────
 
-function ContradictionCard({ item }: { item: Contradiction }) {
+/**
+ * ContradictionCard — collapsible contradiction row
+ *
+ * WHY COLLAPSIBLE: Long contradiction lists with full VS layouts consume too much
+ * vertical space. The collapsed 22px row lets analysts scan all contradictions
+ * quickly; expanding reveals the full claim-A vs claim-B layout.
+ *
+ * WHY CONTROLLED (isExpanded + onToggle props): The parent IntelligenceTab manages
+ * the expanded ID so only one card is expanded at a time (accordion behavior).
+ * This prevents the page from growing unboundedly when multiple cards are open.
+ */
+function ContradictionCard({
+  item,
+  isExpanded,
+  onToggle,
+}: {
+  item: Contradiction;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
   const styles = SEVERITY_STYLES[item.severity];
 
+  if (!isExpanded) {
+    // ── Collapsed: 22px row with severity badge + truncated claim + time ──
+    return (
+      <div
+        className="flex items-center h-[22px] px-2 gap-1.5 hover:bg-muted/40 cursor-pointer border-b border-border/30"
+        onClick={onToggle}
+      >
+        {/* Severity badge — compact colored pill */}
+        <span className={`rounded-[2px] px-1 py-0 text-[9px] font-semibold uppercase ${styles.badge}`}>
+          {styles.text}
+        </span>
+
+        {/* First 60 chars of claim_a — enough context to identify the signal */}
+        <span className="text-[11px] text-foreground flex-1 truncate">
+          {item.claim_a.slice(0, 60)}{item.claim_a.length > 60 ? "…" : ""}
+        </span>
+
+        {/* Relative time */}
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground shrink-0">
+          {formatRelativeTime(item.detected_at)}
+        </span>
+
+        {/* Expand chevron */}
+        <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+      </div>
+    );
+  }
+
+  // ── Expanded: full VS layout ────────────────────────────────────────────
   return (
     <div className="rounded-[2px] border border-border/40 bg-card/60 p-3">
-      {/* Header: severity badge + detected time */}
+      {/* Header: severity badge + collapse button + detected time */}
       <div className="mb-2 flex items-center justify-between">
         <span className={`rounded-[2px] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${styles.badge}`}>
           {styles.text}
         </span>
-        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-          {formatRelativeTime(item.detected_at)}
-        </span>
+
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {formatRelativeTime(item.detected_at)}
+          </span>
+          {/* Collapse button — ChevronDown indicates the card can be collapsed */}
+          <button
+            onClick={onToggle}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Collapse contradiction"
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
-      {/* Claim A vs Claim B */}
+      {/* Claim A vs Claim B — full VS layout */}
       <div className="space-y-2">
         {/* WHY VS layout: makes the contradiction visually obvious at a glance */}
         <div className="rounded-[2px] bg-positive/5 p-2">
@@ -235,6 +295,16 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
 export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   const { accessToken } = useAuth();
 
+  // ── Severity filter state ────────────────────────────────────────────────────
+  // WHY null default: no filter = show all severities. Clicking a severity button
+  // filters to only that severity; clicking again clears the filter.
+  const [severityFilter, setSeverityFilter] = useState<"HIGH" | "MEDIUM" | "LOW" | null>(null);
+
+  // ── Expanded contradiction row state ─────────────────────────────────────────
+  // WHY string|null (not boolean): each contradiction has a unique ID; only one
+  // can be expanded at a time (accordion). null = all collapsed.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
   // ── Entity graph query ──────────────────────────────────────────────────────
   // WHY separate query (not shared with EntityGraphPanel): the Intelligence tab uses
   // depth=2 (full graph) while the Overview sidebar uses depth=1. Different query
@@ -267,6 +337,10 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   const sorted = [...contradictions].sort(
     (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
   );
+
+  // ── Apply severity filter ───────────────────────────────────────────────────
+  // WHY filter on sorted (not raw): maintains the HIGH→MEDIUM→LOW order even after filtering
+  const filtered = sorted.filter((c) => !severityFilter || c.severity === severityFilter);
 
   return (
     <div className="flex flex-col divide-y divide-border/40">
@@ -349,9 +423,92 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
               </span>
             </div>
 
-            {/* Contradiction cards */}
-            {sorted.map((item) => (
-              <ContradictionCard key={item.contradiction_id} item={item} />
+            {/* ── Temporal histogram — weekly buckets from detected_at ─────
+                WHY 8 weeks: contradiction signals build over time. Showing 8 weeks
+                gives enough history to spot "signal spikes" before earnings or events.
+                WHY 30px height: tall enough to show bar height differences without
+                consuming significant vertical space. */}
+            {(() => {
+              const now = Date.now();
+              const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+              const buckets = Array.from({ length: 8 }, (_, i) => ({
+                weekAgo: i,
+                count: contradictions.filter((c) => {
+                  const age = now - new Date(c.detected_at).getTime();
+                  return age >= i * WEEK_MS && age < (i + 1) * WEEK_MS;
+                }).length,
+              })).reverse();
+              const maxCount = Math.max(1, ...buckets.map((b) => b.count));
+              return (
+                <div className="flex items-end gap-px h-[30px] mb-2">
+                  {buckets.map((b, i) => (
+                    <div
+                      key={i}
+                      className="flex-1 flex items-end justify-center"
+                      title={`${b.count} signals ${b.weekAgo === 0 ? "this week" : `${b.weekAgo}w ago`}`}
+                    >
+                      <div
+                        className="w-full bg-primary/30 hover:bg-primary/60 cursor-pointer transition-colors"
+                        style={{ height: `${Math.max(2, (b.count / maxCount) * 28)}px` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* ── Severity count strip — filter buttons ────────────────────
+                WHY always visible: lets analysts quickly assess the severity
+                distribution before reading individual contradictions. */}
+            <div className="flex items-center gap-4 h-[22px] px-0 mb-1">
+              {(["HIGH", "MEDIUM", "LOW"] as const).map((sev) => {
+                const count = contradictions.filter((c) => c.severity === sev).length;
+                return (
+                  <button
+                    key={sev}
+                    onClick={() => setSeverityFilter((f) => (f === sev ? null : sev))}
+                    className={cn(
+                      "font-mono text-[10px] tabular-nums",
+                      sev === "HIGH"
+                        ? severityFilter === "HIGH"
+                          ? "text-negative font-medium"
+                          : "text-negative/60"
+                        : sev === "MEDIUM"
+                        ? severityFilter === "MEDIUM"
+                          ? "text-warning font-medium"
+                          : "text-warning/60"
+                        : severityFilter === "LOW"
+                        ? "text-muted-foreground font-medium"
+                        : "text-muted-foreground/60",
+                    )}
+                  >
+                    {sev} {count}
+                  </button>
+                );
+              })}
+              {/* Clear filter button — only visible when a filter is active */}
+              {severityFilter && (
+                <button
+                  onClick={() => setSeverityFilter(null)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground ml-auto"
+                >
+                  Clear filter
+                </button>
+              )}
+            </div>
+
+            {/* Contradiction rows (collapsible accordion) */}
+            {filtered.map((item) => (
+              <ContradictionCard
+                key={item.contradiction_id}
+                item={item}
+                isExpanded={expandedId === item.contradiction_id}
+                onToggle={() =>
+                  setExpandedId((id) =>
+                    id === item.contradiction_id ? null : item.contradiction_id,
+                  )
+                }
+              />
             ))}
           </div>
         )}
