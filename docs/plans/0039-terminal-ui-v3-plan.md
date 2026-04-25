@@ -2050,7 +2050,9 @@ Sections in order: Analyst Consensus → Revenue Trend → Valuation → Profita
 
 ---
 
-## Wave 6 — Row Height + Typography Global Sweep
+## ✅ Wave 6 — Row Height + Typography Global Sweep
+
+**Status**: **DONE** — 2026-04-25 · 376 tests pass · lint + typecheck clean
 
 **Goal**: Apply 22px row height and 11px data font system-wide. Enforce all §0 terminal quality standards across every component file.
 **Depends on**: Waves 2, 3, 4, 5 (run after all feature waves are done)
