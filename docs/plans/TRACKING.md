@@ -13,7 +13,7 @@
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
 | PLAN-0031 | Terminal UI v3 Ground-Up Redesign — 48px icon rail, resizable multi-panel workspace, named workspaces, 12-column screener, semantic portfolio table, 22px rows, 11px data font | PRD-0031 | draft | 0/8 | — | 2026-04-25 |
-| PLAN-0038 | Free Provider Integration + Loki API Usage Observability — BaseProviderAdapter (generic observability), Finnhub adapter, Yahoo Finance adapter, `s2_mi_provider_*` Prometheus metrics, `provider_api_call` Loki events, routing in ExecuteTaskUseCase | investigation-2026-04-25 | in-progress | 1/4 | — | 2026-04-25 |
+| PLAN-0038 | Free Provider Integration + Loki API Usage Observability — BaseProviderAdapter (generic observability), Finnhub adapter, Yahoo Finance adapter, `s2_mi_provider_*` Prometheus metrics, `provider_api_call` Loki events, routing in ExecuteTaskUseCase | investigation-2026-04-25 | in-progress | 2/4 | — | 2026-04-25 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions

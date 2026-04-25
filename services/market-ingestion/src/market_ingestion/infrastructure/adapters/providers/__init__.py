@@ -31,6 +31,14 @@ def build_provider_registry(settings: object | None = None) -> ProviderRegistry:
     client = httpx.AsyncClient()
     registry.register(EODHDProviderAdapter(api_key=api_key, client=client, base_url=base_url))
     registry.register(YahooFinanceProviderAdapter())
+
+    # Finnhub — registered only when API key is configured
+    finnhub_api_key: str = getattr(settings, "finnhub_api_key", "")
+    if finnhub_api_key:
+        from market_ingestion.infrastructure.adapters.providers.finnhub import FinnhubProviderAdapter
+
+        registry.register(FinnhubProviderAdapter(api_key=finnhub_api_key, client=httpx.AsyncClient()))
+
     return registry
 
 

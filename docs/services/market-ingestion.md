@@ -195,12 +195,23 @@ successful fetch, all 11 methods call `self._record_api_call()` which:
 - increments generic `s2_mi_provider_*` Prometheus metrics (see below)
 `ProviderFetchResult.bars_returned` (new field, default `0`) carries the count of records returned.
 
+**FinnhubProviderAdapter (PLAN-0038 W A-2)**: New `FinnhubProviderAdapter(BaseProviderAdapter)` at
+`infrastructure/adapters/providers/finnhub.py`. Implements 3 dataset types on Finnhub free tier
+(60 req/min, 1.1s rate-limit sleep after each call, `credit_cost=0`):
+- `fetch_news_sentiment(symbol, from_date, to_date)` — GET `/company-news`
+- `fetch_earnings_calendar(from_date, to_date)` — GET `/calendar/earnings` (no symbol on free tier)
+- `fetch_insider_transactions(ticker)` — GET `/stock/insider-transactions`
+
+OHLCV, quotes, fundamentals raise `ProviderUnavailable`. Registered in `build_provider_registry()`
+only when `finnhub_api_key` is non-empty (graceful degradation). Provider enum: `Provider.FINNHUB`.
+
 **Provider configuration (env vars):**
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `MARKET_INGESTION_EODHD_API_KEY` | `demo` | EODHD API key (set to live key in production) |
 | `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | EODHD base URL (override for staging/mock without image rebuild) |
+| `MARKET_INGESTION_FINNHUB_API_KEY` | `""` | Finnhub API key — adapter not registered when empty |
 
 ---
 
