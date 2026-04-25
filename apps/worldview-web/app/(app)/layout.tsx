@@ -4,7 +4,8 @@
  * WHY THIS EXISTS: All authenticated pages live under the (app)/ route group.
  * This layout:
  * 1. Guards against unauthenticated access (redirects to /login)
- * 2. Renders the persistent shell (TopBar + Sidebar) around page content
+ * 2. Renders the persistent shell (TopBar + CollapsibleSidebar) around page content
+ * 3. Provides WorkspaceContext for workspace state management across the app
  *
  * WHY A ROUTE GROUP (app): Next.js route groups (parentheses in folder name)
  * let us apply a layout to a set of pages without adding the group name to the URL.
@@ -20,21 +21,28 @@
  * WHO USES IT: All protected pages — Dashboard, Instrument Detail, Screener,
  * Portfolio, Chat, Alerts, Workspace, Settings.
  * DATA SOURCE: AuthContext (React state)
- * DESIGN REFERENCE: PRD-0028 §6.6.1 Auth Guard, §6.5 Shell Layout
+ * DESIGN REFERENCE: PRD-0031 §4.1 Shell Layout, §4.2 CollapsibleSidebar
  */
 
 "use client";
-// WHY "use client": Reads AuthContext via useAuth() hook — requires client-side
-// React rendering. Server Components cannot access React context.
+// WHY "use client": Reads AuthContext via useAuth() and manages sidebar state
+// (which reads from localStorage — browser-only). Server Components cannot
+// access React context or browser APIs.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { TopBar } from "@/components/shell/TopBar";
-import { Sidebar } from "@/components/shell/Sidebar";
+import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
-import { AskAiPanel } from "@/components/shell/AskAiPanel";
+import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const SIDEBAR_STORAGE_KEY = "worldview-sidebar-expanded";
+
+// ── Layout component ──────────────────────────────────────────────────────────
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -43,14 +51,28 @@ interface AppLayoutProps {
 export default function AppLayout({ children }: AppLayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
-
-  // WHY askAiOpen state here (not in TopBar): The AskAiPanel needs to be rendered
-  // at the layout level so it floats over ALL page content. TopBar only shows the
-  // trigger button; the panel itself must be a sibling of the page content.
-  // IMPORTANT: All hooks must be called unconditionally (React rules) — even though
-  // we have early returns below, hooks must come first.
-  const [askAiOpen, setAskAiOpen] = useState(false);
   const { unreadCount } = useAlertStream();
+
+  // WHY lazy initializer: reads localStorage once at mount, not on every render.
+  // True (expanded) is the default so first-time users see the full labeled sidebar.
+  // typeof window guard makes this safe during Next.js SSR pre-render.
+  const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    // WHY null check: first visit has no stored value — default to expanded (true)
+    return stored === null ? true : stored === "true";
+  });
+
+  // Persist sidebar state whenever the user toggles it
+  function handleSidebarToggle() {
+    setSidebarExpanded((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     // WHY check isLoading first: On first mount, AuthProvider fires a POST
@@ -90,29 +112,38 @@ export default function AppLayout({ children }: AppLayoutProps) {
     return null;
   }
 
-  // Authenticated: render the protected shell layout
+  // Authenticated: render the protected shell layout wrapped in WorkspaceProvider
   return (
-    // WHY flex flex-col h-screen: pins the layout to viewport height so the
-    // main content area scrolls independently without moving the TopBar/Sidebar
-    <div className="flex h-screen flex-col bg-background">
-      <TopBar
-        onOpenAskAi={() => setAskAiOpen((prev) => !prev)}
-        unreadAlerts={unreadCount}
-      />
+    // WHY WorkspaceProvider at layout level: workspace state must be accessible
+    // from WorkspaceTabs (workspace/page.tsx) AND potentially from the sidebar
+    // (e.g. workspace name in TopBar). Providing at layout level avoids re-mounting
+    // the context on page navigation within the (app) route group.
+    <WorkspaceProvider>
+      {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
+       * main content area scrolls independently without moving the TopBar/Sidebar */}
+      <div className="flex h-screen flex-col bg-background">
+        <TopBar unreadAlerts={unreadCount} />
 
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar />
-        {/* Main content area — scrollable, fills remaining space */}
-        <main className="flex-1 overflow-y-auto">
-          {children}
-        </main>
+        {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the
+         * remaining height below the TopBar, each scrolling independently. */}
+        <div className="flex flex-1 overflow-hidden">
+          <CollapsibleSidebar
+            expanded={sidebarExpanded}
+            onToggle={handleSidebarToggle}
+          />
+
+          {/* Main content area — fills remaining width, scrolls vertically */}
+          {/* WHY overflow-y-auto not overflow-auto: prevent horizontal scroll on
+           * the main content area (horizontal scroll should be per-panel, not global) */}
+          <main className="flex-1 overflow-y-auto">
+            {children}
+          </main>
+        </div>
+
+        {/* FlashOverlay — full-screen critical alert overlay (z-[9999], above everything) */}
+        {/* WHY outside the flex layout: overlay must be position:fixed, not flow-positioned */}
+        <FlashOverlay />
       </div>
-
-      {/* FlashOverlay — full-screen critical alert overlay (z-[9999], above everything) */}
-      <FlashOverlay />
-
-      {/* AskAiPanel — floats bottom-right (z-50, below FlashOverlay) */}
-      {askAiOpen && <AskAiPanel onClose={() => setAskAiOpen(false)} />}
-    </div>
+    </WorkspaceProvider>
   );
 }

@@ -33,8 +33,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
-
 /**
  * getInitials — extract user initials for avatar fallback
  * WHY: Most internal users don't have avatar images; initials make the avatar
@@ -48,13 +46,11 @@ function getInitials(name: string | null | undefined): string {
 }
 
 interface TopBarProps {
-  /** Callback to open the AskAiPanel — wired in (app)/layout.tsx */
-  onOpenAskAi?: () => void;
   /** Unread alert count — passed from AlertStreamContext via layout */
   unreadAlerts?: number;
 }
 
-export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
+export function TopBar({ unreadAlerts = 0 }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
 
@@ -66,16 +62,14 @@ export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
   };
 
   return (
-    // WHY h-[44px] not h-12 (48px): Reduced from 48px to 44px to match the
-    // --topbar-height CSS token and save 4px of vertical chrome real estate.
-    // At 44px the bar is still comfortable to click but 8% more compact.
-    // WHY border-b border-border (not border-border/40): The topbar bottom border
-    // must be fully opaque to clearly delineate the chrome from the content area.
-    // The old border-border was already opaque but the new --border (#27272A) is
-    // brighter than the old #243040, so it reads as a crisp structural edge now.
-    <header className="flex h-[44px] w-full shrink-0 items-center justify-between border-b border-border bg-background px-4">
+    // WHY h-9 (36px): PRD-0031 §4.1 — v3 reduces TopBar from 44px to 36px to
+    // maximize data-display vertical space. 36px still clears WCAG touch target
+    // minimums for all interactive elements (buttons have h-7 minimum within).
+    // WHY border-b border-border: crisp structural edge separating chrome from content.
+    <header className="flex h-9 w-full shrink-0 items-center justify-between border-b border-border bg-background px-3">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
-      <div className="flex items-center gap-4">
+      {/* WHY gap-3 (not gap-4): tighter spacing at reduced bar height */}
+      <div className="flex items-center gap-3">
         {/* Wordmark — text for crisp rendering at all DPIs */}
         <button
           onClick={() => router.push("/dashboard")}
@@ -95,23 +89,11 @@ export function TopBar({ onOpenAskAi, unreadAlerts = 0 }: TopBarProps) {
       </div>
 
       {/* ── Right: Tools + User ──────────────────────────────────── */}
-      <div className="flex items-center gap-3">
+      {/* WHY gap-2 (not gap-3): compact at 36px bar height */}
+      <div className="flex items-center gap-2">
         <UtcClock />
 
         <MarketStatusPill />
-
-        {/* Ask AI button — opens AskAiPanel floating mini-chat */}
-        {onOpenAskAi && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onOpenAskAi}
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-            aria-label="Open AI assistant"
-          >
-            Ask AI
-          </Button>
-        )}
 
         {/* Alert bell — shows unread count badge */}
         <button
