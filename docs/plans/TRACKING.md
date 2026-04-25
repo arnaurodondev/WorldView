@@ -11,7 +11,7 @@
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
-| PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | feat/content-ingestion-wave-a1 | in-progress | 2/4 | Wave 1 done (49 tests pass, circuit breaker + PriceSnapshot + S9 enrichment) | 2026-04-24 |
+| PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | draft | 0/5 | — | 2026-04-24 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -57,6 +57,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
+| PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | PRD-native | 2026-04-24 | 4 | — |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | 2026-04-23 | 6 | 2026-04-18 |
 | PLAN-0026 | News Intelligence APIs — Ranked News Feed, Multi-Window Impact & LLM Relevance Scoring | PRD-0026 | 2026-04-22 | 8 | 2026-04-23 |
 | PLAN-0001-A | Infrastructure Prerequisites: Repo Fixes + intelligence-migrations + S1 Internal | PRD-0001 | 2026-03-26 | 3 | — |

@@ -1,0 +1,302 @@
+{
+  "uid": "eodhd-health-v1",
+  "title": "EODHD API Health",
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "schemaVersion": 39,
+  "tags": ["eodhd", "market-ingestion", "quota"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Quota Health",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "gauge",
+      "title": "Monthly Quota Utilization",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "eodhd_quota_utilization_ratio * 100",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Credits Used (30-day rolling)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "targets": [
+        {
+          "expr": "eodhd_quota_credits_used_total",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Daily Budget Headroom",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "expr": "eodhd_daily_budget_headroom * 100",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": -50,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0 },
+              { "color": "green", "value": 20 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Prefetch Cache Hit Rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "expr": "rate(eodhd_prefetch_cache_hits_total[5m]) / (rate(eodhd_prefetch_cache_hits_total[5m]) + rate(eodhd_prefetch_cache_misses_total[5m])) * 100",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "green", "value": 80 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Circuit Breaker",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "stat",
+      "title": "Circuit Breaker State",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "eodhd_circuit_breaker_state",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "CLOSED", "color": "green" },
+                "1": { "text": "OPEN", "color": "red" },
+                "2": { "text": "HALF_OPEN", "color": "yellow" }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Circuit Breaker Trips",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 10 },
+      "targets": [
+        {
+          "expr": "eodhd_circuit_breaker_trips_total",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Request Rates & Latency",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }
+    },
+    {
+      "type": "timeseries",
+      "title": "API Requests Rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "targets": [
+        {
+          "expr": "rate(eodhd_requests_total[5m])",
+          "legendFormat": "{{dataset_type}} - {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP 429 Rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "targets": [
+        {
+          "expr": "rate(eodhd_429_total[5m])",
+          "legendFormat": "429 Rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Latency P50 / P95",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, rate(eodhd_request_latency_seconds_bucket[5m]))",
+          "legendFormat": "P50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(eodhd_request_latency_seconds_bucket[5m]))",
+          "legendFormat": "P95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
