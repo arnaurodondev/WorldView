@@ -14,7 +14,9 @@
  * The ref holds the chart instance to avoid re-creating on every render.
  *
  * WHY timeframe tabs: Different traders use different horizons. Day traders
- * need 5M, swing traders need 1D, fund managers need 1D (30/90 day range).
+ * need 5M, swing traders need 1D/1W, fund managers need 1W/1M.
+ * 1W = weekly bars (S3 Timeframe.ONE_WEEK = "1w"); 1M = monthly bars
+ * (S3 Timeframe.ONE_MONTH = "1M" — uppercase M, case-sensitive in the enum).
  *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx
  * DATA SOURCE: S9 GET /v1/ohlcv/{instrumentId}?timeframe=1D
@@ -34,7 +36,11 @@ import type { OHLCVBar } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Timeframe = "1D" | "1H" | "5M";
+// WHY these exact values: they map directly to S3's Timeframe enum via the
+// gateway normalizer in lib/gateway.ts. The gateway converts "5M"→"5m",
+// "1H"→"1h", "1D"→"1d", "1W"→"1w", and preserves "1M" as-is (uppercase M)
+// because S3's ONE_MONTH = "1M" is case-sensitive (lowercase "1m" is invalid).
+type Timeframe = "5M" | "1H" | "1D" | "1W" | "1M";
 
 interface OHLCVChartProps {
   instrumentId: string;
@@ -129,7 +135,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
         chart = createChart(containerRef.current, {
           width: containerRef.current.clientWidth,
-          height: 280,
+          // WHY 360 (was 280): terminal charts need at least 360px height to show
+          // meaningful price action. 280px is too short for candlestick readability
+          // on instruments with tight day-ranges. 360px matches PRD-0028 §6.5 spec.
+          height: 360,
           layout: CHART_THEME.layout,
           grid: CHART_THEME.grid,
           crosshair: CHART_THEME.crosshair,
@@ -210,7 +219,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     <div>
       {/* Timeframe selector */}
       <div className="mb-2 flex gap-1">
-        {(["5M", "1H", "1D"] as Timeframe[]).map((tf) => (
+        {/* WHY this exact order: mirrors conventional charting toolbar order —
+           intraday (5M, 1H) → daily → weekly → monthly. 1W/1M are added here
+           because S3 ingests weekly/monthly EODHD bars as first-class timeframes. */}
+        {(["5M", "1H", "1D", "1W", "1M"] as Timeframe[]).map((tf) => (
           <button
             key={tf}
             onClick={() => setTimeframe(tf)}
@@ -227,14 +239,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
       {/* Chart error fallback — shown when lightweight-charts fails to load */}
       {chartError && (
-        <div className="flex h-[280px] items-center justify-center rounded-[2px] border border-border bg-card">
+        <div className="flex h-[360px] items-center justify-center rounded-[2px] border border-border bg-card">
           <p className="text-sm text-muted-foreground">Chart unavailable</p>
         </div>
       )}
 
       {/* Chart container — only rendered when no error */}
       {!chartError && isLoading && !data && (
-        <Skeleton className="h-[280px] w-full" />
+        <Skeleton className="h-[360px] w-full" />
       )}
       {!chartError && (
         <div

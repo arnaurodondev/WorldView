@@ -59,7 +59,8 @@ export function IndexTicker() {
   if (isLoading) {
     // WHY 4 skeletons: pre-reserves space so TopBar doesn't reflow when data arrives
     return (
-      <div className="flex items-center gap-4">
+      // WHY gap-2: matches the loaded state gap for layout stability during skeleton→data transition
+      <div className="flex items-center gap-2">
         {INDEX_TICKERS.map((t) => (
           <Skeleton key={t.id} className="h-5 w-20" />
         ))}
@@ -72,30 +73,59 @@ export function IndexTicker() {
   const quotes = data?.quotes ?? {};
 
   return (
-    <div className="flex items-center gap-4">
+    // WHY gap-2 (was gap-4): tighter spacing keeps the 4-ticker strip compact in
+    // the 44px TopBar chrome. gap-4 (16px) added unnecessary width on wide monitors.
+    <div className="flex items-center gap-2">
       {INDEX_TICKERS.map((ticker) => {
         const quote = quotes[ticker.id];
+
+        // WHY: stale/delayed prices should not show live change-direction coloring.
+        // The price may have moved since it was recorded — green/red would be misleading.
+        // A delayed SPY price might show +1.2% from yesterday's close, but SPY is
+        // actually down -0.5% right now. Muted color prevents misreading.
+        const isStale =
+          !!quote?.freshness_status &&
+          ["delayed", "stale", "unavailable"].includes(quote.freshness_status);
 
         return (
           <div key={ticker.id} className="flex items-center gap-1">
             {/* Label — small, muted, uppercase for terminal aesthetic */}
             <span className="text-xs font-medium text-muted-foreground">{ticker.label}</span>
 
-            {/* Price — monospace for alignment, colored by change direction */}
+            {/* Price — monospace for alignment, colored by change direction.
+                WHY muted when stale: the price is not current, so directional coloring
+                (green = up, red = down) would be misleading. Muted signals "old data". */}
             <span
               className={`font-mono text-xs tabular-nums ${
-                quote ? priceChangeClass(quote.change_pct ?? null) : "text-muted-foreground"
+                !quote
+                  ? "text-muted-foreground"
+                  : isStale
+                    ? "text-muted-foreground" // WHY muted: stale price is not current
+                    : priceChangeClass(quote.change_pct ?? null)
               }`}
+              title={isStale ? (quote?.stale_reason ?? "Delayed data") : undefined}
             >
               {quote ? formatPrice(quote.price) : "—"}
             </span>
 
-            {/* Percent change — signed, colored */}
-            {quote && (
+            {/* Only show % change when price is live — stale % is misleading
+                because the reference point (previous close) may also be stale. */}
+            {quote && !isStale && (
               <span
                 className={`font-mono text-xs tabular-nums ${priceChangeClass(quote.change_pct ?? null)}`}
               >
                 {formatPercentDirect(quote.change_pct ?? null)}
+              </span>
+            )}
+            {/* Show a subtle dot for stale prices instead of % change.
+                WHY dot: signals "there is a price but it may be old" without
+                cluttering the TopBar with a full badge for every index. */}
+            {quote && isStale && (
+              <span
+                className="text-[10px] text-muted-foreground"
+                title={quote.stale_reason ?? "Delayed"}
+              >
+                ·
               </span>
             )}
 

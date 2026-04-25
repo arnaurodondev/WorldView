@@ -449,8 +449,10 @@ export default function ChatPage() {
           // server logs, proxy logs, browser history. Bearer header is never logged.
           "Authorization": `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ question, thread_id: threadId } satisfies {
-          question: string;
+        // WHY `message` not `question`: S8 ChatRequestSchema expects `message` field.
+        // (AI-005 fix: field name mismatch caused 422 validation error)
+        body: JSON.stringify({ message: question, thread_id: threadId } satisfies {
+          message: string;
           thread_id: string;
         }),
         signal: controller.signal,
@@ -517,13 +519,15 @@ export default function ChatPage() {
 
           // Parse the JSON token payload
           try {
-            const parsed = JSON.parse(payload) as { token?: string };
-            if (parsed.token) {
-              finalContent += parsed.token;
+            const parsed = JSON.parse(payload) as { text?: string; token?: string };
+            // WHY text ?? token: S8 SSE emitter sends {"text": ...} (AI-006 fix)
+            const chunk = parsed.text ?? parsed.token;
+            if (chunk) {
+              finalContent += chunk;
               // WHY functional update: guarantees we always append to the latest state
               // even if React batches multiple setState calls before rendering.
               setStreaming((prev) =>
-                prev ? { ...prev, text: prev.text + parsed.token! } : prev,
+                prev ? { ...prev, text: prev.text + chunk } : prev,
               );
             }
           } catch {
@@ -638,30 +642,26 @@ export default function ChatPage() {
             {threadsLoading && (
               <div className="space-y-1.5 p-1" aria-label="Loading threads">
                 {[...Array(5)].map((_, i) => (
-                  // WHY Skeleton: zero-layout-shift placeholder maintains vertical
-                  // rhythm so the panel doesn't jump when threads load in.
-                  <Skeleton key={i} className="h-12 w-full rounded-md" />
+                  // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule;
+                  // WHY h-8 (was h-12): compact thread skeleton matching thread row height
+                  <Skeleton key={i} className="h-8 w-full rounded-[2px]" />
                 ))}
               </div>
             )}
 
             {/* Error state */}
             {threadsError && !threadsLoading && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+              <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
                 Failed to load threads. Check your connection.
               </div>
             )}
 
             {/* Empty state — first-time user or all threads deleted */}
+            {/* WHY compact inline (was py-8 centered icon): terminal style */}
             {!threadsLoading && !threadsError && (!threads || threads.length === 0) && (
-              <div className="flex flex-col items-center gap-2 py-8 text-center">
-                <MessageSquare className="h-8 w-8 text-muted-foreground/40" />
-                <p className="text-xs text-muted-foreground">
-                  No conversations yet.
-                  <br />
-                  Click &ldquo;New chat&rdquo; to begin.
-                </p>
-              </div>
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                No conversations yet. Click &ldquo;New chat&rdquo; to begin.
+              </p>
             )}
 
             {/* Thread items */}
@@ -671,7 +671,8 @@ export default function ChatPage() {
                 <div
                   key={thread.thread_id}
                   // WHY group: allows hover:visible on the delete button inside
-                  className="group relative flex cursor-pointer items-start gap-2 rounded-md px-3 py-2.5 transition-colors hover:bg-muted"
+                  // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
+                  className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-3 py-2.5 transition-colors hover:bg-muted"
                   // WHY bg-primary/10 on active: clear selection indicator using
                   // the Bloomberg Dark primary (#E8A317) at low opacity — not overwhelming.
                   // WHY inline style: Tailwind's dynamic class generation can't handle
@@ -735,25 +736,27 @@ export default function ChatPage() {
       <div className="flex flex-1 flex-col overflow-hidden">
 
         {/* ── No thread selected: welcome / empty state ── */}
+        {/* WHY compact (was large centered icon + text-lg + p-8):
+            Terminal chat empty states use compact inline messaging, not a marketing-style
+            welcome card. The panel is part of a split layout — excessive padding
+            creates a consumer-app feel. */}
         {!activeThreadId && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-background p-8 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-              <Bot className="h-8 w-8 text-primary" />
-            </div>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-6 text-center">
+            <Bot className="h-8 w-8 text-primary/60" />
             <div>
-              <h2 className="text-lg font-semibold text-foreground">
+              <p className="text-sm font-semibold text-foreground">
                 Intelligence Chat
-              </h2>
-              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                Ask research-grade questions about markets, companies, economic events,
-                and news. Responses are grounded in your real-time data pipeline.
+              </p>
+              <p className="mt-0.5 max-w-sm text-xs text-muted-foreground">
+                Ask research-grade questions about markets, companies, and news.
               </p>
             </div>
             <Button
+              size="sm"
               onClick={handleNewChat}
-              className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               Start a conversation
             </Button>
           </div>
@@ -764,7 +767,8 @@ export default function ChatPage() {
           <>
             {/* Message list — scrollable, fills available height */}
             <ScrollArea className="flex-1 bg-background">
-              <div className="flex flex-col gap-4 p-6">
+              {/* WHY p-4 gap-3 (was p-6 gap-4): tighter message spacing */}
+              <div className="flex flex-col gap-3 p-4">
 
                 {/* Loading skeleton while thread history is fetching */}
                 {threadLoading && (
@@ -797,7 +801,7 @@ export default function ChatPage() {
 
                 {/* Error state — shown below the last message */}
                 {chatError && (
-                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
                     {chatError}
                   </div>
                 )}
@@ -812,7 +816,8 @@ export default function ChatPage() {
             </ScrollArea>
 
             {/* ── Input area ─────────────────────────────────────────────────── */}
-            <div className="border-t border-border bg-background p-4">
+            {/* WHY p-3 (was p-4): standard terminal panel padding */}
+            <div className="border-t border-border bg-background p-3">
               {/* Cancel button — only visible while streaming */}
               {isStreaming && (
                 <div className="mb-2 flex justify-center">
@@ -843,7 +848,8 @@ export default function ChatPage() {
                   rows={2}
                   disabled={isStreaming}
                   maxLength={2000} // WHY 2000: PRD-0028 §9.2 input validation limit
-                  className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  // WHY rounded-[2px] (was rounded-lg): terminal 2px radius rule
+                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label="Chat message input"
                 />
 
