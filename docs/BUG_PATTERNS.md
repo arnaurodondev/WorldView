@@ -6307,3 +6307,72 @@ When adding a new adapter/provider to a shared registry builder function, **grep
 ### Prevention
 
 Any field in a pydantic-settings `BaseSettings` class whose value is a credential, API key, token, or password MUST use `SecretStr` — never plain `str`. This is enforced by reviewing `config.py` changes in code review. Match the established pattern of `database_url: SecretStr`.
+
+---
+
+## BP-224 — Hardcoded `Path(__file__).parents[N]` Schema Path Fails in Docker
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-data (S3), portfolio (S1), knowledge-graph (S7) |
+| **Severity** | BLOCKING |
+| **Discovered** | 2026-04-26 live-infra QA |
+| **Root cause** | `_SCHEMA_DIR = Path(__file__).parents[N] / "infra/kafka/schemas"` assumes a fixed directory depth. In the source tree the depth is correct; in the Docker container the installed package lives at `/app/<pkg>/…` — a different number of parent levels — so the path resolves to `/infra/kafka/schemas` (root-relative) which doesn't exist. |
+| **Symptom** | `FileNotFoundError` or silent fallback to JSON parsing of Confluent Avro binary → `'utf-32-be' codec can't decode bytes` → all Kafka events dead-lettered. |
+| **Fix** | Replace hardcoded parent chains with the walk-up algorithm: `for base in Path(__file__).resolve().parents: candidate = base / relative; if candidate.is_dir(): return candidate`. This is portable across source tree and Docker container depths. |
+
+### Prevention
+
+Never use `Path(__file__).parents[N]` to locate repo-relative resources. Always use the walk-up pattern. Search for `.parents[` in any new file to catch this before it ships.
+
+---
+
+## BP-225 — `contextlib.suppress` on DB Insert Leaves SQLAlchemy Session Aborted
+
+| Field | Value |
+|-------|-------|
+| **Service** | knowledge-graph (S7) |
+| **Severity** | BLOCKING |
+| **Discovered** | 2026-04-26 live-infra QA |
+| **Root cause** | `contextlib.suppress(Exception)` around `alias_repo.insert()` catches the Python exception from an `IntegrityError` but does NOT roll back the asyncpg transaction. SQLAlchemy/asyncpg requires an explicit rollback (or SAVEPOINT) to recover. Any subsequent SQL in the same session fails with `asyncpg.InFailedSQLTransactionError`. |
+| **Symptom** | Entity created successfully, then `entity_embedding_state.ensure_rows_exist()` fails with `InFailedSQLTransactionError: current transaction is aborted, commands ignored until end of transaction block`. |
+| **Fix** | Use `session.begin_nested()` (SAVEPOINT) instead of `contextlib.suppress`. The SAVEPOINT is automatically rolled back on exception, leaving the outer transaction intact: `try: async with session.begin_nested(): await repo.insert(...) except Exception: pass` |
+
+### Prevention
+
+Never use `contextlib.suppress` to absorb database errors within an active SQLAlchemy async session. Use SAVEPOINTs (`session.begin_nested()`) for best-effort inserts that may collide.
+
+---
+
+## BP-226 — `str(None)` Produces Colliding Alias Text `"None"`
+
+| Field | Value |
+|-------|-------|
+| **Service** | knowledge-graph (S7) |
+| **Severity** | MAJOR |
+| **Discovered** | 2026-04-26 live-infra QA |
+| **Root cause** | `canonical_name = str(value.get("name", "Unknown"))` — if `name` is `null` in the Avro payload, `value.get("name")` returns Python `None`, and `str(None)` produces the string `"None"`. Multiple instruments with null names all attempt to insert `normalized_alias_text='none'` → `uidx_entity_aliases_normalized` unique constraint violation. |
+| **Symptom** | `UniqueViolationError: duplicate key value violates unique constraint "uidx_entity_aliases_normalized" Key (normalized_alias_text)=(none) already exists`. |
+| **Fix** | Guard against None/empty/literal-None values before alias generation: use ticker as fallback, then a UUID-based synthetic name. `if raw_name and str(raw_name).strip().lower() not in ("none", "null"): canonical_name = ...` |
+
+### Prevention
+
+Whenever converting an optional payload field to a string for use as a unique key or alias, always check for `None`, empty string, and the literal strings `"None"` / `"null"` / `"NULL"` before proceeding.
+
+
+---
+
+## BP-182 — Playwright `networkidle` Times Out on Pages with `AlertStreamProvider`
+
+| Field | Value |
+|-------|-------|
+| **Service** | apps/worldview-web E2E tests |
+| **Severity** | MINOR (test infrastructure) |
+| **Discovered** | 2026-04-26 PLAN-0039 QA audit |
+| **Root cause** | `AlertStreamProvider` calls `getWsToken()` (HTTP fetch to `/api/v1/auth/ws-token`) on every WebSocket reconnect attempt. If the WS connection fails (no S10 in E2E), the `onclose` handler fires → schedules a 1s reconnect → fetches ws-token again → continuous HTTP traffic. `page.waitForLoadState("networkidle")` requires 500ms with no network activity, but the reconnect loop never gives a 500ms window. |
+| **Symptom** | E2E test hangs for 30s then fails with `Test timeout of 30000ms exceeded`. Only affects pages that render inside `AlertStreamProvider` (i.e., all `app/(app)/` routes). |
+| **Fix** | Two changes required: (1) Replace `networkidle` with `domcontentloaded` + `waitForTimeout(800–1200ms)` in screenshot/state-capture tests. (2) Mock the ws-token endpoint to return **401** (not 200). A 401 triggers `AlertStreamProvider`'s `GatewayError status===401` path which sets `isConnected=false` and exits without scheduling reconnect — breaking the loop. A 200 response causes an immediate WS connection attempt to `ws://localhost:8010` (no S10 running) which fails, restarting the loop. |
+
+### Prevention
+
+All Playwright tests on `app/(app)/` routes must use `domcontentloaded` not `networkidle`. Mock `**/api/v1/auth/ws-token` to return 401 in E2E test setup to prevent the AlertStreamProvider reconnect loop from generating background traffic.

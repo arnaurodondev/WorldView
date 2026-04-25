@@ -78,8 +78,19 @@ export function SectorHeatmapWidget() {
         </div>
       )}
 
-      {/* ── Error / empty state ────────────────────────────────────────────── */}
-      {(isError || (!isLoading && !data)) && (
+      {/* ── Error state ───────────────────────────────────────────────────── */}
+      {/* WHY separate from empty: an API/network failure (isError) is fundamentally
+          different from "data returned but empty" (!data). Institutional users need
+          to know if the feed is down vs. if no data exists yet. Conflating them with
+          a single message hides the distinction a trader relies on for triage. */}
+      {isError && (
+        <div className="flex-1 px-2">
+          <InlineEmptyState message="Sector data failed to load — check connection" />
+        </div>
+      )}
+
+      {/* ── No-data state (data undefined, no error) ──────────────────────── */}
+      {!isLoading && !isError && !data && (
         <div className="flex-1 px-2">
           <InlineEmptyState message="Sector data unavailable" />
         </div>

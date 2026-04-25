@@ -13,13 +13,13 @@
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
 | PLAN-0039 | Terminal UI v3 Ground-Up Redesign — Bloomberg/CLI terminal quality: 48px icon rail, resizable panels, 12-col screener, 22px rows, §0 Terminal CLI Quality Standard (zero shadows/gradients/rounding, gap-px seams, 10px ALL CAPS headers) | PRD-0031 | **complete** | 8/8 | INSTITUTIONAL_DEMO_READY | 2026-04-25 |
-| PLAN-0040 | Multi-Provider OHLCV Routing and Intraday Resampling — Alpaca/Polygon adapters, DB-backed routing cache, intraday resampling worker (S2+S3) | PRD-0032 | draft | 0/10 | — | 2026-04-25 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
 
 | Date | Report | Scope | Result |
 |------|--------|-------|--------|
+| 2026-04-26 | [2026-04-26-qa-plan-0039-institutional-report.md](../audits/2026-04-26-qa-plan-0039-institutional-report.md) | PLAN-0039 institutional QA — 6-agent review + Institutional Trader Persona; 12 screenshots captured; 7 fixes applied (4 BLOCKING + 3 CRITICAL); 2 MAJOR deferred; 411/411 Vitest + 11/11 E2E Chromium PASS; BP-182 added | READY_WITH_POLISH_NEEDED |
 | 2026-04-25 | [2026-04-25-plan-0039-wave8-acceptance-report.md](../audits/2026-04-25-plan-0039-wave8-acceptance-report.md) | PLAN-0039 Wave 8 final acceptance — 411/411 Vitest pass, 0 TypeScript errors, 0 ESLint errors; §0.10 Bloomberg benchmarks all 0; PRD §16 all criteria verified; Playwright E2E spec committed | INSTITUTIONAL_DEMO_READY |
 | 2026-04-25 | [2026-04-25-qa-ui-bloomberg-grade-report.md](../audits/2026-04-25-qa-ui-bloomberg-grade-report.md) | Bloomberg-grade UI audit — PLAN-0039 all waves; 7 fixes applied (avatar rounded-full, animate-pulse, p-8×3, inline hex colors×4, BriefWidget hex×7, text-amber-400×2); TypeCheck PASS, 367 tests PASS; 2 backend data gaps remain (sector alloc, realized P&L) | READY_WITH_POLISH_NEEDED |
 | 2026-04-25 | [2026-04-25-qa-terminal-redesign-report.md](../audits/2026-04-25-qa-terminal-redesign-report.md) | Terminal redesign gap audit (Waves A/B/C vs qa-frontend-design.md plan) — TypeCheck FAIL (5 errors), no screenshots, workspace placeholders still present, screener 7 cols not 8, SessionStatsStrip missing, Wave C/D/E not committed | NOT_READY |
@@ -62,6 +62,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
+| PLAN-0040 | Multi-Provider OHLCV Routing and Intraday Resampling — Alpaca/Polygon adapters, config-backed routing cache, reclaim worker, intraday resampling worker (S2+S3) | PRD-0032 | 2026-04-26 | 10 | 2026-04-26 |
 | PLAN-0038 | Free Provider Integration + Loki API Usage Observability — BaseProviderAdapter, Finnhub, Yahoo Finance, provider routing, zero-bar failover | investigation-2026-04-25 | 2026-04-26 | 5 | 2026-04-26 |
 | PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | PRD-native | 2026-04-24 | 4 | — |
 | PLAN-0025 | Authentication & Security Foundation — OIDC/Zitadel, RS256 Internal JWT, S9 Hardening | PRD-0025 | 2026-04-23 | 6 | 2026-04-18 |

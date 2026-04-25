@@ -20,7 +20,6 @@
 // WHY "use client": uses usePathname() for active route highlighting
 
 import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
 
 // Keyboard shortcut definitions — mirrors useHotkeys bindings in layout
 // WHY show these here (not in a help modal): Bloomberg puts shortcuts in the

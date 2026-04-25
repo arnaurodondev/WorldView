@@ -210,11 +210,25 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
     );
   }
 
-  // ── Error state ────────────────────────────────────────────────────────────
-  if (isError || !fund) {
+  // ── Error state (network / API failure) ───────────────────────────────────
+  // WHY separate from no-data: isError means the request failed (500, 503, network
+  // timeout). !fund means the request succeeded but returned no data (instrument
+  // not tracked, ETF with no fundamentals, etc.). These are different root causes
+  // and require different user-facing messages. A trader needs to know "is this a
+  // system problem?" vs "does this instrument simply not have fundamentals?"
+  if (isError) {
+    return (
+      <div className="px-2 py-3 text-[11px] text-destructive/80">
+        Failed to load fundamentals — check connection or retry.
+      </div>
+    );
+  }
+
+  // ── No-data state (instrument lacks fundamental coverage) ─────────────────
+  if (!fund) {
     return (
       <div className="px-2 py-3 text-[11px] text-muted-foreground">
-        Fundamentals unavailable. Data may not be loaded yet.
+        No fundamental data available for this instrument.
       </div>
     );
   }
