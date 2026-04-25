@@ -5,8 +5,9 @@ groups:
       # Fires when the monthly EODHD API credit utilisation exceeds 80%.
       # This is an early warning that gives the on-call engineer time to
       # reduce ingestion frequency before the quota is exhausted.
+      # Metric: s2_eodhd_monthly_credits_used / s2_eodhd_monthly_credits_limit
       - alert: EodhdQuotaWarning
-        expr: eodhd_quota_utilization_ratio > 0.8
+        expr: s2_eodhd_monthly_credits_used / clamp_min(s2_eodhd_monthly_credits_limit, 1) > 0.8
         for: 5m
         labels:
           severity: warning
@@ -20,7 +21,7 @@ groups:
       # At 95% the circuit breaker is very close to opening (threshold: 100%).
       # Page immediately — ingestion will halt within minutes.
       - alert: EodhdQuotaCritical
-        expr: eodhd_quota_utilization_ratio > 0.95
+        expr: s2_eodhd_monthly_credits_used / clamp_min(s2_eodhd_monthly_credits_limit, 1) > 0.95
         for: 2m
         labels:
           severity: critical
@@ -29,13 +30,13 @@ groups:
           summary: "EODHD quota above 95% — circuit breaker will open soon"
           description: "EODHD monthly quota utilization is {{ $value | humanizePercentage }}. Ingestion will stop when quota is fully exhausted."
 
-      # Alert: Circuit breaker open (eodhd_circuit_breaker_state == 1)
+      # Alert: Circuit breaker open (s2_eodhd_circuit_breaker_state == 1)
       # When the breaker is open, all EODHD fetches are short-circuited and
       # market-data consumers fall back to stale PriceSnapshot records.
       # This is a critical incident — prices will go stale until the circuit
       # resets at the start of the next billing month.
       - alert: EodhdCircuitBreakerOpen
-        expr: eodhd_circuit_breaker_state == 1
+        expr: max(s2_eodhd_circuit_breaker_state) == 1
         for: 1m
         labels:
           severity: critical
@@ -48,8 +49,9 @@ groups:
       # A burst of 429s is expected during aggressive back-fill; this alert
       # fires only when the rate stays above 0.1/s for 5+ minutes, which
       # indicates the Retry-After back-off logic is not working correctly.
+      # Metric: s2_eodhd_rate_limited_total (labeled by endpoint)
       - alert: EodhdSustained429s
-        expr: rate(eodhd_429_total[10m]) > 0.1
+        expr: sum(rate(s2_eodhd_rate_limited_total[10m])) > 0.1
         for: 5m
         labels:
           severity: warning
@@ -59,12 +61,13 @@ groups:
           description: "Rate of HTTP 429 responses from EODHD is {{ $value | humanize }}/s averaged over 10m."
 
       # Alert: Daily budget headroom negative
-      # The daily budget is the monthly quota divided by the number of days
-      # in the billing period.  Negative headroom means today's calls have
-      # already exceeded the per-day allotment; the monthly quota will be
-      # exhausted ahead of schedule if this continues.
+      # The daily budget is burst_capacity × 0.85 (safety factor).
+      # Negative headroom means today's calls have already exceeded the
+      # per-day allotment; the monthly quota will be exhausted ahead of
+      # schedule if this continues.
+      # Metric: s2_eodhd_daily_budget_headroom (updated by quota status endpoint)
       - alert: EodhdDailyBudgetExceeded
-        expr: eodhd_daily_budget_headroom < 0
+        expr: s2_eodhd_daily_budget_headroom < 0
         for: 1m
         labels:
           severity: warning
