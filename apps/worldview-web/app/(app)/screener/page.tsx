@@ -176,8 +176,10 @@ export default function ScreenerPage() {
         </h1>
         {/* WHY fetching indicator: shows a subtle pulse when the query is re-running
             (e.g., after applying new filters) without a full loading skeleton */}
+        {/* WHY bg-primary static dot (no animate-pulse): §0.5 bans animate-pulse on status indicators
+            — static color change is sufficient; pulse conveys consumer-app anxiety, not terminal authority */}
         {isFetching && !isLoading && (
-          <span className="ml-2 h-1.5 w-1.5 rounded-full bg-primary animate-pulse shrink-0" aria-label="Loading" />
+          <span className="ml-2 h-1.5 w-1.5 rounded-full bg-primary shrink-0" aria-label="Loading" />
         )}
       </div>
 

@@ -108,7 +108,7 @@ function TypingIndicator() {
   return (
     // WHY bg-muted: assistant messages use muted background (user messages use primary/10)
     <div className="flex max-w-[70%] items-end gap-2 self-start">
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
         <Bot className="h-3.5 w-3.5 text-primary" />
       </div>
       <div className="rounded-[2px] bg-muted px-4 py-3">
@@ -226,7 +226,7 @@ function MessageBubble({ message }: { message: Message }) {
       >
         {/* Avatar icon — bot icon for assistant, hidden for user to save space */}
         {!isUser && (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
             <Bot className="h-3.5 w-3.5 text-primary" />
           </div>
         )}
@@ -282,7 +282,7 @@ function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="flex max-w-[70%] items-end gap-2">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
           <Bot className="h-3.5 w-3.5 text-primary" />
         </div>
         <div className="rounded-[2px] bg-muted px-4 py-3 text-sm leading-relaxed">
