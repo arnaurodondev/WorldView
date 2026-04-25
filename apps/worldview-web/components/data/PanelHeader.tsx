@@ -6,9 +6,9 @@
  * Without a shared primitive, every panel reimplements this with slightly different
  * padding, font sizes, or border styles — creating inconsistency across the app.
  *
- * WHY h-8 (32px): Bloomberg panel headers are 30-32px tall. Taller headers (h-10,
- * h-12) waste vertical space in dense multi-panel layouts. h-8 is the minimum
- * that still accommodates touch targets comfortably.
+ * WHY h-6 (24px): Terminal panel headers are 24px tall per §0.2 of the Terminal CLI
+ * Quality Standard. Taller headers (h-8, h-10) waste vertical space in dense
+ * multi-panel layouts. h-6 is the compact terminal standard.
  *
  * WHY border-b border-border/40: the header divider uses 40% opacity to create a
  * visual separation without a harsh full-opacity line. Matches the card/panel
@@ -48,11 +48,11 @@ interface PanelHeaderProps {
  */
 export function PanelHeader({ title, action, className }: PanelHeaderProps) {
   return (
-    // WHY h-8 items-center: 32px height with vertical centering matches Bloomberg
-    // panel header height. border-b divides the header from the content.
+    // WHY h-6 items-center: 24px height with vertical centering per §0.2 Terminal CLI
+    // Quality Standard. border-b divides the header from the content.
     <div
       className={cn(
-        "flex h-8 items-center justify-between border-b border-border/40 px-3",
+        "flex h-6 items-center justify-between border-b border-border/40 px-3",
         className,
       )}
     >

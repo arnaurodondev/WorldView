@@ -201,9 +201,9 @@ function AlertRow({ alert, onNavigate }: AlertRowProps) {
         onClick={onNavigate}
         // WHY compact row (was rounded-lg border bg-card p-3): terminal alert rows
         // are table-like — no card borders, no large padding, no rounded corners.
-        // py-1.5 px-3 gives 28-32px row height matching the design system table-row spec.
+        // h-[22px] px-2 py-0 gives the terminal 22px row height per §0 Terminal CLI Quality Standard.
         // hover:bg-muted/40 provides subtle interactivity feedback without a card lift.
-        className="flex w-full cursor-pointer items-center gap-3 px-3 py-1.5 text-left transition-colors hover:bg-muted/40"
+        className="flex h-[22px] w-full cursor-pointer items-center gap-3 px-2 py-0 text-left transition-colors hover:bg-muted/40"
         aria-label={`Alert: ${alert.title}`}
       >
         {/* Severity badge */}
@@ -211,13 +211,13 @@ function AlertRow({ alert, onNavigate }: AlertRowProps) {
 
         {/* Entity ticker (if available) */}
         {alert.ticker && (
-          <span className="shrink-0 font-mono text-xs tabular-nums text-primary">
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-primary">
             {alert.ticker}
           </span>
         )}
 
         {/* Alert type label */}
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="shrink-0 text-[11px] text-muted-foreground">
           {alert.alert_type}
         </span>
 
@@ -225,7 +225,7 @@ function AlertRow({ alert, onNavigate }: AlertRowProps) {
         {/* WHY 80 chars: matches the task spec; longer messages cause layout
             instability in compact table rows on smaller viewports. */}
         <p
-          className="min-w-0 flex-1 truncate text-xs text-foreground"
+          className="min-w-0 flex-1 truncate text-[11px] text-foreground"
           title={alert.body}
         >
           {alert.body.length > 80 ? `${alert.body.slice(0, 77)}...` : alert.body}

@@ -206,7 +206,7 @@ export function AskAiPanel({ onClose }: AskAiPanelProps) {
     // WHY z-50: below FlashOverlay (z-[9999]) but above page content (z-0).
     <div
       // WHY rounded-[2px] (was rounded-lg): terminal 2px radius rule applies to panels
-      className="fixed bottom-4 right-4 z-50 flex w-80 flex-col rounded-[2px] border border-border bg-background shadow-2xl"
+      className="fixed bottom-4 right-4 z-50 flex w-80 flex-col rounded-[2px] border border-border bg-background"
       role="complementary"
       aria-label="AI assistant"
     >

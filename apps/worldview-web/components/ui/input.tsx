@@ -20,7 +20,7 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
         className={cn(
           // h-9: compact height for dense forms
           // bg-muted: matches elevated panel background
-          "flex h-9 w-full rounded-md border border-border bg-muted px-3 py-1 text-sm shadow-sm transition-colors",
+          "flex h-9 w-full rounded-[2px] border border-border bg-muted px-3 py-1 text-sm transition-colors",
           "file:border-0 file:bg-transparent file:text-sm file:font-medium",
           "placeholder:text-muted-foreground",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",

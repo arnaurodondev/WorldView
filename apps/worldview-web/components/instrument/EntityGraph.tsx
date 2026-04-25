@@ -271,7 +271,7 @@ function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
 function NodeTooltipPanel({ tooltip }: { tooltip: NodeTooltip }) {
   return (
     <div
-      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2 shadow-lg"
+      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
     >
       <p className="text-xs font-medium text-foreground">{tooltip.label}</p>
@@ -294,7 +294,7 @@ function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
 
   return (
     <div
-      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2 shadow-lg"
+      className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
     >
       <p className="text-xs font-medium uppercase tracking-wider text-foreground">

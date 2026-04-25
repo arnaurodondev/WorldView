@@ -35,7 +35,7 @@ const buttonVariants = cva(
         // amber. At /20 the yellow glow was visually aggressive on near-black. /10
         // keeps a subtle luminous edge that signals "primary action" without glowing.
         // Hover: /15 for a light deepening. No float effect — terminal buttons are flat.
-        default: "bg-primary text-primary-foreground shadow-sm shadow-primary/10 hover:bg-primary/90 hover:shadow-md hover:shadow-primary/15",
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
         // Destructive — muted red for delete/dangerous actions
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         // Outline — bordered, transparent background.
