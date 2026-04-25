@@ -197,12 +197,12 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading && !fund) {
     return (
-      <div className="space-y-4 p-4">
+      <div className="space-y-2 p-3">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="space-y-2">
+          <div key={i} className="space-y-1">
             <Skeleton className="h-3 w-24" />
             {Array.from({ length: 3 }).map((_, j) => (
-              <Skeleton key={j} className="h-4 w-full" />
+              <Skeleton key={j} className="h-3 w-full" />
             ))}
           </div>
         ))}
@@ -213,7 +213,7 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
   // ── Error state ────────────────────────────────────────────────────────────
   if (isError || !fund) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
+      <div className="px-2 py-3 text-[11px] text-muted-foreground">
         Fundamentals unavailable. Data may not be loaded yet.
       </div>
     );
