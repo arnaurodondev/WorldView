@@ -110,6 +110,16 @@ eodhd_quota_blocked_total: prom.Counter = prom.Counter(
     labelnames=["dataset_type"],
 )
 
+# ── Daily budget ──────────────────────────────────────────────────────────────
+
+#: Daily budget headroom ratio: (allotted - spent) / allotted.
+#: Positive = within budget; negative = over budget (spent > allotted).
+#: Updated by DailyBudgetTracker.get_status() on each call.
+eodhd_daily_budget_headroom: prom.Gauge = prom.Gauge(
+    "s2_eodhd_daily_budget_headroom",
+    "Daily EODHD budget headroom ratio ((allotted - spent) / allotted); negative = over budget",
+)
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 
 
@@ -123,11 +133,13 @@ def record_eodhd_request(
     """Record a completed EODHD request in all relevant counters.
 
     Args:
+    ----
         endpoint:        Endpoint slug (e.g. ``"real-time"``, ``"eod"``).
         status_code:     HTTP response status code (e.g. ``200``, ``429``).
         symbol_tier:     Symbol tier label (``"T0"``-``"T4"`` or ``"unknown"``).
         cost:            EODHD credits consumed by this request.
         duration_seconds: Wall-clock request duration.
+
     """
     status_label = str(status_code)
     eodhd_requests_total.labels(
@@ -148,7 +160,9 @@ def record_eodhd_rate_limited(endpoint: str) -> None:
     """Increment the 429 rate-limited counter for *endpoint*.
 
     Args:
+    ----
         endpoint: Endpoint slug (e.g. ``"real-time"``).
+
     """
     eodhd_rate_limited_total.labels(endpoint=endpoint).inc()
 
@@ -157,8 +171,10 @@ def record_eodhd_error(endpoint: str, reason: str) -> None:
     """Increment the error counter for *endpoint* with *reason*.
 
     Args:
+    ----
         endpoint: Endpoint slug.
         reason:   Short error reason (e.g. ``"auth"`, ``"unavailable"``).
+
     """
     eodhd_errors_total.labels(endpoint=endpoint, reason=reason).inc()
 
@@ -167,8 +183,10 @@ def set_monthly_credits(used: int, limit: int) -> None:
     """Update the monthly credit gauges from the Valkey quota counter.
 
     Args:
+    ----
         used:  Credits consumed so far this month.
         limit: Configured hard limit (e.g. 100,000).
+
     """
     eodhd_monthly_credits_used.set(used)
     eodhd_monthly_credits_limit.set(limit)

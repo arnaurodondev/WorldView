@@ -44,6 +44,7 @@ from market_ingestion.application.use_cases.daily_budget_tracker import DailyBud
 from market_ingestion.application.use_cases.snapshot_quota import SnapshotEodhdQuotaUseCase
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
 from market_ingestion.domain.enums import DatasetType, Provider
+from market_ingestion.infrastructure.metrics.eodhd import eodhd_daily_budget_headroom, set_monthly_credits
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -299,6 +300,11 @@ async def eodhd_quota_status(
     # reusable across multiple sequential executions.
     budget_tracker = DailyBudgetTracker(uow=uow, safety_factor=0.85)
     daily_status = await budget_tracker.get_status()
+
+    # Publish metrics so Grafana sees fresh values immediately on each poll.
+    # This is correct: API routes may import from infrastructure for observability.
+    set_monthly_credits(used=snapshot.credits_used, limit=snapshot.budget_limit)
+    eodhd_daily_budget_headroom.set(daily_status.headroom_ratio)
 
     return EodhdQuotaStatusResponse(
         provider=snapshot.provider,

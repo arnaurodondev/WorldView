@@ -20,18 +20,18 @@
     {
       "type": "gauge",
       "title": "Monthly Quota Utilization",
+      "description": "s2_eodhd_monthly_credits_used / s2_eodhd_monthly_credits_limit — updated when GET /api/v1/eodhd/quota/status is polled",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "eodhd_quota_utilization_ratio * 100",
+          "expr": "s2_eodhd_monthly_credits_used / clamp_min(s2_eodhd_monthly_credits_limit, 1) * 100",
+          "legendFormat": "Quota %",
           "refId": "A"
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "orientation": "auto",
         "showThresholdLabels": false,
         "showThresholdMarkers": true
@@ -55,43 +55,63 @@
     },
     {
       "type": "stat",
-      "title": "Credits Used (30-day rolling)",
+      "title": "Credits Used This Month",
+      "description": "s2_eodhd_monthly_credits_used — gauge updated by the quota status endpoint",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
       "targets": [
         {
-          "expr": "eodhd_quota_credits_used_total",
+          "expr": "s2_eodhd_monthly_credits_used",
+          "legendFormat": "Used",
           "refId": "A"
         }
       ],
       "options": {
         "graphMode": "none",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        }
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
       "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
+        "defaults": { "unit": "short" },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Monthly Credit Limit",
+      "description": "s2_eodhd_monthly_credits_limit — configured hard ceiling",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 5 },
+      "targets": [
+        {
+          "expr": "s2_eodhd_monthly_credits_limit",
+          "legendFormat": "Limit",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
         "overrides": []
       }
     },
     {
       "type": "gauge",
       "title": "Daily Budget Headroom",
+      "description": "s2_eodhd_daily_budget_headroom = (allotted - spent) / allotted; negative = over daily budget",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
       "targets": [
         {
-          "expr": "eodhd_daily_budget_headroom * 100",
+          "expr": "s2_eodhd_daily_budget_headroom * 100",
+          "legendFormat": "Headroom %",
           "refId": "A"
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "orientation": "auto",
         "showThresholdLabels": false,
         "showThresholdMarkers": true
@@ -115,20 +135,20 @@
     },
     {
       "type": "stat",
-      "title": "Prefetch Cache Hit Rate",
+      "title": "Response Cache Hit Rate",
+      "description": "s2_eodhd_cache_hits_total / (hits + misses) — high hit rate = fewer live EODHD calls",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
-          "expr": "rate(eodhd_prefetch_cache_hits_total[5m]) / (rate(eodhd_prefetch_cache_hits_total[5m]) + rate(eodhd_prefetch_cache_misses_total[5m])) * 100",
+          "expr": "rate(s2_eodhd_cache_hits_total[5m]) / clamp_min(rate(s2_eodhd_cache_hits_total[5m]) + rate(s2_eodhd_cache_misses_total[5m]), 0.001) * 100",
+          "legendFormat": "Hit Rate %",
           "refId": "A"
         }
       ],
       "options": {
         "graphMode": "none",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        }
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
       "fieldConfig": {
         "defaults": {
@@ -154,19 +174,19 @@
     {
       "type": "stat",
       "title": "Circuit Breaker State",
+      "description": "max(s2_eodhd_circuit_breaker_state) — 0=CLOSED (healthy), 1=OPEN (blocking), 2=HALF_OPEN (probing)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 10 },
       "targets": [
         {
-          "expr": "eodhd_circuit_breaker_state",
+          "expr": "max(s2_eodhd_circuit_breaker_state)",
+          "legendFormat": "State",
           "refId": "A"
         }
       ],
       "options": {
         "graphMode": "none",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "colorMode": "background"
       },
       "fieldConfig": {
@@ -183,9 +203,7 @@
           ],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null }
-            ]
+            "steps": [{ "color": "green", "value": null }]
           }
         },
         "overrides": []
@@ -193,20 +211,20 @@
     },
     {
       "type": "stat",
-      "title": "Circuit Breaker Trips",
+      "title": "Quota-Blocked Tasks",
+      "description": "s2_eodhd_quota_blocked_total — tasks rejected because monthly quota was exhausted, by dataset_type",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 10 },
       "targets": [
         {
-          "expr": "eodhd_circuit_breaker_trips_total",
+          "expr": "sum(s2_eodhd_quota_blocked_total)",
+          "legendFormat": "Blocked (total)",
           "refId": "A"
         }
       ],
       "options": {
         "graphMode": "none",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        }
+        "reduceOptions": { "calcs": ["lastNotNull"] }
       },
       "fieldConfig": {
         "defaults": {
@@ -216,7 +234,7 @@
             "steps": [
               { "color": "green", "value": null },
               { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 5 }
+              { "color": "red", "value": 10 }
             ]
           }
         },
@@ -231,70 +249,64 @@
     },
     {
       "type": "timeseries",
-      "title": "API Requests Rate",
+      "title": "API Requests Rate by Endpoint & Tier",
+      "description": "rate(s2_eodhd_requests_total[5m]) — labeled by endpoint, status_code, symbol_tier",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "targets": [
         {
-          "expr": "rate(eodhd_requests_total[5m])",
-          "legendFormat": "{{dataset_type}} - {{status}}",
+          "expr": "rate(s2_eodhd_requests_total[5m])",
+          "legendFormat": "{{endpoint}} [{{symbol_tier}}] {{status_code}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
+        "defaults": { "unit": "reqps" },
         "overrides": []
       }
     },
     {
       "type": "timeseries",
-      "title": "HTTP 429 Rate",
+      "title": "HTTP 429 (Rate-Limited) Rate",
+      "description": "rate(s2_eodhd_rate_limited_total[5m]) — labeled by endpoint",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "targets": [
         {
-          "expr": "rate(eodhd_429_total[5m])",
-          "legendFormat": "429 Rate",
+          "expr": "rate(s2_eodhd_rate_limited_total[5m])",
+          "legendFormat": "429 {{endpoint}}",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "red"
-          },
-          "custom": {
-            "fillOpacity": 20
-          }
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "custom": { "fillOpacity": 20 }
         },
         "overrides": []
       }
     },
     {
       "type": "timeseries",
-      "title": "Request Latency P50 / P95",
+      "title": "Request Latency P50 / P95 by Endpoint",
+      "description": "histogram_quantile on s2_eodhd_request_duration_seconds — labeled by endpoint",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, rate(eodhd_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "P50",
+          "expr": "histogram_quantile(0.5, rate(s2_eodhd_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "P50 {{endpoint}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, rate(eodhd_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "P95",
+          "expr": "histogram_quantile(0.95, rate(s2_eodhd_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "P95 {{endpoint}}",
           "refId": "B"
         }
       ],
       "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
+        "defaults": { "unit": "s" },
         "overrides": []
       }
     }
