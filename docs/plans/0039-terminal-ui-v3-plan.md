@@ -2117,9 +2117,10 @@ Full audit and fix pass enforcing ALL §0 Terminal CLI Quality Standard rules ac
 
 ---
 
-## Wave 7 — Dashboard + Chat + Alerts Redesign
+## Wave 7 — Dashboard + Chat + Alerts Redesign ✅
 
 **Goal**: Trader morning routine dashboard layout, chat institutional enhancements, alerts severity grouping + rule builder.
+**Status**: DONE 2026-04-25 — 411/411 tests pass; typecheck clean; terminal quality verified
 **Depends on**: Wave 6
 **Estimated effort**: 8-10 hours
 **Architecture layer**: UI application

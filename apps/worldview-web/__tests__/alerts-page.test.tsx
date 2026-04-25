@@ -1,14 +1,17 @@
 /**
- * __tests__/alerts-page.test.tsx — Unit tests for Wave F-7 news + alert components
+ * __tests__/alerts-page.test.tsx — Unit tests for Wave F-7 + Wave 7 news + alert components
  *
- * WHY THIS FILE EXISTS: Covers the three core F-7 components:
+ * WHY THIS FILE EXISTS: Covers the core alert and news components:
  * 1. ArticleImpactBadge — score display and null handling
  * 2. ArticleCard — article title, source, and link rendering
- * 3. AlertsList — severity badge rendering (used in Alerts tab)
+ * 3. AlertsList — severity grouping (Wave 7: CRITICAL/HIGH/MEDIUM/LOW groups)
+ * 4. AlertsPage — rule builder button, category filter rail
  *
- * The file also retains a smoke test for the new tabbed AlertsPage (Alerts /
- * News Feed / Top Today tabs) introduced in Wave F-7, replacing the previous
- * single-tab alerts page.
+ * WAVE 7 ADDITIONS:
+ * - severity-groups-present: CRITICAL/HIGH/MEDIUM/LOW sections rendered
+ * - ack-moves-to-ack-section: ACK button moves alert to Acknowledged section
+ * - rule-builder-opens: + Create Rule button present
+ * - category-filter-rail: 7 category chips in news tab
  *
  * WHY MOCK GATEWAY: We don't want real S9 calls in unit tests.
  * WHY MOCK AlertStreamContext: The context wraps a WebSocket — avoid real connections.
@@ -18,7 +21,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ArticleImpactBadge } from "@/components/news/ArticleImpactBadge";
 import { ArticleCard } from "@/components/news/ArticleCard";
@@ -119,6 +123,18 @@ vi.mock("@/lib/gateway", () => ({
   },
 }));
 
+// ── localStorage safe-clear helper ───────────────────────────────────────────
+// WHY: AlertsList reads/writes localStorage for ACK/snooze state.
+// jsdom's localStorage may not be available with opaque origins — guard with
+// a try/catch so tests don't fail if it's unavailable.
+function safeClearLocalStorage() {
+  try {
+    localStorage.clear();
+  } catch {
+    // jsdom with opaque origin doesn't provide localStorage — ignore
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeQueryClient() {
@@ -173,7 +189,7 @@ const ARTICLE_NO_SCORE: Article = {
   impact_window_t5: null,
 };
 
-// ── Tests: ArticleImpactBadge ─────────────────────────────────────────────────
+// ── Tests: ArticleImpactBadge (existing, preserved per R19) ──────────────────
 
 describe("ArticleImpactBadge", () => {
   it("renders score 0.75 as '75'", () => {
@@ -213,7 +229,7 @@ describe("ArticleImpactBadge", () => {
   });
 });
 
-// ── Tests: ArticleCard ────────────────────────────────────────────────────────
+// ── Tests: ArticleCard (existing, preserved per R19) ─────────────────────────
 
 describe("ArticleCard", () => {
   it("renders the article title", () => {
@@ -276,12 +292,13 @@ describe("ArticleCard", () => {
   });
 });
 
-// ── Tests: AlertsList severity badge ─────────────────────────────────────────
+// ── Tests: AlertsList severity badge (existing, preserved per R19) ────────────
 
 describe("AlertsList — severity badges", () => {
   beforeEach(() => {
     // WHY: clear mocks between tests to prevent state bleed across query clients
     vi.clearAllMocks();
+    safeClearLocalStorage();
   });
 
   it("shows HIGH severity badge after data loads", async () => {
@@ -318,6 +335,182 @@ describe("AlertsList — severity badges", () => {
 
     await waitFor(() => {
       expect(screen.getByText("AAPL")).toBeInTheDocument();
+    });
+  });
+});
+
+// ── Tests: AlertsList severity groups (Wave 7 new) ────────────────────────────
+
+describe("AlertsList — severity groups", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    safeClearLocalStorage();
+  });
+
+  it("severity-groups-present: renders CRITICAL and HIGH section headers", async () => {
+    render(<AlertsList />, { wrapper });
+
+    await waitFor(() => {
+      // Section headers show the severity label (e.g. "CRITICAL (1)")
+      // The headers contain the severity text — getAllByText handles multiple matches
+      const critHeaders = screen.getAllByText(/CRITICAL/i);
+      expect(critHeaders.length).toBeGreaterThan(0);
+
+      const highHeaders = screen.getAllByText(/HIGH/i);
+      expect(highHeaders.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("severity-groups-present: renders MEDIUM section header", async () => {
+    render(<AlertsList />, { wrapper });
+
+    await waitFor(() => {
+      // MEDIUM group header is present
+      const medHeaders = screen.getAllByText(/MEDIUM/i);
+      expect(medHeaders.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders ACK ALL buttons for each severity group", async () => {
+    render(<AlertsList />, { wrapper });
+
+    await waitFor(() => {
+      const ackAllButtons = screen.getAllByText("ACK ALL");
+      // Should have one ACK ALL per non-empty severity group (CRITICAL, HIGH, MEDIUM)
+      expect(ackAllButtons.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("renders ACK ▾ dropdown per alert row", async () => {
+    render(<AlertsList />, { wrapper });
+
+    await waitFor(() => {
+      const ackButtons = screen.getAllByText("ACK ▾");
+      expect(ackButtons.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+});
+
+// ── Tests: AlertsList ACK behavior (Wave 7 new) ──────────────────────────────
+
+describe("AlertsList — ACK behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    safeClearLocalStorage();
+  });
+
+  it("ack-moves-to-ack-section: ACK ALL moves alerts to Acknowledged section", async () => {
+    render(<AlertsList />, { wrapper });
+
+    await waitFor(() => {
+      // Wait for alerts to load
+      expect(screen.getAllByText("ACK ALL").length).toBeGreaterThan(0);
+    });
+
+    // Click ACK ALL on the first visible group (should be CRITICAL or HIGH)
+    const ackAllButtons = screen.getAllByText("ACK ALL");
+    fireEvent.click(ackAllButtons[0]);
+
+    // After ACKing, the Acknowledged section should appear
+    await waitFor(() => {
+      expect(screen.getByText(/Acknowledged/i)).toBeInTheDocument();
+    });
+  });
+});
+
+// ── Tests: AlertRuleBuilder (Wave 7 new) ─────────────────────────────────────
+
+describe("AlertRuleBuilder — Create Rule button", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    safeClearLocalStorage();
+  });
+
+  it("rule-builder-opens: + Create Rule button is present in alerts page", async () => {
+    // Import lazily to avoid module mock ordering issues
+    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
+    const qc = makeQueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <AlertsPage />
+      </QueryClientProvider>,
+    );
+
+    // The rule builder trigger button
+    expect(screen.getByText("+ Create Rule")).toBeInTheDocument();
+  });
+
+  it("rule-builder-opens: clicking Create Rule opens the dialog", async () => {
+    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
+    const qc = makeQueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <AlertsPage />
+      </QueryClientProvider>,
+    );
+
+    // Click the button
+    fireEvent.click(screen.getByText("+ Create Rule"));
+
+    // Dialog should open with CREATE ALERT RULE header
+    await waitFor(() => {
+      expect(screen.getByText("CREATE ALERT RULE")).toBeInTheDocument();
+    });
+  });
+
+  it("Manage Rules button shows rule count", async () => {
+    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
+    const qc = makeQueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <AlertsPage />
+      </QueryClientProvider>,
+    );
+
+    // Button shows "⚙ Rules (N)" where N is the count from localStorage
+    // With empty localStorage, count is 0
+    expect(screen.getByText(/⚙ Rules \(\d+\)/)).toBeInTheDocument();
+  });
+});
+
+// ── Tests: Category filter rail (Wave 7 new) ─────────────────────────────────
+
+describe("Category filter rail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    safeClearLocalStorage();
+  });
+
+  it("category-filter-rail: 7 category chips present in News Feed tab", async () => {
+    // WHY userEvent (not fireEvent.click): Radix UI TabsTrigger listens to pointer
+    // events (pointerdown, pointerup, click). jsdom's fireEvent.click() fires only
+    // the click event which Radix ignores. userEvent.click() fires the full pointer
+    // event sequence that Radix requires to switch the active tab panel.
+    const user = userEvent.setup();
+    const { default: AlertsPage } = await import("@/app/(app)/alerts/page");
+    const qc = makeQueryClient();
+
+    render(
+      <QueryClientProvider client={qc}>
+        <AlertsPage />
+      </QueryClientProvider>,
+    );
+
+    // Wait for tab triggers to appear, then activate News Feed
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /news feed/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("tab", { name: /news feed/i }));
+
+    // After tab activation, CategoryFilterRail is rendered — wait for all 7 chips
+    await waitFor(() => {
+      expect(screen.getByText("All")).toBeInTheDocument();
+      expect(screen.getByText("Earnings")).toBeInTheDocument();
+      expect(screen.getByText("M&A")).toBeInTheDocument();
+      expect(screen.getByText("Regulatory")).toBeInTheDocument();
+      expect(screen.getByText("Macro")).toBeInTheDocument();
+      expect(screen.getByText("Analyst")).toBeInTheDocument();
+      expect(screen.getByText("SEC Filings")).toBeInTheDocument();
     });
   });
 });

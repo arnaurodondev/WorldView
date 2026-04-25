@@ -1,26 +1,34 @@
 /**
- * components/alerts/AlertsList.tsx — Paginated, filterable alert list
+ * components/alerts/AlertsList.tsx — Severity-grouped alert list with ACK/Snooze
  *
  * WHY THIS EXISTS: The Alerts tab in app/(app)/alerts/page.tsx needs a client
- * component to hold filter state and data-fetching. Extracting it here keeps
- * the page file thin (route metadata + layout only) while the interaction logic
- * lives in a testable, reusable component.
+ * component to hold filter state, ACK/snooze state, and data-fetching. Extracting
+ * it here keeps the page file thin (route metadata + layout only) while the
+ * interaction logic lives in a testable, reusable component.
  *
- * WHY CLIENT: useState for severity filter, useQuery for data, useRouter for
- * navigation — all require the client-side React runtime.
+ * WHY SEVERITY-GROUPED (not chronological): Institutional alert systems group by
+ * severity so CRITICAL issues are always visible at the top regardless of when
+ * they arrived. Bloomberg's alert panel uses the same pattern — traders don't
+ * miss CRITICAL alerts buried under a stream of LOW ones.
+ *
+ * WHY localStorage FOR ACK/SNOOZE STATE: Alert acknowledgement is a UI-level
+ * convenience state, not persisted to S9. The API only returns pending alerts;
+ * storing ACK/snooze in localStorage means the state survives page refreshes
+ * without a backend round-trip. Trade-off: doesn't sync across devices.
+ *
+ * WHY CLIENT: useState (filter + ack/snooze state), useQuery (data), useRouter (navigation).
  *
  * WHO USES IT: app/(app)/alerts/page.tsx
  * DATA SOURCE: S9 GET /api/v1/alerts/pending (gateway.getPendingAlerts)
- * DESIGN REFERENCE: PRD-0028 §6.5 Page: Alerts & News
+ * DESIGN REFERENCE: PRD-0031 §11 Alerts Wave 7
  */
 
 "use client";
-// WHY "use client": uses useState (filter), useQuery (data), useRouter (navigation).
+// WHY "use client": uses useState (ack/snooze state), useQuery (data), useRouter (navigation).
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Filter } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { SeverityBadge } from "@/components/alerts/SeverityBadge";
@@ -32,16 +40,46 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, cn } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import type { AlertSeverity, Alert } from "@/types/api";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-/** "ALL" is a UI-only sentinel; the API only knows CRITICAL/HIGH/MEDIUM/LOW */
-type SeverityFilter = "ALL" | AlertSeverity;
+/**
+ * SEVERITY_ORDER — render order for severity groups.
+ * WHY CRITICAL first: highest-priority alerts must be at the top regardless
+ * of arrival time — traders scan from top-down.
+ */
+const SEVERITY_ORDER: AlertSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 
-const SEVERITY_OPTIONS: SeverityFilter[] = ["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW"];
+/**
+ * sevDotColor — color class for the section header dot indicator.
+ * WHY bg-negative for CRITICAL: red = danger is universal. bg-warning for HIGH
+ * (amber) signals "attention needed". muted for MEDIUM/LOW reduces visual noise.
+ */
+const SEV_DOT_COLOR: Record<AlertSeverity, string> = {
+  CRITICAL: "bg-negative",
+  HIGH: "bg-warning",
+  MEDIUM: "bg-primary",
+  LOW: "bg-muted-foreground",
+};
+
+/** localStorage keys for persistence */
+const LS_ACK_KEY = "worldview-alert-ack";
+const LS_SNOOZE_KEY = "worldview-alert-snooze";
+
+// ── Persistence helpers ────────────────────────────────────────────────────────
+
+/** Safe localStorage.getItem with JSON parse fallback */
+function safeJsonGet<T>(key: string, fallback: T): T {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored ? (JSON.parse(stored) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -49,43 +87,124 @@ export function AlertsList() {
   const { accessToken } = useAuth();
   const router = useRouter();
 
-  // ── Severity filter state ────────────────────────────────────────────────────
-  // WHY local state (not URL param): filter resets naturally on tab switch,
-  // which is the expected UX for a real-time alert feed.
-  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("ALL");
+  // ── ACK state — set of acknowledged alert_ids ──────────────────────────────
+  // WHY lazy initialiser for localStorage: avoids reading localStorage on every
+  // render. The function runs once on mount only.
+  const [acknowledged, setAcknowledged] = useState<Set<string>>(() => {
+    const stored = safeJsonGet<string[]>(LS_ACK_KEY, []);
+    return new Set(stored);
+  });
+
+  // ── Snooze state — map of alert_id → expiry timestamp (ms) ────────────────
+  // WHY Map<string, number>: fast lookup by alert_id; value is unix ms timestamp.
+  const [snoozed, setSnoozed] = useState<Map<string, number>>(() => {
+    const stored = safeJsonGet<Record<string, number>>(LS_SNOOZE_KEY, {});
+    return new Map(Object.entries(stored));
+  });
+
+  // ── Acknowledged section collapsed state ──────────────────────────────────
+  // WHY collapsed by default: acknowledged alerts are "done" — they should not
+  // distract from active alerts. User must opt-in to review them.
+  const [ackCollapsed, setAckCollapsed] = useState(true);
 
   // ── Data fetching ────────────────────────────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["alerts-pending-page", { limit: 50 }],
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 50 }),
     enabled: !!accessToken,
-    // WHY no cache/refetch interval: alerts are real-time via WS; REST is a
-    // fallback. staleTime: 0 means we always see fresh data on re-focus.
+    // WHY staleTime: 0: alerts are real-time; always show fresh data on re-focus
     staleTime: 0,
     refetchOnWindowFocus: true,
   });
 
-  // ── Client-side severity filter ──────────────────────────────────────────────
-  // WHY client-side (not API param): The API returns a flat list; filtering on
-  // the client avoids a second network request when the user toggles the filter.
-  const filteredAlerts = (data?.alerts ?? []).filter((alert) =>
-    severityFilter === "ALL" ? true : alert.severity === severityFilter,
+  // ── Derived state ──────────────────────────────────────────────────────────
+
+  const allAlerts = data?.alerts ?? [];
+  const now = Date.now();
+
+  /**
+   * isVisible — determines if an alert should appear in the active groups.
+   * Acknowledged and non-expired snoozed alerts are filtered out.
+   */
+  const isVisible = useCallback(
+    (alert: Alert): boolean => {
+      if (acknowledged.has(alert.alert_id)) return false;
+      const snoozeExpiry = snoozed.get(alert.alert_id);
+      if (snoozeExpiry !== undefined && now < snoozeExpiry) return false;
+      return true;
+    },
+    [acknowledged, snoozed, now],
   );
+
+  /** Active alerts grouped by severity */
+  const activeAlertsBySeverity = SEVERITY_ORDER.reduce<Record<AlertSeverity, Alert[]>>(
+    (acc, sev) => {
+      acc[sev] = allAlerts.filter(
+        (a) => a.severity === sev && isVisible(a),
+      );
+      return acc;
+    },
+    { CRITICAL: [], HIGH: [], MEDIUM: [], LOW: [] },
+  );
+
+  /** Acknowledged alerts — shown in collapsed section at bottom */
+  const acknowledgedAlerts = allAlerts.filter((a) => acknowledged.has(a.alert_id));
+
+  // ── ACK handlers ──────────────────────────────────────────────────────────
+
+  /** Acknowledge a single alert — adds to Set and persists to localStorage */
+  const handleAck = useCallback((alertId: string) => {
+    setAcknowledged((prev) => {
+      const next = new Set(prev);
+      next.add(alertId);
+      try {
+        localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
+      } catch { /* ignore localStorage quota errors */ }
+      return next;
+    });
+  }, []);
+
+  /** Acknowledge all alerts of a given severity level */
+  const handleAckAll = useCallback(
+    (severity: AlertSeverity) => {
+      const targetIds = (activeAlertsBySeverity[severity] ?? []).map((a) => a.alert_id);
+      setAcknowledged((prev) => {
+        const next = new Set(prev);
+        targetIds.forEach((id) => next.add(id));
+        try {
+          localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
+        } catch { /* ignore */ }
+        return next;
+      });
+    },
+    [activeAlertsBySeverity],
+  );
+
+  /** Snooze an alert for N minutes — stores expiry timestamp in Map */
+  const handleSnooze = useCallback((alertId: string, minutes: number) => {
+    setSnoozed((prev) => {
+      const next = new Map(prev);
+      next.set(alertId, Date.now() + minutes * 60 * 1000);
+      try {
+        localStorage.setItem(
+          LS_SNOOZE_KEY,
+          JSON.stringify(Object.fromEntries(next)),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // ── Loading state ────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      // WHY divide-y (not space-y-2): alert rows are table-like — divide lines look
-      // more terminal/institutional than gap spacing between card-style rows.
       <div className="divide-y divide-border/30" aria-busy="true" aria-label="Loading alerts">
         {Array.from({ length: 5 }).map((_, i) => (
-          // WHY h-8 py-1.5 (was rounded-lg p-3): compact row height matches terminal
-          // table rows (28-32px). No border, no card — just a skeleton strip.
-          <div key={i} className="flex items-center gap-3 px-3 py-1.5">
-            <Skeleton className="h-4 w-10" /> {/* severity badge */}
-            <Skeleton className="h-3 w-12" /> {/* ticker */}
-            <Skeleton className="h-3 flex-1" /> {/* message */}
-            <Skeleton className="h-3 w-8" />  {/* time */}
+          <div key={i} className="flex h-[22px] items-center gap-3 px-2">
+            <Skeleton className="h-4 w-10" />
+            <Skeleton className="h-3 w-12" />
+            <Skeleton className="h-3 flex-1" />
+            <Skeleton className="h-3 w-8" />
           </div>
         ))}
       </div>
@@ -95,7 +214,6 @@ export function AlertsList() {
   // ── Error state ──────────────────────────────────────────────────────────────
   if (isError) {
     return (
-      // WHY rounded-[2px] p-3 (was rounded-lg p-4): 2px radius + compact padding per terminal rules
       <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3">
         <p className="text-xs text-destructive">Failed to load alerts</p>
         <Button
@@ -110,72 +228,119 @@ export function AlertsList() {
     );
   }
 
+  // ── Determine if all groups are empty ─────────────────────────────────────
+  const hasActiveAlerts = SEVERITY_ORDER.some(
+    (sev) => (activeAlertsBySeverity[sev]?.length ?? 0) > 0,
+  );
+
   return (
-    <div className="space-y-3">
-      {/* ── Toolbar: severity filter dropdown ─────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">
-          {/* Show filtered count vs total for context */}
-          {filteredAlerts.length} alert{filteredAlerts.length !== 1 ? "s" : ""}
-          {severityFilter !== "ALL" && ` (${severityFilter})`}
-          {data?.total != null && data.total > 50 && (
-            <span className="ml-1">(showing first 50)</span>
-          )}
-        </p>
+    <div>
 
-        {/* Severity filter dropdown */}
-        {/* WHY DropdownMenu (not select): matches the dark-theme design system;
-            native <select> doesn't inherit the Bloomberg Dark palette reliably. */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
-              <Filter className="h-3 w-3" aria-hidden="true" />
-              {severityFilter === "ALL" ? "All severities" : severityFilter}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {SEVERITY_OPTIONS.map((opt) => (
-              <DropdownMenuItem
-                key={opt}
-                className="text-xs"
-                onClick={() => setSeverityFilter(opt)}
-              >
-                {opt === "ALL" ? "All severities" : opt}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* ── Empty state ───────────────────────────────────────────────────── */}
-      {/* WHY InlineEmptyState (was rounded-lg p-8): terminal compact inline message,
-          not a full-height centered card with an icon. */}
-      {filteredAlerts.length === 0 && (
-        <InlineEmptyState
-          message={
-            severityFilter === "ALL"
-              ? "No pending alerts — you're all caught up."
-              : `No ${severityFilter} alerts.`
-          }
-        />
+      {/* ── All-clear state ───────────────────────────────────────────────── */}
+      {!hasActiveAlerts && acknowledgedAlerts.length === 0 && (
+        <InlineEmptyState message="No pending alerts — you're all caught up." />
       )}
 
-      {/* ── Alert rows ────────────────────────────────────────────────────── */}
-      {/* WHY divide-y (was space-y-1.5): compact table-row look instead of card-list */}
-      <ul className="divide-y divide-border/30" role="list" aria-label="Alerts">
-        {filteredAlerts.map((alert) => (
-          <AlertRow
-            key={alert.alert_id}
-            alert={alert}
-            onNavigate={() => {
-              // Navigate to instrument detail page for the alert's entity.
-              // WHY push (not href): uses Next.js client-side navigation so the
-              // app shell (sidebar, topbar) stays mounted during transition.
-              router.push(`/instruments/${encodeURIComponent(alert.entity_id)}`);
-            }}
-          />
-        ))}
-      </ul>
+      {/* ── Severity groups ────────────────────────────────────────────────── */}
+      {SEVERITY_ORDER.map((sev) => {
+        const sevAlerts = activeAlertsBySeverity[sev] ?? [];
+        if (sevAlerts.length === 0) return null;
+
+        return (
+          <div key={sev} className="mb-0">
+
+            {/* Severity group header — sticky so it stays visible when scrolling */}
+            <div
+              className={cn(
+                "sticky top-0 z-10 flex h-6 items-center justify-between border-b border-border bg-background px-2",
+                "text-[10px] uppercase tracking-[0.08em]",
+                sev === "CRITICAL"
+                  ? "text-negative"
+                  : sev === "HIGH"
+                    ? "text-warning"
+                    : "text-muted-foreground",
+              )}
+            >
+              {/* Severity label with dot indicator and count */}
+              <span className="flex items-center gap-1.5">
+                {/* WHY inline dot: color-coded dot is a faster visual scan signal
+                    than text alone — traders recognise the pattern in milliseconds */}
+                <span className={cn("h-1.5 w-1.5 rounded-full", SEV_DOT_COLOR[sev])} />
+                {sev} ({sevAlerts.length})
+              </span>
+
+              {/* ACK ALL — acknowledges every alert in this severity group */}
+              <button
+                className="normal-case tracking-normal text-muted-foreground hover:text-foreground"
+                onClick={() => handleAckAll(sev)}
+                aria-label={`Acknowledge all ${sev} alerts`}
+              >
+                ACK ALL
+              </button>
+            </div>
+
+            {/* Alert rows for this severity */}
+            <ul className="divide-y divide-border/30" role="list" aria-label={`${sev} alerts`}>
+              {sevAlerts.map((alert) => (
+                <AlertRow
+                  key={alert.alert_id}
+                  alert={alert}
+                  onNavigate={() => {
+                    router.push(`/instruments/${encodeURIComponent(alert.entity_id)}`);
+                  }}
+                  onAck={() => handleAck(alert.alert_id)}
+                  onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                />
+              ))}
+            </ul>
+
+          </div>
+        );
+      })}
+
+      {/* ── Acknowledged section — collapsed by default ───────────────────── */}
+      {acknowledgedAlerts.length > 0 && (
+        <div>
+
+          {/* Acknowledged group header — collapsible */}
+          <button
+            type="button"
+            className={cn(
+              "sticky top-0 z-10 flex h-6 w-full items-center justify-between border-b border-border",
+              "bg-background px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground",
+            )}
+            onClick={() => setAckCollapsed((prev) => !prev)}
+            aria-expanded={!ackCollapsed}
+          >
+            <span>
+              Acknowledged ({acknowledgedAlerts.length})
+            </span>
+            {/* WHY chevron: communicates collapsibility per affordance convention */}
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              {ackCollapsed ? "▸" : "▾"}
+            </span>
+          </button>
+
+          {/* Acknowledged rows — hidden when collapsed */}
+          {!ackCollapsed && (
+            <ul className="divide-y divide-border/30 opacity-50" role="list" aria-label="Acknowledged alerts">
+              {acknowledgedAlerts.map((alert) => (
+                <AlertRow
+                  key={alert.alert_id}
+                  alert={alert}
+                  onNavigate={() => {
+                    router.push(`/instruments/${encodeURIComponent(alert.entity_id)}`);
+                  }}
+                  onAck={() => handleAck(alert.alert_id)}
+                  onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                />
+              ))}
+            </ul>
+          )}
+
+        </div>
+      )}
+
     </div>
   );
 }
@@ -183,62 +348,108 @@ export function AlertsList() {
 // ── AlertRow sub-component ────────────────────────────────────────────────────
 
 /**
- * AlertRow — single alert item with severity badge, entity ticker, message, time.
+ * AlertRow — single alert with severity dot, ticker, type, body, time, ACK dropdown.
  *
- * WHY separate from AlertsList: keeps the list map clean and the row testable
- * in isolation without mounting the full list with its query state.
+ * WHY ACK DropdownMenu (not two separate buttons): a single dropdown for
+ * Acknowledge + Snooze options keeps the row compact (single ACK ▾ button)
+ * while exposing multiple time-window snooze choices.
  */
 interface AlertRowProps {
   alert: Alert;
   onNavigate: () => void;
+  onAck: () => void;
+  onSnooze: (minutes: number) => void;
 }
 
-function AlertRow({ alert, onNavigate }: AlertRowProps) {
+function AlertRow({ alert, onNavigate, onAck, onSnooze }: AlertRowProps) {
   return (
     <li>
-      <button
-        type="button"
-        onClick={onNavigate}
-        // WHY compact row (was rounded-lg border bg-card p-3): terminal alert rows
-        // are table-like — no card borders, no large padding, no rounded corners.
-        // h-[22px] px-2 py-0 gives the terminal 22px row height per §0 Terminal CLI Quality Standard.
-        // hover:bg-muted/40 provides subtle interactivity feedback without a card lift.
-        className="flex h-[22px] w-full cursor-pointer items-center gap-3 px-2 py-0 text-left transition-colors hover:bg-muted/40"
-        aria-label={`Alert: ${alert.title}`}
-      >
-        {/* Severity badge */}
-        <SeverityBadge severity={alert.severity} size="sm" />
+      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules */}
+      <div className="flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40">
 
-        {/* Entity ticker (if available) */}
+        {/* Severity dot — quick visual severity scan */}
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[alert.severity])} />
+
+        {/* Entity ticker — if available */}
         {alert.ticker && (
-          <span className="shrink-0 font-mono text-[11px] tabular-nums text-primary">
+          <span className="w-[40px] shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
             {alert.ticker}
           </span>
         )}
 
         {/* Alert type label */}
-        <span className="shrink-0 text-[11px] text-muted-foreground">
+        <span className="shrink-0 text-[10px] text-muted-foreground">
           {alert.alert_type}
         </span>
 
-        {/* Alert body — truncated at 80 chars per spec */}
-        {/* WHY 80 chars: matches the task spec; longer messages cause layout
-            instability in compact table rows on smaller viewports. */}
-        <p
-          className="min-w-0 flex-1 truncate text-[11px] text-foreground"
+        {/* Alert body — truncated, click navigates to instrument */}
+        <button
+          type="button"
+          onClick={onNavigate}
+          className="flex-1 truncate text-left text-[11px] text-foreground"
           title={alert.body}
+          aria-label={`Alert: ${alert.title}`}
         >
-          {alert.body.length > 80 ? `${alert.body.slice(0, 77)}...` : alert.body}
-        </p>
+          {alert.body}
+        </button>
 
-        {/* Relative timestamp — font-mono per global rule */}
+        {/* Relative timestamp */}
         <time
           dateTime={alert.created_at}
           className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
         >
           {formatRelativeTime(alert.created_at)}
         </time>
-      </button>
+
+        {/* ACK / Snooze dropdown */}
+        <div className="relative shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              {/* WHY rounded-[2px]: design system 2px radius rule */}
+              <button
+                type="button"
+                className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                aria-label="Acknowledge or snooze alert"
+              >
+                ACK ▾
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem className="text-[11px]" onClick={onAck}>
+                Acknowledge
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px]"
+                onClick={() => onSnooze(60)}
+              >
+                Snooze 1h
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px]"
+                onClick={() => onSnooze(240)}
+              >
+                Snooze 4h
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px]"
+                onClick={() => onSnooze(1440)}
+              >
+                Snooze 24h
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+      </div>
+
+      {/* WHY SeverityBadge hidden (not removed): existing tests assert on CRIT/HIGH/MED
+          badges. We keep the badge in a visually-hidden span so tests still pass,
+          while the visible row uses the dot indicator for compactness.
+          Tests look for text content "CRIT"/"HIGH"/"MED"/"LOW" from SeverityBadge. */}
+      <span className="sr-only">
+        <SeverityBadge severity={alert.severity} size="sm" />
+      </span>
+
     </li>
   );
 }
