@@ -68,7 +68,7 @@ const SelectTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       // Base layout: flex row, vertically centred, full-width by default
-      "flex h-9 w-full items-center justify-between rounded-md",
+      "flex h-9 w-full items-center justify-between rounded-[2px]",
       // Visual style: matches Input component (border-border, bg-muted)
       "border border-border bg-muted px-3 py-2 text-sm",
       // Text: foreground colour so selected value is readable
@@ -173,7 +173,7 @@ const SelectContent = React.forwardRef<
         // Stacking + sizing
         "relative z-50 max-h-96 min-w-[8rem] overflow-hidden",
         // Visual: dark panel matching GlobalSearch command palette
-        "rounded-[2px] border border-border bg-popover text-popover-foreground shadow-md",
+        "rounded-[2px] border border-border bg-popover text-popover-foreground",
         // Radix open/close animations — same tokens as dropdown-menu.tsx
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",

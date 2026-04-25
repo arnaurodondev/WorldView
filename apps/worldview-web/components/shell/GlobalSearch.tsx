@@ -193,14 +193,14 @@ export function GlobalSearch() {
               setQuery("");
             }
           }}
-          className="h-8 text-sm"
+          className="h-8 text-[11px]"
         />
 
         {/* Dropdown — shown on focus or when typing */}
         {open && (
           <div
             // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
-            className="absolute left-0 top-full z-50 mt-1 w-full rounded-[2px] border border-border bg-popover shadow-lg"
+            className="absolute left-0 top-full z-50 mt-1 w-full rounded-[2px] border border-border bg-popover"
             // WHY onMouseDown preventDefault: belt-and-suspenders — prevents the
             // input from blurring when the user presses down on a result item.
             // The primary close guard is the click-outside mousedown listener above;

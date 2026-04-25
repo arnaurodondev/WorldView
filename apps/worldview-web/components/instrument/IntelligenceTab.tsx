@@ -173,7 +173,7 @@ function ContradictionCard({
       <div className="space-y-2">
         {/* WHY VS layout: makes the contradiction visually obvious at a glance */}
         <div className="rounded-[2px] bg-positive/5 p-2">
-          <p className="text-xs text-foreground/80 leading-relaxed">&ldquo;{item.claim_a}&rdquo;</p>
+          <p className="text-[11px] text-foreground/80 leading-relaxed">&ldquo;{item.claim_a}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_a}</p>
         </div>
         <div className="flex items-center justify-center">
@@ -182,7 +182,7 @@ function ContradictionCard({
           <AlertTriangle className={`h-3 w-3 ${styles.icon}`} />
         </div>
         <div className="rounded-[2px] bg-negative/5 p-2">
-          <p className="text-xs text-foreground/80 leading-relaxed">&ldquo;{item.claim_b}&rdquo;</p>
+          <p className="text-[11px] text-foreground/80 leading-relaxed">&ldquo;{item.claim_b}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_b}</p>
         </div>
       </div>
@@ -222,7 +222,7 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
   // WHY p-3 (was p-4): terminal panel standard padding
   return (
     <section className="p-3">
-      <h3 className="mb-2 text-xs font-semibold text-foreground">AI Intelligence Brief</h3>
+      <h3 className="mb-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">AI Intelligence Brief</h3>
 
       {/* ── Loading state: 3-line skeleton ──────────────────────────────────── */}
       {/* WHY 3 lines: instrument briefs are shorter than morning briefs (2-3 paragraphs).
@@ -239,7 +239,7 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
       {/* WHY 503 soft error: S8 may still be generating the brief. Showing a
           "generating" message is less alarming than a hard error block. */}
       {isError && !isLoading && (
-        <div className="rounded-[2px] border rounded-[2px] border border-border/30 bg-card/30 p-3 text-xs text-muted-foreground">
+        <div className="rounded-[2px] border border-border/30 bg-card/30 p-3 text-[11px] text-muted-foreground">
           {error instanceof Error &&
           (error.message.includes("503") || error.message.includes("unavailable"))
             ? "Brief generating... check back in a few minutes."
@@ -255,8 +255,8 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
               this to the trader without blocking the view. */}
           {Date.now() - new Date(brief.generated_at).getTime() > BRIEF_STALE_MS && (
             <div className="mb-2 flex items-center gap-1">
-              <RefreshCw className="h-3 w-3 text-amber-400" />
-              <span className="text-xs text-amber-400">Brief may be outdated</span>
+              <RefreshCw className="h-3 w-3 text-warning" />
+              <span className="text-[11px] text-warning">Brief may be outdated</span>
             </div>
           )}
 
@@ -265,7 +265,7 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
               font sizes that clash with our terminal dense layout. Custom selectors
               on the wrapper div give the same rendered structure (headers, bold,
               lists) without the forced whitespace. Pattern mirrors MorningBriefCard. */}
-          <div className="text-xs leading-relaxed text-foreground [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_li]:ml-3 [&_p]:mb-1.5 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-3">
+          <div className="text-[13px] leading-relaxed text-foreground [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_li]:ml-3 [&_p]:mb-1.5 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-3">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {brief.content}
             </ReactMarkdown>
@@ -282,7 +282,7 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
 
       {/* ── Empty state — no brief available yet ─────────────────────────────── */}
       {!isLoading && !isError && !brief && (
-        <div className="rounded-[2px] border rounded-[2px] border border-border/30 bg-card/30 p-3 text-xs text-muted-foreground">
+        <div className="rounded-[2px] border border-border/30 bg-card/30 p-3 text-[11px] text-muted-foreground">
           No intelligence brief available for this entity yet.
         </div>
       )}
@@ -349,7 +349,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
       {/* WHY p-3 (was p-4): terminal panel standard padding */}
       <section className="p-3">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-foreground">Entity Knowledge Graph</h3>
+          <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Entity Knowledge Graph</h3>
           <span className="text-[10px] text-muted-foreground">
             depth 2 · {graphData?.nodes.length ?? 0} entities
           </span>
@@ -405,7 +405,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             compact inline text. A full-height centered panel with a large icon is
             consumer SaaS style; a single compact line is terminal style. */}
         {!isLoading && !isError && contradictions.length === 0 && (
-          <p className="py-2 text-xs text-positive">
+          <p className="py-2 text-[11px] text-positive">
             No contradictions detected — signals are consistent.
           </p>
         )}
@@ -415,7 +415,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           <div className="space-y-3">
             {/* Count badge at top */}
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-foreground">
+              <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                 Detected Contradictions
               </h3>
               <span className="rounded-[2px] bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">

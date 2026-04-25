@@ -26,7 +26,7 @@ const TabsList = React.forwardRef<
     className={cn(
       // inline-flex h-9: compact tab bar that doesn't waste vertical space
       // bg-muted: slightly elevated from page background
-      "inline-flex h-9 items-center justify-start rounded-md bg-muted p-1 text-muted-foreground",
+      "inline-flex h-9 items-center justify-start rounded-[2px] bg-muted p-1 text-muted-foreground",
       className,
     )}
     {...props}
@@ -49,7 +49,7 @@ const TabsTrigger = React.forwardRef<
       // Previously active and inactive tabs looked nearly identical (both near-white).
       // Amber creates clear visual hierarchy — users instantly know which tab is active.
       // This affects every tab across the app: Portfolio, Instrument Detail, Alerts, Settings.
-      "data-[state=active]:bg-card data-[state=active]:text-primary data-[state=active]:shadow-sm",
+      "data-[state=active]:bg-card data-[state=active]:text-primary",
       className,
     )}
     {...props}

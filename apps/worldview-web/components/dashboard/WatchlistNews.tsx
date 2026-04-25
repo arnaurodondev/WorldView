@@ -85,7 +85,7 @@ export function WatchlistNews() {
           className="group block rounded-[2px] border border-border/50 p-2 hover:border-border hover:bg-muted/30"
         >
           {/* Article headline */}
-          <p className="line-clamp-2 text-xs font-medium leading-snug text-foreground group-hover:text-primary">
+          <p className="line-clamp-2 text-[11px] font-medium leading-snug text-foreground group-hover:text-primary">
             {article.title}
           </p>
           {/* Source + timestamp */}

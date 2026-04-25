@@ -105,7 +105,7 @@ export function StaleBadge({ status, staleReason, dataAsOf }: StaleBadgeProps) {
             side="bottom"
             align="center"
             sideOffset={4}
-            className="z-50 max-w-[220px] rounded-[2px] bg-popover px-2.5 py-1.5 text-[11px] text-popover-foreground shadow-md"
+            className="z-50 max-w-[220px] rounded-[2px] bg-popover px-2.5 py-1.5 text-[11px] text-popover-foreground"
           >
             {tooltipContent}
             <Tooltip.Arrow className="fill-popover" />

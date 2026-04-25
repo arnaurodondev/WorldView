@@ -226,7 +226,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           <button
             key={tf}
             onClick={() => setTimeframe(tf)}
-            className={`rounded-[2px] px-2 py-0.5 text-xs font-medium transition-colors ${
+            className={`rounded-[2px] px-2 py-0.5 text-[11px] font-medium transition-colors ${
               timeframe === tf
                 ? "bg-primary/20 text-primary"
                 : "text-muted-foreground hover:text-foreground"

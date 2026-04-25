@@ -100,7 +100,7 @@ export function TopMovers() {
               style={{ minWidth: "4.5rem" }}
             >
               {/* Ticker — large, font-mono */}
-              <span className="font-mono text-xs font-semibold tabular-nums text-foreground">
+              <span className="font-mono text-[11px] font-medium tabular-nums text-foreground">
                 {mover.ticker}
               </span>
               {/* Price */}
@@ -108,7 +108,7 @@ export function TopMovers() {
                 {formatPrice(mover.price)}
               </span>
               {/* % change — colored */}
-              <span className={`font-mono text-xs font-semibold tabular-nums ${priceChangeClass(mover.change_pct)}`}>
+              <span className={`font-mono text-[11px] font-medium tabular-nums ${priceChangeClass(mover.change_pct)}`}>
                 {formatPercent(mover.change_pct / 100)}
               </span>
             </button>

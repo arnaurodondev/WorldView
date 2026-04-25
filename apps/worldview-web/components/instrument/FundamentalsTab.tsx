@@ -136,8 +136,8 @@ function MetricRow({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-mono text-xs tabular-nums">
+      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
+      <span className="font-mono text-[11px] tabular-nums">
         {children}
         {/* WHY conditional unit: only show unit suffix when there's an actual value,
             not when the value is "—" (the unit would float next to the dash) */}

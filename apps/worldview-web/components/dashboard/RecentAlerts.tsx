@@ -109,8 +109,8 @@ export function RecentAlerts() {
         return (
           <div
             key={alert.id}
-            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
-            className="flex items-start gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
+            // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
+            className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40"
           >
             {/* Severity badge — use Tailwind bg/text classes from severityColor */}
             <span
@@ -121,7 +121,7 @@ export function RecentAlerts() {
             </span>
 
             {/* Alert message */}
-            <p className="min-w-0 flex-1 truncate text-xs text-foreground" title={alert.message}>
+            <p className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={alert.message}>
               {alert.message}
             </p>
 
@@ -136,7 +136,7 @@ export function RecentAlerts() {
       {/* View all link */}
       <Link
         href="/alerts"
-        className="mt-1 block text-center text-xs text-muted-foreground hover:text-foreground"
+        className="mt-1 block text-center text-[11px] text-muted-foreground hover:text-foreground"
       >
         View all alerts →
       </Link>

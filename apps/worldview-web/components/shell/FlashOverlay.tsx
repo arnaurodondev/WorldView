@@ -138,7 +138,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
       aria-describedby="flash-alert-message"
     >
       <div
-        className="relative w-full max-w-lg overflow-hidden rounded-[2px] border border-destructive/50 bg-background shadow-2xl"
+        className="relative w-full max-w-lg overflow-hidden rounded-[2px] border border-destructive/50 bg-background"
         onClick={(e) => e.stopPropagation()} // WHY stopPropagation: prevent backdrop click from bubbling
       >
         {/* Countdown progress bar — red fills from left, shrinks right to left */}

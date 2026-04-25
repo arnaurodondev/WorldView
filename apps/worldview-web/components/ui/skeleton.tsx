@@ -21,7 +21,7 @@ function Skeleton({
       className={cn(
         // animate-pulse with our custom skeleton-pulse keyframe (2s, gentler than default)
         // bg-muted: elevated surface color from Bloomberg Dark (#1A2030)
-        "animate-pulse rounded-md bg-muted",
+        "animate-pulse rounded-[2px] bg-muted",
         className,
       )}
       {...props}

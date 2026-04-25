@@ -81,8 +81,8 @@ export function EconomicCalendar() {
         return (
           <div
             key={event.event_id}
-            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
-            className="flex items-start gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
+            // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
+            className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40"
           >
             {/* Date + time — monospace for column alignment */}
             <div className="shrink-0">
@@ -95,7 +95,7 @@ export function EconomicCalendar() {
             </div>
 
             {/* Event name */}
-            <p className="min-w-0 flex-1 truncate text-xs text-foreground" title={event.title}>
+            <p className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={event.title}>
               {event.title}
             </p>
 

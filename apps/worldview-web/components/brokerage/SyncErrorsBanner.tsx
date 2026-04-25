@@ -152,15 +152,14 @@ export function SyncErrorsBanner({ connectionId }: SyncErrorsBannerProps) {
         // gives assistive technology the full action description.
         aria-label={expanded ? "Collapse sync errors" : "Expand sync errors"}
       >
-        {/* Warning triangle — amber matches the banner background */}
+        {/* Warning triangle — text-warning = design token for amber/cautionary signals */}
         <AlertTriangle
-          className="h-3.5 w-3.5 shrink-0"
+          className="h-3.5 w-3.5 shrink-0 text-warning"
           aria-hidden="true"
-          style={{ color: "#F59E0B" }}
         />
 
         {/* Summary — error count + types */}
-        <span className="flex-1 text-xs" style={{ color: "#F59E0B" }}>
+        <span className="flex-1 text-[11px] text-warning">
           {/* WHY show count first: professionals scan for "how many" before "what kind" */}
           <span className="font-semibold">{errors.length} sync error{errors.length !== 1 ? "s" : ""}</span>
           {!expanded && (
