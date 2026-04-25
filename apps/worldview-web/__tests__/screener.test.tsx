@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeatCell } from "@/components/screener/HeatCell";
 import ScreenerPage from "@/app/(app)/screener/page";
@@ -186,27 +187,45 @@ describe("HeatCell", () => {
 // ── ScreenerPage structure tests ──────────────────────────────────────────────
 
 describe("ScreenerPage", () => {
-  it("renders the filter panel with Filters heading", () => {
-    // WHY structure test: verifies the page renders without errors and the
-    // filter panel is present with its heading.
+  it("renders the FILTERS toggle button in the header bar", () => {
+    // WHY updated: filter panel is now collapsible (default: collapsed).
+    // The "FILTERS" heading is now a toggle button in the results header bar —
+    // collapsed by default to maximize visible data rows (Bloomberg convention).
+    // We verify the toggle button is present and accessible regardless of panel state.
     render(<ScreenerPage />, { wrapper });
 
-    // The "Filters" heading should be visible immediately (not data-dependent)
-    expect(screen.getByText("Filters")).toBeInTheDocument();
+    // The FILTERS toggle button should be visible immediately — it's in the
+    // results header, not inside the collapsible panel.
+    expect(screen.getByRole("button", { name: /filters/i })).toBeInTheDocument();
   });
 
-  it("renders Name/Ticker search input", () => {
+  it("renders Name/Ticker search input when filter panel is opened", async () => {
+    // WHY updated: filter panel is collapsed by default (§0.5 — density first).
+    // Open the panel first, then verify the search input is accessible.
+    const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper });
+
+    // Click the FILTERS toggle to open the panel
+    await user.click(screen.getByRole("button", { name: /filters/i }));
     expect(screen.getByLabelText(/search instruments by name or ticker/i)).toBeInTheDocument();
   });
 
-  it("renders the sector dropdown", () => {
+  it("renders the sector dropdown when filter panel is opened", async () => {
+    // WHY updated: same reason as search input — panel is collapsed by default.
+    const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper });
+
+    await user.click(screen.getByRole("button", { name: /filters/i }));
     expect(screen.getByLabelText(/filter by gics sector/i)).toBeInTheDocument();
   });
 
-  it("renders Apply and Reset buttons", () => {
+  it("renders Apply and Reset buttons when filter panel is opened", async () => {
+    // WHY updated: filter panel is collapsed by default; open it first to reveal
+    // the Apply and Reset buttons. These buttons live inside the collapsible panel.
+    const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper });
+
+    await user.click(screen.getByRole("button", { name: /filters/i }));
     expect(screen.getByRole("button", { name: /apply filters/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reset all filters/i })).toBeInTheDocument();
   });
@@ -214,18 +233,21 @@ describe("ScreenerPage", () => {
   it("renders table column headers", () => {
     render(<ScreenerPage />, { wrapper });
     // WHY check headers immediately: they are rendered in the static <thead>
-    // and don't depend on data loading — table structure should be instant.
+    // and don't depend on data loading or filter panel state — table structure is instant.
     expect(screen.getByRole("columnheader", { name: /ticker/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /name/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /mkt cap/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /score/i })).toBeInTheDocument();
   });
 
-  it("renders market cap tier buttons", () => {
-    render(<ScreenerPage />, { wrapper });
-    // All four tier buttons should be visible in the filter panel.
+  it("renders market cap tier buttons when filter panel is opened", async () => {
+    // WHY updated: filter panel is collapsed by default. Open it first.
     // WHY exact aria-label matching: "All cap" is a substring of "Small cap",
     // so using /all cap/i would match two elements. Use exact string matching instead.
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper });
+
+    await user.click(screen.getByRole("button", { name: /filters/i }));
     expect(screen.getByRole("button", { name: "All cap: No market cap filter" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Large cap: > $10B" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mid cap: $2B–$10B" })).toBeInTheDocument();

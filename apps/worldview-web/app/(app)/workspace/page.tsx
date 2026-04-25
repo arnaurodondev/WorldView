@@ -62,6 +62,12 @@ import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { AlertsList } from "@/components/alerts/AlertsList";
+// WHY WorkspaceScreenerWidget: replaces WorkspacePlaceholder for the "screener" type.
+// Shows top-20 instruments by market_impact_score in a compact 5-column table.
+import { WorkspaceScreenerWidget } from "@/components/workspace/WorkspaceScreenerWidget";
+// WHY WorkspaceChatWidget: replaces WorkspacePlaceholder for the "chat" type.
+// Embedded SSE streaming chat with ephemeral session — no thread list needed.
+import { WorkspaceChatWidget } from "@/components/workspace/WorkspaceChatWidget";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { formatRelativeTime, formatMarketCap, safeExternalUrl } from "@/lib/utils";
@@ -486,16 +492,16 @@ function PanelContent({ type }: { type: PanelType; id: string }) {
       return <WorkspaceNewsPanel />;
 
     case "screener":
-      // WHY inline placeholder: ScreenerPage has a complex filter form that
-      // needs full-page width to be usable. A future wave creates a compact
-      // ScreenerPanel with pre-set filters for workspace use.
-      return <WorkspacePlaceholder type="screener" />;
+      // WHY WorkspaceScreenerWidget: compact 5-column screener showing top-20
+      // instruments by market_impact_score. No filter panel — workspace panels
+      // are ambient monitors; the full Screener page has the filter form.
+      return <WorkspaceScreenerWidget />;
 
     case "chat":
-      // WHY inline placeholder: Chat requires a streaming SSE connection and
-      // input form that needs at minimum 300px height. The ChatPage is built
-      // for full-page use. A future wave adds a compact ChatPanel.
-      return <WorkspacePlaceholder type="chat" />;
+      // WHY WorkspaceChatWidget: minimal SSE chat with ephemeral session.
+      // No thread list — workspace chat is for quick, in-context questions.
+      // The full Chat page handles thread persistence and history browsing.
+      return <WorkspaceChatWidget />;
 
     case "portfolio":
       // WHY WorkspacePortfolioPanel: fetches holdings for the first portfolio
@@ -511,28 +517,6 @@ function PanelContent({ type }: { type: PanelType; id: string }) {
 }
 
 // ── Placeholder sub-component ──────────────────────────────────────────────────
-
-/**
- * WorkspacePlaceholder — renders an informative "coming to workspace" message
- * for panel types not yet adapted for workspace embedding.
- *
- * WHY show a message (not just a Skeleton): The user added this panel; they
- * deserve an explanation of why it's not fully interactive yet, not a
- * misleading loading state that never resolves.
- */
-function WorkspacePlaceholder({ type }: { type: PanelType }) {
-  const def = PANEL_CATALOGUE.find((p) => p.type === type);
-
-  return (
-    // WHY inline text (not centered icon): terminal empty states are compact.
-    // The sidebar link provides full-page access — this panel just signals where to go.
-    <div className="px-3 py-3">
-      <p className="text-xs text-muted-foreground">
-        {def?.label ?? type} — use the sidebar for the full-page experience.
-      </p>
-    </div>
-  );
-}
 
 // ── Panel selector bar ─────────────────────────────────────────────────────────
 

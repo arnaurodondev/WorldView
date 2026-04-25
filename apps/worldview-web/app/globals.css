@@ -97,6 +97,7 @@
      * 44px top chrome — these match that standard. */
     --panel-header-height: 32px;    /* compact panel headers — leaves more room for data */
     --topbar-height: 44px;          /* 4px tighter than old h-12 (48px); denser chrome */
+    --cell-px: 8px;                 /* standard horizontal cell padding in data tables (px-2) */
   }
 
   /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work */
@@ -128,6 +129,7 @@
     --radius: 0.125rem;
     --panel-header-height: 32px;
     --topbar-height: 44px;
+    --cell-px: 8px;
   }
 }
 
@@ -153,20 +155,48 @@
     @apply font-medium leading-tight;
   }
 
-  /* Scrollbars: thin + styled to match dark theme */
+  /* Scrollbars: 4px terminal-grade — matches Claude Code CLI aesthetic.
+   * WHY transparent track: shows the panel background through the scrollbar
+   * channel, making it invisible when not scrolling (cleaner than a visible trough).
+   * WHY border-radius: 0: terminal UIs use sharp thumb edges, not pill shapes.
+   * Bloomberg Terminal scrollbars have zero rounding. */
   ::-webkit-scrollbar {
     width: 4px;
     height: 4px;
   }
   ::-webkit-scrollbar-track {
-    background: hsl(var(--background));
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
     background: hsl(var(--border));
-    border-radius: 2px;
+    border-radius: 0; /* sharp thumb — no pill shape in terminal UIs */
   }
   ::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground));
+  }
+  /* Firefox minimal scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}
+
+/* ── Terminal shadow reset ─────────────────────────────────────────────── */
+/* WHY: Terminal UIs use 1px borders for structure — never decorative shadows.
+ * shadcn/ui Popover, DropdownMenu, and Select add box-shadow by default.
+ * This global reset ensures ALL shadcn popovers/dropdowns render borderless
+ * and shadowless, relying only on the border for definition. */
+@layer base {
+  /* Global shadow reset — borders replace shadows for all panel structure */
+  .shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl, .shadow-2xl {
+    box-shadow: none !important;
+  }
+
+  /* shadcn Radix popper wrappers (Popover, Select, DropdownMenu, Tooltip)
+   * default to a large box-shadow. Override to border-only. */
+  [data-radix-popper-content-wrapper] > * {
+    box-shadow: none !important;
+    border: 1px solid hsl(var(--border)) !important;
   }
 }
 
