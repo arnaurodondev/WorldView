@@ -35,8 +35,13 @@ vi.mock("@/components/shell/TopBar", () => ({
   ),
 }));
 
-vi.mock("@/components/shell/Sidebar", () => ({
-  Sidebar: () => <nav data-testid="shell-sidebar" />,
+// WHY CollapsibleSidebar (not Sidebar): layout.tsx now uses CollapsibleSidebar
+// (PRD-0031 Wave 1). The mock accepts expanded/onToggle props without typing them
+// strictly so it remains valid as the prop interface evolves.
+vi.mock("@/components/shell/CollapsibleSidebar", () => ({
+  CollapsibleSidebar: (props: Record<string, unknown>) => (
+    <nav data-testid="shell-sidebar" data-expanded={String(props.expanded ?? true)} />
+  ),
 }));
 
 vi.mock("@/components/shell/FlashOverlay", () => ({
@@ -45,8 +50,19 @@ vi.mock("@/components/shell/FlashOverlay", () => ({
   FlashOverlay: () => null,
 }));
 
-vi.mock("@/components/shell/AskAiPanel", () => ({
-  AskAiPanel: () => null,
+// WHY mock WorkspaceProvider: WorkspaceProvider reads localStorage on mount.
+// Mocking it to pass children through avoids localStorage dependency in auth tests.
+vi.mock("@/contexts/WorkspaceContext", () => ({
+  WorkspaceProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useWorkspace: vi.fn(() => ({
+    workspaces: [],
+    activeWorkspaceId: "ws-1",
+    activeWorkspace: undefined,
+    setActiveWorkspace: vi.fn(),
+    addWorkspace: vi.fn(),
+    removeWorkspace: vi.fn(),
+    renameWorkspace: vi.fn(),
+  })),
 }));
 
 // ── AlertStreamContext mock ───────────────────────────────────────────────────
@@ -100,8 +116,24 @@ import AppLayout from "@/app/(app)/layout";
 
 // ── Test setup ────────────────────────────────────────────────────────────────
 
+// WHY localStorage stub: layout.tsx reads localStorage in its useState lazy initializer
+// for the sidebar expanded state. jsdom's localStorage may not expose all methods
+// (BP-160 pattern). Stubbing gives us full control and consistent behavior.
+const localStorageMock = {
+  getItem: vi.fn(() => null as string | null),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+  length: 0,
+  key: vi.fn(() => null as string | null),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // WHY stubGlobal: makes localStorage available with the mock implementation
+  // for all code that runs during these tests, including the layout lazy initializer.
+  vi.stubGlobal("localStorage", localStorageMock as unknown as Storage);
+  localStorageMock.getItem.mockReturnValue(null);
 
   // WHY re-set after clearAllMocks: clearAllMocks() resets mockUseAuth to return
   // undefined. We need a predictable default so tests that don't override the

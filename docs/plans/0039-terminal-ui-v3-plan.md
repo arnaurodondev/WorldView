@@ -593,7 +593,9 @@ Add terminal CLI quality baseline CSS to `globals.css`: minimal scrollbar stylin
 
 ---
 
-## Wave 1 — New Shell (CollapsibleSidebar + TopBar)
+## ✅ Wave 1 — New Shell (CollapsibleSidebar + TopBar)
+
+**Status**: **DONE** — 2026-04-25 · 365 tests pass · lint + typecheck clean
 
 **Goal**: Replace the text sidebar with a collapsible icon rail containing watchlist and alarms panels. Update TopBar to 36px with UTC clock.
 **Depends on**: Wave 0
