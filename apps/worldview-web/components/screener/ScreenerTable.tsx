@@ -145,9 +145,23 @@ const COLS: ColDef[] = [
     align: "right",
     sortKey: "daily_return",
     render: (r) => {
-      const { text, cls } = formatPct(r.daily_return);
+      if (r.daily_return == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+      const pct = r.daily_return * 100;
+      const isPos = pct > 0;
+      const isNeg = pct < 0;
       return (
-        <span className={cn("font-mono text-[11px] tabular-nums", cls)}>{text}</span>
+        // WHY pill (bg tint + colored text): directional change pills are an institutional
+        // terminal pattern (tastytrade, TradingView, Refinitiv). The background tint makes
+        // direction scannable in peripheral vision — traders don't need to read the sign
+        // character; the color block fires before parsing the number.
+        <span className={cn(
+          "inline-flex items-center justify-center font-mono text-[10px] tabular-nums px-1 rounded-[2px]",
+          isPos && "bg-positive/10 text-positive",
+          isNeg && "bg-negative/10 text-negative",
+          !isPos && !isNeg && "text-muted-foreground",
+        )}>
+          {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+        </span>
       );
     },
   },
@@ -371,7 +385,14 @@ export function ScreenerTable({ rows, isLoading, sort, onSort }: ScreenerTablePr
                     height: 22,
                     transform: `translateY(${vRow.start}px)`,
                   }}
-                  className="flex items-center border-b border-border/30 hover:bg-muted/40 cursor-pointer"
+                  className={cn(
+                    "flex items-center border-b border-white/[0.06] cursor-pointer transition-none",
+                    // WHY zebra striping: even rows get a barely-perceptible background tint (2% white).
+                    // Institutional pattern (Bloomberg, Refinitiv) — helps the eye track across wide rows
+                    // without needing full-width horizontal rules. The hover tint is slightly stronger
+                    // than the zebra tint so the hovered row always reads as active.
+                    vRow.index % 2 === 0 ? "bg-white/[0.02] hover:bg-white/[0.05]" : "hover:bg-white/[0.04]",
+                  )}
                   onClick={() => router.push(`/instruments/${row.entity_id}`)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") router.push(`/instruments/${row.entity_id}`);

@@ -151,8 +151,8 @@ SelectScrollDownButton.displayName = SelectPrimitive.ScrollDownButton.displayNam
  * parents. This is the same approach as DropdownMenuContent.
  *
  * WHY bg-popover + border-border: matches the GlobalSearch command palette
- * (command.tsx) so all floating panels share the same Bloomberg Dark panel
- * aesthetic (#0A0E14 background, subtle border).
+ * (command.tsx) so all floating panels share the same Terminal Dark panel
+ * aesthetic (#09090B background, subtle border).
  *
  * WHY position="popper": positions the dropdown directly below the trigger
  * (like a native select), rather than Radix's default "item-aligned" mode

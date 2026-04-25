@@ -17,7 +17,10 @@ const Avatar = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AvatarPrimitive.Root
     ref={ref}
-    className={cn("relative flex h-8 w-8 shrink-0 overflow-hidden rounded-full", className)}
+    // WHY rounded-[2px]: terminal design mandates 2px on all interactive elements.
+    // rounded-full (circle) is a consumer-app/SaaS pattern. Bloomberg Terminal uses
+    // rectangular initial badges for user identity.
+    className={cn("relative flex h-8 w-8 shrink-0 overflow-hidden rounded-[2px]", className)}
     {...props}
   />
 ));
@@ -42,7 +45,7 @@ const AvatarFallback = React.forwardRef<
   <AvatarPrimitive.Fallback
     ref={ref}
     className={cn(
-      "flex h-full w-full items-center justify-center rounded-full bg-muted text-xs font-medium",
+      "flex h-full w-full items-center justify-center rounded-[2px] bg-muted text-xs font-medium",
       className,
     )}
     {...props}

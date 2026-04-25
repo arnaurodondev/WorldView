@@ -44,9 +44,10 @@ export function WorkspaceBriefWidget() {
 
   if (isLoading) {
     return (
-      // WHY amber bg on loading state: the container should look consistent with the
-      // loaded state so the skeleton's replacement doesn't cause a layout shift.
-      <div className="border-l-2 border-[#FFD60A] bg-[#F0C04018] p-2 space-y-1">
+      // WHY border-primary / bg-primary/10: these are the design-token equivalents of
+      // the AI accent style. Using tokens (not hardcoded hex) ensures the colour
+      // updates automatically if the primary token changes in globals.css.
+      <div className="border-l-2 border-primary bg-primary/10 p-2 space-y-1">
         <Skeleton className="h-2.5 w-full" />
         <Skeleton className="h-2.5 w-4/5" />
         <Skeleton className="h-2.5 w-2/3" />
@@ -56,7 +57,7 @@ export function WorkspaceBriefWidget() {
 
   if (isError || !data) {
     return (
-      <div className="border-l-2 border-[#FFD60A] bg-[#F0C04018] px-2 py-1">
+      <div className="border-l-2 border-primary bg-primary/10 px-2 py-1">
         <p className="text-[11px] text-muted-foreground">Morning brief not yet generated.</p>
       </div>
     );
@@ -68,7 +69,7 @@ export function WorkspaceBriefWidget() {
 
   if (!briefText) {
     return (
-      <div className="border-l-2 border-[#FFD60A] bg-[#F0C04018] px-2 py-1">
+      <div className="border-l-2 border-primary bg-primary/10 px-2 py-1">
         <p className="text-[11px] text-muted-foreground">Morning brief not yet generated.</p>
       </div>
     );
@@ -79,25 +80,25 @@ export function WorkspaceBriefWidget() {
   const preview = briefText.length > 120 ? `${briefText.slice(0, 120)}…` : briefText;
 
   return (
-    // WHY border-l-2 border-[#FFD60A]: §0.3 explicitly allows border-l-2 for the
-    // AI brief accent (it's in the allowlist alongside InstrumentAISubheader).
-    // The amber left border is the visual signal for AI-generated content.
-    <div className="border-l-2 border-[#FFD60A] bg-[#F0C04018]">
+    // WHY border-primary / bg-primary/10: design-token equivalents of the AI accent.
+    // border-l-2 is the canonical left-rail pattern for AI-generated content (§0.3).
+    // Using tokens (not hardcoded #FFD60A hex) keeps palette changes in globals.css.
+    <div className="border-l-2 border-primary bg-primary/10">
       {/* Header row with expand toggle */}
       <button
-        className="flex w-full items-center gap-1.5 px-2 h-[22px] hover:bg-[#F0C04010]"
+        className="flex w-full items-center gap-1.5 px-2 h-[22px] hover:bg-primary/5"
         aria-expanded={expanded}
         aria-label="Toggle morning brief"
         onClick={() => setExpanded((v) => !v)}
       >
         {/* Toggle icon — chevron down when collapsed, right when expanded */}
         {expanded ? (
-          <ChevronDown className="h-3 w-3 text-[#FFD60A] shrink-0" aria-hidden />
+          <ChevronDown className="h-3 w-3 text-primary shrink-0" aria-hidden />
         ) : (
-          <ChevronRight className="h-3 w-3 text-[#FFD60A] shrink-0" aria-hidden />
+          <ChevronRight className="h-3 w-3 text-primary shrink-0" aria-hidden />
         )}
         {/* Section label */}
-        <span className="text-[10px] uppercase tracking-[0.08em] text-[#FFD60A] font-sans">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-primary font-sans">
           Morning Brief
         </span>
         {/* Collapsed preview text — shown inline when collapsed */}
