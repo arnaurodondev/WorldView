@@ -21,7 +21,7 @@ from datetime import UTC
 from typing import TYPE_CHECKING, Any, cast
 
 from common.time import utc_now  # type: ignore[import-untyped]
-from market_ingestion.domain.enums import DatasetType
+from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import (
     InvalidStateTransition,
     ProviderAuthError,
@@ -44,7 +44,9 @@ if TYPE_CHECKING:
         ProviderAdapter,
         ProviderFetchResult,
     )
+    from market_ingestion.application.ports.circuit_breaker import CircuitBreakerPort
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
+    from market_ingestion.application.ports.zero_bar_tracker import ZeroBarTrackerPort
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
     from market_ingestion.infrastructure.adapters.providers import ProviderRegistry
     from messaging.eodhd_quota.quota_service import EodhdQuotaService
@@ -75,6 +77,8 @@ class ExecuteTaskUseCase:
         canonical_bucket: str = "market-canonical",
         quota_service: EodhdQuotaService | None = None,
         service_name: str = "market-ingestion",
+        circuit_breaker: CircuitBreakerPort | None = None,
+        zero_bar_tracker: ZeroBarTrackerPort | None = None,
     ) -> None:
         self._uow = uow
         self._registry = provider_registry
@@ -85,6 +89,14 @@ class ExecuteTaskUseCase:
         # Optional shared monthly quota enforcer (Valkey-backed, multi-replica safe).
         self._quota_service = quota_service
         self._service_name = service_name
+        # Optional cross-replica circuit breaker (Valkey-backed).
+        # When provided, blocks fetch calls when EODHD is degraded and records
+        # success/failure outcomes to coordinate state across replicas.
+        self._circuit_breaker = circuit_breaker
+        # Optional zero-bar streak tracker (Valkey-backed).
+        # When provided, tracks consecutive zero-bar responses per provider/symbol
+        # and triggers failover to the next provider after FAILOVER_THRESHOLD misses.
+        self._zero_bar_tracker = zero_bar_tracker
 
     async def execute(self, task: IngestionTask) -> None:
         """Run the pipeline for *task*.
@@ -107,13 +119,26 @@ class ExecuteTaskUseCase:
             dataset_type=str(task.dataset_type),
         )
 
-        adapter = self._registry.get(task.provider)
+        # ── Provider routing ──────────────────────────────────────────────────
+        # Select the cheapest registered provider for this dataset/timeframe.
+        # The task.provider stored in DB reflects what was *requested*; the
+        # actual adapter used for this execution may differ (e.g. Yahoo for
+        # OHLCV daily, Finnhub for news).
+        preferred = _preferred_provider(task.dataset_type, task.timeframe, self._registry)
+        adapter = self._registry.get(preferred)
+        if preferred != task.provider:
+            log.info(
+                "provider_routing_override",
+                requested=str(task.provider),
+                selected=preferred.value,
+                dataset_type=str(task.dataset_type),
+                timeframe=task.timeframe or "",
+            )
 
         # ── Step 0: Monthly quota check ──────────────────────────────────────
-        # Only enforced when a shared EodhdQuotaService is wired in.
-        # This check is intentionally placed *before* claiming the provider so
-        # we don't burn a budget token then immediately reject the call.
-        if self._quota_service is not None:
+        # Only enforced when a shared EodhdQuotaService is wired in AND the
+        # selected provider is EODHD (free providers have no quota).
+        if self._quota_service is not None and preferred == Provider.EODHD:
             cost = _task_credit_cost(task)
             from messaging.eodhd_quota.quota_service import QuotaCheckResult
 
@@ -143,17 +168,92 @@ class ExecuteTaskUseCase:
                 )
                 # Soft limit: log and proceed — do not block the call.
 
+        # ── Step 0.5: Circuit breaker check ─────────────────────────────────
+        # If the EODHD circuit is OPEN, block the fetch and retry the task.
+        # HALF_OPEN allows one probe call through (is_open returns False) so
+        # the circuit can self-heal after the cooldown period.
+        # Only applies to EODHD — free providers have their own rate-limit
+        # handling and the CB is EODHD-specific infrastructure.
+        if self._circuit_breaker is not None and preferred == Provider.EODHD:
+            endpoint = str(task.dataset_type)
+            if await self._circuit_breaker.is_open(endpoint):
+                log.warning("circuit_breaker_open", endpoint=endpoint)
+                exc = ProviderRateLimited("EODHD circuit breaker OPEN — task deferred")
+                await self._persist_retry(task, exc)
+                raise exc
+
         # ── Step 1: Fetch ────────────────────────────────────────────────────
         try:
             fetch_result = await self._fetch(adapter, task)
+            # Record success after a clean fetch so the circuit can close after
+            # a HALF_OPEN probe or reset the failure counter in CLOSED state.
+            if self._circuit_breaker is not None:
+                await self._circuit_breaker.record_success(str(task.dataset_type))
         except (ProviderRateLimited, ProviderUnavailable, TaskLeaseLost) as exc:
             log.warning("fetch_retryable_error", error=str(exc))
+            # Count rate-limit and unavailability errors toward the circuit
+            # breaker threshold.  TaskLeaseLost is a local scheduling issue
+            # (not a provider error) so we skip it.
+            if self._circuit_breaker is not None and not isinstance(exc, TaskLeaseLost):
+                await self._circuit_breaker.record_failure(str(task.dataset_type))
             await self._persist_retry(task, exc)
             raise
         except (ProviderAuthError, ProviderDataError) as exc:
             log.error("fetch_fatal_error", error=str(exc))
             await self._persist_fail(task, exc)
             raise
+
+        # ── Zero-bar failover check ──────────────────────────────────────────
+        # Tracks consecutive zero-bar responses per (provider, symbol, timeframe,
+        # dataset). After FAILOVER_THRESHOLD (default 5) consecutive misses,
+        # re-route to the next provider in the priority chain.
+        # Dataset gate: only list-type datasets can have meaningful zero-bar
+        # counts; FUNDAMENTALS/MACRO always return bars_returned=1.
+        if self._zero_bar_tracker is not None and task.dataset_type in _ZERO_BAR_DATASET_TYPES:
+            if fetch_result.bars_returned == 0:
+                streak = await self._zero_bar_tracker.record_zero(
+                    provider=preferred.value,
+                    symbol=task.symbol,
+                    timeframe=task.timeframe or "",
+                    dataset_type=str(task.dataset_type),
+                )
+                log.debug("zero_bar_streak_recorded", streak=streak, provider=preferred.value)
+                if self._zero_bar_tracker.should_failover(streak):
+                    fallback = _fallback_provider(task.dataset_type, task.timeframe, preferred, self._registry)
+                    if fallback is not None:
+                        fallback_adapter = self._registry.get(fallback)
+                        log.warning(
+                            "provider_zero_bar_failover",
+                            streak=streak,
+                            primary_provider=preferred.value,
+                            fallback_provider=fallback.value,
+                            symbol=task.symbol,
+                            timeframe=task.timeframe or "",
+                        )
+                        try:
+                            fetch_result = await self._fetch(fallback_adapter, task)
+                        except (ProviderRateLimited, ProviderUnavailable, TaskLeaseLost) as exc:
+                            log.warning("fallback_fetch_retryable_error", error=str(exc))
+                            await self._persist_retry(task, exc)
+                            raise
+                        except (ProviderAuthError, ProviderDataError) as exc:
+                            log.error("fallback_fetch_fatal_error", error=str(exc))
+                            await self._persist_fail(task, exc)
+                            raise
+                    else:
+                        log.warning(
+                            "provider_zero_bar_no_fallback",
+                            streak=streak,
+                            provider=preferred.value,
+                            dataset_type=str(task.dataset_type),
+                        )
+            else:
+                await self._zero_bar_tracker.reset(
+                    provider=preferred.value,
+                    symbol=task.symbol,
+                    timeframe=task.timeframe or "",
+                    dataset_type=str(task.dataset_type),
+                )
 
         # ── Step 2: Store bronze ─────────────────────────────────────────────
         try:
@@ -589,6 +689,81 @@ def _map_fundamentals_sections(raw: dict, symbol: str, source: str) -> dict:
     _add("insider_transactions_snapshot", raw.get("InsiderTransactions"))  # FIX-F7
 
     return sections
+
+
+# ---------------------------------------------------------------------------
+# Provider routing — selects the cheapest registered provider per dataset
+# ---------------------------------------------------------------------------
+
+_YAHOO_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
+_FINNHUB_TYPES: frozenset[DatasetType] = frozenset(
+    {
+        DatasetType.NEWS_SENTIMENT,
+        DatasetType.EARNINGS_CALENDAR,
+        DatasetType.INSIDER_TRANSACTIONS,
+    }
+)
+_ZERO_BAR_DATASET_TYPES: frozenset[DatasetType] = frozenset(
+    {
+        DatasetType.OHLCV,
+        DatasetType.NEWS_SENTIMENT,
+        DatasetType.EARNINGS_CALENDAR,
+        DatasetType.INSIDER_TRANSACTIONS,
+    }
+)
+
+
+def _preferred_provider(
+    dataset_type: DatasetType,
+    timeframe: str | None,
+    registry: ProviderRegistry,
+) -> Provider:
+    """Return the cheapest registered provider for this dataset/timeframe.
+
+    Priority order:
+      OHLCV + (1d | 1w | 1mo | 1M) → Yahoo Finance if registered (0 credits)
+      NEWS_SENTIMENT | EARNINGS_CALENDAR | INSIDER_TRANSACTIONS → Finnhub if registered (free)
+      All other combinations → EODHD (default, always registered)
+    """
+    if dataset_type == DatasetType.OHLCV and timeframe in _YAHOO_TIMEFRAMES:
+        try:
+            registry.get(Provider.YAHOO_FINANCE)
+            return Provider.YAHOO_FINANCE
+        except ProviderUnavailable:
+            pass
+    if dataset_type in _FINNHUB_TYPES:
+        try:
+            registry.get(Provider.FINNHUB)
+            return Provider.FINNHUB
+        except ProviderUnavailable:
+            pass
+    return Provider.EODHD
+
+
+def _fallback_provider(
+    dataset_type: DatasetType,
+    timeframe: str | None,
+    current_provider: Provider,
+    registry: ProviderRegistry,
+) -> Provider | None:
+    """Return the next provider in the priority chain after zero-bar failover.
+
+    Chain (matches _preferred_provider() inverse):
+      OHLCV daily/weekly/monthly: Yahoo Finance → EODHD → None
+      NEWS_SENTIMENT / EARNINGS_CALENDAR / INSIDER_TRANSACTIONS: Finnhub → EODHD → None
+      OHLCV intraday / all others: EODHD → None  (no free intraday alternative)
+
+    Returns None when no fallback is registered or dataset has no alternative.
+    """
+    if (
+        dataset_type == DatasetType.OHLCV
+        and timeframe in _YAHOO_TIMEFRAMES
+        and current_provider == Provider.YAHOO_FINANCE
+    ):
+        return Provider.EODHD
+    if dataset_type in _FINNHUB_TYPES and current_provider == Provider.FINNHUB:
+        return Provider.EODHD
+    return None
 
 
 def _task_credit_cost(task: IngestionTask) -> int:

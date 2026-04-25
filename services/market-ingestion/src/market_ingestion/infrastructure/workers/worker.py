@@ -22,9 +22,11 @@ from market_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from market_ingestion.application.use_cases.execute_task import ExecuteTaskUseCase
 from market_ingestion.config import Settings
 from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+from market_ingestion.infrastructure.adapters.circuit_breaker import ValkeyCircuitBreaker
 from market_ingestion.infrastructure.adapters.object_store import S3ObjectStoreAdapter
 from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
 from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
+from market_ingestion.infrastructure.adapters.zero_bar_tracker import ValkeyZeroBarTracker
 from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -43,11 +45,13 @@ class WorkerProcess:
     """Long-running worker that claims and executes ingestion tasks.
 
     Args:
+    ----
         settings: Service configuration.
         worker_id: Unique worker identifier.  Defaults to a random UUID.
         batch_size: Number of tasks to claim per iteration.
         lease_seconds: Lease duration in seconds.
         idle_sleep_seconds: Sleep duration when no tasks are available.
+
     """
 
     def __init__(
@@ -163,6 +167,11 @@ class WorkerProcess:
     async def _execute_task(self, task: IngestionTask) -> None:
         """Execute a single claimed task through the pipeline."""
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
+
+        # Build optional Valkey-backed infrastructure (circuit breaker + zero-bar tracker)
+        circuit_breaker = self._build_circuit_breaker()
+        zero_bar_tracker = self._build_zero_bar_tracker()
+
         use_case = ExecuteTaskUseCase(
             uow=uow,
             provider_registry=self._registry,
@@ -170,6 +179,8 @@ class WorkerProcess:
             serializer=self._serializer,
             bronze_bucket=getattr(self._settings, "bronze_bucket", "market-bronze"),
             canonical_bucket=getattr(self._settings, "canonical_bucket", "market-canonical"),
+            circuit_breaker=circuit_breaker,
+            zero_bar_tracker=zero_bar_tracker,
         )
         try:
             await use_case.execute(task)
@@ -191,9 +202,36 @@ class WorkerProcess:
                 api_key=self._settings.eodhd_api_key,
                 client=client,
                 base_url=self._settings.eodhd_base_url,
-            )
+            ),
         )
         return registry
+
+    def _build_circuit_breaker(self) -> ValkeyCircuitBreaker | None:
+        """Build a Valkey-backed circuit breaker if Valkey is configured."""
+        valkey = self._build_valkey_client()
+        if valkey is None:
+            return None
+        return ValkeyCircuitBreaker(valkey=valkey)
+
+    def _build_zero_bar_tracker(self) -> ValkeyZeroBarTracker | None:
+        """Build a Valkey-backed zero-bar tracker if Valkey is configured."""
+        valkey = self._build_valkey_client()
+        if valkey is None:
+            return None
+        return ValkeyZeroBarTracker(valkey=valkey)
+
+    def _build_valkey_client(self) -> Any | None:
+        """Return a ValkeyClient if Valkey URL is configured, else None."""
+        valkey_url = getattr(self._settings, "valkey_url", None)
+        if not valkey_url:
+            return None
+        try:
+            from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+            return ValkeyClient(url=str(valkey_url))
+        except (ImportError, Exception):
+            logger.warning("valkey_client_unavailable", reason="import or connection failure")
+            return None
 
     def _build_object_store(self) -> S3ObjectStoreAdapter:
         try:
