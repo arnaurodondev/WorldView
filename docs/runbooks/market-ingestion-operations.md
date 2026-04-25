@@ -11,8 +11,9 @@
 3. [Health Checks & Monitoring](#3-health-checks--monitoring)
 4. [Common Operations](#4-common-operations)
 5. [Runbooks](#5-runbooks)
-6. [Go-Live Checklist](#6-go-live-checklist)
-7. [Rollback Procedures](#7-rollback-procedures)
+6. [EODHD Quota Management](#6-eodhd-quota-management)
+7. [Go-Live Checklist](#7-go-live-checklist)
+8. [Rollback Procedures](#8-rollback-procedures)
 
 ---
 
@@ -267,7 +268,143 @@ docker compose up --scale svc-market-ingestion-worker=3 -d
 
 ---
 
-## 6. Go-Live Checklist
+## 6. EODHD Quota Management
+
+### Overview
+
+EODHD provides up to 100,000 API credits/month on the professional plan. Each API call costs:
+- Real-time quote: 1 credit
+- EOD bar: 1 credit
+- Fundamentals: 5–50 credits
+- Bulk quote: 1 credit per symbol
+
+PLAN-0036 enforces a hard monthly limit via the circuit breaker (opens at 95%).
+
+---
+
+### Monitoring
+
+Key Grafana dashboard: `EODHD API Health` (uid: `eodhd-health-v1`)
+
+Key metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `s2_eodhd_monthly_credits_used` | Credits used this calendar month |
+| `s2_eodhd_circuit_breaker_state` | 0=closed, 1=open, 2=half_open |
+| `s2_eodhd_rate_limited_total` | Rate-limit responses from EODHD |
+| `s2_eodhd_credits_used_total` | Cumulative credits used (labeled by endpoint, symbol_tier) |
+
+Quick check via the API:
+```bash
+curl http://localhost:8002/api/v1/eodhd/quota/status
+```
+
+---
+
+### Alert Response
+
+#### EodhdQuotaWarning (>80%)
+
+1. Identify which endpoint/tier is consuming most credits via Grafana.
+2. Consider promoting high-volume symbols to T3 (EOD-only) tier to reduce intraday calls.
+3. Verify fundamentals/macro/economic_events cadence is set to 90 days (migration 0009).
+
+#### EodhdQuotaCritical (>95%)
+
+1. Circuit breaker will open automatically at 95% — no further EODHD calls are made.
+2. Prices are now served from stale PriceSnapshots; frontend shows "~" prefix on affected tickers.
+3. Check if the monthly reset is imminent (credits reset on the 1st of the month).
+4. If many days remain: promote symbols to T3/T4 to reduce future consumption after reset.
+
+#### EodhdCircuitBreakerOpen
+
+1. Confirm circuit breaker state:
+   ```bash
+   curl http://localhost:8002/api/v1/eodhd/quota/status
+   ```
+2. If month just reset and counter is stale: restart market-ingestion to reset Valkey counters.
+3. If quota is genuinely exhausted: inform stakeholders; prices are served from snapshots until reset.
+
+#### EodhdSustained429s
+
+1. Check the EODHD status page for platform-wide incidents.
+2. Verify rate-limiting is applied correctly (Retry-After header is respected by the adapter).
+3. Check for multiple competing instances sharing the same quota window — only one scheduler
+   should produce tasks at a time.
+
+---
+
+### Tier Management
+
+Symbol tiers control polling frequency and credit consumption:
+
+| Tier | Audience | Frequency | Dataset |
+|------|----------|-----------|---------|
+| T0 | Portfolio holdings | 5-minute real-time quotes | Real-time + EOD |
+| T1 | Watchlist symbols | 15-minute quotes | Real-time + EOD |
+| T2 | Tracked symbols (default) | 1-hour quotes | EOD |
+| T3 | Screener symbols | EOD only (post-market) | EOD only |
+| T4 | Inactive | Not polled | None |
+
+To change a symbol's tier:
+```bash
+# Via API (preferred)
+curl -X POST http://localhost:8002/api/v1/symbols/AAPL/tier \
+  -H "Content-Type: application/json" \
+  -d '{"tier": "T3"}'
+
+# Or directly in the database
+UPDATE symbol_tiers SET tier = 3 WHERE symbol = 'AAPL' AND exchange = 'US';
+```
+
+---
+
+### Derived OHLCV Bars
+
+Weekly (1W) and monthly (1M) OHLCV bars are derived locally from daily bars (PLAN-0036 W2-4).
+EODHD is **never** called for 1W or 1M timeframes — these cost 0 credits.
+
+To verify derived bars are present for a symbol:
+```sql
+SELECT timeframe, COUNT(*), MIN(bar_date), MAX(bar_date)
+FROM ohlcv_bars
+WHERE instrument_id = '<instrument_id>' AND is_derived = true
+GROUP BY timeframe;
+```
+
+---
+
+### Emergency Procedures
+
+#### Force-reset circuit breaker
+
+Only perform this if you are certain the quota has been reset (new billing month or plan upgrade):
+
+```bash
+# Connect to the Valkey CLI and delete the quota counter
+redis-cli -h valkey -p 6379 DEL market:eodhd:quota:credits_used
+```
+
+Then restart the market-ingestion service so it picks up a fresh counter:
+```bash
+docker compose restart svc-market-ingestion svc-market-ingestion-scheduler \
+  svc-market-ingestion-worker svc-market-ingestion-dispatcher
+```
+
+#### Hard-disable EODHD polling
+
+Set `EODHD_ENABLED=false` in the service environment and restart market-ingestion.
+No EODHD API calls will be made; prices fall through to the stale PriceSnapshot layer.
+
+```bash
+# In docker-compose.override.yml or the .env file:
+MARKET_INGESTION_EODHD_ENABLED=false
+```
+
+---
+
+## 7. Go-Live Checklist
 
 ### Infrastructure Pre-requisites
 
@@ -327,7 +464,7 @@ curl -s http://localhost:8002/api/v1/policies | python3 -c "import sys,json; d=j
 
 ---
 
-## 7. Rollback Procedures
+## 8. Rollback Procedures
 
 ### Code Rollback
 
