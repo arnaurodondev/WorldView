@@ -66,6 +66,16 @@ export interface WorkspaceConfig {
   id: string;
   name: string;
   rows: WorkspaceRow[];
+  /**
+   * Persisted panel size ratios for react-resizable-panels.
+   * WHY stored here (not separately): workspace config is the single source of
+   * truth for everything a named workspace contains. Sizes and layout change
+   * together — storing them together prevents stale-size bugs on workspace switch.
+   *
+   * Structure: rowSizes[rowIdx] = [size0, size1, ...] — proportional widths
+   * for panels within that row. Outer array (not stored here) is row heights.
+   */
+  panelSizes?: number[][];
 }
 
 // ── Default presets (PRD §5.5) ────────────────────────────────────────────────
@@ -131,6 +141,12 @@ interface WorkspaceContextValue {
   addWorkspace: () => void;
   removeWorkspace: (id: string) => void;
   renameWorkspace: (id: string, name: string) => void;
+  /** Add a new panel of the given type to the active workspace (appended to last row or new row) */
+  addPanelToWorkspace: (workspaceId: string, type: PanelType) => void;
+  /** Remove a specific panel from the active workspace by panel ID */
+  removePanelFromWorkspace: (workspaceId: string, panelId: string) => void;
+  /** Persist the panel size ratios after a resize drag event */
+  updatePanelSizes: (workspaceId: string, panelSizes: number[][]) => void;
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -243,6 +259,62 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const addPanelToWorkspace = useCallback((workspaceId: string, type: PanelType) => {
+    setWorkspaces((prev) =>
+      prev.map((w) => {
+        if (w.id !== workspaceId) return w;
+        // WHY try last row first: users expect new panels to appear near the bottom.
+        // If the last row has only 1 panel, add a second panel in that row (side by side).
+        // If the last row already has 2 panels, start a new row below.
+        const lastRow = w.rows[w.rows.length - 1];
+        const newPanel: WorkspacePanel = {
+          id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type,
+        };
+        if (lastRow && lastRow.panels.length < 2) {
+          // Add to existing last row
+          const updatedRows = [...w.rows];
+          updatedRows[updatedRows.length - 1] = {
+            panels: [...lastRow.panels, newPanel],
+          };
+          return { ...w, rows: updatedRows };
+        }
+        // Start a new row
+        return { ...w, rows: [...w.rows, { panels: [newPanel] }] };
+      }),
+    );
+  }, []);
+
+  const removePanelFromWorkspace = useCallback((workspaceId: string, panelId: string) => {
+    setWorkspaces((prev) =>
+      prev.map((w) => {
+        if (w.id !== workspaceId) return w;
+        // WHY filter then clean: remove the specific panel, then remove any rows
+        // that end up empty (a row with 0 panels is an invalid workspace state).
+        const updatedRows = w.rows
+          .map((row) => ({ panels: row.panels.filter((p) => p.id !== panelId) }))
+          .filter((row) => row.panels.length > 0);
+        // WHY fallback to a single chart: if all panels are removed, restore a minimal
+        // default so the workspace is never completely blank.
+        const safeRows =
+          updatedRows.length > 0
+            ? updatedRows
+            : [{ panels: [{ id: `p-default-${Date.now()}`, type: "chart" as PanelType }] }];
+        return { ...w, rows: safeRows };
+      }),
+    );
+  }, []);
+
+  const updatePanelSizes = useCallback((workspaceId: string, panelSizes: number[][]) => {
+    setWorkspaces((prev) =>
+      prev.map((w) =>
+        // WHY shallow merge (not deep): panelSizes is a plain number[][] that fully
+        // replaces the previous value — no need to merge individual cells.
+        w.id === workspaceId ? { ...w, panelSizes } : w,
+      ),
+    );
+  }, []);
+
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
   return (
@@ -255,6 +327,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         addWorkspace,
         removeWorkspace,
         renameWorkspace,
+        addPanelToWorkspace,
+        removePanelFromWorkspace,
+        updatePanelSizes,
       }}
     >
       {children}
