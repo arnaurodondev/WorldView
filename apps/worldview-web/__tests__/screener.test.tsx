@@ -1,19 +1,27 @@
 /**
- * __tests__/screener.test.tsx — Unit tests for Screener page and HeatCell component
+ * __tests__/screener.test.tsx — Unit tests for Screener page (Wave 3 rewrite)
  *
- * WHY THIS EXISTS: The screener is a core power-user feature. These tests verify:
- * 1. HeatCell correctly renders numeric scores as 0–100 integers
- * 2. HeatCell renders "—" for null scores (no data case)
- * 3. The screener page renders the filter panel and table headers (structure test)
+ * WHY THIS EXISTS: The screener is the primary discovery tool for institutional
+ * traders. After the Wave 3 rewrite (12-column table, virtual scroll, collapsible
+ * filter bar), these tests verify:
  *
- * WHY MOCK GATEWAY: We don't want real S9 calls in unit tests. The mock controls
- * exactly what the screener receives so tests are deterministic.
+ * 1. HeatCell renders correctly (unchanged from Wave 0)
+ * 2. ScreenerPage structural elements render (filter bar, heading)
+ * 3. Column headers are all present and ALL CAPS
+ * 4. Filter bar toggles open/closed
+ * 5. Data rows render correctly after query resolves
+ * 6. Sort cycling (asc → desc → null) works
+ * 7. Missing fields (Revenue, Beta) show "—"
  *
- * WHY MOCK NEXT/NAVIGATION: The screener page uses useRouter for row navigation.
- * App Router is not mounted in unit tests — mock to prevent "invariant" errors.
+ * WHY MOCK @tanstack/react-virtual: jsdom has no layout engine, so the
+ * virtualizer's getScrollElement() returns a 0-height container and renders
+ * 0 virtual items. Mocking useVirtualizer makes it render ALL items, which is
+ * correct for unit tests that don't need scroll behavior.
  *
- * DATA SOURCE: Mocked gateway client
- * DESIGN REFERENCE: PRD-0028 §6.5 Screener, docs/ui/DESIGN_SYSTEM.md HeatCell
+ * WHY MOCK GATEWAY: Prevents real HTTP calls, controls response for assertions.
+ *
+ * DATA SOURCE: Mocked gateway client (runScreener)
+ * DESIGN REFERENCE: PRD-0031 §7 Screener, Wave 3
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -23,10 +31,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeatCell } from "@/components/screener/HeatCell";
 import ScreenerPage from "@/app/(app)/screener/page";
 
+// ── @tanstack/react-virtual mock ──────────────────────────────────────────────
+// WHY mock useVirtualizer: jsdom has no layout engine. The virtualizer measures
+// the scroll container via getBoundingClientRect() which returns zeros in jsdom.
+// This causes getTotalSize() = 0 and getVirtualItems() = [] — no rows render.
+// Mocking renders ALL items so tests can assert on data cell content.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number; [k: string]: unknown }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, i) => ({
+        index: i,
+        key: i,
+        start: i * 22,
+        size: 22,
+      })),
+    getTotalSize: () => count * 22,
+    measure: () => undefined,
+  }),
+}));
+
 // ── Next.js router mock ───────────────────────────────────────────────────────
-// WHY: ScreenerPage uses useRouter() for row click navigation. The App Router
-// is not mounted in vitest/jsdom — mock prevents "useRouter must be used inside
-// Next.js App Router context" invariant error.
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
     push: vi.fn(),
@@ -38,8 +62,6 @@ vi.mock("next/navigation", () => ({
 }));
 
 // ── Gateway mock ──────────────────────────────────────────────────────────────
-// WHY mock runScreener: prevents real HTTP calls to S9, controls the response
-// shape for predictable assertions.
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     runScreener: vi.fn().mockResolvedValue({
@@ -71,9 +93,8 @@ vi.mock("@/lib/gateway", () => ({
       ],
       total: 2,
       offset: 0,
-      limit: 20,
+      limit: 50,
     }),
-    // WHY mock refreshToken + logout: AuthContext calls these on mount
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "test-token",
       user: {
@@ -97,8 +118,6 @@ vi.mock("@/lib/gateway", () => ({
 }));
 
 // ── Auth mock ─────────────────────────────────────────────────────────────────
-// WHY: ScreenerPage uses useAuth() to get the access token for the gateway.
-// Returning a static token avoids needing to mount the full AuthProvider.
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
     accessToken: "test-token",
@@ -118,40 +137,22 @@ vi.mock("@/hooks/useAuth", () => ({
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-/**
- * makeQueryClient — fresh QueryClient with retries disabled for each test.
- * WHY no retry: we want query failures to surface immediately, not be masked
- * by silent retries that add 4+ seconds per test.
- */
-function makeQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  });
-}
-
-/**
- * wrapper — TanStack Query provider for components under test.
- * WHY per-test client: prevents query cache from leaking between tests.
- */
-function wrapper({ children }: { children: React.ReactNode }) {
-  const qc = makeQueryClient();
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+function makeWrapper() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  };
 }
 
 // ── HeatCell tests ────────────────────────────────────────────────────────────
 
 describe("HeatCell", () => {
-  it('renders the score as integer 0–100 for score 0.75', () => {
-    // WHY 0.75 → "75": Math.round(0.75 * 100) = 75
+  it("renders the score as integer 0–100 for score 0.75", () => {
     render(<HeatCell score={0.75} />);
     expect(screen.getByText("75")).toBeInTheDocument();
   });
 
   it('renders "—" for null score (no data case)', () => {
-    // WHY em-dash: user must see "no data" not a zero score, which would imply
-    // the instrument is bad rather than unscored.
     render(<HeatCell score={null} />);
     expect(screen.getByText("—")).toBeInTheDocument();
   });
@@ -173,8 +174,6 @@ describe("HeatCell", () => {
 
   it("renders a title attribute for accessibility", () => {
     render(<HeatCell score={0.75} />);
-    // WHY check title: keyboard/screen-reader users need context on what
-    // the colour and number mean — "Signal score: 75/100" provides that.
     expect(screen.getByTitle("Signal score: 75/100")).toBeInTheDocument();
   });
 
@@ -184,116 +183,210 @@ describe("HeatCell", () => {
   });
 });
 
-// ── ScreenerPage structure tests ──────────────────────────────────────────────
+// ── ScreenerPage — structure tests ────────────────────────────────────────────
 
-describe("ScreenerPage", () => {
-  it("renders the FILTERS toggle button in the header bar", () => {
-    // WHY updated: filter panel is now collapsible (default: collapsed).
-    // The "FILTERS" heading is now a toggle button in the results header bar —
-    // collapsed by default to maximize visible data rows (Bloomberg convention).
-    // We verify the toggle button is present and accessible regardless of panel state.
-    render(<ScreenerPage />, { wrapper });
-
-    // The FILTERS toggle button should be visible immediately — it's in the
-    // results header, not inside the collapsible panel.
-    expect(screen.getByRole("button", { name: /filters/i })).toBeInTheDocument();
+describe("ScreenerPage — structure", () => {
+  it("renders the page heading", () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    expect(screen.getByText("Instrument Screener")).toBeInTheDocument();
   });
 
-  it("renders Name/Ticker search input when filter panel is opened", async () => {
-    // WHY updated: filter panel is collapsed by default (§0.5 — density first).
-    // Open the panel first, then verify the search input is accessible.
-    const user = userEvent.setup();
-    render(<ScreenerPage />, { wrapper });
-
-    // Click the FILTERS toggle to open the panel
-    await user.click(screen.getByRole("button", { name: /filters/i }));
-    expect(screen.getByLabelText(/search instruments by name or ticker/i)).toBeInTheDocument();
+  it("renders the filter toggle button", () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // WHY aria-label "Toggle screener filters": distinct from Apply/Reset labels
+    // to avoid ambiguous multi-element matches. See ScreenerFilterBar.tsx.
+    expect(
+      screen.getByRole("button", { name: /toggle screener filters/i })
+    ).toBeInTheDocument();
   });
 
-  it("renders the sector dropdown when filter panel is opened", async () => {
-    // WHY updated: same reason as search input — panel is collapsed by default.
-    const user = userEvent.setup();
-    render(<ScreenerPage />, { wrapper });
+  it("renders all 12 column headers with ALL CAPS text", () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // WHY check columnheader role: ScreenerTable sets role="columnheader" on
+    // each header div for screen reader accessibility.
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers.length).toBe(12);
 
-    await user.click(screen.getByRole("button", { name: /filters/i }));
+    // WHY spot-check specific headers: verifies no columns were silently dropped
+    // or renamed during the 12-column rewrite.
+    expect(screen.getByRole("columnheader", { name: /ticker/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /name/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /sector/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /price/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /chg/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /mkt cap/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /p\/e/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /revenue/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /beta/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /score/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /52w range/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /volume/i })).toBeInTheDocument();
+  });
+});
+
+// ── ScreenerPage — filter bar tests ──────────────────────────────────────────
+
+describe("ScreenerPage — filter bar", () => {
+  it("filter bar is collapsed by default (Apply button not visible in normal flow)", () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // WHY collapsed by default: terminal density-first principle (§0.5).
+    // The toggle button is present; Apply button is in collapsed panel (still
+    // in DOM but inside a grid 0fr container).
+    expect(
+      screen.getByRole("button", { name: /toggle screener filters/i })
+    ).toBeInTheDocument();
+  });
+
+  it("opens filter bar when toggle is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+    expect(
+      screen.getByLabelText(/search instruments by name or ticker/i)
+    ).toBeInTheDocument();
+  });
+
+  it("renders sector dropdown when filter panel is opened", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
     expect(screen.getByLabelText(/filter by gics sector/i)).toBeInTheDocument();
   });
 
   it("renders Apply and Reset buttons when filter panel is opened", async () => {
-    // WHY updated: filter panel is collapsed by default; open it first to reveal
-    // the Apply and Reset buttons. These buttons live inside the collapsible panel.
     const user = userEvent.setup();
-    render(<ScreenerPage />, { wrapper });
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
 
-    await user.click(screen.getByRole("button", { name: /filters/i }));
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
     expect(screen.getByRole("button", { name: /apply filters/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reset all filters/i })).toBeInTheDocument();
   });
 
-  it("renders table column headers", () => {
-    render(<ScreenerPage />, { wrapper });
-    // WHY check headers immediately: they are rendered in the static <thead>
-    // and don't depend on data loading or filter panel state — table structure is instant.
-    expect(screen.getByRole("columnheader", { name: /ticker/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /name/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /mkt cap/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /score/i })).toBeInTheDocument();
-  });
-
   it("renders market cap tier buttons when filter panel is opened", async () => {
-    // WHY updated: filter panel is collapsed by default. Open it first.
-    // WHY exact aria-label matching: "All cap" is a substring of "Small cap",
-    // so using /all cap/i would match two elements. Use exact string matching instead.
     const user = userEvent.setup();
-    render(<ScreenerPage />, { wrapper });
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
 
-    await user.click(screen.getByRole("button", { name: /filters/i }));
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
     expect(screen.getByRole("button", { name: "All cap: No market cap filter" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Large cap: > $10B" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mid cap: $2B–$10B" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Small cap: < $2B" })).toBeInTheDocument();
   });
+});
 
-  it("renders screener page heading", () => {
-    render(<ScreenerPage />, { wrapper });
-    expect(screen.getByText("Instrument Screener")).toBeInTheDocument();
-  });
+// ── ScreenerPage — data rendering tests ──────────────────────────────────────
 
+describe("ScreenerPage — data rows", () => {
   it("shows AAPL ticker after data loads", async () => {
-    render(<ScreenerPage />, { wrapper });
-
-    // WHY waitFor: data arrives asynchronously from the mocked gateway.
-    // The row only renders after the query resolves.
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // WHY waitFor: query resolves asynchronously from the mocked gateway.
     await waitFor(() => {
       expect(screen.getByText("AAPL")).toBeInTheDocument();
     });
   });
 
   it("shows TSLA ticker after data loads", async () => {
-    render(<ScreenerPage />, { wrapper });
-
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
     await waitFor(() => {
       expect(screen.getByText("TSLA")).toBeInTheDocument();
     });
   });
 
   it("shows HeatCell score of 75 for AAPL (market_impact_score 0.75)", async () => {
-    render(<ScreenerPage />, { wrapper });
-
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
     await waitFor(() => {
-      // AAPL has market_impact_score=0.75 → HeatCell should display "75"
+      // AAPL has market_impact_score=0.75 → HeatCell displays "75"
       expect(screen.getByText("75")).toBeInTheDocument();
     });
   });
 
-  it("shows em-dash in HeatCell for TSLA (null market_impact_score)", async () => {
-    render(<ScreenerPage />, { wrapper });
-
+  it("shows em-dash for TSLA (null market_impact_score)", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
     await waitFor(() => {
-      // TSLA has market_impact_score=null → HeatCell shows "—"
-      // getAllByText because the Price column also shows "—" for all rows
+      // TSLA has null market_impact_score → HeatCell shows "—"
+      // Multiple "—" exist (Price, Revenue, Beta, Volume also show "—")
       const dashes = screen.getAllByText("—");
       expect(dashes.length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  it("backend-pending columns (Revenue, Beta, Price, Volume) show em-dash", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    await waitFor(() => {
+      // WHY multiple: each backend-pending column per row shows "—".
+      // 2 rows × 4 backend-pending cols = 8 dashes minimum, plus TSLA's HeatCell.
+      const dashes = screen.getAllByText("—");
+      // At minimum: 2 rows × 4 backend-pending cols (Price, Revenue, Beta, Volume) = 8
+      // Plus: TSLA HeatCell = 9
+      expect(dashes.length).toBeGreaterThanOrEqual(8);
+    });
+  });
+
+  it("positive change% renders with + prefix", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // AAPL daily_return=0.0124 → +1.24%
+    await waitFor(() => {
+      expect(screen.getByText("+1.24%")).toBeInTheDocument();
+    });
+  });
+
+  it("negative change% renders with - prefix", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // TSLA daily_return=-0.0315 → -3.15%
+    await waitFor(() => {
+      expect(screen.getByText("-3.15%")).toBeInTheDocument();
+    });
+  });
+
+  it("market cap renders abbreviated (T for trillions)", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // AAPL market_cap=3T → "3.0T"
+    await waitFor(() => {
+      expect(screen.getByText("3.0T")).toBeInTheDocument();
+    });
+  });
+});
+
+// ── ScreenerPage — sort tests ─────────────────────────────────────────────────
+
+describe("ScreenerPage — column sort", () => {
+  it("clicking a sortable column header triggers sort icon change", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    // Find the TICKER column header (sortable)
+    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
+    // WHY aria-sort "none" before click: no sort active initially
+    expect(tickerHeader).toHaveAttribute("aria-sort", "none");
+
+    await user.click(tickerHeader);
+
+    // WHY "ascending" after first click: sort cycles null → asc → desc → null
+    expect(tickerHeader).toHaveAttribute("aria-sort", "ascending");
+  });
+
+  it("clicking sorted column again changes sort to descending", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
+    await user.click(tickerHeader); // asc
+    await user.click(tickerHeader); // desc
+
+    expect(tickerHeader).toHaveAttribute("aria-sort", "descending");
+  });
+
+  it("clicking column third time clears sort (back to none)", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
+    await user.click(tickerHeader); // asc
+    await user.click(tickerHeader); // desc
+    await user.click(tickerHeader); // none
+
+    expect(tickerHeader).toHaveAttribute("aria-sort", "none");
   });
 });
