@@ -108,10 +108,10 @@ export default function SettingsPage() {
   // from the authenticated session. This is the same data shown in TopBar.
   const { user } = useAuth();
 
+  // WHY p-3 (was p-6): standard terminal panel padding
+  // WHY max-w-3xl: Settings pages are form-heavy — wide lines make them hard to scan.
   return (
-    // WHY max-w-3xl: Settings pages are form-heavy — wide lines make them hard
-    // to scan. 768px cap is the standard form width for terminal-style UIs.
-    <div className="mx-auto max-w-3xl space-y-4 p-6">
+    <div className="mx-auto max-w-3xl space-y-3 p-3">
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div>
         {/* WHY text-lg (not text-xl): matches the global heading hierarchy —
@@ -129,7 +129,7 @@ export default function SettingsPage() {
       <Tabs defaultValue="profile" className="w-full">
         {/* WHY grid-cols-3: Three equal-width tabs; matches screener and alerts
             tab bar patterns used elsewhere in the app. */}
-        <TabsList className="mb-4 grid w-full grid-cols-3">
+        <TabsList className="mb-2 grid w-full grid-cols-3">
           <TabsTrigger value="profile" className="gap-1.5 text-xs">
             <User className="h-3.5 w-3.5" aria-hidden="true" />
             Profile
@@ -246,7 +246,7 @@ function ProfileTab({ user }: ProfileTabProps) {
         </dl>
 
         {/* ── Read-only notice ──────────────────────────────────────────── */}
-        <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <p className="rounded-[2px] bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           Profile fields are read-only in the terminal. To update your name,
           email, or avatar, visit the account settings in the authentication portal.
         </p>
@@ -313,7 +313,7 @@ function NotificationsTab() {
         ))}
 
         {/* ── MVP placeholder notice ───────────────────────────────────── */}
-        <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <p className="rounded-[2px] bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           Notification delivery is under development. Toggles are saved locally
           in this session and will persist once the preference API is live.
         </p>
@@ -374,7 +374,7 @@ function AppearanceTab() {
           <Separator className="bg-border/40" />
 
           {/* ── Design rationale ───────────────────────────────────────── */}
-          <div className="rounded-md bg-muted/40 px-3 py-3 space-y-2">
+          <div className="rounded-[2px] bg-muted/40 px-3 py-3 space-y-2">
             <p className="text-xs font-medium text-foreground">
               Why permanently dark?
             </p>
@@ -422,7 +422,7 @@ function AppearanceTab() {
                 {/* Color swatch — uses inline style so the exact hex is applied
                     even if the Tailwind class wouldn't be generated for these values */}
                 <div
-                  className="h-10 w-full rounded-md border border-border/60"
+                  className="h-8 w-full rounded-[2px] border border-border/60"
                   style={{ backgroundColor: swatch.hex }}
                   aria-hidden="true"
                 />

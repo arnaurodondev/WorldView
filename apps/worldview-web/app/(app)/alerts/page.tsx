@@ -49,9 +49,11 @@ export default function AlertsPage() {
   const defaultTab = searchParams.get("tab") ?? "alerts";
 
   return (
-    // WHY max-w-4xl: single-column feed is harder to scan when lines are too long.
-    // 896px cap balances data density with readability on wide monitors.
-    <div className="mx-auto max-w-4xl space-y-4 p-6">
+    // WHY full-width p-3 (was max-w-4xl p-6): terminal alert feeds should use the
+    // full viewport width — constraining to 896px wastes screen real estate on
+    // wide monitors that institutional traders rely on for data density.
+    // p-3 (12px) is the standard terminal panel padding per design system.
+    <div className="space-y-2 p-3">
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div>
         {/* WHY text-lg (not text-xl): matches the global heading hierarchy —
@@ -67,7 +69,8 @@ export default function AlertsPage() {
           Radix UI handles keyboard navigation (Left/Right arrows + Home/End)
           and ARIA roles (role="tablist", role="tab", role="tabpanel"). */}
       <Tabs defaultValue={defaultTab} className="w-full">
-        <TabsList className="mb-4 grid w-full grid-cols-3">
+        {/* WHY mb-2 (was mb-4): tighter spacing, less vertical whitespace */}
+        <TabsList className="mb-2 grid w-full grid-cols-3">
           {/* Alerts tab — unacknowledged pending alerts */}
           <TabsTrigger value="alerts" className="gap-1.5 text-xs">
             <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
@@ -136,8 +139,9 @@ function NewsFeedTab({ accessToken }: TabProps) {
   if (isLoading) return <NewsSkeletons />;
 
   if (isError) {
+    // WHY rounded-[2px] p-3 (was rounded-lg p-6): 2px radius + tight padding per terminal design rules
     return (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-center">
+      <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-center">
         <p className="text-sm text-destructive">Failed to load news feed</p>
         <button
           type="button"
@@ -153,8 +157,9 @@ function NewsFeedTab({ accessToken }: TabProps) {
   const articles = data?.articles ?? [];
 
   if (articles.length === 0) {
+    // WHY rounded-[2px] p-3 (was rounded-lg p-8): terminal empty states are compact
     return (
-      <div className="rounded-lg border border-border/50 p-8 text-center">
+      <div className="rounded-[2px] border border-border/40 p-3 text-center">
         <Newspaper className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
         <p className="text-sm text-muted-foreground">No news available</p>
       </div>
@@ -194,8 +199,9 @@ function TopTodayTab({ accessToken }: TabProps) {
   if (isLoading) return <NewsSkeletons />;
 
   if (isError) {
+    // WHY rounded-[2px] p-3 (was rounded-lg p-6): 2px radius + tight padding per terminal design rules
     return (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-center">
+      <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-center">
         <p className="text-sm text-destructive">Failed to load top news</p>
         <button
           type="button"
@@ -211,8 +217,9 @@ function TopTodayTab({ accessToken }: TabProps) {
   const articles = data?.articles ?? [];
 
   if (articles.length === 0) {
+    // WHY rounded-[2px] p-3 (was rounded-lg p-8): terminal empty states are compact
     return (
-      <div className="rounded-lg border border-border/50 p-8 text-center">
+      <div className="rounded-[2px] border border-border/40 p-3 text-center">
         <TrendingUp className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
         <p className="text-sm text-muted-foreground">No top stories in the last 72 hours</p>
       </div>
@@ -240,7 +247,7 @@ function NewsSkeletons() {
   return (
     <div className="space-y-2" aria-busy="true" aria-label="Loading news">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="space-y-2 rounded-lg border border-border/50 p-3">
+        <div key={i} className="space-y-2 rounded-[2px] border border-border/40 p-3">
           {/* Source badge + timestamp row */}
           <div className="flex items-center justify-between">
             <Skeleton className="h-4 w-16" />

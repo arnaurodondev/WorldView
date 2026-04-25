@@ -13,6 +13,18 @@
  * Our target users know ↑/↓ arrow keys and Enter for selection.
  * cmdk provides this interaction model out of the box.
  *
+ * WHY click-outside ref (not onBlur+setTimeout): The original onBlur+setTimeout
+ * pattern was fragile — some browsers fire blur before the pointerup event that
+ * cmdk uses to trigger onSelect, so clicking a result closed the dropdown before
+ * navigation fired. A mousedown click-outside detector is more reliable: it only
+ * closes the dropdown when the click target is genuinely outside the search widget
+ * (SEARCH-001 fix, 2026-04-24).
+ *
+ * WHY onClick AND onSelect on CommandItem: cmdk's onSelect fires for keyboard
+ * Enter selection; onClick fires for mouse clicks. Some cmdk versions only trigger
+ * one or the other depending on whether the item is keyboard-highlighted. Using
+ * both handlers ensures navigation works regardless of interaction mode.
+ *
  * WHO USES IT: components/shell/TopBar.tsx
  * DATA SOURCE: S9 GET /api/v1/search/instruments?q=<query>
  * DESIGN REFERENCE: PRD-0028 §6.5 GlobalSearch
@@ -20,9 +32,9 @@
 
 "use client";
 // WHY "use client": Uses useState for input state, useQuery for search results,
-// useRouter for navigation — all browser-side operations.
+// useRouter for navigation, useRef for click-outside detection — all browser-side.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 // WHY no Search icon import here: CommandInput from shadcn/ui already renders its own Search icon
@@ -38,11 +50,51 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 
+// ── Recent instruments localStorage helpers ───────────────────────────────────
+// WHY store recent instruments: Bloomberg-style search remembers the last 5
+// instruments you navigated to and shows them when the search input is focused
+// but empty. This reduces clicks for traders who repeatedly check the same tickers.
+const RECENT_KEY = "worldview-recent-instruments";
+const RECENT_MAX = 5;
+
+/** Read the recent instruments list from localStorage (falls back to []) */
+function readRecent(): Array<{ entityId: string; ticker: string; name: string }> {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    return raw ? (JSON.parse(raw) as Array<{ entityId: string; ticker: string; name: string }>) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Prepend a new instrument to the recent list, keeping at most RECENT_MAX entries */
+function saveRecent(entityId: string, ticker: string, name: string): void {
+  try {
+    const current = readRecent().filter((r) => r.entityId !== entityId);
+    const updated = [{ entityId, ticker, name }, ...current].slice(0, RECENT_MAX);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+  } catch {
+    // localStorage may be blocked in some browsers — silently ignore
+  }
+}
+
 export function GlobalSearch() {
   const router = useRouter();
   const { accessToken } = useAuth();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  // WHY recentKey: incrementing this causes recentInstruments to re-read from
+  // localStorage after a navigation, ensuring the list is always fresh.
+  const [recentKey, setRecentKey] = useState(0);
+
+  // WHY containerRef: used by the click-outside mousedown listener to determine
+  // whether the click target is inside the search widget. If outside → close.
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // ── Recent instruments (shown when query is empty) ────────────────────────
+  // WHY useMemo keyed to recentKey: re-reads localStorage when the key increments
+  // (after each navigation) without requiring a useEffect + setState.
+  const recentInstruments = useMemo(() => readRecent(), [recentKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // WHY debounce 300ms: don't fire S9 search on every keystroke — wait for pause
   const debouncedQuery = useDebounce(query, 300);
@@ -60,6 +112,24 @@ export function GlobalSearch() {
     staleTime: 30_000,
   });
 
+  // ── Click-outside detection ───────────────────────────────────────────────
+  // WHY mousedown (not click): mousedown fires before blur, so we can determine
+  // whether the user is clicking inside the widget before the input loses focus.
+  // If clicking outside → close. If clicking inside (on a result) → do nothing
+  // here; the result's onClick/onSelect will handle navigation.
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener("mousedown", handleMouseDown);
+    }
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [open]);
+
+  // ── ⌘K shortcut ──────────────────────────────────────────────────────────
   // WHY ⌘K handler: Bloomberg-like keyboard shortcut for search.
   // Experienced traders use keyboard more than mouse.
   useEffect(() => {
@@ -73,10 +143,30 @@ export function GlobalSearch() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // ── Navigation handler (shared by onSelect and onClick) ──────────────────
+  // WHY useCallback: stable reference so it can be used safely in both handlers
+  // without triggering re-renders.
+  const navigateTo = useCallback((entityId: string, ticker: string, name: string) => {
+    // ADR-F-12: entity_id ≠ instrument_id — always use entity_id for URL routing.
+    // WHY saveRecent before push: localStorage write is sync; if we wrote after
+    // push, the re-read triggered by recentKey increment might race with navigation.
+    saveRecent(entityId, ticker, name);
+    setRecentKey((k) => k + 1); // trigger re-read of recent list
+    router.push(`/instruments/${entityId}`);
+    setQuery("");
+    setOpen(false);
+  }, [router]);
+
   const results = data?.results ?? [];
 
+  // WHY showRecent: show recent instruments when query is empty (Bloomberg-style).
+  // When the user has typed something, show search results instead.
+  const showRecent = debouncedQuery.length === 0;
+
   return (
-    <div className="relative w-64">
+    // WHY ref on container div: needed for click-outside detection to distinguish
+    // clicks inside the search widget from clicks on the rest of the page.
+    <div ref={containerRef} className="relative w-64">
       {/* WHY Command (not a plain input): gives us keyboard navigation and selection
           semantics that users expect from a Bloomberg-like interface */}
       <Command className="rounded-md border border-border bg-background shadow-none" shouldFilter={false}>
@@ -85,78 +175,137 @@ export function GlobalSearch() {
           value={query}
           onValueChange={(val) => {
             setQuery(val);
-            setOpen(val.length > 0);
+            // WHY always open: when val is empty, open shows recent instruments.
+            // When val has text, open shows search results. Always show the dropdown
+            // when the user is actively typing.
+            setOpen(true);
           }}
-          onBlur={() => {
-            // Delay close to allow click on result item to register
-            setTimeout(() => setOpen(false), 150);
-          }}
+          // WHY onFocus opens the dropdown: traders expect recent instruments to
+          // appear when they click the search box (Bloomberg-style). Without this,
+          // the recent list would only appear after typing a character.
+          onFocus={() => setOpen(true)}
+          // WHY no onBlur here: close is handled by the click-outside mousedown
+          // listener above. An onBlur+setTimeout can race against the item's
+          // onClick and cause navigation to never fire (SEARCH-001).
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               setOpen(false);
+              setQuery("");
             }
           }}
           className="h-8 text-sm"
         />
 
-        {/* Dropdown results — only shown when query is non-empty */}
+        {/* Dropdown — shown on focus or when typing */}
         {open && (
-          // WHY onMouseDown preventDefault: clicking a result fires "blur" on the input
-          // before the "click" on the CommandItem registers. Calling preventDefault() on
-          // the container's mousedown stops the input from losing focus (and closing the
-          // dropdown) before the click handler on CommandItem can execute. Without this,
-          // clicking a result on some browsers/OSes would close the dropdown and navigate
-          // to nothing.
           <div
-            className="absolute left-0 top-full z-50 mt-1 w-full rounded-md border border-border bg-popover shadow-lg"
+            // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
+            className="absolute left-0 top-full z-50 mt-1 w-full rounded-[2px] border border-border bg-popover shadow-lg"
+            // WHY onMouseDown preventDefault: belt-and-suspenders — prevents the
+            // input from blurring when the user presses down on a result item.
+            // The primary close guard is the click-outside mousedown listener above;
+            // this handles the edge case where blur fires between mousedown and mouseup.
             onMouseDown={(e) => e.preventDefault()}
           >
             <CommandList>
-              <CommandEmpty className="py-3 text-xs">
-                {debouncedQuery.length >= 1 ? "No instruments found." : "Type to search…"}
-              </CommandEmpty>
-
-              {results.length > 0 && (
-                <CommandGroup>
-                  {results.map((result) => (
+              {/* ── Recent instruments (shown when query is empty) ────────── */}
+              {showRecent && recentInstruments.length > 0 && (
+                <CommandGroup heading="Recent">
+                  {recentInstruments.map((recent) => (
                     <CommandItem
-                      key={result.entity_id}
-                      // WHY value={result.entity_id}: cmdk uses the `value` prop for
-                      // keyboard selection matching. Without it, cmdk tries to match
-                      // against the text content of the item — which is a concatenation
-                      // of ticker + name + exchange. Setting value explicitly ensures
-                      // the correct item is highlighted when navigating with arrow keys.
-                      value={result.entity_id}
-                      onSelect={() => {
-                        // Navigate to instrument detail using entity_id (ADR-F-12:
-                        // entity_id ≠ instrument_id — use entity_id for URL routing)
-                        router.push(`/instruments/${result.entity_id}`);
-                        setQuery("");
-                        setOpen(false);
-                      }}
+                      key={recent.entityId}
+                      value={recent.entityId}
+                      onSelect={() => navigateTo(recent.entityId, recent.ticker, recent.name)}
+                      onClick={() => navigateTo(recent.entityId, recent.ticker, recent.name)}
                       className="cursor-pointer"
                     >
-                      <div className="flex w-full items-center justify-between">
-                        {/* Ticker — monospace for alignment */}
-                        <span className="font-mono text-sm font-medium tabular-nums text-foreground">
-                          {result.ticker}
+                      <div className="flex w-full items-center gap-2">
+                        <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-foreground">
+                          {recent.ticker}
                         </span>
-                        {/* Company name — truncated to fit */}
-                        <span className="ml-2 truncate text-xs text-muted-foreground">
-                          {result.name}
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                          {recent.name}
                         </span>
-                        {/* Exchange badge */}
-                        {result.exchange && (
-                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                            {result.exchange}
-                          </span>
-                        )}
+                        {/* WHY clock icon text: subtle "recent" signal without a bulky icon */}
+                        <span className="shrink-0 text-[10px] text-muted-foreground/60">↩</span>
                       </div>
                     </CommandItem>
                   ))}
                 </CommandGroup>
               )}
+
+              {/* ── Empty state when no recents and no query ──────────────── */}
+              {showRecent && recentInstruments.length === 0 && (
+                <CommandEmpty className="py-3 text-xs">
+                  Type to search instruments…
+                </CommandEmpty>
+              )}
+
+              {/* ── Search results ───────���───────────────────────────────── */}
+              {!showRecent && (
+                <>
+                  <CommandEmpty className="py-3 text-xs">
+                    No instruments found.
+                  </CommandEmpty>
+
+                  {results.length > 0 && (
+                    <CommandGroup>
+                      {results.map((result) => (
+                        <CommandItem
+                          key={result.entity_id}
+                          // WHY value={result.entity_id}: cmdk uses the `value` prop for
+                          // keyboard selection matching. Without it, cmdk tries to match
+                          // against the text content of the item — which is a concatenation
+                          // of ticker + name + exchange. Setting value explicitly ensures
+                          // the correct item is highlighted when navigating with arrow keys.
+                          value={result.entity_id}
+                          // WHY onSelect: fires on keyboard Enter when the item is highlighted.
+                          onSelect={() => navigateTo(result.entity_id, result.ticker, result.name)}
+                          // WHY onClick: fires on mouse click. cmdk's onSelect does not always
+                          // fire on click if the item isn't keyboard-highlighted — adding onClick
+                          // makes navigation work regardless of interaction mode (SEARCH-001).
+                          onClick={() => navigateTo(result.entity_id, result.ticker, result.name)}
+                          className="cursor-pointer"
+                        >
+                          <div className="flex w-full items-center justify-between gap-2">
+                            {/* Ticker — monospace for alignment */}
+                            <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-foreground">
+                              {result.ticker}
+                            </span>
+                            {/* Company name — truncated to fit */}
+                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                              {result.name}
+                            </span>
+                            {/* Exchange badge */}
+                            {result.exchange && (
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {result.exchange}
+                              </span>
+                            )}
+                          </div>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+                </>
+              )}
             </CommandList>
+
+            {/* ── Keyboard hint strip ────────���─────────────────────────────── */}
+            {/* WHY keyboard hints: Bloomberg-style search always shows keyboard
+                shortcuts in the dropdown footer. Traders use keyboard more than mouse;
+                showing ↑↓/↵/⎋ reduces learning curve for new users. */}
+            <div className="flex items-center justify-end gap-3 border-t border-border/40 px-2 py-1">
+              <span className="text-[9px] text-muted-foreground/60">
+                <kbd className="font-mono">↑↓</kbd> Navigate
+              </span>
+              <span className="text-[9px] text-muted-foreground/60">
+                <kbd className="font-mono">↵</kbd> Open
+              </span>
+              <span className="text-[9px] text-muted-foreground/60">
+                <kbd className="font-mono">⎋</kbd> Close
+              </span>
+            </div>
           </div>
         )}
       </Command>

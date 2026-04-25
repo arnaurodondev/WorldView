@@ -102,20 +102,34 @@ export function PortfolioSummary() {
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!firstPortfolio || !holdingsResp) {
+    // WHY compact inline (was h-24 flex items-center justify-center):
+    // terminal empty states don't center-vertically; they use compact inline text.
     return (
-      <div className="flex h-24 items-center justify-center">
-        <p className="text-sm text-muted-foreground">
-          No portfolio yet —{" "}
-          <Link href="/portfolio" className="text-primary hover:underline">
-            create one
-          </Link>
-        </p>
-      </div>
+      <p className="py-3 text-xs text-muted-foreground">
+        No portfolio yet —{" "}
+        <Link href="/portfolio" className="text-primary hover:underline">
+          create one
+        </Link>
+      </p>
     );
   }
 
   const quotes = quotesData?.quotes ?? {};
   const holdings = holdingsResp.holdings;
+
+  // WHY: detect if any holding has stale/delayed/unavailable prices.
+  // When true, the portfolio total is an approximation — show "~" prefix.
+  // "live" and "recent" are the only statuses where prices are trustworthy enough
+  // to display without a caveat. "delayed", "stale", "unavailable" all mean the
+  // price may not reflect the current market.
+  const hasStaleQuotes = Object.values(quotes).some(
+    (q) => q?.freshness_status && !["live", "recent"].includes(q.freshness_status),
+  );
+  // WHY check missing quotes separately: if getBatchQuotes returned nothing for a
+  // holding (quote absent from the response), the total is also approximate because
+  // we fall back to h.current_price or h.average_cost — neither is live.
+  const hasMissingQuotes = holdings.some((h) => !quotes[h.instrument_id]);
+  const isApproximate = hasStaleQuotes || hasMissingQuotes;
 
   // ── Compute portfolio totals with live prices ──────────────────────────────
   // WHY recompute live (don't trust server-side values): the batch quote call
@@ -173,7 +187,20 @@ export function PortfolioSummary() {
 
       {/* Total value — large, prominent */}
       <div className="mb-3">
-        <p className="font-mono text-2xl font-semibold tabular-nums text-foreground">
+        {/* WHY text-xl (was text-2xl): 24px is too large for a dashboard widget.
+            text-xl (20px) keeps the value prominent without dominating the small panel. */}
+        <p className="font-mono text-xl font-semibold tabular-nums text-foreground">
+          {/* WHY "~" prefix: standard financial convention for "approximately".
+              Shown when one or more prices are delayed, stale, or unavailable.
+              Bloomberg uses this same convention on delayed portfolios. */}
+          {isApproximate && (
+            <span
+              className="mr-0.5 text-muted-foreground"
+              title="Some prices are delayed or unavailable"
+            >
+              ~
+            </span>
+          )}
           {formatPrice(totalValue)}
         </p>
         <div className={`flex items-center gap-1 ${priceChangeClass(totalUnrealisedPnlPct)}`}>
@@ -183,11 +210,22 @@ export function PortfolioSummary() {
             <TrendingDown className="h-3 w-3" />
           )}
           <span className="font-mono text-sm tabular-nums">
+            {/* WHY "~" on P&L too: if the total value is approximate, the P&L derived
+                from it is also approximate. Both numbers share the same stale data. */}
+            {isApproximate && <span className="text-muted-foreground">~</span>}
             {formatPrice(Math.abs(totalUnrealisedPnl))}
             {" "}
             ({formatPercent(totalUnrealisedPnlPct / 100)})
           </span>
         </div>
+        {/* WHY subtle note (not error): stale prices are common during pre-market/weekends.
+            A jarring error state would concern the user unnecessarily. A small hint
+            below the P&L is enough to inform without alarming. */}
+        {isApproximate && (
+          <p className="mb-2 text-[10px] text-muted-foreground">
+            Some prices are delayed
+          </p>
+        )}
       </div>
 
       {/* Top 4 holdings table */}

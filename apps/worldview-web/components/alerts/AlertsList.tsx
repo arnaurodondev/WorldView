@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime } from "@/lib/utils";
+import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import type { AlertSeverity, Alert } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -74,12 +75,16 @@ export function AlertsList() {
   // ── Loading state ────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="space-y-2" aria-busy="true" aria-label="Loading alerts">
+      // WHY divide-y (not space-y-2): alert rows are table-like — divide lines look
+      // more terminal/institutional than gap spacing between card-style rows.
+      <div className="divide-y divide-border/30" aria-busy="true" aria-label="Loading alerts">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-3 rounded-lg border border-border/50 p-3">
-            <Skeleton className="h-5 w-10" /> {/* severity badge */}
-            <Skeleton className="h-4 w-16" /> {/* ticker */}
-            <Skeleton className="h-4 flex-1" /> {/* message */}
+          // WHY h-8 py-1.5 (was rounded-lg p-3): compact row height matches terminal
+          // table rows (28-32px). No border, no card — just a skeleton strip.
+          <div key={i} className="flex items-center gap-3 px-3 py-1.5">
+            <Skeleton className="h-4 w-10" /> {/* severity badge */}
+            <Skeleton className="h-3 w-12" /> {/* ticker */}
+            <Skeleton className="h-3 flex-1" /> {/* message */}
             <Skeleton className="h-3 w-8" />  {/* time */}
           </div>
         ))}
@@ -90,12 +95,13 @@ export function AlertsList() {
   // ── Error state ──────────────────────────────────────────────────────────────
   if (isError) {
     return (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center">
-        <p className="text-sm text-destructive">Failed to load alerts</p>
+      // WHY rounded-[2px] p-3 (was rounded-lg p-4): 2px radius + compact padding per terminal rules
+      <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3">
+        <p className="text-xs text-destructive">Failed to load alerts</p>
         <Button
           variant="ghost"
           size="sm"
-          className="mt-2 text-xs"
+          className="mt-1 h-6 px-0 text-xs"
           onClick={() => void refetch()}
         >
           Retry
@@ -142,18 +148,21 @@ export function AlertsList() {
       </div>
 
       {/* ── Empty state ───────────────────────────────────────────────────── */}
+      {/* WHY InlineEmptyState (was rounded-lg p-8): terminal compact inline message,
+          not a full-height centered card with an icon. */}
       {filteredAlerts.length === 0 && (
-        <div className="rounded-lg border border-border/50 p-8 text-center">
-          <p className="text-sm text-muted-foreground">
-            {severityFilter === "ALL"
-              ? "No pending alerts — you're all caught up"
-              : `No ${severityFilter} alerts`}
-          </p>
-        </div>
+        <InlineEmptyState
+          message={
+            severityFilter === "ALL"
+              ? "No pending alerts — you're all caught up."
+              : `No ${severityFilter} alerts.`
+          }
+        />
       )}
 
       {/* ── Alert rows ────────────────────────────────────────────────────── */}
-      <ul className="space-y-1.5" role="list" aria-label="Alerts">
+      {/* WHY divide-y (was space-y-1.5): compact table-row look instead of card-list */}
+      <ul className="divide-y divide-border/30" role="list" aria-label="Alerts">
         {filteredAlerts.map((alert) => (
           <AlertRow
             key={alert.alert_id}
@@ -190,7 +199,11 @@ function AlertRow({ alert, onNavigate }: AlertRowProps) {
       <button
         type="button"
         onClick={onNavigate}
-        className="group flex w-full items-start gap-3 rounded-lg border border-border/50 bg-card p-3 text-left transition-colors hover:border-border hover:bg-muted/30"
+        // WHY compact row (was rounded-lg border bg-card p-3): terminal alert rows
+        // are table-like — no card borders, no large padding, no rounded corners.
+        // py-1.5 px-3 gives 28-32px row height matching the design system table-row spec.
+        // hover:bg-muted/40 provides subtle interactivity feedback without a card lift.
+        className="flex w-full cursor-pointer items-center gap-3 px-3 py-1.5 text-left transition-colors hover:bg-muted/40"
         aria-label={`Alert: ${alert.title}`}
       >
         {/* Severity badge */}

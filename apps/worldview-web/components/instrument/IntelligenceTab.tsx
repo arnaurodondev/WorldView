@@ -31,12 +31,18 @@
 
 import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle } from "lucide-react";
+// WHY CheckCircle removed: empty contradictions state now uses inline text only
+import { AlertTriangle, RefreshCw } from "lucide-react";
+// WHY ReactMarkdown: S8 returns instrument briefs as markdown (headers, bold, lists).
+// ReactMarkdown renders these as proper HTML elements with semantic structure.
+import ReactMarkdown from "react-markdown";
+// WHY remarkGfm: enables GFM extensions (tables, task lists, strikethrough)
+import remarkGfm from "remark-gfm";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeTime } from "@/lib/utils";
-import type { Contradiction } from "@/types/api";
+import type { BriefingResponse, Contradiction } from "@/types/api";
 
 // ── EntityGraph dynamic import (ssr:false) ────────────────────────────────────
 // WHY next/dynamic with ssr:false: EntityGraph.tsx uses sigma.js which creates a
@@ -124,6 +130,106 @@ function ContradictionCard({ item }: { item: Contradiction }) {
   );
 }
 
+// ── InstrumentBriefSection (AI brief sub-component) ──────────────────────────
+// WHY separate component: isolates the useQuery hook and its loading/error/stale
+// states from the parent IntelligenceTab. This means the graph and contradictions
+// sections are not blocked by the brief data fetch — they render independently.
+
+/** Brief older than 12h shows a stale indicator */
+const BRIEF_STALE_MS = 12 * 60 * 60 * 1000;
+
+function InstrumentBriefSection({ entityId }: { entityId: string }) {
+  const { accessToken } = useAuth();
+
+  // WHY useQuery with staleTime 30min: instrument briefs are generated on-demand
+  // by S8 and cached in Valkey for 24h. No need to refetch aggressively.
+  // WHY retry 2 + retryDelay 10s: S8 may be generating the brief (503); give it
+  // time to complete before showing an error state.
+  const {
+    data: brief,
+    isLoading,
+    isError,
+    error,
+  } = useQuery<BriefingResponse>({
+    queryKey: ["instrument-brief", entityId],
+    queryFn: () => createGateway(accessToken).getInstrumentBrief(entityId),
+    enabled: !!accessToken && !!entityId,
+    staleTime: 30 * 60 * 1000,
+    retry: 2,
+    retryDelay: 10_000,
+  });
+
+  // WHY p-3 (was p-4): terminal panel standard padding
+  return (
+    <section className="p-3">
+      <h3 className="mb-2 text-xs font-semibold text-foreground">AI Intelligence Brief</h3>
+
+      {/* ── Loading state: 3-line skeleton ──────────────────────────────────── */}
+      {/* WHY 3 lines: instrument briefs are shorter than morning briefs (2-3 paragraphs).
+          3 skeleton lines match the expected visual height while loading. */}
+      {isLoading && (
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      )}
+
+      {/* ── Error / unavailable state ────────────────────────────────────────── */}
+      {/* WHY 503 soft error: S8 may still be generating the brief. Showing a
+          "generating" message is less alarming than a hard error block. */}
+      {isError && !isLoading && (
+        <div className="rounded-[2px] border rounded-[2px] border border-border/30 bg-card/30 p-3 text-xs text-muted-foreground">
+          {error instanceof Error &&
+          (error.message.includes("503") || error.message.includes("unavailable"))
+            ? "Brief generating... check back in a few minutes."
+            : "Intelligence brief unavailable."}
+        </div>
+      )}
+
+      {/* ── Brief content (rendered as markdown) ─────────────────────────────── */}
+      {!isLoading && !isError && brief && (
+        <div>
+          {/* WHY stale indicator: if the brief is older than 12h, the data may
+              no longer reflect current market conditions. Amber text signals
+              this to the trader without blocking the view. */}
+          {Date.now() - new Date(brief.generated_at).getTime() > BRIEF_STALE_MS && (
+            <div className="mb-2 flex items-center gap-1">
+              <RefreshCw className="h-3 w-3 text-amber-400" />
+              <span className="text-xs text-amber-400">Brief may be outdated</span>
+            </div>
+          )}
+
+          {/* WHY custom selectors (was prose prose-sm prose-invert):
+              The @tailwindcss/typography prose plugin adds opinionated margins and
+              font sizes that clash with our terminal dense layout. Custom selectors
+              on the wrapper div give the same rendered structure (headers, bold,
+              lists) without the forced whitespace. Pattern mirrors MorningBriefCard. */}
+          <div className="text-xs leading-relaxed text-foreground [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_li]:ml-3 [&_p]:mb-1.5 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-3">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {brief.content}
+            </ReactMarkdown>
+          </div>
+
+          {/* WHY generated_at timestamp: traders need to know how fresh the
+              intelligence is — a brief from yesterday may be stale after
+              overnight earnings or macro events. */}
+          <p className="mt-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+            Generated {new Date(brief.generated_at).toISOString().slice(0, 16).replace("T", " ")} UTC
+          </p>
+        </div>
+      )}
+
+      {/* ── Empty state — no brief available yet ─────────────────────────────── */}
+      {!isLoading && !isError && !brief && (
+        <div className="rounded-[2px] border rounded-[2px] border border-border/30 bg-card/30 p-3 text-xs text-muted-foreground">
+          No intelligence brief available for this entity yet.
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
@@ -166,7 +272,8 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
     <div className="flex flex-col divide-y divide-border/40">
 
       {/* ── Entity Knowledge Graph ─────────────────────────────────────────── */}
-      <section className="p-4">
+      {/* WHY p-3 (was p-4): terminal panel standard padding */}
+      <section className="p-3">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-semibold text-foreground">Entity Knowledge Graph</h3>
           <span className="text-[10px] text-muted-foreground">
@@ -186,21 +293,15 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         )}
       </section>
 
-      {/* ── AI Intelligence Brief (placeholder) ───────────────────────────── */}
-      {/* WHY placeholder: getInstrumentBrief S9 endpoint exists but the brief
-          generation pipeline (S8 DeepSeek R1) is not yet integrated into the
-          Intelligence tab. This section marks the intended location for the
-          brief so the layout is established for the next implementation wave. */}
-      <section className="p-4">
-        <h3 className="mb-2 text-xs font-semibold text-foreground">AI Intelligence Brief</h3>
-        <div className="rounded-[2px] border border-border/30 bg-card/30 p-4 text-xs text-muted-foreground">
-          Brief generation coming soon — this section will show an AI-generated
-          summary of recent developments, risk factors, and price-relevant signals.
-        </div>
-      </section>
+      {/* ── AI Intelligence Brief (live) ─────────────────────────────────── */}
+      {/* WHY live: PLAN-0034 integrated the S8 briefing pipeline. This section
+          now fetches a real AI-generated brief from S8 via the S9 gateway.
+          It shows loading skeletons, 503 soft errors, and stale indicators. */}
+      <InstrumentBriefSection entityId={entityId} />
 
       {/* ── Detected Contradictions ────────────────────────────────────────── */}
-      <section className="p-4">
+      {/* WHY p-3 (was p-4): terminal panel standard padding */}
+      <section className="p-3">
 
         {/* Loading state */}
         {isLoading && (
@@ -225,15 +326,14 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           </p>
         )}
 
-        {/* Empty state */}
+        {/* Empty state — no contradictions found */}
+        {/* WHY inline (was flex-col items-center py-8): terminal empty states are
+            compact inline text. A full-height centered panel with a large icon is
+            consumer SaaS style; a single compact line is terminal style. */}
         {!isLoading && !isError && contradictions.length === 0 && (
-          <div className="flex flex-col items-center gap-2 py-8 text-center">
-            <CheckCircle className="h-8 w-8 text-positive/60" />
-            <p className="text-sm font-medium text-muted-foreground">No contradictions detected</p>
-            <p className="text-xs text-muted-foreground/60">
-              The NLP pipeline found no conflicting claims across recent articles.
-            </p>
-          </div>
+          <p className="py-2 text-xs text-positive">
+            No contradictions detected — signals are consistent.
+          </p>
         )}
 
         {/* Contradiction list */}

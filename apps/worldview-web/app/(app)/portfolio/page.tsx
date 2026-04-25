@@ -36,7 +36,8 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Plus, TrendingUp, TrendingDown, Link2, RefreshCw } from "lucide-react";
+// WHY Plus removed: Add Position button stub was removed (non-functional placeholder violates design rules)
+import { ChevronDown, TrendingUp, TrendingDown, Link2, RefreshCw } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -48,6 +49,9 @@ import {
   cn,
 } from "@/lib/utils";
 import type { Portfolio, Holding, Transaction, WatchlistMember } from "@/types/api";
+
+// ── Terminal primitives ───────────────────────────────────────────────────────
+import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 
 // ── Brokerage components ──────────────────────────────────────────────────────
 // WHY import here: the Brokerages tab renders these two components.
@@ -98,7 +102,10 @@ function PnlSummaryRow({
       {/* WHY hover:bg-muted/50 + transition-colors on all PnL tiles: subtle hover
           feedback tells the user these tiles are interactive-looking data regions.
           transition-colors smooths the background change (no jarring flash). */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
+      {/* WHY rounded-[2px] (was rounded-md): terminal 2px radius rule.
+          WHY no hover:bg-muted/50: KPI tiles are not interactive — hover effect
+          incorrectly implies clickability. Removed to avoid misleading affordance. */}
+      <div className="rounded-[2px] border border-border/60 bg-muted/30 px-3 py-2">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Total Value
         </p>
@@ -108,7 +115,10 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Today P&L ──────────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
+      {/* WHY rounded-[2px] (was rounded-md): terminal 2px radius rule.
+          WHY no hover:bg-muted/50: KPI tiles are not interactive — hover effect
+          incorrectly implies clickability. Removed to avoid misleading affordance. */}
+      <div className="rounded-[2px] border border-border/60 bg-muted/30 px-3 py-2">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Today P&amp;L
         </p>
@@ -123,7 +133,10 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Unrealised P&L ──────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
+      {/* WHY rounded-[2px] (was rounded-md): terminal 2px radius rule.
+          WHY no hover:bg-muted/50: KPI tiles are not interactive — hover effect
+          incorrectly implies clickability. Removed to avoid misleading affordance. */}
+      <div className="rounded-[2px] border border-border/60 bg-muted/30 px-3 py-2">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Unrealised P&amp;L
         </p>
@@ -138,7 +151,10 @@ function PnlSummaryRow({
       </div>
 
       {/* ── Unrealised P&L% ─────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors">
+      {/* WHY rounded-[2px] (was rounded-md): terminal 2px radius rule.
+          WHY no hover:bg-muted/50: KPI tiles are not interactive — hover effect
+          incorrectly implies clickability. Removed to avoid misleading affordance. */}
+      <div className="rounded-[2px] border border-border/60 bg-muted/30 px-3 py-2">
         <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           Unrealised P&amp;L%
         </p>
@@ -214,11 +230,9 @@ interface HoldingsTableProps {
 
 function HoldingsTable({ holdings, quotes, onRowClick }: HoldingsTableProps) {
   if (holdings.length === 0) {
-    return (
-      <div className="flex h-24 items-center justify-center">
-        <p className="text-sm text-muted-foreground">No holdings yet.</p>
-      </div>
-    );
+    // WHY InlineEmptyState (was h-24 flex items-center justify-center):
+    // terminal empty states are compact inline text, not full-height centered panels.
+    return <InlineEmptyState message="No holdings yet." />;
   }
 
   return (
@@ -353,11 +367,7 @@ interface TransactionsTableProps {
 
 function TransactionsTable({ transactions }: TransactionsTableProps) {
   if (transactions.length === 0) {
-    return (
-      <div className="flex h-24 items-center justify-center">
-        <p className="text-sm text-muted-foreground">No transactions yet.</p>
-      </div>
-    );
+    return <InlineEmptyState message="No transactions yet." />;
   }
 
   // Sort newest first (ISO timestamps compare lexicographically)
@@ -455,11 +465,7 @@ interface WatchlistTableProps {
 
 function WatchlistTable({ members, quotes, onRowClick }: WatchlistTableProps) {
   if (members.length === 0) {
-    return (
-      <div className="flex h-24 items-center justify-center">
-        <p className="text-sm text-muted-foreground">Watchlist is empty.</p>
-      </div>
-    );
+    return <InlineEmptyState message="Watchlist is empty." />;
   }
 
   return (
@@ -737,8 +743,9 @@ export default function PortfolioPage() {
 
   // ── Loading state ────────────────────────────────────────────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
+    // WHY p-3 space-y-3 (was p-6 space-y-4): standard terminal panel padding per design system
     return (
-      <div className="space-y-4 p-6">
+      <div className="space-y-3 p-3">
         {/* Page header skeleton */}
         <div className="flex items-center justify-between">
           <Skeleton className="h-7 w-32" />
@@ -763,8 +770,9 @@ export default function PortfolioPage() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
+  // WHY p-3 space-y-3 (was p-6 space-y-4): standard terminal panel padding per design system
   return (
-    <div className="space-y-4 p-6">
+    <div className="space-y-3 p-3">
 
       {/* ── Page header: title + portfolio selector ────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -800,21 +808,9 @@ export default function PortfolioPage() {
             </DropdownMenu>
           )}
 
-          {/*
-           * "Add Position" button — placeholder for Wave F-10 transaction modal.
-           * WHY disabled+tooltip: the spec says to show the button as a stub
-           * in Wave F-9 without the modal implementation. Disabled state
-           * + title tooltip communicates "coming soon" without custom UI.
-           */}
-          <Button
-            size="sm"
-            disabled
-            title="Coming soon — add a position to your portfolio"
-            className="gap-1 opacity-60"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add Position
-          </Button>
+          {/* WHY removed: disabled stub buttons in production views violate design rule.
+              "Add Position" was a non-functional placeholder — removed until Wave F-10
+              implements the actual transaction modal. */}
         </div>
       </div>
 

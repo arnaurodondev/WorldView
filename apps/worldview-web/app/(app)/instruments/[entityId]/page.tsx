@@ -29,10 +29,12 @@
 // WHY "use client": uses useQuery for CompanyOverview + tab state (useState).
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
+// WHY useRouter: used for router.back() in the back nav button so the user returns
+// to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, TrendingUp } from "lucide-react";
-import Link from "next/link";
+// WHY ArrowLeft only: TrendingUp removed from not-found state; no longer needed.
+import { ArrowLeft } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -43,13 +45,17 @@ import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
+import { InstrumentBriefPanel } from "@/components/instrument/InstrumentBriefPanel";
 import { ArticleCard } from "@/components/news/ArticleCard";
+import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { Button } from "@/components/ui/button";
 import { formatMarketCap, formatPercentDirect } from "@/lib/utils";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function InstrumentDetailPage() {
   const params = useParams();
+  const router = useRouter();
   // WHY decodeURIComponent: entity_id from URL may be percent-encoded
   const entityId = decodeURIComponent(params.entityId as string);
   const { accessToken } = useAuth();
@@ -87,10 +93,12 @@ export default function InstrumentDetailPage() {
   // ── Page loading state ─────────────────────────────────────────────────────
   if (overviewLoading && !overview) {
     return (
-      <div className="space-y-4 p-6">
+      // WHY p-3 space-y-3 (was p-6 space-y-4): standard terminal panel padding
+      <div className="space-y-3 p-3">
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-10 w-72" />
-        <Skeleton className="h-[280px] w-full" />
+        {/* WHY h-[360px] (was h-[280px]): matches updated OHLCVChart height */}
+        <Skeleton className="h-[360px] w-full" />
       </div>
     );
   }
@@ -98,12 +106,15 @@ export default function InstrumentDetailPage() {
   // ── Not found state ────────────────────────────────────────────────────────
   if (!instrument) {
     return (
-      <div className="flex flex-col items-center gap-4 p-12 text-center">
-        <TrendingUp className="h-10 w-10 text-muted-foreground/30" />
+      // WHY p-6 (was p-12): reduced empty state padding per terminal design rules
+      <div className="flex flex-col items-center gap-2 p-6 text-center">
         <p className="text-sm text-muted-foreground">Instrument not found.</p>
-        <Link href="/dashboard" className="text-xs text-primary hover:underline">
-          ← Back to dashboard
-        </Link>
+        <button
+          onClick={() => router.back()}
+          className="text-xs text-primary hover:underline"
+        >
+          ← Go back
+        </button>
       </div>
     );
   }
@@ -114,17 +125,23 @@ export default function InstrumentDetailPage() {
     <div className="flex min-h-0 flex-col">
       {/* ── Back nav ─────────────────────────────────────────────────────── */}
       <div className="border-b border-border/40 px-4 py-2">
-        <Link
-          href="/dashboard"
+        {/* WHY router.back() (was Link href="/dashboard"): takes the user back to
+            wherever they came from — screener, dashboard, portfolio — rather than
+            always navigating to /dashboard which is disorienting if they arrived
+            from the screener. */}
+        <button
+          onClick={() => router.back()}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
-          Dashboard
-        </Link>
+          Back
+        </button>
       </div>
 
       {/* ── Instrument header ─────────────────────────────────────────────── */}
-      <div className="border-b border-border/40 px-4 py-4">
+      {/* WHY py-2 (was py-4): tighter header preserves vertical space above the fold.
+          The instrument header is chrome, not content — it should not dominate. */}
+      <div className="border-b border-border/40 px-4 py-2">
         <div className="flex flex-wrap items-start gap-4">
           {/* Left: ticker + name + exchange badge */}
           <div className="min-w-0 flex-1">
@@ -143,6 +160,15 @@ export default function InstrumentDetailPage() {
               )}
             </div>
             <p className="mt-0.5 text-sm text-muted-foreground">{instrument.name}</p>
+            {/* Company description — sourced from EODHD General.Description via S9.
+                WHY line-clamp-2: descriptions can be 500+ chars. Two lines is enough
+                context without consuming too much header real estate. Traders who want
+                more can click to the Intelligence tab's brief. */}
+            {instrument.description && (
+              <p className="mt-1 line-clamp-2 max-w-prose text-xs leading-relaxed text-muted-foreground/80">
+                {instrument.description}
+              </p>
+            )}
           </div>
 
           {/* Right: live price badge */}
@@ -156,7 +182,8 @@ export default function InstrumentDetailPage() {
 
         {/* Quick stats row — market cap, 52W range, currency */}
         {fund && (
-          <div className="mt-3 flex flex-wrap gap-4">
+          // WHY gap-2 mt-2 (was gap-4 mt-3): tighter spacing, more data in less space
+          <div className="mt-2 flex flex-wrap gap-2">
             {fund.market_cap != null && (
               <div>
                 <span className="text-[10px] text-muted-foreground">Mkt Cap</span>
@@ -195,6 +222,12 @@ export default function InstrumentDetailPage() {
         )}
       </div>
 
+      {/* ── AI Instrument Brief — shared across all tabs ─────────────────────── */}
+      {/* WHY above the tabs (not inside Intelligence): analysts want a quick AI
+          context summary regardless of which tab they're on. Placing it here means
+          the brief is always visible without switching tabs (UI-003 fix). */}
+      <InstrumentBriefPanel entityId={entityId} />
+
       {/* ── Tab navigation ─────────────────────────────────────────────────── */}
       <Tabs defaultValue="overview" className="flex min-h-0 flex-1 flex-col">
         <TabsList className="shrink-0 rounded-none border-b border-border/40 bg-transparent px-4">
@@ -216,10 +249,11 @@ export default function InstrumentDetailPage() {
         <TabsContent value="overview" className="mt-0 flex-1 overflow-auto">
           <div className="grid grid-cols-1 gap-0 lg:grid-cols-[1fr_320px]">
             {/* Left: OHLCV chart */}
-            <div className="border-b border-border/40 p-4 lg:border-b-0 lg:border-r">
-              <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
-                Price Chart
-              </h2>
+            {/* WHY p-0 (was p-4): chart fills its container edge-to-edge.
+                The chart controls provide their own internal padding.
+                WHY no "Price Chart" heading: redundant — the chart IS the price chart.
+                Removing the label recovers vertical space without losing information. */}
+            <div className="border-b border-border/40 p-0 lg:border-b-0 lg:border-r">
               <OHLCVChart
                 instrumentId={instrument.instrument_id}
                 initialBars={overview?.ohlcv?.bars}
@@ -227,10 +261,9 @@ export default function InstrumentDetailPage() {
             </div>
 
             {/* Right: entity graph */}
-            <div className="p-4">
-              <h2 className="mb-2 text-xs font-semibold text-muted-foreground">
-                Related Entities
-              </h2>
+            {/* WHY p-2 (was p-4): EntityGraphPanel has its own PanelHeader; outer padding
+                of 16px adds unnecessary gap between the panel border and the header strip. */}
+            <div className="p-2">
               <EntityGraphPanel
                 entityId={entityId}
                 centerLabel={instrument.ticker}
@@ -251,20 +284,25 @@ export default function InstrumentDetailPage() {
         <TabsContent value="news" className="mt-0 flex-1 overflow-auto">
           <div className="divide-y divide-border/30">
             {newsLoading && !newsResp ? (
+              // WHY px-3 py-2 (was p-4): compact skeleton rows at terminal row height
               Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="p-4">
-                  <Skeleton className="mb-2 h-4 w-3/4" />
+                <div key={i} className="px-3 py-2">
+                  <Skeleton className="mb-1.5 h-3.5 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
                 </div>
               ))
             ) : newsResp?.articles.length === 0 ? (
-              <p className="p-6 text-sm text-muted-foreground">
-                No news articles found for this entity.
-              </p>
+              // WHY InlineEmptyState (was p-6 text-sm): terminal compact inline message
+              <InlineEmptyState
+                message="No news articles found for this entity."
+                className="px-3"
+              />
             ) : (
               <>
                 {newsResp?.articles.map((article) => (
-                  <div key={article.article_id} className="px-4 py-3">
+                  // WHY px-3 py-2 (was px-4 py-3): tighter outer padding; ArticleCard
+                  // already has its own internal p-3 — double-padding wastes space.
+                  <div key={article.article_id} className="px-3 py-2">
                     <ArticleCard article={article} />
                   </div>
                 ))}
@@ -273,13 +311,17 @@ export default function InstrumentDetailPage() {
                 {/* WHY 20: RankedNewsResponse has no .limit field (unlike NewsResponse).
                     Use the same hardcoded limit passed to getEntityNews above. */}
                 {newsResp && newsOffset + 20 < newsResp.total && (
-                  <div className="p-4 text-center">
-                    <button
+                  // WHY Button variant="outline" size="sm" (was plain button):
+                  // styled button communicates interactivity more clearly than plain text
+                  <div className="px-3 py-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => setNewsOffset((o) => o + 20)}
-                      className="text-xs text-muted-foreground hover:text-foreground"
+                      className="h-7 text-xs"
                     >
                       Load more articles
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>

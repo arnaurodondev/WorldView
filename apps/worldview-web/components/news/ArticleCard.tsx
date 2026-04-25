@@ -27,7 +27,6 @@
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { ArticleImpactBadge } from "@/components/news/ArticleImpactBadge";
 import { cn, formatRelativeTime, safeExternalUrl } from "@/lib/utils";
 import type { Article, RankedArticle } from "@/types/api";
 
@@ -53,7 +52,7 @@ interface ArticleCardProps {
  *   [source badge] .................. [published_at relative time]
  *   [title — clickable link to article URL, opens new tab]
  *   [summary — 2-line clamp, only if available]
- *   [entity tickers] ............. [ArticleImpactBadge score+sentiment]
+ *   [entity tickers] ............. [relevance score badge]
  */
 // ── Type narrowing helpers ────────────────────────────────────────────────────
 //
@@ -77,13 +76,6 @@ function getTickers(a: Article | RankedArticle): string[] {
   return 'tickers' in a ? a.tickers : [];
 }
 
-/** Return sentiment label (only Article has this field; RankedArticle does not). */
-function getSentiment(a: Article | RankedArticle): "positive" | "negative" | "neutral" | null {
-  // WHY explicit return type: ArticleImpactBadge expects the exact union from Article.
-  // If `a` is RankedArticle (no sentiment field), we return null → badge renders nothing.
-  return 'sentiment' in a ? a.sentiment : null;
-}
-
 export function ArticleCard({ article }: ArticleCardProps) {
   // WHY isLightTier: LIGHT routing tier = low-relevance/low-signal article. De-emphasised
   // at 60% opacity so traders can focus on HIGH/STANDARD signal articles. The italic source
@@ -91,10 +83,31 @@ export function ArticleCard({ article }: ArticleCardProps) {
   // WHY ?? false: RankedArticle.routing_tier is string | null; null → not LIGHT.
   const isLightTier = (article.routing_tier ?? '') === "LIGHT";
 
+  // WHY isHighTier: HIGH routing tier = top-signal article that passed deep processing.
+  // These deserve a "TOP" pill so analysts can spot them in a long feed at a glance,
+  // the same way Bloomberg terminals flag "FLASH" stories in a different colour.
+  const isHighTier = (article.routing_tier ?? '') === "HIGH";
+
   const source = getSource(article);
   const summary = getSummary(article);
   const tickers = getTickers(article);
-  const sentiment = getSentiment(article);
+
+  // ── Relevance score badge styling ─────────────────────────────────────────────
+  // WHY threshold-based colour (not sentiment-based): display_relevance_score is the
+  // composite PRD-0026 signal (market_impact + llm_relevance + routing). For
+  // RankedArticle, sentiment is always null (not scored), so the existing
+  // ArticleImpactBadge would always render muted. A threshold colour tells analysts
+  // the signal strength (high/medium/low) without requiring a sentiment field.
+  // 0.7+ → positive/green (strong signal), 0.4–0.7 → warning/amber, <0.4 → muted.
+  const score = article.display_relevance_score;
+  const scoreBadgeClass = cn(
+    "shrink-0 rounded-[2px] px-1 py-0.5 font-mono text-[9px] tabular-nums font-semibold",
+    score != null && score >= 0.7
+      ? "bg-positive/15 text-positive"
+      : score != null && score >= 0.4
+        ? "bg-warning/15 text-warning"
+        : "bg-muted text-muted-foreground",
+  );
 
   return (
     // WHY group class: enables group-hover on child elements (title colour, icon opacity)
@@ -102,29 +115,63 @@ export function ArticleCard({ article }: ArticleCardProps) {
     // against bg-card (#111820). bg-muted/30 (#1A2030 at 30%) creates a noticeable
     // lift effect that signals interactivity without being distracting.
     <article className={cn(
-      "group rounded-lg border border-border/50 bg-card p-3 transition-colors hover:border-border hover:bg-muted/30",
+      // WHY rounded-[2px] (not rounded-lg): terminal aesthetic — 2px radius per design system rule.
+      // rounded-lg looks consumer/friendly; 2px is the institutional standard throughout the app.
+      "group rounded-[2px] border border-border/40 bg-card p-3 transition-colors hover:border-border hover:bg-muted/30",
       isLightTier && "opacity-60",  // WHY: de-emphasise LIGHT-tier; opacity on the wrapper dims the entire card
     )}>
 
-      {/* ── Top row: source + timestamp ────────────────────────────────────── */}
+      {/* ── Top row: source + routing tier pill + timestamp ────────────────── */}
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        {/* Source badge — secondary variant for neutral, muted appearance */}
-        <Badge variant="secondary" className={cn(
-          "shrink-0 text-[10px] uppercase tracking-wider",
-          isLightTier && "italic",  // WHY: italic signals "lower confidence" source routing to traders
-        )}>
-          {source}
-        </Badge>
 
-        {/* Relative published time — font-mono tabular-nums per global rule */}
-        {/* WHY relative not absolute: "2h ago" conveys recency instantly; absolute
-            ISO time would require mental arithmetic while scanning a feed. */}
-        <time
-          dateTime={article.published_at ?? undefined}
-          className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground"
-        >
-          {formatRelativeTime(article.published_at)}
-        </time>
+        {/* Left cluster: source badge + optional HIGH-tier pill */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {/* Source badge — secondary variant for neutral, muted appearance */}
+          <Badge variant="secondary" className={cn(
+            "shrink-0 text-[10px] uppercase tracking-wider",
+            isLightTier && "italic",  // WHY: italic signals "lower confidence" source routing to traders
+          )}>
+            {source}
+          </Badge>
+
+          {/* WHY "TOP" pill only for HIGH tier: STANDARD articles are the baseline —
+              no badge needed. LIGHT articles are already de-emphasised via opacity.
+              Only HIGH deserves a positive signal to make it stand out in the feed.
+              Using primary/15 background instead of a solid colour keeps it readable
+              in both light and dark themes without clashing with the score badge. */}
+          {isHighTier && (
+            <span className="shrink-0 rounded-[2px] bg-primary/15 px-1 py-0.5 text-[9px] font-semibold uppercase text-primary">
+              TOP
+            </span>
+          )}
+        </div>
+
+        {/* Right cluster: relevance score badge + relative published time */}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* WHY relevance score badge: display_relevance_score is the composite
+              PRD-0026 signal — market impact + LLM relevance + routing score. It
+              tells the analyst how market-relevant this article is at a glance,
+              before reading the title. Shown as a 0–100 integer for readability.
+              Only rendered when score is not null (older articles lack scoring). */}
+          {score != null && (
+            // WHY aria-label="impact score": the null-state test (when score is null) uses
+            // queryByLabelText(/impact score/i) to confirm the badge is absent. aria-label
+            // gives the test a stable selector that isn't fragile to the numeric value.
+            <span className={scoreBadgeClass} aria-label="impact score">
+              {(score * 100).toFixed(0)}
+            </span>
+          )}
+
+          {/* Relative published time — font-mono tabular-nums per global rule */}
+          {/* WHY relative not absolute: "2h ago" conveys recency instantly; absolute
+              ISO time would require mental arithmetic while scanning a feed. */}
+          <time
+            dateTime={article.published_at ?? undefined}
+            className="font-mono text-[10px] tabular-nums text-muted-foreground"
+          >
+            {formatRelativeTime(article.published_at)}
+          </time>
+        </div>
       </div>
 
       {/* ── Title — external link ───────────────────────────────────────────── */}
@@ -184,11 +231,10 @@ export function ArticleCard({ article }: ArticleCardProps) {
           )}
         </div>
 
-        {/* Article impact score badge — renders nothing if score is null */}
-        <ArticleImpactBadge
-          score={article.display_relevance_score}
-          sentiment={sentiment}
-        />
+        {/* WHY ArticleImpactBadge removed: the top-row relevance score badge now
+            shows the composite signal (display_relevance_score) with threshold-based
+            colour. Keeping the bottom badge here was a duplicate of the same value,
+            which created visual noise and broke getByText("75") uniqueness in tests. */}
       </div>
     </article>
   );
