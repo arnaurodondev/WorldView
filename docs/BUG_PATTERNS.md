@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-220](#bp-220) | Market ingestion / routing | `_fallback_provider()` returns `None` for intraday timeframes — zero-bar failover silently gives up instead of routing to Polygon; Polygon is never called on intraday tasks | `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py:_fallback_provider()` |
+| [BP-221](#bp-221) | Market ingestion / dispatch | Intraday dispatch set `_INTRADAY_TFS = {"1m", "5m", "1h"}` missing `"15m"`, `"30m"`, `"4h"` — those timeframes fall through to `fetch_ohlcv()` path and raise `AttributeError` on Alpaca/Polygon adapters that don't implement `fetch_ohlcv()` for intraday | `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py:_fetch()` |
 | [BP-218](#bp-218) | Market ingestion / quota | `ingestion_watermarks.last_success_at` column exists in schema since migration 0001 but `watermark_repository.save()` never writes it — pre-fetch freshness gate always skips (perpetually "fresh"), causing redundant EODHD calls | `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/watermark_repository.py:save()`; `domain/entities/watermark.py` |
 | [BP-219](#bp-219) | Market ingestion / quota | Monthly EODHD quota enforced in-process only (legacy provider_budgets table, per-replica) — 4 worker replicas each believe they have 100K credits; effective monthly budget = 400K; exceeded at ~25K symbols per replica | `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/`; any service using DB-backed in-process quota instead of Valkey INCRBY shared counter |
 | [BP-192](#bp-192) | Kafka / enriched event | S6 `_enqueue_enriched` sends only counts (relation_count, claim_count) in `nlp.article.enriched.v1` — NOT actual extracted data arrays; S7 reads empty lists, graph materialization is a no-op | `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py:759`; S7 enriched_consumer |
@@ -6237,3 +6239,71 @@ When adding a new column to an existing table, immediately add it to:
 ### Prevention
 
 Shared budgets (quota, rate limits, credit counters) that span multiple replicas MUST use a shared backing store (Valkey, Redis, Postgres advisory lock) — never in-process memory or per-replica DB rows. Use Valkey INCRBY for atomic increment with TTL. Document the replica-multiplication risk in the service `.claude-context.md`.
+
+---
+
+## BP-220 — `_fallback_provider()` Returns `None` for Intraday — Silent Failover Gap
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-26 — PRD-0032 / PLAN-0040 audit |
+| **Severity** | HIGH — entire zero-bar failover chain silently aborts for all intraday tasks; Polygon adapter is registered but never called |
+| **Root cause** | `_fallback_provider()` in `execute_task.py` was added by PLAN-0038 Wave A-4 with explicit `return None` for intraday timeframes ("no free intraday alternative"). When PRD-0032 added Polygon as an intraday failover, the zero-bar failover code path (`ZeroBarTracker.should_failover() → True → _fallback_provider()`) was not updated. The caller treats `None` as "no fallback available" and returns the empty result. |
+| **Symptom** | `ZeroBarTracker` reaches `FAILOVER_THRESHOLD` (5 consecutive zeros) and `should_failover()` returns `True`, but the task's `fetched_by_provider` remains `"alpaca"` and no Polygon request is made. Log shows `zero_bar_failover_skipped` but no `provider_routing_cache_selected` event for intraday tasks. |
+| **Fix** | In Wave A-4 T-A-4-06: when `routing_cache` is set, replace the `_fallback_provider()` call with an ordered iteration over `routing_cache.get_providers_for(dataset_type, timeframe)[1:]` — skipping the current provider and trying each remaining one in weight order. |
+
+### Prevention
+
+When adding a new provider to a failover chain, **always** audit every `_fallback_*` function in `execute_task.py` for exhaustive coverage. The pattern `if fallback is None: return` is a silent failure — no exception, no log, no metric. Any new provider capability (intraday, quotes, etc.) must be reflected in every fallback/routing decision point, not just the primary selection.
+
+Add a test: `test_zero_bar_failover_reaches_polygon` — verifies that after 5 zero-bar Alpaca responses, the Polygon adapter is called.
+
+---
+
+## BP-221 — Intraday Dispatch Set Missing Timeframes (`15m`, `30m`, `4h`)
+
+| Field | Value |
+|-------|-------|
+| **Discovered** | 2026-04-26 — PRD-0032 / PLAN-0040 audit |
+| **Severity** | MEDIUM — `15m`, `30m`, `4h` tasks silently fall through to `fetch_ohlcv()` path; Alpaca/Polygon raise `ProviderUnavailable` with a confusing "wrong method" error, or worse, EODHD is incorrectly called instead |
+| **Root cause** | `_fetch()` in `execute_task.py` dispatches intraday timeframes via `fetch_intraday()` using a hardcoded set `{"1m", "5m", "1h"}`. PRD-0032 added `15m`, `30m`, `4h` as new intraday timeframes, but the dispatch set was not extended. |
+| **Symptom** | Tasks with `timeframe="15m"` reach `_fetch()` and fall into the `else` branch (`fetch_ohlcv()`). EODHD's `fetch_ohlcv()` doesn't handle intraday; Alpaca's `fetch_ohlcv()` is correct but was intended to be called via `fetch_intraday()` alias. Result: incorrect data or `ProviderUnavailable`. |
+| **Fix** | Extend `_INTRADAY_TFS` (or equivalent constant/set) to `{"1m", "5m", "15m", "30m", "1h", "4h"}` in `execute_task.py`. Add `fetch_intraday()` as an alias on all new intraday adapters. |
+
+### Prevention
+
+When adding a new timeframe that is semantically "intraday", always search `execute_task.py` for any hardcoded set of intraday timeframes and update it. Treat the dispatch set as an enum-exhaustive match — add a test that asserts `fetch_intraday()` is called for every timeframe in `_INTRADAY_TFS`.
+
+---
+
+## BP-222 — Worker Registry Divergence: `_build_registry()` Bypasses Shared Builder
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) |
+| **Severity** | CRITICAL |
+| **Discovered** | 2026-04-26 QA PLAN-0038 |
+| **Root cause** | `WorkerProcess._build_registry()` manually constructed a `ProviderRegistry` and only registered `EODHDProviderAdapter`. The canonical `build_provider_registry()` in `__init__.py` registered EODHD + Yahoo + Finnhub, but the worker never called it. |
+| **Symptom** | Provider routing (`_preferred_provider()`) and zero-bar failover were dead code in the production worker — all data always fetched via EODHD. |
+| **Fix** | Replace `_build_registry()` body with `build_provider_registry(self._settings, http_timeout=...)`. |
+
+### Prevention
+
+When adding a new adapter/provider to a shared registry builder function, **grep for ALL callers** of the registry — not just the API path. Workers, schedulers, and test helpers that construct their own registries bypass the shared builder and must be updated independently. Add a test asserting the worker's registry contains all expected providers.
+
+---
+
+## BP-223 — API Keys as `str` Instead of `SecretStr` in pydantic-settings
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2), potentially others |
+| **Severity** | CRITICAL |
+| **Discovered** | 2026-04-26 QA PLAN-0038 |
+| **Root cause** | `eodhd_api_key`, `finnhub_api_key`, `storage_secret_key` etc. were typed as plain `str` in `config.py`. `SecretStr` was only used for `database_url`. |
+| **Symptom** | API keys appear in full in `repr(settings)`, `settings.model_dump()`, pydantic validation error tracebacks, and any diagnostic logging that serialises the settings object. |
+| **Fix** | Change all secret fields to `SecretStr`. Update all call sites to use `.get_secret_value()`. Update test mocks to assign `SecretStr("...")` values. |
+
+### Prevention
+
+Any field in a pydantic-settings `BaseSettings` class whose value is a credential, API key, token, or password MUST use `SecretStr` — never plain `str`. This is enforced by reviewing `config.py` changes in code review. Match the established pattern of `database_url: SecretStr`.

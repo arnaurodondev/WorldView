@@ -6,7 +6,6 @@ import json
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, cast
-from urllib.parse import urlparse
 
 from market_ingestion.application.ports.adapters import ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType, Provider
@@ -24,22 +23,6 @@ if TYPE_CHECKING:
     import httpx
 
 logger = get_logger(__name__)
-
-
-def _endpoint_slug(url: str) -> str:
-    """Extract a safe endpoint label for metrics/logs (no query params, no secrets).
-
-    Examples
-    --------
-        "https://eodhd.com/api/real-time/AAPL.US" → "real-time"
-        "https://eodhd.com/api/eod/MSFT.US"       → "eod"
-        "https://eodhd.com/api/fundamentals/TSLA"  → "fundamentals"
-
-    """
-    path = urlparse(url).path
-    # Split on "/" and take the first non-empty segment after "api".
-    segments = [p for p in path.split("/") if p and p != "api"]
-    return segments[0] if segments else "unknown"
 
 
 def _parse_retry_after(header_value: str | None) -> float | None:
@@ -435,11 +418,17 @@ class EODHDProviderAdapter(BaseProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
         self._record_api_call(
             dataset_type=DatasetType.MACRO_INDICATOR.value,
             symbol=symbol,
             timeframe="",
-            bars_returned=1,
+            bars_returned=bars_returned,
             latency_ms=duration_ms,
             credit_cost=EODHD_CREDIT_COST.get("macro_indicator", 5),
         )
@@ -453,7 +442,7 @@ class EODHDProviderAdapter(BaseProviderAdapter):
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
             provider_metadata={"country": country, "indicator": indicator},
-            bars_returned=1,
+            bars_returned=bars_returned,
         )
 
     async def fetch_news_sentiment(
@@ -683,7 +672,7 @@ class EODHDProviderAdapter(BaseProviderAdapter):
 
         """
         # Use the endpoint slug (no host, no query-params) so API key never leaks.
-        slug = _endpoint_slug(url)
+        slug = self._sanitize_url_slug(url)
         try:
             response = await self._client.get(url, params=params)
         except Exception as exc:
@@ -692,10 +681,12 @@ class EODHDProviderAdapter(BaseProviderAdapter):
                 endpoint=slug,
                 error=str(exc),
             )
-            raise ProviderUnavailable(f"EODHD connection error on {slug}: {exc}") from exc
+            self._record_error(reason="connection_error", endpoint=slug)
+            raise ProviderUnavailable(f"EODHD connection error on {slug}: {type(exc).__name__}") from exc
 
         status = response.status_code
         if status in (401, 403):
+            self._record_error(reason="auth_error", endpoint=slug)
             raise ProviderAuthError(f"EODHD auth failed: HTTP {status} for endpoint '{slug}'")
         if status == 429:
             retry_after = _parse_retry_after(response.headers.get("Retry-After"))
@@ -704,13 +695,16 @@ class EODHDProviderAdapter(BaseProviderAdapter):
                 endpoint=slug,
                 retry_after_seconds=retry_after,
             )
+            self._record_rate_limited(endpoint=slug)
             raise ProviderRateLimited(
                 f"EODHD rate limited: HTTP 429 for endpoint '{slug}'",
                 retry_after=retry_after,
             )
         if status >= 500:
+            self._record_error(reason="http_error", endpoint=slug)
             raise ProviderUnavailable(f"EODHD server error: HTTP {status} for endpoint '{slug}'")
         if status >= 400:
+            self._record_error(reason="http_error", endpoint=slug)
             raise ProviderDataError(f"EODHD client error: HTTP {status} for endpoint '{slug}'")
 
         return cast("bytes", response.content)

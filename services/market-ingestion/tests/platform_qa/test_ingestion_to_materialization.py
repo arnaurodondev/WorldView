@@ -36,7 +36,7 @@ _NEEDS_LIVE_KEY = pytest.mark.skipif(not _HAS_LIVE_KEY, reason="Requires live EO
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scenario_trigger_creates_db_task():
     """GIVEN a POST /api/v1/ingest/trigger request
     WHEN the API accepts it (202)
@@ -82,7 +82,7 @@ async def test_scenario_trigger_creates_db_task():
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scenario_backfill_produces_chunks():
     """GIVEN a backfill request for a 90-day window with 30-day chunks
     WHEN BackfillUseCase.execute() runs
@@ -122,7 +122,7 @@ async def test_scenario_backfill_produces_chunks():
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scenario_worker_executes_task_with_mock_provider():
     """GIVEN a pending task in the DB
     WHEN the worker claims and executes it with a mock provider
@@ -177,8 +177,8 @@ async def test_scenario_worker_executes_task_with_mock_provider():
                 "low": 149.0,
                 "close": 153.0,
                 "volume": 1_000_000,
-            }
-        ]
+            },
+        ],
     ).encode()
     fetch_result = ProviderFetchResult(
         provider=Provider.EODHD,
@@ -200,7 +200,7 @@ async def test_scenario_worker_executes_task_with_mock_provider():
             byte_length=len(ohlcv_data),
             sha256="abc123def456" * 4,
             mime_type="application/json",
-        )
+        ),
     )
 
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
@@ -231,7 +231,7 @@ async def test_scenario_worker_executes_task_with_mock_provider():
 
 @_NEEDS_INFRA
 @_NEEDS_LIVE_KEY
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scenario_live_eodhd_fetch():
     """GIVEN a valid EODHD API key
     WHEN fetching AAPL daily OHLCV for a 5-day window
@@ -243,7 +243,7 @@ async def test_scenario_live_eodhd_fetch():
 
     settings = Settings()
     async with httpx.AsyncClient() as client:
-        adapter = EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client)
+        adapter = EODHDProviderAdapter(api_key=settings.eodhd_api_key.get_secret_value(), client=client)
         result = await adapter.fetch_ohlcv(
             symbol="AAPL",
             timeframe="1d",
@@ -261,15 +261,15 @@ async def test_scenario_live_eodhd_fetch():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_scenario_readyz_healthy():
     """GIVEN a healthy DB and storage
     WHEN GET /readyz is called
     THEN the response is 200 with status=ok and both checks passing.
     """
     from httpx import ASGITransport, AsyncClient
-    from market_ingestion.api.dependencies import get_object_store, get_uow
+    from market_ingestion.api.dependencies import get_object_store, get_read_uow, get_uow
     from market_ingestion.app import create_app
 
     app = create_app()
@@ -287,8 +287,14 @@ async def test_scenario_readyz_healthy():
     async def override_uow():
         yield mock_uow
 
+    # readyz uses get_read_uow (R27) — override both so the test client doesn't
+    # need a real session_factory in app.state.
     app.dependency_overrides[get_uow] = override_uow
+    app.dependency_overrides[get_read_uow] = override_uow
     app.dependency_overrides[get_object_store] = lambda: mock_store
+    # readyz checks for JWKS public key loaded by InternalJWTMiddleware (F-003B).
+    # Simulate a loaded key so the JWKS check passes without a real JWT service.
+    app.state._internal_jwt_public_key = "dummy_public_key_for_test"
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -303,8 +309,8 @@ async def test_scenario_readyz_healthy():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_scenario_scheduler_tick_with_symbol_policy_creates_task():
     """GIVEN an enabled polling policy with a specific symbol
     WHEN the scheduler ticks

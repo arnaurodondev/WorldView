@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,8 +34,8 @@ class Settings(BaseSettings):
 
     # Storage
     storage_endpoint: str = "http://localhost:7480"
-    storage_access_key: str  # Required — set MARKET_INGESTION_STORAGE_ACCESS_KEY env var
-    storage_secret_key: str  # Required — set MARKET_INGESTION_STORAGE_SECRET_KEY env var
+    storage_access_key: SecretStr  # Required — set MARKET_INGESTION_STORAGE_ACCESS_KEY env var
+    storage_secret_key: SecretStr  # Required — set MARKET_INGESTION_STORAGE_SECRET_KEY env var
     storage_bucket: str = "market-ingestion"
     bronze_bucket: str = "market-bronze"
     canonical_bucket: str = "market-canonical"
@@ -41,15 +43,16 @@ class Settings(BaseSettings):
     # Provider base URLs (operational — overridable without image rebuild)
     eodhd_base_url: str = "https://eodhd.com/api"
 
-    # Provider API keys
+    # Provider API keys — SecretStr prevents accidental serialisation via
+    # repr(), model_dump(), or error tracebacks (F-002 QA finding).
     # N-003: Default "demo" is intentional for local dev and CI testing.
     # The demo key supports EODHD's original 3 endpoints at low concurrency.
     # Tests use the demo key explicitly; set MARKET_INGESTION_EODHD_API_KEY to
     # a real key in production. Startup validator below emits a WARNING if unset.
-    eodhd_api_key: str = "demo"
-    finnhub_api_key: str = ""
-    polygon_api_key: str = ""
-    alpha_vantage_api_key: str = ""
+    eodhd_api_key: SecretStr = SecretStr("demo")
+    finnhub_api_key: SecretStr = SecretStr("")
+    polygon_api_key: SecretStr = SecretStr("")
+    alpha_vantage_api_key: SecretStr = SecretStr("")
 
     # Valkey / Redis
     valkey_url: str = "redis://localhost:6379/0"
@@ -89,6 +92,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:
         """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag.",
+            )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",
@@ -101,7 +110,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _warn_demo_eodhd_key(self) -> Settings:
-        if self.eodhd_api_key == "demo":
+        if self.eodhd_api_key.get_secret_value() == "demo":
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "demo_eodhd_api_key",
                 message=(

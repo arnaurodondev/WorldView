@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import UTC, datetime
 from typing import Any, cast
 
 import httpx
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from market_ingestion.application.ports.adapters import ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import (
@@ -25,6 +25,13 @@ _BASE_URL = "https://finnhub.io/api/v1"
 # Finnhub free tier: 60 req/min = 1 req/second
 # Sleep slightly over 1s to stay safely under the limit
 _RATE_LIMIT_SLEEP = 1.1
+
+# Process-level lock to serialize Finnhub requests.  Without this, multiple
+# concurrent tasks (e.g. from asyncio.gather in the worker loop) can fire
+# overlapping requests and exceed the 60 req/min free-tier cap.  The lock
+# does NOT coordinate across OS processes — for multi-replica deployments,
+# the distributed Valkey rate limiter handles cross-process coordination.
+_FINNHUB_LOCK = asyncio.Lock()
 
 
 class FinnhubProviderAdapter(BaseProviderAdapter):
@@ -100,14 +107,13 @@ class FinnhubProviderAdapter(BaseProviderAdapter):
             latency_ms=duration_ms,
             credit_cost=0,
         )
-        await asyncio.sleep(_RATE_LIMIT_SLEEP)
         return ProviderFetchResult(
             provider=Provider.FINNHUB,
             dataset_type=DatasetType.NEWS_SENTIMENT,
             symbol=symbol,
             raw_data=raw,
             content_type="application/json",
-            fetched_at=datetime.now(tz=UTC),
+            fetched_at=utc_now(),
             duration_ms=duration_ms,
             bars_returned=bars_returned,
         )
@@ -147,14 +153,13 @@ class FinnhubProviderAdapter(BaseProviderAdapter):
             latency_ms=duration_ms,
             credit_cost=0,
         )
-        await asyncio.sleep(_RATE_LIMIT_SLEEP)
         return ProviderFetchResult(
             provider=Provider.FINNHUB,
             dataset_type=DatasetType.EARNINGS_CALENDAR,
             symbol="CALENDAR",
             raw_data=raw,
             content_type="application/json",
-            fetched_at=datetime.now(tz=UTC),
+            fetched_at=utc_now(),
             duration_ms=duration_ms,
             bars_returned=bars_returned,
         )
@@ -190,14 +195,13 @@ class FinnhubProviderAdapter(BaseProviderAdapter):
             latency_ms=duration_ms,
             credit_cost=0,
         )
-        await asyncio.sleep(_RATE_LIMIT_SLEEP)
         return ProviderFetchResult(
             provider=Provider.FINNHUB,
             dataset_type=DatasetType.INSIDER_TRANSACTIONS,
             symbol=ticker,
             raw_data=raw,
             content_type="application/json",
-            fetched_at=datetime.now(tz=UTC),
+            fetched_at=utc_now(),
             duration_ms=duration_ms,
             bars_returned=bars_returned,
         )
@@ -205,17 +209,27 @@ class FinnhubProviderAdapter(BaseProviderAdapter):
     # ── Private HTTP helper ────────────────────────────────────────────────────
 
     async def _get(self, url: str, params: dict[str, Any]) -> bytes:
-        """Execute GET request, map HTTP errors to domain errors."""
+        """Execute GET request, map HTTP errors to domain errors.
+
+        Acquires ``_FINNHUB_LOCK`` so that only one Finnhub request is in
+        flight per process at any time, then sleeps ``_RATE_LIMIT_SLEEP``
+        seconds before releasing the lock.
+        """
         # Never log url with params — contains api_token
         endpoint = self._sanitize_url_slug(url)
-        try:
-            response = await self._client.get(url, params=params, timeout=30.0)
-        except httpx.ConnectError as exc:
-            self._record_error(reason="connection_error", endpoint=endpoint)
-            raise ProviderUnavailable(f"Finnhub connection error: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            self._record_error(reason="timeout", endpoint=endpoint)
-            raise ProviderUnavailable(f"Finnhub request timeout: {exc}") from exc
+        async with _FINNHUB_LOCK:
+            try:
+                response = await self._client.get(url, params=params, timeout=30.0)
+            except httpx.ConnectError as exc:
+                self._record_error(reason="connection_error", endpoint=endpoint)
+                raise ProviderUnavailable(f"Finnhub connection error: {type(exc).__name__}") from exc
+            except httpx.TimeoutException as exc:
+                self._record_error(reason="timeout", endpoint=endpoint)
+                raise ProviderUnavailable(f"Finnhub request timeout: {type(exc).__name__}") from exc
+
+            # Sleep inside the lock so the next request cannot start until the
+            # rate-limit cooldown has elapsed.
+            await asyncio.sleep(_RATE_LIMIT_SLEEP)
 
         if response.status_code == 429:
             self._record_rate_limited(endpoint=endpoint)

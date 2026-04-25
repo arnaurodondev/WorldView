@@ -24,6 +24,7 @@ from market_ingestion.application.use_cases.execute_task import (
     _fallback_provider,
 )
 from market_ingestion.domain.enums import DatasetType, Provider
+from market_ingestion.domain.errors import ProviderAuthError, ProviderRateLimited
 from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
 # ---------------------------------------------------------------------------
@@ -336,3 +337,60 @@ async def test_fundamentals_not_tracked() -> None:
 
     tracker.record_zero.assert_not_called()
     tracker.reset.assert_not_called()
+
+
+# ===========================================================================
+# F-011f: Fallback fetch error paths
+# ===========================================================================
+
+
+@pytest.mark.unit()
+@pytest.mark.asyncio()
+async def test_fallback_rate_limited_retries_task() -> None:
+    """Fallback adapter raises ProviderRateLimited → task.retry() is called."""
+    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    tracker = _make_zero_bar_tracker(streak_value=5)
+    use_case, uow = _build_use_case(registry, zero_bar_tracker=tracker)
+    task = _make_task(DatasetType.OHLCV, "1d")
+
+    # Primary (Yahoo) returns zero bars to trigger failover
+    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
+    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+
+    # Fallback (EODHD) raises rate-limited error
+    eodhd_adapter = registry.get(Provider.EODHD)
+    eodhd_adapter.fetch_ohlcv = AsyncMock(side_effect=ProviderRateLimited("EODHD rate limit hit", retry_after=60.0))
+
+    with pytest.raises(ProviderRateLimited):
+        await use_case.execute(task)
+
+    # task.retry() should have been called (retryable error)
+    task.retry.assert_called_once()
+    # task.fail() should NOT have been called
+    task.fail.assert_not_called()
+
+
+@pytest.mark.unit()
+@pytest.mark.asyncio()
+async def test_fallback_auth_error_fails_task() -> None:
+    """Fallback adapter raises ProviderAuthError → task.fail() is called."""
+    registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
+    tracker = _make_zero_bar_tracker(streak_value=5)
+    use_case, uow = _build_use_case(registry, zero_bar_tracker=tracker)
+    task = _make_task(DatasetType.OHLCV, "1d")
+
+    # Primary (Yahoo) returns zero bars to trigger failover
+    yahoo_adapter = registry.get(Provider.YAHOO_FINANCE)
+    yahoo_adapter.fetch_ohlcv = AsyncMock(return_value=_make_fetch_result(bars_returned=0))
+
+    # Fallback (EODHD) raises auth error (fatal)
+    eodhd_adapter = registry.get(Provider.EODHD)
+    eodhd_adapter.fetch_ohlcv = AsyncMock(side_effect=ProviderAuthError("EODHD API key invalid"))
+
+    with pytest.raises(ProviderAuthError):
+        await use_case.execute(task)
+
+    # task.fail() should have been called (fatal error)
+    task.fail.assert_called_once()
+    # task.retry() should NOT have been called
+    task.retry.assert_not_called()

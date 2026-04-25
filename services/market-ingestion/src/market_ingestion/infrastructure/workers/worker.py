@@ -16,16 +16,13 @@ import asyncio
 import signal
 from typing import TYPE_CHECKING, Any, cast
 
-import httpx
-
 from market_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from market_ingestion.application.use_cases.execute_task import ExecuteTaskUseCase
 from market_ingestion.config import Settings
 from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 from market_ingestion.infrastructure.adapters.circuit_breaker import ValkeyCircuitBreaker
 from market_ingestion.infrastructure.adapters.object_store import S3ObjectStoreAdapter
-from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
-from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
+from market_ingestion.infrastructure.adapters.providers import build_provider_registry
 from market_ingestion.infrastructure.adapters.zero_bar_tracker import ValkeyZeroBarTracker
 from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
@@ -33,6 +30,7 @@ from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
+    from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
 logger = get_logger(__name__)
 
@@ -99,6 +97,10 @@ class WorkerProcess:
         self._registry = self._build_registry()
         self._object_store = self._build_object_store()
         self._serializer = DefaultCanonicalSerializer()
+
+        # Build Valkey-backed infrastructure once (F-007: avoid per-task connection leak)
+        self._circuit_breaker = self._build_circuit_breaker()
+        self._zero_bar_tracker = self._build_zero_bar_tracker()
 
     def stop(self) -> None:
         """Signal the worker loop to stop after the current batch."""
@@ -168,10 +170,6 @@ class WorkerProcess:
         """Execute a single claimed task through the pipeline."""
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
 
-        # Build optional Valkey-backed infrastructure (circuit breaker + zero-bar tracker)
-        circuit_breaker = self._build_circuit_breaker()
-        zero_bar_tracker = self._build_zero_bar_tracker()
-
         use_case = ExecuteTaskUseCase(
             uow=uow,
             provider_registry=self._registry,
@@ -179,8 +177,8 @@ class WorkerProcess:
             serializer=self._serializer,
             bronze_bucket=getattr(self._settings, "bronze_bucket", "market-bronze"),
             canonical_bucket=getattr(self._settings, "canonical_bucket", "market-canonical"),
-            circuit_breaker=circuit_breaker,
-            zero_bar_tracker=zero_bar_tracker,
+            circuit_breaker=self._circuit_breaker,
+            zero_bar_tracker=self._zero_bar_tracker,
         )
         try:
             await use_case.execute(task)
@@ -194,17 +192,8 @@ class WorkerProcess:
             )
 
     def _build_registry(self) -> ProviderRegistry:
-        registry = ProviderRegistry()
         timeout = getattr(self._settings, "provider_http_timeout_seconds", 30.0)
-        client = httpx.AsyncClient(timeout=timeout)
-        registry.register(
-            EODHDProviderAdapter(
-                api_key=self._settings.eodhd_api_key,
-                client=client,
-                base_url=self._settings.eodhd_base_url,
-            ),
-        )
-        return registry
+        return build_provider_registry(self._settings, http_timeout=timeout)
 
     def _build_circuit_breaker(self) -> ValkeyCircuitBreaker | None:
         """Build a Valkey-backed circuit breaker if Valkey is configured."""
@@ -240,8 +229,8 @@ class WorkerProcess:
 
             storage_settings = StorageSettings(
                 endpoint=self._settings.storage_endpoint,
-                access_key=self._settings.storage_access_key,
-                secret_key=self._settings.storage_secret_key,
+                access_key=self._settings.storage_access_key.get_secret_value(),
+                secret_key=self._settings.storage_secret_key.get_secret_value(),
             )
             storage = S3ObjectStorage(storage_settings)
         except ImportError:

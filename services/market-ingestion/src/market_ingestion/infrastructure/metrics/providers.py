@@ -8,7 +8,7 @@ import prometheus_client as prom
 s2_mi_provider_requests_total: prom.Counter = prom.Counter(
     "s2_mi_provider_requests_total",
     "Total provider API requests",
-    labelnames=["provider", "dataset_type", "timeframe", "status_code"],
+    labelnames=["provider", "dataset_type", "timeframe"],
 )
 s2_mi_provider_credits_total: prom.Counter = prom.Counter(
     "s2_mi_provider_credits_total",
@@ -19,7 +19,7 @@ s2_mi_provider_latency_seconds: prom.Histogram = prom.Histogram(
     "s2_mi_provider_latency_seconds",
     "Provider API request latency in seconds",
     labelnames=["provider", "dataset_type"],
-    buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
 )
 s2_mi_provider_rate_limited_total: prom.Counter = prom.Counter(
     "s2_mi_provider_rate_limited_total",
@@ -38,7 +38,6 @@ def record_provider_request(
     provider: str,
     dataset_type: str,
     timeframe: str,
-    status_code: int,
     duration_seconds: float,
     credit_cost: int = 0,
 ) -> None:
@@ -47,7 +46,6 @@ def record_provider_request(
         provider=provider,
         dataset_type=dataset_type,
         timeframe=timeframe,
-        status_code=str(status_code),
     ).inc()
     if credit_cost > 0:
         s2_mi_provider_credits_total.labels(provider=provider, dataset_type=dataset_type).inc(credit_cost)

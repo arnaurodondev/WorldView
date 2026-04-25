@@ -9,6 +9,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.integration
 
@@ -19,7 +20,7 @@ _NEEDS_INFRA = pytest.mark.skipif(
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_scheduler_tick_with_no_policies_completes():
     """ScheduleDueTasksUseCase.execute() completes with an empty policies table."""
     from market_ingestion.application.use_cases.schedule_tasks import ScheduleDueTasksUseCase
@@ -43,8 +44,8 @@ async def test_scheduler_tick_with_no_policies_completes():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_scheduler_process_tick_interval_respected():
     """Scheduler respects tick interval; multiple ticks are spread over time."""
     from market_ingestion.infrastructure.scheduler.scheduler import SchedulerProcess
@@ -83,8 +84,8 @@ async def test_scheduler_process_tick_interval_respected():
     assert tick_count == 3
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_worker_idle_back_pressure():
     """Worker correctly backs off when no tasks are available."""
     from market_ingestion.infrastructure.workers.worker import WorkerProcess
@@ -92,10 +93,10 @@ async def test_worker_idle_back_pressure():
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
     settings.database_url_read = ""
-    settings.eodhd_api_key = "demo"
+    settings.eodhd_api_key = SecretStr("demo")
     settings.storage_endpoint = "http://localhost:7480"
-    settings.storage_access_key = "key"
-    settings.storage_secret_key = "test-secret"  # noqa: S105
+    settings.storage_access_key = SecretStr("key")
+    settings.storage_secret_key = SecretStr("test-secret")
     settings.storage_bucket = "bucket"
     settings.kafka_bootstrap_servers = "localhost:9092"
 
@@ -104,7 +105,7 @@ async def test_worker_idle_back_pressure():
             "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.build_provider_registry"),
         patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
         patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
     ):

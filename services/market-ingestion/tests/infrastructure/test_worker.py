@@ -9,18 +9,18 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 _PATCH_FACTORIES = "market_ingestion.infrastructure.workers.worker._build_factories"
-_PATCH_EODHD = "market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"
-_PATCH_REGISTRY = "market_ingestion.infrastructure.workers.worker.ProviderRegistry"
+_PATCH_BUILD_REGISTRY = "market_ingestion.infrastructure.workers.worker.build_provider_registry"
 
 
 def _make_settings(concurrency: int = 2) -> MagicMock:
     s = MagicMock()
-    s.eodhd_api_key = "test-key"
+    s.eodhd_api_key = SecretStr("test-key")
     s.storage_endpoint = "http://localhost:9000"
-    s.storage_access_key = "key"
-    s.storage_secret_key = "secret"  # noqa: S105
+    s.storage_access_key = SecretStr("key")
+    s.storage_secret_key = SecretStr("secret")
     s.storage_bucket = "test-bucket"
     s.worker_concurrency = concurrency
     s.worker_batch_size = 10
@@ -33,8 +33,7 @@ def _make_worker(concurrency: int = 2) -> object:
 
     with (
         patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
-        patch(_PATCH_EODHD),
-        patch(_PATCH_REGISTRY),
+        patch(_PATCH_BUILD_REGISTRY),
     ):
         return WorkerProcess(settings=_make_settings(concurrency), worker_id="test-worker")
 
@@ -44,8 +43,8 @@ def _make_worker(concurrency: int = 2) -> object:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_worker_semaphore_timeout_logs_warning() -> None:
     """When semaphore acquisition times out, a warning is logged and the error is swallowed.
 
@@ -56,8 +55,7 @@ async def test_worker_semaphore_timeout_logs_warning() -> None:
 
     with (
         patch(_PATCH_FACTORIES, return_value=(MagicMock(), MagicMock())),
-        patch(_PATCH_EODHD),
-        patch(_PATCH_REGISTRY),
+        patch(_PATCH_BUILD_REGISTRY),
     ):
         worker = WorkerProcess(settings=_make_settings(concurrency=1), worker_id="test-worker")
 
@@ -80,8 +78,8 @@ async def test_worker_semaphore_timeout_logs_warning() -> None:
     worker._execute_task.assert_not_awaited()  # type: ignore[attr-defined]
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_worker_continues_other_tasks_after_timeout() -> None:
     """A semaphore timeout on one task does not prevent subsequent tasks from executing.
 
