@@ -482,7 +482,9 @@ Use `pytest-httpx` for HTTP mocking, `structlog.testing.capture_logs()` for even
 
 ---
 
-## Wave A-2: Finnhub Provider Adapter
+## Wave A-2: Finnhub Provider Adapter ✅
+
+**Status**: **DONE** — 2026-04-25 · 95 unit tests pass · ruff + mypy clean
 
 **Goal**: Implement `FinnhubProviderAdapter` for `NEWS_SENTIMENT`, `EARNINGS_CALENDAR`, and `INSIDER_TRANSACTIONS` dataset types. Wire into the provider registry so these datasets no longer consume EODHD credits (5 credits/call saved per request).
 
@@ -659,11 +661,11 @@ Use `pytest-httpx` and `structlog.testing.capture_logs()`.
 ---
 
 ### Validation Gate
-- [ ] `ruff check` on changed files
-- [ ] `mypy` on `market-ingestion` package
-- [ ] 12 new unit tests pass (7 Finnhub + 5 logging from A-1)
-- [ ] `Provider.FINNHUB` in enum
-- [ ] `build_provider_registry()` only registers Finnhub when API key present
+- [x] `ruff check` on changed files
+- [x] `mypy` on `market-ingestion` package
+- [x] 7 new unit tests pass (95 total)
+- [x] `Provider.FINNHUB` in enum
+- [x] `build_provider_registry()` only registers Finnhub when API key present
 
 ### Break Impact
 
