@@ -35,6 +35,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
+import { StatusBar } from "@/components/shell/StatusBar";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 
@@ -139,6 +140,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
             {children}
           </main>
         </div>
+
+        {/* Status bar — Bloomberg-inspired bottom bar with keyboard hints + connection status */}
+        {/* WHY before FlashOverlay: StatusBar is a normal flow element (24px fixed height).
+         * FlashOverlay uses position:fixed so it renders above everything at z-[9999] —
+         * DOM order doesn't affect its visual stacking, but keeping it last in the tree
+         * makes the layout structure clear: flow elements first, overlays after. */}
+        <StatusBar />
 
         {/* FlashOverlay — full-screen critical alert overlay (z-[9999], above everything) */}
         {/* WHY outside the flex layout: overlay must be position:fixed, not flow-positioned */}

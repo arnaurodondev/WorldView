@@ -86,7 +86,10 @@ export function MarketStatusPill() {
         >
           {/* Status dot */}
           <span
-            className={`h-1.5 w-1.5 rounded-full ${overall === "open" ? "bg-positive animate-pulse" : ""} ${overall === "pre-after-hours" ? "bg-warning" : ""} ${overall === "closed" ? "bg-destructive" : ""}`}
+            // WHY no animate-pulse: Bloomberg Terminal status dots are static.
+          // Pulsing reads as "consumer app notification" not "institutional terminal".
+          // Color change (teal/amber/red) already conveys the session state clearly.
+          className={`h-1.5 w-1.5 rounded-full ${overall === "open" ? "bg-positive" : ""} ${overall === "pre-after-hours" ? "bg-warning" : ""} ${overall === "closed" ? "bg-destructive" : ""}`}
           />
           {pillLabel}
         </button>

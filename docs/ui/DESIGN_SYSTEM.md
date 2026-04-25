@@ -79,8 +79,11 @@ All colors are expressed as CSS custom properties. **Never use hardcoded hex val
 
   /* ── Structural density ────────────────────────────────────────────── */
   --radius: 0.125rem;                    /* 2px — near-zero, terminal-sharp corners */
-  --panel-header-height: 32px;           /* compact panel chrome */
-  --topbar-height: 44px;                 /* 44px top chrome */
+  --panel-header-height: 24px;           /* PRD-0031: 24px (was 32px) — compact panel chrome */
+  --topbar-height: 36px;                 /* PRD-0031: 36px (was 44px) — dense top chrome */
+  --data-row-height: 22px;              /* PRD-0031: 22px data rows (was 32px/h-8) */
+  --sidebar-collapsed-width: 48px;      /* PRD-0031: icon-only collapsed sidebar */
+  --sidebar-expanded-width: 220px;      /* PRD-0031: expanded sidebar with watchlist */
 }
 ```
 
@@ -170,7 +173,7 @@ export default function RootLayout({ children }) {
 | **Ticker symbol** | **IBM Plex Mono** | `font-mono text-sm font-semibold uppercase tracking-widest` | 14px/600 |
 | **Price (header)** | **IBM Plex Mono** | `font-mono text-4xl font-semibold tabular-nums` | 36px/600 |
 | **Numeric value (large)** | **IBM Plex Mono** | `font-mono text-xl font-semibold tabular-nums` | 20px/600 |
-| **Numeric value (table)** | **IBM Plex Mono** | `font-mono text-xs tabular-nums text-right` | 12px/400 |
+| **Numeric value (table)** | **IBM Plex Mono** | `font-mono text-[11px] tabular-nums text-right` | **11px/400** (PRD-0031: was 12px) |
 | **Percentage change** | **IBM Plex Mono** | `font-mono text-sm tabular-nums` | 14px/400 |
 | **Terminal/chat text** | **IBM Plex Mono** | `font-mono text-xs leading-relaxed` | 12px/400 |
 

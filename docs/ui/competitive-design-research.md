@@ -2,7 +2,48 @@
 
 > **Purpose**: Research document covering the design systems of 8 major financial platforms.
 > Used to inform Worldview's typography, color, and layout decisions.
-> **Researched**: 2026-04-13
+> **Researched**: 2026-04-13, updated 2026-04-25 (v3 redesign research — Bloomberg/tastytrade/TWS/ZeroTerminal/Finviz patterns for PRD-0031)
+
+## 2026-04-25 v3 Redesign Research Summary
+
+Key patterns that Worldview v3 must adopt:
+
+### Row height and font size
+- Bloomberg: 18px rows, 10px font
+- tastytrade: 20px rows, 11px font
+- TWS Mosaic: 18px rows, 10px font
+- **Worldview v3 target: 22px rows, 11px IBM Plex Mono for data**
+
+### Panel resize and workspace save
+- TWS Mosaic: drag-to-resize, named workspaces (save/load)
+- TradingView: 12 layout patterns, named saves, drag borders
+- Bloomberg: tabbed unlimited panels
+- **Worldview v3 target: drag-to-resize, named workspaces in localStorage**
+
+### Navigation
+- TWS/tastytrade: 48px icon rail (no text labels)
+- Bloomberg: left sidebar + tabbed content
+- **Worldview v3 target: 48px icon rail, no text labels**
+
+### Screener density
+- Finviz: 14+ visible columns at 1440px
+- tastytrade: 12-16 columns
+- **Worldview v2: 7 columns** ← this is the gap
+- **Worldview v3 target: 12 columns**
+
+### Color coding
+- All platforms: green/red for positive/negative (universal, non-negotiable)
+- Bloomberg: amber accent
+- Worldview: yellow primary (Bloomberg-adjacent) — keep
+
+### What creates "professional" feel
+1. Dark background, never white or light gray
+2. Monospace font for ALL numbers (not just prices)
+3. 1px borders between rows (not rounded per-row cards)
+4. Semantic color coding (trader spots outliers in 2 sec without reading)
+5. Minimal animation — instant response
+6. No decorative gradients, no glassmorphism
+7. Persistent watchlist/positions always visible (never hidden behind nav)
 
 ---
 

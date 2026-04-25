@@ -36,6 +36,12 @@
 import { useEffect, useState, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+// WHY useQueryClient: after the callback completes (success or failure), we
+// invalidate the "brokerage-connections" query so the Brokerages tab on the
+// Portfolio page reflects the new connection state immediately when the user
+// navigates back. Without this, TanStack Query serves stale cached data and
+// the user sees the old list until the staleTime window expires.
+import { useQueryClient } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -52,6 +58,9 @@ export default function BrokerageCallbackPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { accessToken } = useAuth();
+  // WHY here (not in the effect): useQueryClient() is a hook and must be called
+  // at the top level of the component, not inside useEffect.
+  const queryClient = useQueryClient();
 
   // Read all four required params from the URL
   // WHY ?? "": useSearchParams().get() returns null for missing params;
@@ -101,9 +110,20 @@ export default function BrokerageCallbackPage() {
         sessionId,
       })
       .then(() => {
+        // WHY invalidate on success: the connection status in TanStack Query cache
+        // is still "pending" from when the modal first created it. After activation
+        // it becomes "active". Invalidating forces ConnectedBrokeragesList to
+        // re-fetch and show the correct status immediately when the user returns
+        // to the Portfolio page via the "Go to Portfolio" button.
+        void queryClient.invalidateQueries({ queryKey: ["brokerage-connections"] });
         setState("success");
       })
       .catch((err: unknown) => {
+        // WHY also invalidate on error: a failed activation attempt may have left
+        // the connection in an "error" status on the server. Invalidating ensures
+        // ConnectedBrokeragesList shows the correct error badge + recovery options
+        // (Sync Now / Disconnect) so the user is not stuck on a stale "pending" view.
+        void queryClient.invalidateQueries({ queryKey: ["brokerage-connections"] });
         setState("error");
         setErrorMessage(
           err instanceof Error
@@ -125,10 +145,9 @@ export default function BrokerageCallbackPage() {
   // ── Loading UI ───────────────────────────────────────────────────────────
   if (state === "idle" || state === "loading") {
     return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8">
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-3">
         <Loader2
-          className="h-10 w-10 animate-spin"
-          style={{ color: "#0EA5E9" }}
+          className="h-10 w-10 animate-spin text-primary"
           aria-label="Activating brokerage connection"
         />
         <div className="text-center">
@@ -146,10 +165,9 @@ export default function BrokerageCallbackPage() {
   // ── Success UI ───────────────────────────────────────────────────────────
   if (state === "success") {
     return (
-      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8">
+      <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-3">
         <CheckCircle2
-          className="h-12 w-12"
-          style={{ color: "#26A69A" }}
+          className="h-12 w-12 text-positive"
           aria-hidden="true"
         />
         <div className="text-center">
@@ -176,10 +194,9 @@ export default function BrokerageCallbackPage() {
 
   // ── Error UI ─────────────────────────────────────────────────────────────
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8">
+    <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-3">
       <XCircle
-        className="h-12 w-12"
-        style={{ color: "#EF5350" }}
+        className="h-12 w-12 text-negative"
         aria-hidden="true"
       />
       <div className="text-center">

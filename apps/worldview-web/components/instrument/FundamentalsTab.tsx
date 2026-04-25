@@ -70,7 +70,10 @@ function getMetricClass(
   if (greenBelow != null && value < greenBelow) return "text-positive";
   // Amber = in-between — not great, not terrible; Tailwind's amber-400 in dark mode
   // WHY amber-400 not amber-500: 500 is too orange against the dark #0A0E14 background
-  return "text-amber-400";
+  // WHY text-warning not text-amber-400: --warning (#F59E0B) is the design system
+  // token for cautionary signals. Using raw Tailwind amber-400 bypasses the token
+  // and breaks if the warning color changes in globals.css.
+  return "text-warning";
 }
 
 /**
@@ -91,7 +94,10 @@ function getMarginClass(
   if (value == null) return "text-muted-foreground";
   if (greenAbove != null && value > greenAbove) return "text-positive";
   if (redBelow != null && value < redBelow) return "text-negative";
-  return "text-amber-400";
+  // WHY text-warning not text-amber-400: --warning (#F59E0B) is the design system
+  // token for cautionary signals. Using raw Tailwind amber-400 bypasses the token
+  // and breaks if the warning color changes in globals.css.
+  return "text-warning";
 }
 
 // ── Metric row sub-component ──────────────────────────────────────────────────

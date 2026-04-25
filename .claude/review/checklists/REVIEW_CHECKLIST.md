@@ -103,6 +103,7 @@
 - [ ] Import guards pass: `python3 scripts/import_guards/check_import_guards.py --strict --baseline scripts/import_guards/baseline.json`
 - [ ] `setattr` uses field allowlist, never user-controlled keys directly
 - [ ] All Kafka consumers extend `BaseKafkaConsumer` — no direct `confluent_kafka.Consumer` (R20)
+- [ ] All `market-ingestion` provider adapters extend `BaseProviderAdapter` (not `ProviderAdapter` directly) — ensures `_record_api_call()` is available and generic metrics are emitted (STANDARDS §18)
 - [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
 - [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
 
@@ -177,6 +178,10 @@ Mark N/A for pure backend changes.
 - [ ] All colors use CSS variables from `docs/ui/DESIGN_SYSTEM.md §2` — no hardcoded hex (HR-037)
 - [ ] Positive values use `--positive` (green), negative use `--negative` (red) — consistently
 - [ ] `class="dark"` remains on `<html>` — no conditional theme switching
+- [ ] No `style={{ color: "#hex" }}` inline styles — use Tailwind token classes (`text-primary`, `text-positive`, `text-negative`) instead (BP-202)
+- [ ] No `rounded-full` on institutional UI elements — sharp 2px corners everywhere except status indicator dots
+- [ ] No `animate-pulse` on status indicators — static color change conveys state without consumer-app animation
+- [ ] No hardcoded hex in `className` strings (e.g. `border-[#FFD60A]`) — use `border-primary` and design token classes
 
 ### 10g. Dependencies
 - [ ] **Exact version pins** in `package.json` (no `^` or `~`) (HR-036)

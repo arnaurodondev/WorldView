@@ -935,7 +935,9 @@ Replace `<Sidebar />` with `<CollapsibleSidebar />` in the app layout, wire `Wor
 
 ---
 
-## Wave 2 — Workspace Full Redesign
+## Wave 2 ✅ — Workspace Full Redesign
+
+**Status**: **DONE** — 2026-04-25 · 359 tests pass · lint + typecheck clean
 
 **Goal**: Implement react-resizable-panels, named workspaces, 10 panel types, and symbol linking.
 **Depends on**: Wave 1
@@ -1213,9 +1215,9 @@ Complete workspace persistence including panel sizes and symbol linking state.
 ```
 
 ### Wave 2 Validation Gate
-- [ ] `pnpm run typecheck` exits 0
-- [ ] `pnpm run lint` exits 0
-- [ ] `pnpm test` — all tests pass
+- [x] `pnpm run typecheck` exits 0
+- [x] `pnpm run lint` exits 0
+- [x] `pnpm test` — all tests pass (359)
 - [ ] Visual: 4 default workspace presets visible in tabs
 - [ ] Visual: panel drag-to-resize works (handle turns primary on hover)
 - [ ] Visual: all 10 panel types render correct content
@@ -1231,7 +1233,9 @@ Complete workspace persistence including panel sizes and symbol linking state.
 
 ---
 
-## Wave 3 — Screener Full Redesign
+## Wave 3 ✅ — Screener Full Redesign
+
+**Status**: **DONE** — 2026-04-25 · 367 tests pass · lint + typecheck clean
 
 **Goal**: 12-column screener with virtual scroll and collapsible filter bar.
 **Depends on**: Wave 1 (parallel with Wave 2+)
@@ -1407,9 +1411,9 @@ New 12-column screener table per PRD §7.
 ```
 
 ### Wave 3 Validation Gate
-- [ ] `pnpm run typecheck` exits 0
-- [ ] `pnpm run lint` exits 0
-- [ ] `pnpm test` — all screener tests pass
+- [x] `pnpm run typecheck` exits 0
+- [x] `pnpm run lint` exits 0
+- [x] `pnpm test` — all screener tests pass (367 total)
 - [ ] Visual: 12 columns visible in browser at 1440px
 - [ ] Visual: rows are exactly 22px high (verify with DevTools)
 - [ ] **Terminal quality**: ALL column headers are 10px uppercase
@@ -1425,7 +1429,9 @@ New 12-column screener table per PRD §7.
 
 ---
 
-## Wave 4 — Portfolio Full Redesign
+## Wave 4 ✅ — Portfolio Full Redesign
+
+**Status**: **DONE** — 2026-04-25 · 367 tests pass · lint + typecheck clean
 
 **Goal**: 4-tab portfolio with 9-col holdings table, sector allocation, transactions (+ DIVIDEND), watchlists (multi-tab), and brokerages.
 **Depends on**: Wave 1 (parallel with Waves 2, 3, 5)
