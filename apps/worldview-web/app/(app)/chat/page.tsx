@@ -48,11 +48,12 @@ import {
   useState,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { MessageSquare, Plus, Send, Trash2, Bot } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { safeExternalUrl } from "@/lib/utils";
+import { safeExternalUrl, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -80,6 +81,23 @@ interface StreamingMessage {
  */
 const PLACEHOLDER_THREAD_TITLE = "New conversation";
 
+/**
+ * STARTER_QUESTIONS — pre-filled question cards shown when a thread has no messages.
+ *
+ * WHY starter questions: empty-thread state is a common UX dead zone — users
+ * don't know what to ask first. Pre-seeded cards reduce blank-page anxiety and
+ * guide traders toward high-value research questions. [TICKER] is replaced at
+ * render time with the entity ticker from the URL param (if available).
+ */
+const STARTER_QUESTIONS = [
+  "What are the key risks for [TICKER] next quarter?",
+  "Compare MSFT and GOOGL cloud revenue growth over 4 quarters",
+  "Summarize [TICKER]'s latest earnings call",
+  "Recent insider transactions and what they signal",
+  "What analyst consensus shows for [TICKER] in 2026?",
+  "Search SEC filings for 'supply chain' risk exposure",
+] as const;
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 /**
@@ -106,10 +124,52 @@ function TypingIndicator() {
 }
 
 /**
+ * CITATION_ICONS — maps citation source type to a display icon.
+ *
+ * WHY source type icons: visual icons let traders instantly recognise the
+ * nature of a citation (SEC filing vs news vs earnings call) without reading
+ * the source string. This is especially useful when 3–5 citations appear
+ * below an assistant message and the trader scans for the most authoritative one.
+ */
+const CITATION_ICONS: Record<string, string> = {
+  sec: "📄",
+  news: "📰",
+  earnings: "📊",
+  knowledge_graph: "🕸",
+};
+
+/**
+ * getCitationIcon — infer a citation icon from source or title heuristics.
+ * WHY heuristics: Citation.source is a human-readable string like "Reuters",
+ * not a structured type enum. We fall back to title-keyword matching when
+ * source doesn't match a known key.
+ */
+function getCitationIcon(cite: Citation): string {
+  const src = cite.source.toLowerCase();
+  if (src.includes("sec") || src.includes("edgar") || src.includes("filing")) {
+    return CITATION_ICONS.sec ?? "📄";
+  }
+  if (src.includes("earning") || src.includes("transcript")) {
+    return CITATION_ICONS.earnings ?? "📊";
+  }
+  if (src.includes("knowledge") || src.includes("graph")) {
+    return CITATION_ICONS.knowledge_graph ?? "🕸";
+  }
+  // Title heuristics for news citations
+  const title = (cite.title ?? "").toLowerCase();
+  if (title.includes("10-k") || title.includes("10-q") || title.includes("8-k")) {
+    return CITATION_ICONS.sec ?? "📄";
+  }
+  return CITATION_ICONS.news ?? "📰";
+}
+
+/**
  * CitationList — renders source citations below assistant messages.
  * WHY show citations: RAG responses cite the exact articles the LLM used for
  * its answer. Analysts can click through to verify the primary source — critical
  * for finance where accuracy of sourcing matters legally.
+ *
+ * Wave 7 enhancement: each citation now shows a type icon + source + title + match%.
  */
 function CitationList({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
@@ -129,7 +189,18 @@ function CitationList({ citations }: { citations: Citation[] }) {
         >
           {/* WHY superscript index: matches academic citation convention analysts recognise */}
           <sup className="font-mono text-[9px]">[{i + 1}]</sup>
-          <span className="max-w-[160px] truncate">{cite.title}</span>
+          {/* Type icon — communicates SEC/news/earnings source at a glance */}
+          <span aria-hidden="true">{getCitationIcon(cite)}</span>
+          {/* Source name — abbreviated to fit pill width */}
+          <span className="font-mono text-[9px] text-primary/70">{cite.source}</span>
+          {/* Title — truncated */}
+          <span className="max-w-[140px] truncate">{cite.title}</span>
+          {/* Match % — how relevant the citation was to the question */}
+          {/* WHY show match%: traders care about source reliability; a 90% match
+              means the LLM used this article heavily vs a 20% tangential reference */}
+          <span className="font-mono text-[9px] text-primary/60">
+            {(cite.relevance_score * 100).toFixed(0)}%
+          </span>
         </a>
       ))}
     </div>
@@ -230,6 +301,17 @@ function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
 
 export default function ChatPage() {
   const { accessToken } = useAuth();
+
+  // ── Entity context from URL param ─────────────────────────────────────────
+  // WHY useSearchParams: the instrument detail page navigates to /chat?entity_id=XXX
+  // to pre-load AI context so questions auto-focus on the selected entity.
+  const searchParams = useSearchParams();
+  const entityIdFromUrl = searchParams.get("entity_id");
+
+  // WHY entityTicker: we use the entity_id as-is for the context badge since
+  // a gateway lookup for ticker would require additional async complexity.
+  // A future wave can enrich this with a getEntity() call.
+  const [entityTicker] = useState<string | null>(entityIdFromUrl);
 
   // ── Thread list state ──────────────────────────────────────────────────────
 
@@ -780,6 +862,41 @@ export default function ChatPage() {
                   </div>
                 )}
 
+                {/* ── Starter questions — shown when thread has no messages ────── */}
+                {/* WHY 2-col grid: 6 questions fit in a balanced 3-row × 2-col layout
+                    that fills the empty thread canvas without feeling sparse */}
+                {!threadLoading && localMessages.length === 0 && !streaming && (
+                  <div className="grid grid-cols-2 gap-2 p-3">
+                    {STARTER_QUESTIONS.map((q, i) => {
+                      // Replace [TICKER] placeholder with entity ticker from URL or leave as-is
+                      const displayQuestion = q.replace(
+                        "[TICKER]",
+                        entityTicker ?? "[TICKER]",
+                      );
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          // WHY rounded-[2px]: design system 2px radius everywhere
+                          className={cn(
+                            "rounded-[2px] border border-border bg-card",
+                            "cursor-pointer p-3 text-left",
+                            "hover:border-primary/40 hover:bg-muted/40",
+                            "text-[12px] leading-relaxed text-foreground",
+                            "transition-colors duration-0",
+                          )}
+                          // WHY inject into input (not send directly): trader may want
+                          // to edit the question before sending — especially the
+                          // [TICKER] placeholder variants.
+                          onClick={() => setInput(displayQuestion)}
+                        >
+                          {displayQuestion}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Render persisted messages */}
                 {localMessages.map((msg) => (
                   <MessageBubble key={msg.message_id} message={msg} />
@@ -814,6 +931,21 @@ export default function ChatPage() {
             {/* ── Input area ─────────────────────────────────────────────────── */}
             {/* WHY p-3 (was p-4): standard terminal panel padding */}
             <div className="border-t border-border bg-background p-3">
+              {/* Entity context badge — shown when ?entity_id= param is set */}
+              {/* WHY above input: the badge tells the trader which entity their
+                  questions will be focused on. Placing it above the textarea
+                  keeps it in natural reading order (context → input). */}
+              {entityIdFromUrl && (
+                <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
+                  <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
+                    Context: {entityTicker ?? entityIdFromUrl}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    questions will focus on this entity
+                  </span>
+                </div>
+              )}
+
               {/* Cancel button — only visible while streaming */}
               {isStreaming && (
                 <div className="mb-2 flex justify-center">

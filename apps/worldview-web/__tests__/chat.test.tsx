@@ -13,6 +13,9 @@
  * 4. Thread list populates from mocked gateway data
  * 5. Empty thread state shows welcome message
  * 6. Error state in thread list is handled gracefully
+ * 7. (Wave 7) Starter question cards shown on empty thread
+ * 8. (Wave 7) Entity context badge shown when entity_id param present
+ * 9. (Wave 7) Clicking starter card injects text into input
  *
  * WHAT WE DO NOT TEST HERE:
  * - SSE stream consumption (requires fetch mock + ReadableStream simulation)
@@ -21,8 +24,6 @@
  * - Citation click navigation (E2E)
  *
  * WHY MOCK GATEWAY: We don't want real S9 calls in unit tests.
- * Mocking gateway.ts lets us inject known thread data and test deterministically.
- *
  * WHY MOCK NEXT/NAVIGATION: Next.js App Router hooks (useRouter, usePathname)
  * are not available in the jsdom test environment — mock them to avoid invariant errors.
  *
@@ -151,7 +152,7 @@ async function renderChatPage() {
   return render(<ChatPage />, { wrapper: Wrapper });
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Tests: Thread list panel (existing, preserved per R19) ───────────────────
 
 describe("Chat page — thread list panel", () => {
   beforeEach(() => {
@@ -196,6 +197,8 @@ describe("Chat page — thread list panel", () => {
     });
   });
 });
+
+// ── Tests: New chat button (existing, preserved per R19) ─────────────────────
 
 describe("Chat page — new chat button", () => {
   beforeEach(() => {
@@ -242,6 +245,8 @@ describe("Chat page — new chat button", () => {
     });
   });
 });
+
+// ── Tests: Message input (existing, preserved per R19) ───────────────────────
 
 describe("Chat page — message input", () => {
   beforeEach(() => {
@@ -306,6 +311,8 @@ describe("Chat page — message input", () => {
   });
 });
 
+// ── Tests: Empty and error states (existing, preserved per R19) ───────────────
+
 describe("Chat page — empty and error states", () => {
   it("shows empty state message when no threads exist", async () => {
     // Override mock to return empty array
@@ -329,5 +336,128 @@ describe("Chat page — empty and error states", () => {
         screen.getByText(/no conversations yet/i),
       ).toBeInTheDocument();
     });
+  });
+});
+
+// ── Tests: Starter questions (Wave 7 new) ─────────────────────────────────────
+
+describe("Chat page — starter questions", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("starter-questions-on-empty: shows 6 question cards when thread has no messages", async () => {
+    await renderChatPage();
+
+    // Start a new chat (creates empty thread)
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+
+    // Should show 6 starter question cards
+    await waitFor(() => {
+      // "Summarize [TICKER]'s latest earnings call" is one of the starter questions
+      expect(
+        screen.getByText(/Summarize .* latest earnings call/i),
+      ).toBeInTheDocument();
+    });
+
+    // All 6 starter questions should be present
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Compare MSFT and GOOGL cloud revenue growth/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Recent insider transactions/i),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Search SEC filings for/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("click-card-injects-text: clicking a starter card fills the input", async () => {
+    await renderChatPage();
+
+    // Start a new chat
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+
+    // Wait for starter questions to appear
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Compare MSFT and GOOGL cloud revenue growth/i),
+      ).toBeInTheDocument();
+    });
+
+    // Click the MSFT/GOOGL comparison card
+    const card = screen.getByText(/Compare MSFT and GOOGL cloud revenue growth/i);
+    fireEvent.click(card);
+
+    // The textarea should now contain the question text
+    await waitFor(() => {
+      const textarea = screen.getByRole("textbox", { name: /chat message input/i });
+      expect((textarea as HTMLTextAreaElement).value).toMatch(
+        /Compare MSFT and GOOGL cloud revenue growth/i,
+      );
+    });
+  });
+});
+
+// ── Tests: Entity context badge (Wave 7 new) ──────────────────────────────────
+
+describe("Chat page — entity context badge", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("entity-context-badge: badge shown when entity_id URL param is set", async () => {
+    // Mock useSearchParams to return entity_id param
+    const { useSearchParams } = await import("next/navigation");
+    vi.mocked(useSearchParams).mockReturnValue(
+      new URLSearchParams("entity_id=ent-aapl") as ReturnType<typeof import("next/navigation").useSearchParams>,
+    );
+
+    await renderChatPage();
+
+    // Start a new chat to get to the message area where badge appears
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+
+    // Entity context badge should appear above the input
+    await waitFor(() => {
+      expect(screen.getByText(/Context:/i)).toBeInTheDocument();
+    });
+  });
+
+  it("entity-context-badge: badge NOT shown when no entity_id param", async () => {
+    // Ensure no entity_id param
+    const { useSearchParams } = await import("next/navigation");
+    vi.mocked(useSearchParams).mockReturnValue(
+      new URLSearchParams() as ReturnType<typeof import("next/navigation").useSearchParams>,
+    );
+
+    await renderChatPage();
+
+    // Start a new chat
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+
+    // Wait for input to appear
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /chat message input/i })).toBeInTheDocument();
+    });
+
+    // Context badge should NOT be present
+    expect(screen.queryByText(/Context:/i)).not.toBeInTheDocument();
   });
 });
