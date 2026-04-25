@@ -138,7 +138,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
       aria-describedby="flash-alert-message"
     >
       <div
-        className="relative w-full max-w-lg overflow-hidden rounded-lg border border-destructive/50 bg-background shadow-2xl"
+        className="relative w-full max-w-lg overflow-hidden rounded-[2px] border border-destructive/50 bg-background shadow-2xl"
         onClick={(e) => e.stopPropagation()} // WHY stopPropagation: prevent backdrop click from bubbling
       >
         {/* Countdown progress bar — red fills from left, shrinks right to left */}
@@ -147,7 +147,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
           style={{ width: `${progressPct}%` }}
         />
 
-        <div className="p-6">
+        <div className="p-4">
           {/* Header: severity badge + close button */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2">
