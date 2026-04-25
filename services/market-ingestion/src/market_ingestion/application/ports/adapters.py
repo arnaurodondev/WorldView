@@ -35,6 +35,7 @@ class ProviderFetchResult:
     range_start: datetime | None = None
     range_end: datetime | None = None
     provider_metadata: dict[str, Any] | None = None
+    bars_returned: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +63,13 @@ class ProviderAdapter(ABC):
     ) -> ProviderFetchResult:
         """Fetch real-time quotes for a symbol.
 
-        Raises:
+        Raises
+        ------
             ProviderRateLimited: HTTP 429.
             ProviderUnavailable: HTTP 5xx or connection timeout.
             ProviderAuthError: HTTP 401/403.
             ProviderDataError: Malformed response.
+
         """
 
     @abstractmethod
@@ -110,8 +113,10 @@ class ObjectStoreAdapter(ABC):
     ) -> ObjectRef:
         """Store an object and return its reference.
 
-        Raises:
+        Raises
+        ------
             StorageUnavailable: If storage is unreachable.
+
         """
 
     @abstractmethod
@@ -190,11 +195,14 @@ class CanonicalSerializer(ABC):
         can identify and parse it without additional context.
 
         Args:
+        ----
             raw_data: The parsed JSON payload from the provider (dict or list).
             dataset_type: String value of the DatasetType enum (e.g. "economic_events").
             symbol: The task symbol (e.g. "EVENTS.USA", "AAPL").
             source: String value of the Provider enum (e.g. "eodhd").
 
         Returns:
+        -------
             UTF-8-encoded NDJSON with a single envelope record, newline-terminated.
+
         """

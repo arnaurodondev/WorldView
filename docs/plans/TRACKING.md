@@ -11,13 +11,16 @@
 | PLAN-0014 | Claude Code Source Adaptations — Tier 2 Enhancements (hooks, subagent isolation, memory scopes, S8 RAG pipeline) | investigation-2026-04-01 | pending | 0/6 | — | 2026-04-01 |
 | PLAN-0023 | Knowledge Graph Analytics & NLP Cache Layer (Community Detection, Hub Scoring, Graph Evolution, NER Cache, SSRF Hardening) | PRD-0023 | draft | 0/8 | — | 2026-04-08 |
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
-| PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | draft | 0/5 | — | 2026-04-24 |
+| PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
+| PLAN-0031 | Terminal UI v3 Ground-Up Redesign — 48px icon rail, resizable multi-panel workspace, named workspaces, 12-column screener, semantic portfolio table, 22px rows, 11px data font | PRD-0031 | draft | 0/8 | — | 2026-04-25 |
+| PLAN-0038 | Free Provider Integration + Loki API Usage Observability — BaseProviderAdapter (generic observability), Finnhub adapter, Yahoo Finance adapter, `s2_mi_provider_*` Prometheus metrics, `provider_api_call` Loki events, routing in ExecuteTaskUseCase | investigation-2026-04-25 | in-progress | 1/4 | — | 2026-04-25 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
 
 | Date | Report | Scope | Result |
 |------|--------|-------|--------|
+| 2026-04-25 | [2026-04-25-qa-terminal-redesign-report.md](../audits/2026-04-25-qa-terminal-redesign-report.md) | Terminal redesign gap audit (Waves A/B/C vs qa-frontend-design.md plan) — TypeCheck FAIL (5 errors), no screenshots, workspace placeholders still present, screener 7 cols not 8, SessionStatsStrip missing, Wave C/D/E not committed | NOT_READY |
 | 2026-04-13 | [2026-04-13-qa-e2e-live-stack-report.md](../audits/2026-04-13-qa-e2e-live-stack-report.md) | Pre-demo live-stack QA — 47 containers, 10 DBs, all migrations, 4,210 pass / 4 fail (BP-134 JWT gaps) / 56 skip; direct API endpoint testing via RS256 JWT | GO |
 | 2026-04-13 | [2026-04-13-qa-plan-0027-design-review.md](../audits/2026-04-13-qa-plan-0027-design-review.md) | PLAN-0027 canvas design QA — 12 pages reviewed and enhanced in worldview-mvp.pen; Bloomberg-quality density achieved across all pages; 2 new pages built (Alerts, Chat/Brief); shadcn/ui component map added to Design System | GO |
 | 2026-04-18 | [2026-04-18-qa-plan-0028-s9-report.md](../audits/2026-04-18-qa-plan-0028-s9-report.md) | PLAN-0028 S9-1..S9-3 QA — 5-agent review of ~40 new proxy routes + S10 WS middleware; 127 api-gateway + 338 alert tests PASS; 1 mypy fix (BaseException); 0 BLOCKING, 2 CRITICAL (pre-existing JWT bypass + test gaps), 8 MAJOR | PASS_WITH_WARNINGS |

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import urlparse
 
-from market_ingestion.application.ports.adapters import ProviderAdapter, ProviderFetchResult
+from market_ingestion.application.ports.adapters import ProviderFetchResult
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import (
     ProviderAuthError,
@@ -15,6 +16,8 @@ from market_ingestion.domain.errors import (
     ProviderRateLimited,
     ProviderUnavailable,
 )
+from market_ingestion.domain.freshness import EODHD_CREDIT_COST, EODHD_INTRADAY_COST
+from market_ingestion.infrastructure.adapters.providers.base import BaseProviderAdapter
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -26,10 +29,12 @@ logger = get_logger(__name__)
 def _endpoint_slug(url: str) -> str:
     """Extract a safe endpoint label for metrics/logs (no query params, no secrets).
 
-    Examples:
+    Examples
+    --------
         "https://eodhd.com/api/real-time/AAPL.US" → "real-time"
         "https://eodhd.com/api/eod/MSFT.US"       → "eod"
         "https://eodhd.com/api/fundamentals/TSLA"  → "fundamentals"
+
     """
     path = urlparse(url).path
     # Split on "/" and take the first non-empty segment after "api".
@@ -44,9 +49,11 @@ def _parse_retry_after(header_value: str | None) -> float | None:
     - Integer delta-seconds: ``"120"``
     - HTTP-date: ``"Wed, 01 Jan 2026 12:00:00 GMT"``
 
-    Returns:
+    Returns
+    -------
         Seconds to wait (≥ 0.0), or ``None`` if the header is absent or
         unparseable.  Does NOT clamp to a maximum — callers apply their own cap.
+
     """
     if header_value is None:
         return None
@@ -77,7 +84,7 @@ _TIMEFRAME_MAP = {
 }
 
 
-class EODHDProviderAdapter(ProviderAdapter):
+class EODHDProviderAdapter(BaseProviderAdapter):
     """Fetches OHLCV, quotes, and fundamentals from the EODHD (EOD Historical Data) API.
 
     All HTTP errors are mapped to domain errors:
@@ -134,6 +141,22 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.OHLCV.value,
+            symbol=symbol,
+            exchange=exchange or "",
+            timeframe=timeframe,
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("ohlcv", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.OHLCV,
@@ -144,6 +167,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             duration_ms=duration_ms,
             range_start=start,
             range_end=end,
+            bars_returned=bars_returned,
         )
 
     async def fetch_quotes(
@@ -160,6 +184,16 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        self._record_api_call(
+            dataset_type=DatasetType.QUOTES.value,
+            symbol=symbol,
+            exchange=exchange or "",
+            timeframe="",
+            bars_returned=1,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("quotes", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.QUOTES,
@@ -168,6 +202,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=1,
         )
 
     async def fetch_fundamentals(
@@ -194,6 +229,16 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        self._record_api_call(
+            dataset_type=DatasetType.FUNDAMENTALS.value,
+            symbol=symbol,
+            exchange=exchange or "",
+            timeframe="",
+            bars_returned=1,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("fundamentals", 10),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.FUNDAMENTALS,
@@ -203,6 +248,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
             provider_metadata={"variant": variant},
+            bars_returned=1,
         )
 
     async def health_check(self) -> bool:
@@ -244,6 +290,22 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.OHLCV.value,
+            symbol=symbol,
+            exchange=exchange or "",
+            timeframe=interval,
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_INTRADAY_COST,
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.OHLCV,
@@ -253,6 +315,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
             provider_metadata={"interval": eodhd_interval},
+            bars_returned=bars_returned,
         )
 
     async def fetch_earnings_calendar(
@@ -276,6 +339,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.EARNINGS_CALENDAR.value,
+            symbol="CALENDAR",
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("earnings_calendar", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.EARNINGS_CALENDAR,
@@ -284,6 +362,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     async def fetch_economic_events(
@@ -313,6 +392,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.ECONOMIC_EVENTS.value,
+            symbol=country,
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("economic_events", 5),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.ECONOMIC_EVENTS,
@@ -321,6 +415,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     async def fetch_macro_indicator(self, symbol: str) -> ProviderFetchResult:
@@ -340,6 +435,15 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        self._record_api_call(
+            dataset_type=DatasetType.MACRO_INDICATOR.value,
+            symbol=symbol,
+            timeframe="",
+            bars_returned=1,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("macro_indicator", 5),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.MACRO_INDICATOR,
@@ -349,6 +453,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
             provider_metadata={"country": country, "indicator": indicator},
+            bars_returned=1,
         )
 
     async def fetch_news_sentiment(
@@ -377,6 +482,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.NEWS_SENTIMENT.value,
+            symbol=symbol,
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("news_sentiment", 5),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.NEWS_SENTIMENT,
@@ -385,6 +505,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     async def fetch_insider_transactions(
@@ -411,6 +532,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.INSIDER_TRANSACTIONS.value,
+            symbol=ticker,
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("insider_transactions", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.INSIDER_TRANSACTIONS,
@@ -419,6 +555,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     async def fetch_yield_curve(
@@ -453,6 +590,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.YIELD_CURVE.value,
+            symbol=series_symbol,
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("yield_curve", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.YIELD_CURVE,
@@ -461,6 +613,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     async def fetch_historical_market_cap(
@@ -484,6 +637,21 @@ class EODHDProviderAdapter(ProviderAdapter):
         raw = await self._get(url, params)
         duration_ms = int((time.monotonic() - t0) * 1000)
 
+        try:
+            parsed = json.loads(raw)
+            bars_returned = len(parsed) if isinstance(parsed, list) else 1
+        except Exception:
+            bars_returned = 0
+
+        self._record_api_call(
+            dataset_type=DatasetType.MARKET_CAP.value,
+            symbol=ticker,
+            timeframe="",
+            bars_returned=bars_returned,
+            latency_ms=duration_ms,
+            credit_cost=EODHD_CREDIT_COST.get("market_cap", 1),
+        )
+
         return ProviderFetchResult(
             provider=Provider.EODHD,
             dataset_type=DatasetType.MARKET_CAP,
@@ -492,6 +660,7 @@ class EODHDProviderAdapter(ProviderAdapter):
             content_type="application/json",
             fetched_at=datetime.now(tz=UTC),
             duration_ms=duration_ms,
+            bars_returned=bars_returned,
         )
 
     # -------------------------------------------------------------------------
