@@ -69,6 +69,10 @@ INTELLIGENCE_DB_URL = os.environ.get(
     "INTELLIGENCE_DB_URL",
     "postgresql://postgres:postgres@localhost:5432/intelligence_db",
 )
+CONTENT_INGESTION_DB_URL = os.environ.get(
+    "CONTENT_INGESTION_DB_URL",
+    "postgresql://postgres:postgres@localhost:5432/content_ingestion_db",
+)
 
 # ---------------------------------------------------------------------------
 # Target instruments (real data should already exist from EODHD ingestion)
@@ -889,15 +893,74 @@ def seed_intelligence_db(conn_intel, instrument_map: dict[str, str], *, reset: b
     cur.close()
 
 
+# Deterministic UUID for the Polymarket source row.
+# WHY deterministic: ON CONFLICT DO NOTHING requires stable PK across runs.
+# Prefix "22222222" visually distinguishes demo sources from real UUIDv7 IDs.
+_POLYMARKET_SOURCE_ID = "22222222-0001-7000-8000-000000000001"
+
+# Config matches PolymarketProviderSettings defaults in content_ingestion/config.py.
+# page_size and max_pages_per_cycle are advisory — the adapter reads them from
+# settings, not from this config dict, but we store them here for observability.
+_POLYMARKET_SOURCE_CONFIG: dict = {
+    "page_size": 500,
+    "max_pages_per_cycle": 20,
+}
+
+
+def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
+    """Seed the Polymarket polling source in content_ingestion_db.
+
+    WHY: The S4 ingestion pipeline polls only sources that exist in the
+    ``sources`` table. Without a Polymarket row, the scheduler never creates
+    tasks for it and the Prediction Markets widget stays permanently empty.
+
+    The source row is idempotent (ON CONFLICT DO NOTHING on the unique ``name``
+    column).  Running the script multiple times is safe.
+    """
+    cur = conn.cursor()
+
+    if reset:
+        print("  [reset] Removing seeded sources from content_ingestion_db...")
+        cur.execute(
+            "DELETE FROM sources WHERE id = %s::uuid",
+            (_POLYMARKET_SOURCE_ID,),
+        )
+        conn.commit()
+
+    now_ts = datetime.now(tz=UTC).isoformat()
+
+    cur.execute(
+        """
+        INSERT INTO sources (id, name, source_type, enabled, config, created_at)
+        VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s)
+        ON CONFLICT (name) DO NOTHING
+        """,
+        (
+            _POLYMARKET_SOURCE_ID,
+            "Polymarket",
+            "polymarket",
+            True,
+            json.dumps(_POLYMARKET_SOURCE_CONFIG),
+            now_ts,
+        ),
+    )
+    status = "inserted" if cur.rowcount else "already exists"
+    print(f"  Polymarket source: {status} (id={_POLYMARKET_SOURCE_ID})")
+
+    conn.commit()
+    cur.close()
+
+
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
 
 
-def validate_seeding(conn_mkt, conn_intel, instrument_map: dict[str, str]) -> bool:
+def validate_seeding(conn_mkt, conn_intel, conn_ci, instrument_map: dict[str, str]) -> bool:
     """Print a summary table and return True if all required data is present."""
     cur_mkt = conn_mkt.cursor()
     cur_intel = conn_intel.cursor()
+    cur_ci = conn_ci.cursor()
 
     print("\n─── Validation ───────────────────────────────────────────────────────")
 
@@ -946,8 +1009,21 @@ def validate_seeding(conn_mkt, conn_intel, instrument_map: dict[str, str]) -> bo
     n_relations = cur_intel.fetchone()[0]
     print(f"  KG relations seeded: {n_relations} (expected ≥ {len(KG_RELATIONS)})")
 
+    # Polymarket source check
+    cur_ci.execute(
+        "SELECT COUNT(*) FROM sources WHERE source_type = 'polymarket' AND enabled = true",
+        (),
+    )
+    n_polymarket = cur_ci.fetchone()[0]
+    pm_ok = n_polymarket > 0
+    status = "✓" if pm_ok else "✗"
+    print(f"  {status} Polymarket source: enabled={pm_ok} (count={n_polymarket})")
+    if not pm_ok:
+        all_ok = False
+
     cur_mkt.close()
     cur_intel.close()
+    cur_ci.close()
     return all_ok
 
 
@@ -966,14 +1042,16 @@ def main() -> None:
     args = parser.parse_args()
 
     print("=== worldview demo data seeder ===")
-    print(f"  market_data_db : {MARKET_DATA_DB_URL}")
-    print(f"  intelligence_db: {INTELLIGENCE_DB_URL}")
-    print(f"  reset mode     : {args.reset}")
+    print(f"  market_data_db        : {MARKET_DATA_DB_URL}")
+    print(f"  intelligence_db       : {INTELLIGENCE_DB_URL}")
+    print(f"  content_ingestion_db  : {CONTENT_INGESTION_DB_URL}")
+    print(f"  reset mode            : {args.reset}")
     print()
 
     try:
         conn_mkt = psycopg2.connect(MARKET_DATA_DB_URL)
         conn_intel = psycopg2.connect(INTELLIGENCE_DB_URL)
+        conn_ci = psycopg2.connect(CONTENT_INGESTION_DB_URL)
     except Exception as e:
         print(f"ERROR: could not connect to databases: {e}", file=sys.stderr)
         sys.exit(1)
@@ -998,7 +1076,10 @@ def main() -> None:
         print("\n── intelligence_db ────────────────────────────────────────────────────")
         seed_intelligence_db(conn_intel, instrument_map, reset=args.reset)
 
-        ok = validate_seeding(conn_mkt, conn_intel, instrument_map)
+        print("\n── content_ingestion_db ───────────────────────────────────────────────")
+        seed_content_ingestion_db(conn_ci, reset=args.reset)
+
+        ok = validate_seeding(conn_mkt, conn_intel, conn_ci, instrument_map)
         print()
         if ok:
             print("✓ All validation checks passed. Demo data is ready.")
@@ -1009,6 +1090,7 @@ def main() -> None:
     finally:
         conn_mkt.close()
         conn_intel.close()
+        conn_ci.close()
 
 
 if __name__ == "__main__":

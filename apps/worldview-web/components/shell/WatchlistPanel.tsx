@@ -19,13 +19,14 @@
 
 "use client";
 // WHY "use client": uses useQuery (TanStack, client-only), useRouter (navigation),
-// and live data that updates every 30s (not suitable for Server Component).
+// useState for the watchlist dropdown, and live data (30s refresh).
 
+import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { priceChangeClass, formatPercentDirect } from "@/lib/utils";
+import { priceChangeClass, formatPercentDirect, cn } from "@/lib/utils";
 import type { WatchlistMember } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -39,7 +40,28 @@ export function WatchlistPanel() {
   const { accessToken } = useAuth();
   const router = useRouter();
 
-  // Fetch the user's watchlists — use the first one for the sidebar
+  // WHY selectedWatchlistId state: the dropdown lets the user switch which
+  // watchlist is pinned to the sidebar without navigating to the portfolio page.
+  // null means "use the first watchlist" (default on load).
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // WHY dropdownRef + click-outside listener: clicking outside the dropdown header
+  // should close it. Without this, the dropdown stays open as the user scrolls/clicks
+  // elsewhere in the sidebar — a confusing UX for a power-user trading terminal.
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [dropdownOpen]);
+
+  // Fetch the user's watchlists — all of them (needed for the dropdown switcher)
   // WHY staleTime 30s: watchlist membership changes infrequently (user-driven);
   // 30s prevents a refetch on every page navigation without hiding new additions.
   const { data: watchlistsData } = useQuery({
@@ -49,8 +71,11 @@ export function WatchlistPanel() {
     staleTime: 30_000,
   });
 
-  const firstWatchlist = watchlistsData?.[0];
-  const members: WatchlistMember[] = firstWatchlist?.members ?? [];
+  // Resolve active watchlist: use selected if present, otherwise fall back to first
+  const activeWatchlist =
+    watchlistsData?.find((wl) => wl.watchlist_id === selectedWatchlistId) ??
+    watchlistsData?.[0];
+  const members: WatchlistMember[] = activeWatchlist?.members ?? [];
   const memberIds = members.map((m) => m.entity_id);
 
   // Fetch live batch quotes for watchlist member entity IDs
@@ -77,17 +102,49 @@ export function WatchlistPanel() {
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           WATCHLIST
         </span>
-        {/* Watchlist switcher — clicking navigates to the full watchlist management page.
-            WHY font-mono: the watchlist name often contains ticker symbols or codes —
-            monospace keeps it readable alongside the ticker column below. */}
-        {firstWatchlist && (
-          <button
-            onClick={() => router.push("/portfolio?tab=watchlists")}
-            className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors duration-0"
-            aria-label={`Switch watchlist: currently ${firstWatchlist.name}`}
-          >
-            {firstWatchlist.name} ▾
-          </button>
+        {/* Watchlist dropdown switcher — shows all watchlists so the trader can
+            switch which one is pinned to the sidebar without leaving the current page.
+            WHY relative on wrapper: anchors the absolute-positioned dropdown. */}
+        {activeWatchlist && (
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setDropdownOpen((prev) => !prev)}
+              className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors duration-0"
+              aria-label={`Switch watchlist (current: ${activeWatchlist.name})`}
+              aria-expanded={dropdownOpen}
+            >
+              {activeWatchlist.name} ▾
+            </button>
+            {/* Dropdown list — only shown when there are multiple watchlists to switch between */}
+            {dropdownOpen && watchlistsData && watchlistsData.length > 0 && (
+              <div className="absolute right-0 top-full z-50 min-w-[140px] border border-border bg-card shadow-md">
+                {watchlistsData.map((wl) => (
+                  <button
+                    key={wl.watchlist_id}
+                    onClick={() => {
+                      setSelectedWatchlistId(wl.watchlist_id);
+                      setDropdownOpen(false);
+                    }}
+                    className={cn(
+                      "w-full px-2 py-1 text-left text-[11px] hover:bg-muted/40 transition-colors duration-0",
+                      activeWatchlist.watchlist_id === wl.watchlist_id
+                        ? "text-primary font-medium"
+                        : "text-foreground",
+                    )}
+                  >
+                    {wl.name}
+                  </button>
+                ))}
+                {/* Manage link — navigates to full watchlist management in Portfolio */}
+                <button
+                  onClick={() => { setDropdownOpen(false); router.push("/portfolio?tab=watchlists"); }}
+                  className="w-full border-t border-border px-2 py-1 text-left text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-0"
+                >
+                  Manage watchlists →
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

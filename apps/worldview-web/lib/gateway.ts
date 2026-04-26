@@ -1028,11 +1028,14 @@ export function createGateway(token?: string | null) {
       moverType: "gainers" | "losers" = "gainers",
       limit = 10,
     ): Promise<TopMoversResponse> {
-      // S9 composed endpoint returns raw screener results from S3
+      // S9 composed endpoint returns raw screener results from S3.
+      // S3's ScreenInstrumentResponse uses field name `ticker` (not `symbol`).
+      // We include both in the type so the transform handles either shape.
       const raw = await apiFetch<{
         results?: Array<{
           instrument_id?: string;
-          symbol?: string;
+          ticker?: string;   // S3 ScreenInstrumentResponse field name
+          symbol?: string;   // legacy / alternate field name kept for forward compat
           name?: string;
           exchange?: string;
           metrics?: {
@@ -1064,11 +1067,14 @@ export function createGateway(token?: string | null) {
         return { movers: raw.movers, type: (raw.type as "gainers" | "losers") ?? moverType };
       }
 
-      // Transform screener results into Mover[] format
+      // Transform screener results into Mover[] format.
+      // WHY ticker ?? symbol fallback: S3's ScreenInstrumentResponse uses `ticker`.
+      // Some older or alternate responses may use `symbol`. Try both so the widget
+      // always shows a symbol string instead of an empty cell.
       const movers = (raw.results ?? []).map((r) => ({
         instrument_id: r.instrument_id ?? "",
-        ticker: r.symbol ?? "",
-        name: r.name ?? r.symbol ?? "", // Fall back to symbol if name not available
+        ticker: r.ticker ?? r.symbol ?? r.name?.split(" ")[0] ?? r.instrument_id?.slice(0, 6) ?? "",
+        name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
         price: 0, // Not available from screener — would need a quote lookup
         change_pct: r.metrics?.daily_return ?? 0,
         volume: null as number | null,
