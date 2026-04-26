@@ -140,7 +140,7 @@ class FinnhubAdapter(SourceAdapter):
         except RateLimitError as e:
             logger.warning("finnhub_rate_limited_transcripts", sleep_secs=e.sleep_secs)
             await asyncio.sleep(e.sleep_secs)
-            transcript_list = await self._client.fetch_transcript_list(symbol=symbol)
+            transcript_list = await self._client.fetch_transcript_list(symbol=symbol)  # type: ignore[assignment]
         except Exception as exc:
             # 403 Forbidden = premium-only endpoint; log and continue with news only.
             logger.info(
