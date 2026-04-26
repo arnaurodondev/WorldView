@@ -141,7 +141,7 @@ def s1_client_stub(s1_base_url: str) -> S1Client:
     settings = Settings(
         s1_portfolio_base_url=s1_base_url,
         database_url="postgresql+asyncpg://x:x@localhost/x",  # not used
-        s8_internal_token="test-s8-token",
+        s8_internal_jwt="test-s8-token",
         s1_internal_token="test-s1-token",
     )
     return S1Client(settings)
@@ -167,7 +167,7 @@ def integration_settings(postgres_container: str, s1_base_url: str) -> Settings:
         admin_token="test-admin-token",
         service_name="alert-test",
         log_json=False,
-        s8_internal_token="test-s8-token",
+        s8_internal_jwt="test-s8-token",
         s1_internal_token="test-s1-token",
         # F-001: skip_verification=True because JWKS server is not running
         # in integration test environment (public_key stays None).

@@ -54,7 +54,7 @@ def _make_app() -> FastAPI:
         admin_token="test-admin",
         service_name="alert-unit-test",
         log_json=False,
-        s8_internal_token="test-s8-token",
+        s8_internal_jwt="test-s8-token",
         s1_internal_token="test-s1-token",
         # F-001: skip_verification=True — no JWKS public key loaded in unit tests
         internal_jwt_skip_verification=True,

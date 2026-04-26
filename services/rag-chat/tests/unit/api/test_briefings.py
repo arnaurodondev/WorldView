@@ -630,3 +630,113 @@ async def test_generate_briefing_uc_hhi_no_positions_key() -> None:
     )
 
     assert result["risk_summary"]["concentration_score"] == 0.0
+
+
+# ── BP-184: Empty-context hallucination guard ─────────────────────────────────
+
+
+async def test_generate_briefing_uc_empty_context_returns_placeholder() -> None:
+    """BP-184: When portfolio_context and market_snapshots carry no real data,
+    execute() returns an empty narrative WITHOUT calling the LLM.
+
+    This prevents the LLM from fabricating realistic-looking but false portfolio
+    data when no context is available (e.g. S10 scheduler stub phase before
+    real portfolio data is wired in).
+    """
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    # If the guard fails and the LLM is called, the test would hang because
+    # stream is not configured as an async generator — the test would raise.
+    mock_chain.stream = MagicMock(side_effect=AssertionError("LLM must NOT be called for empty context"))
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={},  # no holdings, no positions
+        market_snapshots=[],  # no snapshots
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    # Guard must return empty narrative without calling LLM or rate-limit counter
+    assert result["narrative"] == ""
+    assert result["citations"] == []
+    assert "generated_at" in result
+    # rate limit should NOT be incremented (guard fires before the counter check)
+    mock_valkey.incr.assert_not_called()
+
+
+async def test_generate_briefing_uc_empty_portfolio_with_morning_overview_snapshot_is_placeholder() -> None:
+    """BP-184: A market_snapshot with type='morning_overview' is a sentinel, not real data.
+
+    When all snapshots are morning_overview type and portfolio_context has no
+    real holdings/positions, the guard still fires and returns an empty narrative.
+    """
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = MagicMock(side_effect=AssertionError("LLM must NOT be called for sentinel-only context"))
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={},
+        market_snapshots=[{"type": "morning_overview", "sp500": -0.5}],  # sentinel only
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    assert result["narrative"] == ""
+    mock_valkey.incr.assert_not_called()
+
+
+async def test_generate_briefing_uc_real_snapshot_bypasses_guard() -> None:
+    """BP-184: A market_snapshot without type='morning_overview' is real data.
+
+    When at least one snapshot is a real instrument snapshot, the guard allows
+    the briefing to proceed to the LLM even if portfolio_context is empty.
+    """
+    from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+
+    async def _fake_stream(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+        yield "Real narrative."
+
+    mock_valkey = MagicMock()
+    mock_valkey.incr = AsyncMock(return_value=1)
+    mock_valkey.expire = AsyncMock()
+    mock_chain = MagicMock()
+    mock_chain.stream = _fake_stream
+
+    uc = GenerateBriefingUseCase(
+        llm_chain=mock_chain,
+        valkey=mock_valkey,
+    )
+
+    result = await uc.execute(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        portfolio_context={},  # no positions
+        market_snapshots=[{"symbol": "AAPL", "close": 175.0}],  # real snapshot
+        active_signals=[],
+        lookback_days=7,
+    )
+
+    # Real snapshot present — LLM should be called, narrative non-empty
+    assert result["narrative"] == "Real narrative."

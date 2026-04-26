@@ -27,7 +27,7 @@ def _settings(**overrides: Any) -> Settings:
         "email_provider": "resend",
         "email_from_address": "noreply@example.com",
         "s8_base_url": "http://s8:8008",
-        "s8_internal_token": "s8-token",
+        "s8_internal_jwt": "s8-token",
         "s1_internal_token": "s1-token",
         "s3_market_data_base_url": "http://s3:8003",
         "s1_portfolio_base_url": "http://s1:8001",
@@ -127,18 +127,25 @@ class TestS8BriefingClient:
         mock_client.post.assert_called_once()
 
     @pytest.mark.unit
-    async def test_request_briefing_sends_internal_token(self) -> None:
+    async def test_request_briefing_sends_internal_jwt(self) -> None:
+        """S8BriefingClient must send X-Internal-JWT header (not X-Internal-Token).
+
+        PRD-0025: S8's InternalJWTMiddleware requires X-Internal-JWT with an
+        RS256-signed service JWT.  Sending X-Internal-Token results in a 401.
+        """
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"narrative": "x"}
         mock_resp.raise_for_status = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_resp)
 
-        client = S8BriefingClient(_settings(s8_internal_token="secret-s8"), client=mock_client)
+        client = S8BriefingClient(_settings(s8_internal_jwt="secret-s8-jwt"), client=mock_client)
         await client.request_briefing(_USER_ID, _TENANT_ID, {}, [])
 
         headers = mock_client.post.call_args.kwargs["headers"]
-        assert headers["X-Internal-Token"] == "secret-s8"
+        # Bug fix: header must be X-Internal-JWT (not X-Internal-Token)
+        assert "X-Internal-Token" not in headers, "X-Internal-Token is rejected by S8 middleware"
+        assert headers["X-Internal-JWT"] == "secret-s8-jwt"
 
     @pytest.mark.unit
     async def test_request_briefing_401_raises_briefing_client_error(self) -> None:

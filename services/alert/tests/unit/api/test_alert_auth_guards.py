@@ -26,7 +26,7 @@ def _make_app(*, internal_jwt_skip_verification: bool = True) -> object:
         database_url="postgresql+asyncpg://x:x@localhost/x",
         service_name="alert-auth-test",
         log_json=False,
-        s8_internal_token="test-s8",
+        s8_internal_jwt="test-s8",
         s1_internal_token="test-s1",
         internal_jwt_skip_verification=internal_jwt_skip_verification,
     )

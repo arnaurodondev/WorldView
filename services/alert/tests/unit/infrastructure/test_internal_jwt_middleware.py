@@ -22,7 +22,7 @@ def _make_app(**settings_kwargs: object) -> object:
         "kafka_bootstrap_servers": "localhost:9092",
         "kafka_schema_registry_url": "http://localhost:8081",
         "database_url": "postgresql+asyncpg://test:test@localhost:5432/test",
-        "s8_internal_token": "test-s8",
+        "s8_internal_jwt": "test-s8",
         "s1_internal_token": "test-s1",
     }
     base.update(settings_kwargs)
