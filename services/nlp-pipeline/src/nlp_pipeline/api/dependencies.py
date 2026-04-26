@@ -13,6 +13,7 @@ from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQu
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
+from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
@@ -116,6 +117,19 @@ def get_news_query_repo(
 
 
 NewsQueryRepoDep = Annotated[NewsQueryPort, Depends(get_news_query_repo)]
+
+
+def get_entity_mention_repo(
+    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> EntityMentionRepository:
+    """Build an EntityMentionRepository backed by the read replica (R27 — query-only).
+
+    Used by GET /api/v1/entities/{entity_id}/articles in the entities router.
+    """
+    return EntityMentionRepository(session)
+
+
+EntityMentionRepoDep = Annotated[EntityMentionRepository, Depends(get_entity_mention_repo)]
 
 
 def get_entity_resolver_use_case(

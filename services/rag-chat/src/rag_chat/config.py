@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     # ── Ollama (local LLM container) ──────────────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"
-    ollama_classification_model: str = "qwen2.5:3b"
+    ollama_classification_model: str = "qwen3:0.6b"
     ollama_completion_model: str = "deepseek-r1:32b"  # emergency fallback only
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 

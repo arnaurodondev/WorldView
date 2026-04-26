@@ -394,7 +394,7 @@ async def test_relevance_scoring_worker_entrypoint_runs_and_stops() -> None:
 
     mock_settings = _mock_settings(
         relevance_scoring_ollama_url="http://ollama:11434",
-        relevance_scoring_model="qwen2.5:3b",
+        relevance_scoring_model="qwen3:0.6b",
         relevance_scoring_batch_size=50,
         relevance_scoring_timeout_seconds=30,
         relevance_scoring_cycle_seconds=1800,

@@ -936,19 +936,19 @@ services:
   # ── Ollama — LLM inference (embeddings + Qwen2.5 extraction) ─────────────────
   # Serves:
   #   - BGE-large-en-v1.5  (embedding model, Block 7)
-  #   - Qwen2.5:7b-instruct (extraction model, Block 10)
+  #   - qwen3:0.6b         (intent classification, S8 rag-chat; replaces qwen2.5:3b)
+  #   - qwen2.5:7b-instruct (extraction model, Block 10)
   #
   # GPU notes:
   #   Ollama can use a GPU when the Docker host has NVIDIA drivers + nvidia-docker2.
   #   Uncomment the `deploy.resources` block below to enable GPU passthrough.
-  #   Without GPU, Qwen2.5:7b runs on CPU at ~5-15 min/document (DEEP tier only).
+  #   Without GPU, qwen3:0.6b runs on CPU in <1s per classify call (very fast at 522 MB).
   #   BGE-large embeddings are fast enough on CPU (~0.1 s/section).
   #
-  # Usage:
-  #   After first start, pull models inside the container:
-  #     docker compose exec ollama ollama pull bge-large-en-v1.5
-  #     docker compose exec ollama ollama pull qwen2.5:7b-instruct
-  #   Or mount a pre-populated model cache via the ollama_data volume.
+  # Model pre-loading:
+  #   The `ollama-init` service below pulls all required models automatically after
+  #   Ollama is healthy. No manual `docker exec ollama ollama pull ...` needed.
+  #   Models are cached in the ollama_data volume and persist across container restarts.
   ollama:
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
@@ -972,6 +972,39 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+
+  # ── Ollama model init — pre-pulls required models after Ollama is healthy ─────
+  # This init container runs once (restart: no) and pulls all models needed by the
+  # platform so `docker compose up` gives a fully operational Ollama with no manual
+  # intervention. Models are stored in the shared ollama_data volume and cached
+  # across restarts — subsequent `docker compose up` calls skip download.
+  #
+  # Models pulled:
+  #   - qwen3:0.6b      → S8 intent classification (522 MB, CPU-fast, Qwen3 gen)
+  #   - bge-large       → S7/S8 text embeddings (1.2 GB, BERT-based)
+  #
+  # qwen2.5:7b-instruct (DEEP extraction, Block 10) is NOT pulled here because it
+  # is only needed for the rare DEEP processing tier and its 4 GB size would slow
+  # first-boot significantly. Pull it manually if DEEP tier is required:
+  #   docker compose exec ollama ollama pull qwen2.5:7b-instruct
+  ollama-init:
+    image: ollama/ollama:0.6.7
+    profiles: [infra, all]
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        ollama pull qwen3:0.6b &&
+        ollama pull bge-large
+      "
+    environment:
+      # Tell the Ollama CLI to talk to the ollama container (not localhost)
+      OLLAMA_HOST: "http://ollama:11434"
+    volumes:
+      # Share the same model cache so pulls persist for the main ollama container
+      - ollama_data:/root/.ollama
 
   # ── GLiNER server — NER inference (Block 4) ───────────────────────────────────
   # Runs GLiNER (DeBERTa-large) as a standalone HTTP service so NLP pipeline

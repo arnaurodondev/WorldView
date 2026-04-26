@@ -136,14 +136,14 @@ def _build_windows(chunks: list[Chunk], max_tokens: int, overlap_tokens: int) ->
 
 
 def _build_prompt(window_text: str, mention_names: list[str]) -> str:
-    """Build the extraction prompt for Qwen2.5-7B-Instruct."""
+    """Build the extraction prompt for Qwen2.5-7B-Instruct.
+
+    Delegates to the centralised DEEP_EXTRACTION template in libs/prompts.
+    """
+    from prompts.extraction.deep import DEEP_EXTRACTION  # type: ignore[import-untyped]
+
     entities_str = ", ".join(mention_names) if mention_names else "none identified"
-    return (
-        f"Extract structured financial intelligence from the following document passage.\n"
-        f"Identified entities: {entities_str}\n\n"
-        f"Document:\n{window_text}\n\n"
-        f"Return JSON matching the schema with events, claims, and relations."
-    )
+    return DEEP_EXTRACTION.render(entities=entities_str, text=window_text)  # type: ignore[no-any-return]
 
 
 async def _run_extraction_window(

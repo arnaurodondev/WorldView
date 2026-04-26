@@ -62,9 +62,24 @@ class EntityArticleResponse(BaseModel):
     mention_count: int
 
 
+class EntityArticleItem(BaseModel):
+    """One article mentioning a specific entity (for GET /entities/{id}/articles)."""
+
+    article_id: str
+    title: str
+    url: str
+    published_at: datetime
+    source_name: str
+    source_type: str | None = None
+    display_relevance_score: float | None = None
+    primary_entity_id: str
+
+
 class EntityArticlesResponse(BaseModel):
-    entity_id: UUID
-    items: list[EntityArticleResponse]
+    """Response for GET /api/v1/entities/{entity_id}/articles (rag-chat feed)."""
+
+    articles: list[EntityArticleItem]
+    entity_id: str
     total: int
 
 
