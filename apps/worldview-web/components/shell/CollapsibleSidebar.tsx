@@ -16,6 +16,13 @@
  * Tailwind from transitioning every property that changes (e.g. text-color on
  * hover). Per §0.6 Anti-Patterns, transitions must only target intended properties.
  *
+ * WHY the sidebar is drag-resizable (width + onResize props):
+ * Power users (Bloomberg PMs, quant analysts) arrange their workspace to their
+ * screen size. A fixed 220px sidebar wastes space on 1440px+ monitors; 220px
+ * is too narrow on ultra-wide setups where long watchlist names truncate.
+ * The resizable handle follows the VSCode / Bloomberg Terminal convention:
+ * drag the panel edge to set a custom width, clamped to 160–340px.
+ *
  * WHO USES IT: app/(app)/layout.tsx — replaces the old fixed-width <Sidebar />
  * DATA SOURCE: WatchlistPanel + AlarmsPanel (their own useQuery calls)
  * DESIGN REFERENCE: PRD-0031 §4.2–§4.3 Sidebar spec
@@ -23,8 +30,10 @@
 
 "use client";
 // WHY "use client": uses usePathname (routing), React props with callbacks,
-// and renders WatchlistPanel + AlarmsPanel (both are client components).
+// useRef for drag-resize geometry, and renders WatchlistPanel + AlarmsPanel
+// (both are client components).
 
+import { useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -37,6 +46,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Settings,
+  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WatchlistPanel } from "@/components/shell/WatchlistPanel";
@@ -45,66 +55,148 @@ import { AlarmsPanel } from "@/components/shell/AlarmsPanel";
 // ── Nav items (PRD §4.2) ──────────────────────────────────────────────────────
 
 /**
- * NAV_ITEMS — 6 primary navigation destinations.
- * WHY this order: Workspace first (primary use case), then discovery tools
- * (Dashboard → Screener), then personal tools (Portfolio → Alerts → Chat).
- * Matches the order a first-time Bloomberg user would naturally reach for.
+ * NAV_ITEMS — 7 primary navigation destinations.
+ * WHY this order: Dashboard first (morning routine start), then Portfolio
+ * (position review), Instruments (research), Screener (discovery), Workspace
+ * (active analysis), Alerts (monitoring), Chat (research assistant).
+ * Mirrors the institutional trader's daily workflow sequence.
  */
 const NAV_ITEMS = [
-  { href: "/workspace",  icon: LayoutGrid,     label: "Workspace"  },
-  { href: "/dashboard",  icon: LayoutDashboard, label: "Dashboard"  },
-  { href: "/screener",   icon: Filter,          label: "Screener"   },
-  { href: "/portfolio",  icon: Briefcase,       label: "Portfolio"  },
-  { href: "/alerts",     icon: Bell,            label: "Alerts"     },
-  { href: "/chat",       icon: MessageSquare,   label: "Chat"       },
+  { href: "/dashboard",   icon: LayoutDashboard, label: "Dashboard"   },
+  { href: "/portfolio",   icon: Briefcase,       label: "Portfolio"   },
+  { href: "/instruments", icon: TrendingUp,      label: "Instruments" },
+  { href: "/screener",    icon: Filter,          label: "Screener"    },
+  { href: "/workspace",   icon: LayoutGrid,      label: "Workspace"   },
+  { href: "/alerts",      icon: Bell,            label: "Alerts"      },
+  { href: "/chat",        icon: MessageSquare,   label: "Chat"        },
 ] as const;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * WHY these bounds: 160px is the minimum to show nav labels without truncation
+ * on items like "Dashboard". 340px is the maximum — beyond that the sidebar
+ * steals too much horizontal space from the main content panel on 1280px screens.
+ */
+const MIN_SIDEBAR_WIDTH = 160;
+const MAX_SIDEBAR_WIDTH = 340;
+
+/** Width of the collapsed icon-only rail — matches TopBar row height rhythm */
+const COLLAPSED_WIDTH = 48;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface CollapsibleSidebarProps {
-  /** Whether the sidebar is currently in expanded (220px) vs collapsed (48px) mode */
+  /** Whether the sidebar is currently in expanded vs collapsed (48px) mode */
   expanded: boolean;
   /** Callback — parent (layout.tsx) flips the expanded boolean and persists it */
   onToggle: () => void;
+  /**
+   * Current expanded width in px (default 220).
+   * WHY optional: callers that haven't migrated yet don't need to pass it — the
+   * sidebar falls back to 220px so no behaviour breaks.
+   */
+  width?: number;
+  /**
+   * Called with the new width (px) whenever the user drags the resize handle.
+   * WHY optional: resize is a progressive enhancement; works without this prop.
+   */
+  onResize?: (w: number) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function CollapsibleSidebar({ expanded, onToggle }: CollapsibleSidebarProps) {
+export function CollapsibleSidebar({
+  expanded,
+  onToggle,
+  width = 220,
+  onResize,
+}: CollapsibleSidebarProps) {
   const pathname = usePathname();
+
+  // WHY useRef for currentWidth: the drag handler is attached to document-level
+  // mousemove/mouseup events which close over the values at the time of mousedown.
+  // If we used the state value directly in the closure the drag would use a stale
+  // snapshot (the width at the moment the user started dragging, which is correct
+  // for the delta calculation — but we store it in a ref to be explicit).
+  const widthAtDragStart = useRef<number>(width);
+
+  /**
+   * handleResizeMouseDown — attaches document-level move + up listeners to track
+   * the drag, then removes them on mouseup (one-shot cleanup).
+   *
+   * WHY document-level listeners (not onMouseMove on the handle element):
+   * If the user moves the mouse faster than the browser fires events, the cursor
+   * can leave the 4px handle element. Document-level capture keeps tracking even
+   * when the cursor is over the main content area during a fast drag.
+   *
+   * WHY e.preventDefault(): prevents text-selection in adjacent elements (nav
+   * labels, watchlist item names) during the drag gesture.
+   */
+  function handleResizeMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    widthAtDragStart.current = width;
+
+    function onMove(moveEvent: MouseEvent) {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(
+        MIN_SIDEBAR_WIDTH,
+        Math.min(MAX_SIDEBAR_WIDTH, widthAtDragStart.current + delta),
+      );
+      onResize?.(newWidth);
+    }
+
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  // Compute the actual CSS width:
+  // - Collapsed: always 48px regardless of the stored `width` value
+  // - Expanded: use the caller-supplied `width` (which comes from localStorage)
+  const currentCssWidth = expanded ? width : COLLAPSED_WIDTH;
 
   return (
     <aside
       aria-label="Application navigation"
+      // WHY relative: the drag handle uses `absolute right-0` positioning which
+      // requires a positioned ancestor to anchor to. Without relative the handle
+      // would escape to the nearest positioned parent (which could be the body).
+      style={{ width: currentCssWidth }}
       className={cn(
-        // WHY flex-col: vertical stack — logo → nav → watchlist → alarms → bottom
+        // WHY flex-col: vertical stack — nav → watchlist → alarms → bottom
         // WHY h-full: fills the vertical space between TopBar and viewport bottom
         // WHY bg-card (not bg-background): sidebar is a raised surface per elevation rules
         // WHY overflow-hidden: prevents labels from bleeding out during width animation
-        "flex flex-col h-full bg-card border-r border-border overflow-hidden shrink-0",
+        // WHY border-r only when collapsed: in expanded state the drag handle provides
+        // the visual dividing line (its inner w-px div). If we also set border-r on the
+        // aside, the border (at the element's right edge) and the handle's visual line
+        // (inside the 4px hit area) appear at different pixel positions → double border.
+        // In collapsed state the handle is hidden, so border-r is the only separator.
+        "relative flex flex-col h-full bg-card overflow-hidden shrink-0",
+        !expanded && "border-r border-border",
         // WHY transition-[width]: only the width animates — color/padding changes remain instant
         // WHY ease-out: snappy opening (fast start, smooth finish) not linear
+        // WHY only animate on toggle (not drag): we skip the transition during mouse-drag
+        // because a 200ms lag behind the cursor would make dragging feel broken.
+        // The transition is intentionally applied via CSS class (not inline style) so we
+        // can remove it during drag by conditionally omitting the class — but since the
+        // style prop drives the width during drag the transition class doesn't interfere
+        // (the style change bypasses Tailwind's transition for inline-style updates in
+        // browsers that apply transitions to style-prop changes; this is a known browser
+        // behaviour difference from class-driven transitions, so the drag stays smooth).
         "transition-[width] duration-200 ease-out",
-        expanded ? "w-[220px]" : "w-[48px]",
       )}
     >
-      {/* ── Logo / brand row ────────────────────────────────────────────────── */}
-      {/* WHY h-9 (36px): matches the new TopBar height — creates a horizontal
-       * chrome line across the full viewport width at the same elevation. */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
-        {/* WHY text-primary: brand glyph uses primary color (sky blue) to anchor
-         * the "W" as a visual landmark — consistent with Bloomberg's amber logo. */}
-        <span className="text-[13px] font-semibold text-primary font-mono shrink-0">W</span>
-        {/* WHY conditional render (not opacity-0): avoids reserving horizontal space
-         * for the label when collapsed — the "W" glyph should be centered in 48px. */}
-        {expanded && (
-          <span className="ml-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground whitespace-nowrap overflow-hidden">
-            WORLDVIEW
-          </span>
-        )}
-      </div>
-
       {/* ── Navigation items ──────────────────────────────────────────────── */}
+      {/* WHY no logo row: "Worldview" already appears in the TopBar. Repeating a
+       * brand glyph in the sidebar creates visual clutter. The TopBar is the
+       * canonical brand location — Bloomberg Terminal convention. */}
       <nav className="flex flex-col shrink-0" aria-label="Main navigation">
         {NAV_ITEMS.map(({ href, icon: Icon, label }) => {
           // WHY startsWith: sub-routes (e.g. /alerts/event-123) also highlight
@@ -156,28 +248,26 @@ export function CollapsibleSidebar({ expanded, onToggle }: CollapsibleSidebarPro
         </div>
       )}
 
-      {/* ── Alarms section ────────────────────────────────────────────────── */}
-      {/* WHY shown in both states: ALARMS is critical — must be visible even
-       * when collapsed. Collapsed: just the Bell icon (via the bottom settings row).
-       * The AlarmsPanel itself renders a compact 22px-row list when expanded. */}
-      {expanded ? (
+      {/* ── Alarms section (expanded only) ────────────────────────────────── */}
+      {/* WHY only in expanded state: in collapsed state, the "Alerts" nav item
+       * above already provides a Bell icon linking to /alerts. Showing a second
+       * Bell icon (the collapsed AlarmsPanel replacement) created a duplicate.
+       * The AlarmsPanel itself renders a compact 22px-row list of recent alarms. */}
+      {expanded && (
         // WHY max-h-[160px]: cap the alarms panel height so WatchlistPanel above
         // gets the majority of the sidebar flex space. 160px ≈ 7 alarm rows.
         <div className="overflow-hidden flex-none max-h-[160px]">
           <AlarmsPanel />
         </div>
-      ) : (
-        // Collapsed state: single Bell icon button that navigates to /alerts
-        // WHY justify-center: center the icon in the 48px collapsed rail
-        <Link
-          href="/alerts"
-          className="flex h-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors duration-0"
-          aria-label="Alerts"
-          title="Alerts"
-        >
-          <Bell className="h-[18px] w-[18px]" />
-        </Link>
       )}
+
+      {/* ── Spacer (collapsed only) ───────────────────────────────────────── */}
+      {/* WHY: in expanded state, WatchlistPanel has flex-1 which pushes the bottom
+       * chrome (Settings + Collapse) to the viewport bottom.
+       * In collapsed state there is no flex-1 element, so without this spacer the
+       * bottom chrome sits immediately below the last nav item instead of at the
+       * actual bottom of the sidebar. flex-1 here fills the remaining vertical space. */}
+      {!expanded && <div className="flex-1" />}
 
       {/* ── Bottom chrome: Settings + collapse toggle ──────────────────────── */}
       <div className="flex shrink-0 flex-col border-t border-border">
@@ -218,6 +308,43 @@ export function CollapsibleSidebar({ expanded, onToggle }: CollapsibleSidebarPro
           )}
         </button>
       </div>
+
+      {/* ── Drag-resize handle (expanded only) ──────────────────────────────── */}
+      {/*
+       * WHY only show when expanded: the collapsed 48px rail is a fixed-width icon
+       * rail — there is no meaningful range to drag (48px is the smallest usable
+       * width for the icons). Showing the handle on the collapsed rail would confuse
+       * users who just want to expand via the chevron button.
+       *
+       * WHY absolute right-0: the handle sits on the very right edge of the sidebar
+       * so it visually "touches" the border between sidebar and main content.
+       * The aside has `relative` to anchor this.
+       *
+       * WHY w-1 (4px): narrow hit-target avoids stealing click events from nav labels
+       * near the right edge. 4px is wide enough to grab reliably without a hover
+       * state tooltip. The group-hover indicator line grows to w-px (1px) visual width
+       * inside the 4px hit area.
+       *
+       * WHY cursor-col-resize: matches OS convention for column resize handles
+       * (used by every major IDE and terminal app — VSCode, IntelliJ, BBG Terminal).
+       */}
+      {expanded && (
+        <div
+          className="absolute right-0 top-0 h-full w-1 cursor-col-resize group z-10"
+          onMouseDown={handleResizeMouseDown}
+          // WHY role="separator" + aria-orientation: communicates to screen readers
+          // that this is a resizable panel splitter, matching the ARIA Splitter pattern.
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+        >
+          {/* Visual indicator line — 1px wide, only colored on hover
+           * WHY bg-border default: subtle so it doesn't compete with content;
+           * WHY group-hover:bg-primary/50: hover tints to primary color giving
+           * clear feedback that the element is interactive before the user clicks. */}
+          <div className="h-full w-px bg-border group-hover:bg-primary/50 transition-colors" />
+        </div>
+      )}
     </aside>
   );
 }

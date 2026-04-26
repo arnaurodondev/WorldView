@@ -68,8 +68,11 @@ export default function DashboardPage() {
 
       {/* ── Row 1: Morning Brief — full width ────────────────────────────── */}
       {/* WHY col-span-12: brief always spans all columns — it's the primary
-          situational awareness widget and deserves full horizontal real estate */}
-      <div className="col-span-12">
+          situational awareness widget and deserves full horizontal real estate.
+          WHY border border-primary: the Morning Brief is the single most important
+          widget — a yellow/amber accent border marks it visually as the primary
+          intelligence signal, following Bloomberg Terminal's amber-on-black hierarchy. */}
+      <div className="col-span-12 border border-primary/60">
         <MorningBriefCard />
       </div>
 

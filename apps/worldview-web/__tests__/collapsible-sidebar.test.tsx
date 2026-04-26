@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS: The sidebar is the primary navigation surface — any regression
  * here breaks navigation for the entire application. Tests verify:
- * 1. All 6 nav items are present (Workspace, Dashboard, Screener, Portfolio, Alerts, Chat)
+ * 1. All 7 nav items are present (Dashboard, Portfolio, Instruments, Screener, Workspace, Alerts, Chat)
  * 2. The active route gets highlighted (aria-current + active styling)
  * 3. Collapsed state hides nav labels (icon-only mode)
  * 4. Expanded state shows nav labels
@@ -155,13 +155,17 @@ describe("CollapsibleSidebar — expanded state", () => {
     expect(mockOnToggle).toHaveBeenCalledOnce();
   });
 
-  it("shows the WORLDVIEW brand label when expanded", () => {
+  it("does not show a W brand glyph (TopBar is the canonical brand location)", () => {
+    // WHY no "W" in sidebar: "Worldview" is displayed in the TopBar — repeating
+    // a brand glyph in the sidebar adds visual clutter. The logo row was removed
+    // per Bloomberg Terminal convention (brand identity in top bar only).
     render(
       <CollapsibleSidebar expanded onToggle={mockOnToggle} />,
       { wrapper: makeWrapper() },
     );
 
-    expect(screen.getByText("WORLDVIEW")).toBeInTheDocument();
+    // queryByText returns null (not found) — confirm "W" is absent from the sidebar
+    expect(screen.queryByText("W")).not.toBeInTheDocument();
   });
 });
 

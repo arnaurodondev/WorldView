@@ -203,19 +203,20 @@ export default function PortfolioPage() {
     [holdingsResp],
   );
 
-  // ── Query 7.5: company overviews for holdings (for gics_sector) ──────────
+  // ── Query 7.5: company overviews for holdings (sector + ticker enrichment) ──
   // WHY a separate query (not bundled with holdings): the holdings query comes
-  // from S9's portfolio routes; sector data comes from S9's company-overview
-  // route (which calls the intelligence service). These are different cache keys
-  // with different stale windows — holdings refresh every 30s; sector almost never
-  // changes (GICS rebalances once a year).
+  // from S9's portfolio routes; company overview comes from the intelligence service.
+  // Different cache keys, different stale windows — holdings refresh every 30s;
+  // ticker/sector data almost never changes.
   //
-  // WHY Promise.all: fetch all in parallel (not sequential) to minimize wall-clock
-  // time. N=5 typical portfolio: ~5 parallel requests instead of sequential.
+  // WHY Promise.all: fetch all in parallel to minimize wall-clock time.
   //
-  // WHY staleTime 300s: gics_sector is recategorised once per GICS review cycle
-  // (~annually). 5-minute client-side cache avoids redundant network requests
-  // every time the user switches tabs.
+  // WHY staleTime 300s: gics_sector rebalances annually; ticker/name are permanent.
+  // 5-minute cache avoids redundant requests on tab switches.
+  //
+  // WHY return {ticker, name, entity_id, sector}: the gateway returns empty ticker/name
+  // for holdings (S1 doesn't store them). Company overview enriches all four fields.
+  // SemanticHoldingsTable reads h.ticker and h.name — they must be non-empty.
   const { data: holdingOverviews } = useQuery({
     queryKey: ["holdings-overviews", holdingInstrumentIds],
     queryFn: async () => {
@@ -224,20 +225,43 @@ export default function PortfolioPage() {
           createGateway(accessToken).getCompanyOverview(id).catch(() => null),
         ),
       );
-      // Return a map: instrumentId → gics_sector (null if fetch failed or sector unknown)
-      // WHY null-coalesce to null (not "Unknown") here: the consumer useMemo decides
-      // the display label; keeping raw nulls makes it easier to distinguish "no sector
-      // data" from "sector is literally the string Unknown".
       return Object.fromEntries(
         holdingInstrumentIds.map((id, i) => [
           id,
-          results[i]?.instrument?.gics_sector ?? null,
+          {
+            sector:    results[i]?.instrument?.gics_sector ?? null,
+            ticker:    results[i]?.instrument?.ticker ?? null,
+            name:      results[i]?.instrument?.name ?? null,
+            entity_id: results[i]?.instrument?.entity_id ?? null,
+          },
         ]),
-      ) as Record<string, string | null>;
+      ) as Record<string, { sector: string | null; ticker: string | null; name: string | null; entity_id: string | null }>;
     },
     enabled: holdingInstrumentIds.length > 0 && !!accessToken,
     staleTime: 300_000,
   });
+
+  // ── Enriched holdings: merge ticker/name/entity_id from company overviews ──
+  // WHY this memo: getHoldings() returns holdings with empty ticker/name (S1 doesn't
+  // store these). The company overview query above fetches them asynchronously.
+  // This memo creates a merged list that SemanticHoldingsTable can render correctly.
+  // Before holdingOverviews resolves, we fall back to instrument_id as a placeholder.
+  const enrichedHoldings = useMemo(
+    () =>
+      holdings.map((h) => {
+        const ov = holdingOverviews?.[h.instrument_id];
+        return {
+          ...h,
+          // WHY parentheses: TypeScript disallows mixing ?? and || without explicit
+          // grouping (TS5076). The intent is: use enrichment value if non-null,
+          // else fall back to the existing field, else fall back to derived placeholder.
+          ticker:    (ov?.ticker    ?? h.ticker)    || h.instrument_id.slice(0, 8).toUpperCase(),
+          name:      (ov?.name      ?? h.name)      || `Instrument ${h.instrument_id.slice(-6)}`,
+          entity_id: (ov?.entity_id ?? h.entity_id) || h.instrument_id,
+        };
+      }),
+    [holdings, holdingOverviews],
+  );
 
   // ── KPI computations ─────────────────────────────────────────────────────
   const kpi = useMemo(() => {
@@ -247,7 +271,9 @@ export default function PortfolioPage() {
     let topGainer: { ticker: string; pnlPct: number } | null = null;
     let topLoser: { ticker: string; pnlPct: number } | null = null;
 
-    for (const h of holdings) {
+    // WHY use enrichedHoldings (not raw holdings): enrichedHoldings has ticker/name
+    // populated from company overviews. topGainer/topLoser display ticker in the KPI strip.
+    for (const h of enrichedHoldings) {
       const q = holdingsQuotes[h.instrument_id];
       const livePrice = q?.price ?? h.current_price ?? h.average_cost;
       totalValue += livePrice * h.quantity;
@@ -288,7 +314,7 @@ export default function PortfolioPage() {
     // any current holding (position fully closed). Skip those — we can't infer cost
     // basis without the holding row.
     const costByInstrument = Object.fromEntries(
-      holdings.map((h) => [h.instrument_id, h.average_cost]),
+      enrichedHoldings.map((h) => [h.instrument_id, h.average_cost]),
     );
     let realizedPnl = 0;
     for (const tx of transactionsResp?.transactions ?? []) {
@@ -309,10 +335,10 @@ export default function PortfolioPage() {
       unrealisedPnlPct,
       topGainer,
       topLoser,
-      positionCount: holdings.length,
+      positionCount: enrichedHoldings.length,
       realizedPnl: realizedPnlOrNull,
     };
-  }, [holdings, holdingsQuotes, transactionsResp]);
+  }, [enrichedHoldings, holdingsQuotes, transactionsResp]);
 
   // ── Sector / type allocation (derived from holdings + company overviews) ──
   // WHY separate useMemo (not inlined with kpi): holdingOverviews resolves later
@@ -320,11 +346,11 @@ export default function PortfolioPage() {
   // in a separate memo means the KPI strip updates immediately when quotes arrive,
   // while the SectorAllocationPanel fills in asynchronously without blocking the KPI.
   const { bySector, byType } = useMemo(() => {
-    if (!holdings.length || !holdingOverviews) return { bySector: [], byType: [] };
+    if (!enrichedHoldings.length || !holdingOverviews) return { bySector: [], byType: [] };
 
     // Build market value per instrument using the same live-price logic as KPI
     const valueByInstrument: Record<string, number> = {};
-    const totalVal = holdings.reduce((sum, h) => {
+    const totalVal = enrichedHoldings.reduce((sum, h) => {
       const q = holdingsQuotes[h.instrument_id];
       // WHY three-way fallback: live quote → server-enriched current_price → cost basis
       // This mirrors the KPI memo's price logic so sector weights are consistent with
@@ -341,11 +367,11 @@ export default function PortfolioPage() {
 
     // Group holdings by GICS sector, summing their market values
     const sectorMap: Record<string, number> = {};
-    for (const h of holdings) {
+    for (const h of enrichedHoldings) {
       // WHY "Unknown" fallback: holdingOverviews[id] is null when the overview
       // request failed or the instrument has no sector classification. "Unknown"
       // is more honest than silently dropping the position from the chart.
-      const sector = holdingOverviews[h.instrument_id] ?? "Unknown";
+      const sector = holdingOverviews[h.instrument_id]?.sector ?? "Unknown";
       sectorMap[sector] = (sectorMap[sector] ?? 0) + (valueByInstrument[h.instrument_id] ?? 0);
     }
 
@@ -359,7 +385,7 @@ export default function PortfolioPage() {
     const byType = [{ label: "Equity", value: totalVal, pct: 100 }];
 
     return { bySector, byType };
-  }, [holdings, holdingOverviews, holdingsQuotes]);
+  }, [enrichedHoldings, holdingOverviews, holdingsQuotes]); // enrichedHoldings already merges holding+overview
 
   // ── Loading state ────────────────────────────────────────────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
@@ -396,7 +422,7 @@ export default function PortfolioPage() {
   if (portfoliosError) {
     return (
       <div className="p-3">
-        <InlineEmptyState message="Failed to load portfolio. Check your connection and reload." />
+        <InlineEmptyState message="Failed to load portfolio data. Check your connection and reload." />
       </div>
     );
   }
@@ -405,7 +431,7 @@ export default function PortfolioPage() {
   return (
     // WHY h-full flex-col: fills the shell's main content area.
     // min-h-0 prevents flexbox from overflowing its parent.
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 bg-card">
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       {/* WHY h-9 shrink-0: 36px header is the terminal standard. shrink-0 prevents
@@ -446,9 +472,9 @@ export default function PortfolioPage() {
         )}
 
         {/* Position count — quick glance at book size */}
-        {holdings.length > 0 && (
+        {enrichedHoldings.length > 0 && (
           <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {holdings.length} positions
+            {enrichedHoldings.length} positions
           </span>
         )}
       </div>
@@ -519,8 +545,11 @@ export default function PortfolioPage() {
             </div>
           ) : (
             <div className="p-2">
+              {/* WHY enrichedHoldings: raw holdings have empty ticker/name (S1 doesn't
+                  store them). enrichedHoldings merges ticker/name/entity_id from company
+                  overviews so the TICKER and NAME columns render correctly. */}
               <SemanticHoldingsTable
-                holdings={holdings}
+                holdings={enrichedHoldings}
                 quotes={holdingsQuotes}
                 totalValue={kpi.totalValue}
               />
