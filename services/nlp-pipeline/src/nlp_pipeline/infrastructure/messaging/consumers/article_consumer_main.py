@@ -98,11 +98,32 @@ async def main() -> None:
         model_id=settings.embedding_model_id,
         semaphore=ml_sem,
     )
-    extraction_client = OllamaExtractionAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.extraction_model_id,
-        semaphore=ml_sem,
-    )
+    # Deep extraction: use DeepInfra (external API) when extraction_api_key is configured.
+    # qwen2.5:7b-instruct is too large for CPU self-hosting (7B model); DeepInfra hosts it on GPUs.
+    # Falls back to OllamaExtractionAdapter (which will fail gracefully) if no API key.
+    if settings.extraction_api_key:
+        from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
+            DeepSeekExtractionAdapter,
+        )
+
+        extraction_client = DeepSeekExtractionAdapter(  # type: ignore[assignment]
+            api_key=settings.extraction_api_key,
+            model_id=settings.extraction_api_model_id,
+            base_url=settings.extraction_api_base_url,
+            semaphore=ml_sem,
+        )
+        log.info(
+            "extraction_deepinfra_adapter_selected",
+            model_id=settings.extraction_api_model_id,
+            base_url=settings.extraction_api_base_url,
+        )
+    else:
+        extraction_client = OllamaExtractionAdapter(  # type: ignore[assignment]
+            base_url=settings.ollama_base_url,
+            model_id=settings.extraction_model_id,
+            semaphore=ml_sem,
+        )
+        log.info("extraction_ollama_adapter_selected", model_id=settings.extraction_model_id)
 
     # Backpressure controller
     bp = BackpressureController(
@@ -115,6 +136,9 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group,
         topics=[settings.topic_article_stored],
+        # bge-large CPU inference can take 2-5s per article; increase poll interval
+        # to 30 minutes to prevent consumer from leaving the group mid-batch.
+        max_poll_interval_ms=1_800_000,
     )
     # Optional: configure MinIO storage (article downloads + chunk text upload)
     _object_storage = None
