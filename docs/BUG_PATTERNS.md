@@ -6550,3 +6550,37 @@ Any repository that uses `CAST(:param AS vector)` with asyncpg must pass the emb
 ### Prevention
 
 asyncpg requires native Python types for typed parameters: `datetime.date` for DATE, `datetime.datetime` for TIMESTAMP, `list[float]` does NOT work for vector (use `str()`). When writing raw SQL with `CAST(:param AS TYPE)`, use the matching Python type in the parameters dict.
+
+---
+
+## BP-235 — httpx Default 5s Read Timeout Shadows asyncio.wait_for Deadline
+
+| Field | Value |
+|-------|-------|
+| **Service** | nlp-pipeline (S6) — `unresolved_resolution_worker.py`; any service using httpx with `asyncio.wait_for` |
+| **Severity** | HIGH (makes configurable LLM timeout completely ineffective) |
+| **Discovered** | 2026-04-26 investigation into unresolved resolution worker timeouts |
+| **Root cause** | `httpx.AsyncClient()` with no arguments has `Timeout(5.0)` applied to ALL components: connect, read, write, pool. When calling `asyncio.wait_for(client.post(...), timeout=10.0)`, the httpx read timeout fires at 5s — before asyncio's 10s outer deadline — raising `httpx.ReadTimeout`. The asyncio wrapper never fires. Any call to `asyncio.wait_for` with an httpx client that has a shorter internal timeout will always be dominated by httpx, making the asyncio deadline useless. |
+| **Symptom** | LLM API calls reliably fail at 5s despite `asyncio.wait_for(timeout=10.0)`. Configuration changes to the timeout setting have no effect. |
+| **Fix** | Always pass an explicit timeout to the AsyncClient constructor: `httpx.AsyncClient(timeout=httpx.Timeout(desired_timeout))`. The inner httpx timeout must be >= the outer asyncio deadline, or the asyncio deadline is meaningless. |
+
+### Prevention
+
+When wrapping httpx calls in `asyncio.wait_for`, ALWAYS set `httpx.AsyncClient(timeout=httpx.Timeout(N))` with N >= the asyncio deadline. Never rely on `asyncio.wait_for` to be the effective timeout boundary — httpx's default will fire first. Add to code review checklist: "any asyncio.wait_for wrapping an httpx call must set matching timeout on the client".
+
+---
+
+## BP-236 — Valkey 24h Briefing Cache Masks Article Score Updates
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) — `public_briefings.py` |
+| **Severity** | LOW (demo/debugging issue, correct production behavior) |
+| **Discovered** | 2026-04-26 demo readiness QA |
+| **Root cause** | The morning briefing route caches responses in Valkey for 24h (key: `briefing:morning:{user_id}`). After updating article `llm_relevance_score` in the DB to populate the brief, the cached response (generated before the score update) is returned, still showing "Not available in retrieved context". The 0-second response time is the key indicator of a cache hit. |
+| **Symptom** | Morning briefing returns stale "Not available" content despite 42 articles now scored above threshold. Response time is ~0ms. |
+| **Fix** | `redis-cli DEL "briefing:morning:{user_id}"` to invalidate the cache key. Pattern: all Valkey briefing keys follow `briefing:{type}:{entity_id?}:{user_id}`. |
+
+### Prevention
+
+Document that updating article scores or context sources requires Valkey cache invalidation before the next request. For development/debugging: `redis-cli --scan --pattern "briefing:*" | xargs redis-cli DEL`.
