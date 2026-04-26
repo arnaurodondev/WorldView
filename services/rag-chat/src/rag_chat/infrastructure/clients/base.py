@@ -31,8 +31,18 @@ class BaseUpstreamClient:
         extra_headers: dict[str, str] | None = None,
     ) -> dict:
         """POST *path* with JSON *payload*.  Returns ``{}`` on any error."""
+        # WHY: Propagate X-Internal-JWT from the current request context to upstream
+        # service calls (S6, S7). Without this, S6/S7 return 401 since they validate
+        # X-Internal-JWT via InternalJWTMiddleware (PRD-0025).
+        from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+        headers: dict[str, str] = dict(extra_headers or {})
+        jwt = get_current_jwt()
+        if jwt and "X-Internal-JWT" not in headers:
+            headers["X-Internal-JWT"] = jwt
+
         try:
-            resp = await self._client.post(path, json=payload, headers=extra_headers or {})
+            resp = await self._client.post(path, json=payload, headers=headers)
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
         except httpx.TimeoutException:
@@ -57,8 +67,18 @@ class BaseUpstreamClient:
         extra_headers: dict[str, str] | None = None,
     ) -> dict:
         """GET *path* with optional query *params*.  Returns ``{}`` on any error."""
+        # WHY: Propagate X-Internal-JWT from the current request context to upstream
+        # service calls (S6, S7). Without this, S6/S7 return 401 since they validate
+        # X-Internal-JWT via InternalJWTMiddleware (PRD-0025).
+        from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+        headers: dict[str, str] = dict(extra_headers or {})
+        jwt = get_current_jwt()
+        if jwt and "X-Internal-JWT" not in headers:
+            headers["X-Internal-JWT"] = jwt
+
         try:
-            resp = await self._client.get(path, params=params, headers=extra_headers or {})
+            resp = await self._client.get(path, params=params, headers=headers)
             resp.raise_for_status()
             return resp.json()  # type: ignore[no-any-return]
         except httpx.TimeoutException:

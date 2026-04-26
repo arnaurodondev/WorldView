@@ -57,7 +57,13 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(
-        self, app: Any, jwks_url: str, *, skip_verification: bool = False, service_name: str = "unknown"
+        self,
+        app: Any,
+        jwks_url: str,
+        *,
+        skip_verification: bool = False,
+        service_name: str = "unknown",
+        jti_replay_check_enabled: bool = True,
     ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
@@ -65,6 +71,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
         self._service_name = service_name
+        # JTI replay protection should only be enabled at user-facing service boundaries
+        # (S8 rag-chat, S9 api-gateway). Internal-only services (S6, S7) receive the
+        # same JWT forwarded by S8 and must allow it through multiple times per request.
+        # Set jti_replay_check_enabled=False for those services.
+        self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
@@ -209,11 +220,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             # use. Any subsequent request with the same JTI within the TTL window is
             # rejected. Fail-open: if Valkey is unavailable, the check is skipped
             # (JWT signature + expiry remain validated, so security degrades gracefully).
-            # Note: knowledge-graph does not configure Valkey on app.state; getattr
-            # returns None and the JTI check is safely skipped in production.
+            # IMPORTANT: jti_replay_check_enabled=False for internal-only services (S6, S7)
+            # because S8 forwards the same JWT to these services multiple times within a
+            # single user request. The user-facing boundary check at S8 is sufficient.
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
-            if jti:
+            if jti and self._jti_replay_check_enabled:
                 valkey = getattr(request.app.state, "valkey", None)
                 if valkey is not None:
                     # TTL = remaining token lifetime + 60 s buffer (handles clock skew).

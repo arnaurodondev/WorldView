@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,7 +58,8 @@ class Settings(BaseSettings):
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
     topic_signal_detected: str = "nlp.signal.detected.v1"
-    topic_claim_extracted: str = "claim.extracted"
+    # RH-002 fix: aligned with Kafka init script topic name (claim.extracted.v1)
+    topic_claim_extracted: str = "claim.extracted.v1"
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
@@ -168,6 +171,14 @@ class Settings(BaseSettings):
     # production — only for E2E tests that run without a full S9 stack.
     internal_jwt_skip_verification: bool = False
 
+    # JTI replay check boundary control.
+    # S6 is an internal-only service: S8 (rag-chat) forwards the same JWT token
+    # to S6 multiple times per user request (e.g. once to embed, once to search
+    # chunks). The JTI replay check at S8 is the correct user-facing boundary.
+    # Enabling it here causes the second S6 call within the same request to be
+    # rejected as a replay, breaking RAG retrieval. Default: False.
+    jti_replay_check_enabled: bool = False
+
     # Admin API
     admin_token: str = ""
 
@@ -179,6 +190,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:
         """Warn at startup if any database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
         for field_name, env_var in (
             ("database_url", "NLP_PIPELINE_DATABASE_URL"),
             ("intelligence_database_url", "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL"),

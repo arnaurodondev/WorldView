@@ -6,12 +6,13 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    version="2.0",
+    version="2.1",
     description="Morning market briefing — portfolio, news, alerts, market overview, events",
     template=(
         "You are a financial intelligence analyst writing a morning market briefing.\n"
         "Synthesize the following data into a clear, actionable markdown narrative.\n\n"
         "{safety}\n\n"
+        "As of: {current_date}\n\n"
         "## Structure\n"
         "Organize the briefing with these sections:\n"
         "1. **Market Overview** — Sector performance, top movers, overall market tone\n"
@@ -23,8 +24,8 @@ MORNING_BRIEFING = PromptTemplate(
         "- Target 500-1000 words\n"
         "- Use numbered citations [N] when referencing specific data\n"
         "- Flag conflicting signals explicitly\n"
-        "- If a context section is empty, omit the section heading entirely"
-        " (do not write 'No data available')\n"
+        "- If a context section is empty, skip the entire section (heading + body)."
+        " Never write 'No data available', 'not available', or similar.\n"
         "- Do not compute portfolio P&L, percentage returns, or position values"
         " unless they appear verbatim in the portfolio context\n"
         "- Do not use phrases like 'consider', 'you should', 'it may be worth'\n"
@@ -43,6 +44,7 @@ MORNING_BRIEFING = PromptTemplate(
             "market_overview",
             "events_context",
             "safety",
+            "current_date",  # date context so the LLM knows what "today" is
         }
     ),
 )

@@ -11,6 +11,8 @@ Example::
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,12 +53,12 @@ class Settings(BaseSettings):
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 
     # ── LLM API providers (primary + fallback chain) ──────────────────────────
-    deepinfra_api_key: str | None = None  # primary: deepseek-r1-distill-qwen-32b
+    deepinfra_api_key: str | None = None  # primary: deepseek-ai/DeepSeek-R1-Distill-Llama-70B
     openrouter_api_key: str | None = None  # fallback: deepseek/deepseek-r1-distill-qwen-32b
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
-    completion_model: str = "deepseek-r1-distill-qwen-32b"  # RAG_CHAT_COMPLETION_MODEL
+    completion_model: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"  # RAG_CHAT_COMPLETION_MODEL
 
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
@@ -71,6 +73,7 @@ class Settings(BaseSettings):
     s7_base_url: str = "http://knowledge-graph:8007"
     s3_base_url: str = "http://market-data:8003"
     s1_base_url: str = "http://portfolio:8001"
+    s5_base_url: str = "http://alert:8005"  # Alert service (S5) — used by BriefingContextGatherer
     s1_internal_token: str  # required — set via RAG_CHAT_S1_INTERNAL_TOKEN
 
     # ── Feature flags ─────────────────────────────────────────────────────────
@@ -94,7 +97,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
-        """Warn at startup about default credentials."""
+        """Validate startup invariants: F-007 (skip_verification) + F-014 (whitespace coercion) + credential warning."""
+        # F-007: internal_jwt_skip_verification=True MUST NOT be used in production.
+        # Prevents accidentally deploying with signature verification disabled.
+        if self.internal_jwt_skip_verification and os.environ.get("APP_ENV") == "production":
+            raise ValueError("internal_jwt_skip_verification MUST NOT be enabled in production")
+
+        # F-014: Coerce whitespace-only database_url_read to None — functionally empty
+        # DSN strings cause asyncpg connection errors at startup.
+        if self.database_url_read is not None:
+            raw = self.database_url_read.get_secret_value()
+            if not raw or not raw.strip():
+                object.__setattr__(self, "database_url_read", None)
+
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

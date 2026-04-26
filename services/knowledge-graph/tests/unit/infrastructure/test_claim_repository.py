@@ -132,3 +132,82 @@ class TestFetchContradictionsForEntity:
 
         params: dict = session.execute.call_args[0][1]
         assert params["top_k"] == 5
+
+
+class TestSearchClaimsBP180:
+    """Regression tests for BP-180: asyncpg NULL type ambiguity in search_claims.
+
+    (:param IS NULL) with a Python None raises AmbiguousParameterError.
+    Fix: CAST(:param AS TEXT[]) IS NULL so the type is always explicit.
+    """
+
+    def test_search_claims_null_claim_types_uses_cast_in_sql(self) -> None:
+        """When claim_types=None, the SQL must use CAST for the IS NULL check.
+
+        Verifies that the CAST pattern (BP-180) is present in the SQL so that
+        asyncpg can infer the PostgreSQL type from a Python None binding.
+        """
+        session = _make_session()
+        repo = _make_repo(session)
+        entity_id = uuid4()
+
+        _run(
+            repo.search_claims(
+                entity_ids=[entity_id],
+                claim_types=None,
+            )
+        )
+
+        sql_text: str = str(session.execute.call_args[0][0].text)
+        # The BP-180 fix replaces ":claim_types IS NULL" with
+        # "CAST(:claim_types AS TEXT[]) IS NULL" — verify the CAST is present.
+        assert "cast(:claim_types as text[])" in sql_text.lower(), f"BP-180 CAST fix not found in SQL: {sql_text}"
+
+    def test_search_claims_null_claim_types_passes_none_param(self) -> None:
+        """When claim_types=None, the params dict must still pass None for :claim_types
+        (the CAST in SQL handles the type disambiguation)."""
+        session = _make_session()
+        repo = _make_repo(session)
+        entity_id = uuid4()
+
+        _run(repo.search_claims(entity_ids=[entity_id], claim_types=None))
+
+        params: dict = session.execute.call_args[0][1]
+        assert params["claim_types"] is None
+
+    def test_search_claims_with_claim_types_passes_list(self) -> None:
+        """When claim_types=['analyst_rating'], the list is forwarded as-is."""
+        session = _make_session()
+        repo = _make_repo(session)
+        entity_id = uuid4()
+
+        _run(
+            repo.search_claims(
+                entity_ids=[entity_id],
+                claim_types=["analyst_rating"],
+            )
+        )
+
+        params: dict = session.execute.call_args[0][1]
+        assert params["claim_types"] == ["analyst_rating"]
+
+    def test_search_claims_entity_ids_use_cast(self) -> None:
+        """The entity_ids filter must use CAST(:entity_ids AS UUID[]) in the SQL."""
+        session = _make_session()
+        repo = _make_repo(session)
+        entity_id = uuid4()
+
+        _run(repo.search_claims(entity_ids=[entity_id]))
+
+        sql_text: str = str(session.execute.call_args[0][0].text)
+        assert (
+            "cast(:entity_ids as uuid[])" in sql_text.lower()
+        ), f"BP-180 CAST for entity_ids not found in SQL: {sql_text}"
+
+    def test_search_claims_empty_result_returns_empty_list(self) -> None:
+        """Empty DB result → returns empty list."""
+        session = _make_session(fetchall_return=[])
+        repo = _make_repo(session)
+
+        result = _run(repo.search_claims(entity_ids=[uuid4()]))
+        assert result == []

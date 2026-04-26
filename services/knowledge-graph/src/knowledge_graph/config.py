@@ -116,6 +116,13 @@ class Settings(BaseSettings):
     # production — only for E2E tests that run without a full S9 stack.
     internal_jwt_skip_verification: bool = False
 
+    # JTI replay check boundary control.
+    # S7 is an internal-only service: S8 (rag-chat) forwards the same JWT token
+    # to S7 multiple times per user request (e.g. graph enrichment + entity search).
+    # The JTI replay check at S8 is the correct user-facing boundary.
+    # Default: False — replay check is disabled for this internal service.
+    jti_replay_check_enabled: bool = False
+
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
 
@@ -126,7 +133,7 @@ class Settings(BaseSettings):
         if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
-                "Set APP_ENV != 'production' or remove the flag."
+                "Set APP_ENV != 'production' or remove the flag.",
             )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]

@@ -1,7 +1,7 @@
 """DeepInfra LLM streaming adapter (T-F-3-01).
 
 Uses the OpenAI-compatible chat completions API to stream tokens
-from deepseek-r1-distill-qwen-32b via DeepInfra.
+from deepseek-ai/DeepSeek-R1-Distill-Llama-70B via DeepInfra.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-_MODEL = "deepseek-r1-distill-qwen-32b"
+_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 _BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 
@@ -31,6 +31,7 @@ class DeepInfraCompletionAdapter:
     """
 
     name = "deepinfra"
+    model_id: str = _MODEL  # expose for orchestrator model tracking
 
     def __init__(
         self,

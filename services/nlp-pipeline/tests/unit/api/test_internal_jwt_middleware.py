@@ -48,12 +48,29 @@ def _make_token(
 class _PreKeyedJWTMiddleware(InternalJWTMiddleware):
     """Subclass that accepts a pre-built public key to avoid HTTP calls in tests."""
 
-    def __init__(self, app: Any, public_key: Any, *, skip_verification: bool = False) -> None:
-        super().__init__(app, jwks_url="http://unused-in-test/internal/jwks", skip_verification=skip_verification)
+    def __init__(
+        self,
+        app: Any,
+        public_key: Any,
+        *,
+        skip_verification: bool = False,
+        jti_replay_check_enabled: bool = True,
+    ) -> None:
+        super().__init__(
+            app,
+            jwks_url="http://unused-in-test/internal/jwks",
+            skip_verification=skip_verification,
+            jti_replay_check_enabled=jti_replay_check_enabled,
+        )
         self._public_key = public_key
 
 
-def _build_app(public_key: Any = None, *, skip_verification: bool = False) -> FastAPI:
+def _build_app(
+    public_key: Any = None,
+    *,
+    skip_verification: bool = False,
+    jti_replay_check_enabled: bool = True,
+) -> FastAPI:
     """Build a minimal FastAPI app with _PreKeyedJWTMiddleware."""
     app = FastAPI()
 
@@ -74,7 +91,12 @@ def _build_app(public_key: Any = None, *, skip_verification: bool = False) -> Fa
     async def metrics_route() -> JSONResponse:
         return JSONResponse({"metric": 1})
 
-    app.add_middleware(_PreKeyedJWTMiddleware, public_key=public_key, skip_verification=skip_verification)
+    app.add_middleware(
+        _PreKeyedJWTMiddleware,
+        public_key=public_key,
+        skip_verification=skip_verification,
+        jti_replay_check_enabled=jti_replay_check_enabled,
+    )
     return app
 
 
@@ -211,8 +233,13 @@ async def test_jti_first_use_accepted() -> None:
     assert called
 
 
-async def test_jti_replay_rejected() -> None:
-    """F-012: Second request with same jti returns 401 (Valkey SET NX returns None = key existed)."""
+async def test_jti_replay_rejected_when_check_enabled() -> None:
+    """F-012: Second request with same jti returns 401 when jti_replay_check_enabled=True.
+
+    This verifies that the replay check works when explicitly enabled. In production,
+    S6 runs with jti_replay_check_enabled=False (see config.py), but this test
+    confirms the check mechanism itself still works for services where it is on.
+    """
     from unittest.mock import AsyncMock
 
     from starlette.applications import Starlette
@@ -239,7 +266,13 @@ async def test_jti_replay_rejected() -> None:
     mock_valkey.set_nx = AsyncMock(return_value=False)  # SET NX failed → key already present
     mock_app.state.valkey = mock_valkey
 
-    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    # Explicitly enable replay check to confirm the enforcement path works
+    mw = InternalJWTMiddleware(
+        mock_app,
+        jwks_url="http://mock/jwks",
+        skip_verification=False,
+        jti_replay_check_enabled=True,
+    )
     mw._public_key = public_key
 
     called: list[bool] = []
@@ -261,6 +294,73 @@ async def test_jti_replay_rejected() -> None:
     assert result.status_code == 401
     assert b"replay" in result.body
     assert not called
+
+
+async def test_jti_replay_allowed_when_check_disabled() -> None:
+    """F-012-internal: jti_replay_check_enabled=False skips Valkey check entirely.
+
+    This is the production behaviour for S6 (nlp-pipeline) and S7 (knowledge-graph).
+    S8 (rag-chat) forwards the same JWT to S6 multiple times per user request
+    (embed call, then chunk search call). Without this flag the second call would
+    be rejected as a replay even though it is a legitimate fan-out from S8.
+    """
+    from unittest.mock import AsyncMock
+
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key, public_key = _generate_rsa_pair()
+    token_with_jti = jwt.encode(
+        {
+            "sub": "user-123",
+            "tenant_id": "tenant-abc",
+            "role": "user",
+            "iss": "worldview-gateway",
+            "jti": "nlp-replay-disabled-jti",
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    # Valkey is present and would reject the replay if the check ran
+    mock_valkey = AsyncMock()
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # would signal "replay" if called
+    mock_app.state.valkey = mock_valkey
+
+    # jti_replay_check_enabled=False — Valkey must NOT be consulted at all
+    mw = InternalJWTMiddleware(
+        mock_app,
+        jwks_url="http://mock/jwks",
+        skip_verification=False,
+        jti_replay_check_enabled=False,
+    )
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/signals",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_with_jti.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    # Request must pass through: replay check is disabled
+    assert result.status_code == 200
+    assert called
+    # Valkey must not have been touched at all
+    mock_valkey.set_nx.assert_not_called()
 
 
 async def test_internal_jwt_rejects_wrong_issuer() -> None:

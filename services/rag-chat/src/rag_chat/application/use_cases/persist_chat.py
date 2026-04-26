@@ -55,8 +55,19 @@ class ChatPersistenceUseCase:
         user_message: str,
         assistant_response: AssistantResponse,
         uow: RagUnitOfWorkPort,
+        *,
+        tenant_id: UUID | None = None,
+        user_id: UUID | None = None,
     ) -> tuple[UUID, UUID]:
         """Persist both messages and return ``(user_msg_id, assistant_msg_id)``.
+
+        Args:
+            thread_id:          Target conversation thread.
+            user_message:       Raw user query text.
+            assistant_response: Structured response from the pipeline.
+            uow:                Active unit of work (already entered).
+            tenant_id:          Required for lazy thread creation (streaming path).
+            user_id:            Required for lazy thread creation (streaming path).
 
         Raises:
             Any SQLAlchemy exception on DB failure (caller must catch).
@@ -67,6 +78,28 @@ class ChatPersistenceUseCase:
         now = utc_now()
         user_msg_id: UUID = new_uuid7()
         asst_msg_id: UUID = new_uuid7()
+
+        # Bug 3 Fix: Ensure the thread row exists before inserting messages.
+        # WHY: The SSE streaming client sends a client-generated thread_id
+        # (crypto.randomUUID()) that may never have been POST /v1/threads.
+        # Inserting messages without a matching thread row violates the FK
+        # constraint on messages.thread_id → threads.thread_id.
+        # We lazily create the thread here only when tenant_id + user_id are known.
+        if tenant_id is not None and user_id is not None:
+            existing = await uow.threads.get(thread_id, user_id, tenant_id)
+            if existing is None:
+                from rag_chat.domain.entities.conversation import ConversationThread
+
+                thread = ConversationThread(
+                    thread_id=thread_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    title=None,
+                    entity_ids=(),
+                    created_at=now,
+                    updated_at=now,
+                )
+                await uow.threads.create(thread)
 
         user_msg = Message(
             message_id=user_msg_id,

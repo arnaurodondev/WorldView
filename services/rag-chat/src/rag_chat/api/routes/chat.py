@@ -85,7 +85,11 @@ async def chat_stream(
     request_body: ChatRequestSchema,
     request: Request,
     auth: AuthContextDep,
-    uow: UoWDep,
+    # WHY NO UoWDep HERE: FastAPI closes yield dependencies when the route function
+    # returns. EventSourceResponse iterates the generator AFTER return — meaning the
+    # UoW dependency is already torn down before persistence fires in execute_streaming,
+    # causing "RagUnitOfWork not entered" (AssertionError). Fix: create a UoW whose
+    # lifetime is scoped to the generator, not the route function. (Bug 2)
 ) -> Any:
     """SSE streaming chat endpoint.
 
@@ -110,17 +114,25 @@ async def chat_stream(
     emitter = SSEEmitter()
 
     async def event_generator() -> AsyncGenerator[dict[str, str], None]:
-        try:
-            async for event in orchestrator.execute_streaming(chat_req, uow):
-                yield event
-        except RateLimitExceededError as e:
-            yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
-        except (PIIDetectedError, PromptInjectionError) as e:
-            yield emitter.emit_error("INPUT_REJECTED", str(e))
-        except ProviderUnavailableError as e:
-            yield emitter.emit_error("PROVIDER_UNAVAILABLE", str(e))
-        except Exception as e:
-            log.error("stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
-            yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
+        # WHY local import inside nested function: R25 says routes must not import
+        # from infrastructure/ at module level. A local import inside an async
+        # generator is the established pattern in this codebase (see dependencies.py).
+        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
+
+        # Create a fresh UoW scoped to the generator lifetime — this is the only
+        # place where the UoW is alive at the moment execute_streaming() persists.
+        async with _RagUoW(request.app.state.write_factory) as uow:
+            try:
+                async for event in orchestrator.execute_streaming(chat_req, uow):
+                    yield event
+            except RateLimitExceededError as e:
+                yield emitter.emit_error("RATE_LIMIT_EXCEEDED", str(e))
+            except (PIIDetectedError, PromptInjectionError) as e:
+                yield emitter.emit_error("INPUT_REJECTED", str(e))
+            except ProviderUnavailableError as e:
+                yield emitter.emit_error("PROVIDER_UNAVAILABLE", str(e))
+            except Exception as e:
+                log.error("stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
+                yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
     return EventSourceResponse(event_generator())

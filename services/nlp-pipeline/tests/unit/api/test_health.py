@@ -58,6 +58,8 @@ def _make_app(
     app.state.valkey = mock_valkey
 
     app.state.dispatcher_healthy = dispatcher_healthy
+    # F-003B: Readyz now checks JWKS public key — inject a mock to satisfy the check.
+    app.state._internal_jwt_public_key = MagicMock()
     return app
 
 

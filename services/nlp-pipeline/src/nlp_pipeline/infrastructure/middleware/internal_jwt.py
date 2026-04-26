@@ -56,12 +56,26 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     middleware instance.
     """
 
-    def __init__(self, app: Any, jwks_url: str, *, skip_verification: bool = False) -> None:
+    def __init__(
+        self,
+        app: Any,
+        jwks_url: str,
+        *,
+        skip_verification: bool = False,
+        service_name: str = "unknown",
+        jti_replay_check_enabled: bool = True,
+    ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
         self._public_key: RSAPublicKey | None = None
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
+        self._service_name = service_name
+        # JTI replay protection should only be enabled at user-facing service boundaries
+        # (S8 rag-chat, S9 api-gateway). Internal-only services (S6, S7) receive the
+        # same JWT forwarded by S8 and must allow it through multiple times per request
+        # (e.g. embed + chunk search). Set jti_replay_check_enabled=False for those.
+        self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
@@ -206,16 +220,20 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             # use. Any subsequent request with the same JTI within the TTL window is
             # rejected. Fail-open: if Valkey is unavailable, the check is skipped
             # (JWT signature + expiry remain validated, so security degrades gracefully).
+            # IMPORTANT: jti_replay_check_enabled=False for internal-only services (S6, S7)
+            # because S8 forwards the same JWT to these services multiple times within a
+            # single user request (e.g. embed call + chunk search call). The user-facing
+            # boundary check at S8 is sufficient; re-checking here causes false 401 replays.
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
-            if jti:
+            if jti and self._jti_replay_check_enabled:
                 valkey = getattr(request.app.state, "valkey", None)
                 if valkey is not None:
                     # TTL = remaining token lifetime + 60 s buffer (handles clock skew).
                     # max(1, ...) prevents a zero-or-negative TTL on an about-to-expire token.
                     ttl = max(1, int(exp - time.time()) + 60)
                     try:
-                        was_new = await valkey.set_nx(f"jti:{jti}", "1", ex=ttl)
+                        was_new = await valkey.set_nx(f"jti:{self._service_name}:{jti}", "1", ex=ttl)
                         if not was_new:
                             logger.warning("jti_replay_detected", jti=jti)  # type: ignore[no-any-return]
                             return Response(

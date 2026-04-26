@@ -78,6 +78,13 @@ class OutputProcessor:
         # 3. Parse [N] citation markers (1-based)
         refs: set[int] = {int(m) for m in _CITATION_RE.findall(text)}
 
+        # Coherence guard: if no retrieved items were provided (citations will be empty)
+        # but the LLM still emitted [N] markers, strip those orphaned markers from the
+        # text.  Without this, the user sees "[1] [2]" inline references that point to
+        # nothing — worse than having no citations at all.
+        if not retrieved_items:
+            text = re.sub(r"\s*\[\d+\]", "", text)
+
         # 4. Build citations list
         citations: list[Citation] = []
         for ref in sorted(refs):
