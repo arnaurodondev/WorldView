@@ -104,7 +104,9 @@ class ParallelRetrievalOrchestrator:
         if plan.use_graph:
             for eid in entity_ids[:_MAX_GRAPH_ENTITIES]:
                 tasks.append(self._with_cb("graph", self._fetch_graph(eid)))
-        if plan.use_claims:
+        # Claims search requires at least one entity_id (min_length=1 on endpoint).
+        # Skip when entity resolution returned no entities (e.g. generic queries).
+        if plan.use_claims and entity_ids:
             tasks.append(self._with_cb("claims", self._fetch_claims(entity_ids, plan)))
         if plan.use_events:
             tasks.append(self._with_cb("events", self._fetch_events(entity_ids, plan)))

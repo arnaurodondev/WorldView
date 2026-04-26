@@ -23,9 +23,20 @@ class S3Client(BaseUpstreamClient):
     async def get_fundamentals_highlights(self, instrument_id: UUID) -> dict:
         """GET /api/v1/fundamentals/{id}/highlights.
 
-        Returns ``{}`` on timeout or HTTP error.
+        The endpoint returns FundamentalsResponse:
+          {"security_id": "...", "records": [{"section": "highlights", "data": {...}}]}
+        We extract the first record's "data" dict so callers receive flat key-value
+        fundamentals (e.g. PERatio, MarketCapitalization) directly.
+
+        Returns ``{}`` on timeout, HTTP error, or missing records.
         """
-        return await self._get(f"/api/v1/fundamentals/{instrument_id}/highlights")
+        raw = await self._get(f"/api/v1/fundamentals/{instrument_id}/highlights")
+        # Unwrap the nested records structure from FundamentalsResponse
+        records = raw.get("records", [])
+        if records and isinstance(records, list):
+            data = records[0].get("data", {})
+            return dict(data) if isinstance(data, dict) else {}
+        return {}
 
     async def get_earnings(self, instrument_id: UUID) -> list[dict]:
         """GET /api/v1/fundamentals/{id}/earnings → earnings history list.
@@ -53,7 +64,8 @@ class S3Client(BaseUpstreamClient):
         raw = await self._get(f"/api/v1/instruments/symbol/{ticker}")
         if not raw:
             return None
-        instrument_id = raw.get("instrument_id")
+        # Market-data InstrumentResponse uses "id" not "instrument_id"
+        instrument_id = raw.get("instrument_id") or raw.get("id")
         if instrument_id is None:
             return None
         from uuid import UUID as _UUID

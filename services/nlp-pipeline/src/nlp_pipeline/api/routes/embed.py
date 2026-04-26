@@ -99,29 +99,49 @@ async def embed_text(
 
     _log.debug("embed_request", model=model_id, text_len=len(full_text))  # type: ignore[no-any-return]
 
-    try:
-        async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{ollama_url}/api/embeddings",
-                json={"model": model_id, "prompt": full_text},
+    # Fallback model list: try primary model first, then nomic-embed-text as backup.
+    # This allows graceful operation when bge-large is not yet pulled in Ollama.
+    fallback_models = ["nomic-embed-text"]
+
+    embedding: list[float] = []
+    used_model = model_id
+    models_to_try = [model_id] + [m for m in fallback_models if m != model_id]
+
+    for candidate in models_to_try:
+        try:
+            async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{ollama_url}/api/embeddings",
+                    json={"model": candidate, "prompt": full_text},
+                )
+                resp.raise_for_status()
+                data: dict = resp.json()
+                embedding = data["embedding"]
+                used_model = candidate
+                if candidate != model_id:
+                    _log.warning(  # type: ignore[no-any-return]
+                        "embed_fallback_model_used",
+                        requested=model_id,
+                        used=candidate,
+                    )
+                break  # success — stop trying
+        except httpx.TimeoutException:
+            _log.warning("embed_ollama_timeout", model=candidate)  # type: ignore[no-any-return]
+            continue
+        except httpx.HTTPStatusError as exc:
+            _log.warning(  # type: ignore[no-any-return]
+                "embed_ollama_http_error",
+                model=candidate,
+                status=exc.response.status_code,
             )
-            resp.raise_for_status()
-            data: dict = resp.json()
-            embedding: list[float] = data["embedding"]
-    except httpx.TimeoutException:
-        _log.warning("embed_ollama_timeout", model=model_id)  # type: ignore[no-any-return]
-        # 503 so rag-chat degrades gracefully (returns empty embedding) instead of 500.
-        return JSONResponse(status_code=503, content={"error": "embedding_timeout"})
-    except httpx.HTTPStatusError as exc:
-        _log.warning(  # type: ignore[no-any-return]
-            "embed_ollama_http_error",
-            model=model_id,
-            status=exc.response.status_code,
-        )
-        return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
-    except (TimeoutError, httpx.RequestError, KeyError, ValueError) as exc:
-        _log.warning("embed_request_error", model=model_id, error=str(exc))  # type: ignore[no-any-return]
+            continue
+        except (TimeoutError, httpx.RequestError, KeyError, ValueError) as exc:
+            _log.warning("embed_request_error", model=candidate, error=str(exc))  # type: ignore[no-any-return]
+            continue
+
+    if not embedding:
+        # All models failed — return 503 so rag-chat degrades gracefully.
         return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
 
-    _log.info("embed_ok", model=model_id, dimensions=len(embedding))  # type: ignore[no-any-return]
-    return EmbedResponse(embedding=embedding, model=model_id, dimensions=len(embedding))
+    _log.info("embed_ok", model=used_model, dimensions=len(embedding))  # type: ignore[no-any-return]
+    return EmbedResponse(embedding=embedding, model=used_model, dimensions=len(embedding))

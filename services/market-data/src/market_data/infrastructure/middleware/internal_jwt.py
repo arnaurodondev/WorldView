@@ -57,7 +57,13 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(
-        self, app: Any, jwks_url: str, *, skip_verification: bool = False, service_name: str = "unknown"
+        self,
+        app: Any,
+        jwks_url: str,
+        *,
+        skip_verification: bool = False,
+        service_name: str = "unknown",
+        jti_replay_check_enabled: bool = True,
     ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
@@ -65,6 +71,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
         self._service_name = service_name
+        self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
@@ -210,9 +217,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             # rejected. Fail-open: if Valkey is unavailable, the check is skipped
             # (JWT signature + expiry remain validated, so security degrades gracefully).
             # Note: market-data stores the Valkey client as app.state.valkey_client.
+            # IMPORTANT: set jti_replay_check_enabled=False when a single request can
+            # legitimately hit this service multiple times with the same JWT (e.g.
+            # rag-chat calling quotes + fundamentals in asyncio.gather).
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
-            if jti:
+            if jti and self._jti_replay_check_enabled:
                 valkey = getattr(request.app.state, "valkey_client", None)
                 if valkey is not None:
                     # TTL = remaining token lifetime + 60 s buffer (handles clock skew).
