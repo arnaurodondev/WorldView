@@ -353,9 +353,15 @@ class BriefingContextGatherer:
         return _map_news_articles(raw.get("articles", []))
 
     async def _fetch_entity_articles(self, entity_id: str) -> list[NewsArticleSummary]:
-        """GET /api/v1/entities/{entity_id}/articles from S6."""
+        """GET /api/v1/entities/{entity_id}/briefing-articles from S6.
+
+        Uses the /briefing-articles path (not /articles) to bypass the watchlist
+        ownership guard in the signals router, which returns 404 for entities not
+        on the tenant watchlist.  The briefing use case must fetch articles for any
+        entity regardless of watchlist membership.
+        """
         raw = await self._s6._get(
-            f"/api/v1/entities/{entity_id}/articles",
+            f"/api/v1/entities/{entity_id}/briefing-articles",
             params={"limit": 10},
         )
         return _map_news_articles(raw.get("articles", []))

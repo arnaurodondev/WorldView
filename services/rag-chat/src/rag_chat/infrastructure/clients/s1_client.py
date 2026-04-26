@@ -3,7 +3,11 @@
 Endpoints:
   GET /api/v1/users/{user_id}/portfolio/context → portfolio context (cached)
 
-Auth: X-Internal-Token + X-User-Id headers (internal service-to-service).
+Auth: X-Internal-JWT propagated from ContextVar (PRD-0025 InternalJWTMiddleware).
+      S1 Portfolio validates X-Internal-JWT like all other backend services.
+      The legacy X-Internal-Token / X-User-Id / X-Tenant-Id headers are removed
+      — they are rejected by InternalJWTMiddleware and were the root cause of
+      portfolio context calls returning 401/403.
 Cache: Valkey ``s1:v1:portfolio_ctx:{user_id}`` TTL=300 s.
 """
 
@@ -48,12 +52,16 @@ class S1Client(BaseUpstreamClient):
         self,
         user_id: UUID,
         tenant_id: UUID,
-        x_internal_token: str,
+        x_internal_token: str = "",  # — kept for protocol compat; JWT from ContextVar
     ) -> PortfolioContext | None:
         """GET /api/v1/users/{user_id}/portfolio/context.
 
         Checks Valkey cache first (TTL=300 s).  On cache miss, calls S1 and
         stores the result.  Returns ``None`` on timeout or HTTP error.
+
+        Auth note (PRD-0025): x_internal_token is ignored — the X-Internal-JWT
+        header is injected automatically from the ContextVar set by the API
+        middleware (same pattern as S6/S7 clients via BaseUpstreamClient._get).
         """
         cache_key = f"{_CACHE_KEY_PREFIX}:{user_id}"
 
@@ -73,14 +81,21 @@ class S1Client(BaseUpstreamClient):
             logger.warning("s1_cache_read_error", error=str(exc))
 
         # ── HTTP call ──────────────────────────────────────────────────────────
+        # WHY: Use X-Internal-JWT (PRD-0025) not the legacy X-Internal-Token.
+        # S1 Portfolio validates X-Internal-JWT via InternalJWTMiddleware at startup.
+        # Legacy headers (X-Internal-Token, X-User-Id, X-Tenant-Id) are rejected
+        # by InternalJWTMiddleware and caused 401/403 on every portfolio call.
+        from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+        headers: dict[str, str] = {}
+        jwt = get_current_jwt()
+        if jwt:
+            headers["X-Internal-JWT"] = jwt
+
         try:
             resp = await self._client.get(
                 f"/api/v1/users/{user_id}/portfolio/context",
-                headers={
-                    "X-Internal-Token": x_internal_token,
-                    "X-User-Id": str(user_id),
-                    "X-Tenant-Id": str(tenant_id),
-                },
+                headers=headers,
             )
             resp.raise_for_status()
             raw: dict = resp.json()
