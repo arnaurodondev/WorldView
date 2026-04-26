@@ -124,7 +124,8 @@ class TestEmbedEndpoint:
                 resp = await client.post("/api/v1/embed", json={"text": "test text"})
 
         assert resp.status_code == 503
-        assert resp.json()["error"] == "embedding_timeout"
+        # All fallback models also timeout → embedding_unavailable (not embedding_timeout)
+        assert resp.json()["error"] == "embedding_unavailable"
 
     @pytest.mark.asyncio
     async def test_ollama_5xx_returns_503(self) -> None:

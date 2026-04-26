@@ -254,6 +254,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
         service_name=settings.service_name,
+        jti_replay_check_enabled=settings.internal_jwt_jti_check_enabled,
     )
     await jwt_middleware.startup()
 
@@ -343,6 +344,7 @@ def create_app() -> FastAPI:
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
         service_name=settings.service_name,
+        jti_replay_check_enabled=settings.internal_jwt_jti_check_enabled,
     )
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)

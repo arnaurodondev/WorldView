@@ -58,8 +58,8 @@ SELECT event_id, event_type, event_subtype, subject_entity_id,
 FROM events
 WHERE (CAST(:entity_ids AS UUID[]) IS NULL OR subject_entity_id = ANY(CAST(:entity_ids AS UUID[])))
   AND (CAST(:event_types AS TEXT[]) IS NULL OR event_type = ANY(CAST(:event_types AS TEXT[])))
-  AND (:date_from IS NULL OR event_date >= :date_from)
-  AND (:date_to   IS NULL OR event_date <= :date_to)
+  AND (CAST(:date_from AS DATE) IS NULL OR event_date >= CAST(:date_from AS DATE))
+  AND (CAST(:date_to   AS DATE) IS NULL OR event_date <= CAST(:date_to   AS DATE))
 ORDER BY event_date DESC
 LIMIT :top_k
 """),
