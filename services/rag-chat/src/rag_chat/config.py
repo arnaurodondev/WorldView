@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     s7_base_url: str = "http://knowledge-graph:8007"
     s3_base_url: str = "http://market-data:8003"
     s1_base_url: str = "http://portfolio:8001"
-    s5_base_url: str = "http://alert:8005"  # Alert service (S5) — used by BriefingContextGatherer
+    s5_base_url: str = "http://alert:8010"  # Alert service (S5) — used by BriefingContextGatherer
     s1_internal_token: str  # required — set via RAG_CHAT_S1_INTERNAL_TOKEN
 
     # ── Feature flags ─────────────────────────────────────────────────────────
