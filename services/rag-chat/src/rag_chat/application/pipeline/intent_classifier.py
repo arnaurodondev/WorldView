@@ -157,8 +157,11 @@ class OllamaIntentClassifier:
         try:
             response = await self._client.post(
                 f"{self._ollama_url}/api/generate",
+                # BP-F-008: qwen3:0.6b on CPU takes ~14s per inference (prefill bottleneck).
+                # 20s timeout ensures warm calls complete; cold model-load calls (~30s first)
+                # still fall back to keyword heuristic which is adequate for most intents.
                 json={"model": self._model, "prompt": prompt, "stream": False, "format": "json"},
-                timeout=5.0,
+                timeout=20.0,
             )
             response.raise_for_status()
             return _parse_intent_response(response.json().get("response", ""))

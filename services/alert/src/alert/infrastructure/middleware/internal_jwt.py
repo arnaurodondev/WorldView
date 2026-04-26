@@ -37,9 +37,10 @@ _SKIP_PATHS: frozenset[str] = frozenset(
         "/internal/v1/health",
     }
 )
-# SEC-001 fix: /admin MUST NOT bypass JWT — admin endpoints need both
-# InternalJWT auth AND the X-Admin-Token check.
-_SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz")
+# Admin endpoints are protected by X-Admin-Token (AdminAuthDep) and do not
+# require an X-Internal-JWT header — they are called by internal tools and
+# operators, not by S9-proxied user requests.
+_SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz", "/admin")
 
 _JWKS_REFRESH_INTERVAL_SECONDS = 3600  # 1 hour
 
@@ -58,12 +59,23 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
     middleware instance.
     """
 
-    def __init__(self, app: Any, jwks_url: str, *, skip_verification: bool = False) -> None:
+    def __init__(
+        self,
+        app: Any,
+        jwks_url: str,
+        *,
+        skip_verification: bool = False,
+        jti_replay_check_enabled: bool = True,
+    ) -> None:
         super().__init__(app)
         self._jwks_url = jwks_url
         self._public_key: RSAPublicKey | None = None
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
+        # BP-183: JTI replay check should be disabled for internal-only services
+        # that receive forwarded JWTs from other services (e.g. rag-chat calls alert).
+        # When disabled, only signature + expiry are verified.
+        self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
@@ -212,9 +224,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             # use. Any subsequent request with the same JTI within the TTL window is
             # rejected. Fail-open: if Valkey is unavailable, the check is skipped
             # (JWT signature + expiry remain validated, so security degrades gracefully).
+            # BP-183: disabled when jti_replay_check_enabled=False (internal-only services
+            # that receive forwarded user JWTs from other services like rag-chat).
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
-            if jti:
+            if jti and self._jti_replay_check_enabled:
                 valkey = getattr(request.app.state, "valkey", None)
                 if valkey is not None:
                     # TTL = remaining token lifetime + 60 s buffer (handles clock skew).

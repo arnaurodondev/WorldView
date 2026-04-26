@@ -24,8 +24,12 @@ _THINK_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-# Match [N] citation markers in the output
+# Match [N] citation markers in the output (e.g. [1], [12])
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+
+# Match [N:X] style markers that DeepSeek R1 sometimes emits instead of plain [N].
+# These are not part of our citation protocol — always strip them.
+_CITATION_N_COLON_RE = re.compile(r"\s*\[N:\d+\]")
 
 # Basic PII patterns — email, phone, SSN, credit card
 _PII_PATTERNS = [
@@ -69,6 +73,11 @@ class OutputProcessor:
         """
         # 1. Strip reasoning blocks
         text = _THINK_RE.sub("", raw_output).strip()
+
+        # 1b. Strip [N:X] markers — DeepSeek R1 occasionally emits these instead of
+        # the standard [N] format. They are never part of our citation protocol and
+        # have no corresponding citation entry in retrieved_items (F-CH-009 fix).
+        text = _CITATION_N_COLON_RE.sub("", text)
 
         # 2. PII scan on output
         if _contains_pii(text):

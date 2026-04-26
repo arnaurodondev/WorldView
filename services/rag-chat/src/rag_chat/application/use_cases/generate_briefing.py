@@ -322,6 +322,28 @@ class GenerateBriefingUseCase:
         market_text = _format_market_overview(ctx)
         events_text = _format_events(ctx)
 
+        # ── 3b. Empty context guard ───────────────────────────────────────────
+        # WHY: When all upstream services are unavailable or return empty data,
+        # the LLM receives a completely empty prompt and degrades to a retail-grade
+        # disclaimer ("Please ensure all relevant context sections are populated").
+        # This is unacceptable for institutional users. Return a professional
+        # placeholder so the UI renders something useful instead of LLM confusion.
+        all_sections_empty = not any([portfolio_text, news_text, alerts_text, market_text, events_text])
+        if all_sections_empty:
+            log.warning("morning_briefing_empty_context", user_id=user_id)  # type: ignore[no-any-return]
+            generated_at = datetime.now(tz=UTC).isoformat()
+            return {
+                "content": (
+                    "Portfolio data is being synchronized with upstream services. "
+                    "Your morning briefing will be available shortly — "
+                    "please refresh in a few minutes."
+                ),
+                "risk_summary": _build_morning_risk_summary(ctx),
+                "entity_mentions": [],
+                "citations": [],
+                "generated_at": generated_at,
+            }
+
         prompt = MORNING_BRIEFING.render(
             safety=SAFETY_FOOTER,
             current_date=today,
@@ -525,31 +547,85 @@ def _format_entity_context(ctx: Any) -> str:
     return "\n".join(lines)
 
 
+def _fmt_usd_billions(value: Any) -> str:
+    """Format a raw integer dollar value (e.g. 2_800_000_000_000) as '$X.XXB'.
+
+    EODHD returns MarketCapitalization and RevenueTTM as raw integers (full USD).
+    The LLM must receive a pre-formatted human string — otherwise it picks random
+    unit conventions (sometimes billions, sometimes trillions, sometimes raw bytes).
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if v >= 1e12:
+        return f"${v / 1e12:.2f}T"
+    if v >= 1e9:
+        return f"${v / 1e9:.2f}B"
+    if v >= 1e6:
+        return f"${v / 1e6:.2f}M"
+    return f"${v:,.0f}"
+
+
+def _fmt_percent(value: Any) -> str:
+    """Format a decimal ratio (e.g. 0.2543) as 'XX.X%'.
+
+    EODHD returns margin/growth fields as raw floats in [0, 1] (or negative).
+    """
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _format_fundamentals(ctx: Any) -> str:
     """Format fundamental data highlights for an instrument brief.
 
     Reports a curated set of financial metrics when present in the data dict.
     Missing metrics are silently omitted (no 'N/A' placeholders — prompt template
     instructs the LLM to write 'Not in retrieved context' for absent metrics).
+
+    All raw EODHD values are pre-formatted into human-readable strings before
+    being passed to the LLM to prevent unit-convention hallucinations (BP-F-002).
     """
     if ctx is None or ctx.fundamentals is None:
         return ""
-    field_labels = {
-        "MarketCapitalization": "Market Cap (USD)",
-        "PERatio": "P/E TTM",
-        "DilutedEpsTTM": "EPS TTM (USD)",
-        "RevenueTTM": "Revenue TTM (USD)",
+    data = ctx.fundamentals.data
+
+    # Fields that arrive as raw integer USD values and must be scaled to B/T.
+    # NOTE: MarketCapitalizationMln is intentionally excluded — it conflicts with
+    # MarketCapitalization and causes the LLM to present the same metric twice in
+    # different units. Use only the raw-integer canonical field.
+    large_usd_fields: dict[str, str] = {
+        "MarketCapitalization": "Market Cap",
+        "RevenueTTM": "Revenue TTM",
+    }
+
+    # Fields that arrive as decimal ratios in [-1, 1] and must be shown as %.
+    percent_fields: dict[str, str] = {
         "ProfitMargin": "Net Profit Margin",
         "OperatingMarginTTM": "Operating Margin TTM",
-        "EPSEstimateNextYear": "EPS Estimate Next FY (USD)",
-        "WallStreetTargetPrice": "Consensus Target (USD)",
-        "MostRecentQuarter": "Most Recent Quarter",
         "QuarterlyRevenueGrowthYOY": "Revenue Growth YoY",
         "QuarterlyEarningsGrowthYOY": "Earnings Growth YoY",
     }
+
+    # Fields rendered verbatim (already in correct unit or not financial amounts).
+    verbatim_fields: dict[str, str] = {
+        "PERatio": "P/E TTM",
+        "DilutedEpsTTM": "EPS TTM (USD)",
+        "EPSEstimateNextYear": "EPS Est. Next FY (USD)",
+        "WallStreetTargetPrice": "Consensus Target (USD)",
+        "MostRecentQuarter": "Most Recent Quarter",
+    }
+
     lines: list[str] = []
-    data = ctx.fundamentals.data
-    for key, label in field_labels.items():
+    for key, label in large_usd_fields.items():
+        if key in data:
+            lines.append(f"- **{label}**: {_fmt_usd_billions(data[key])}")
+    for key, label in percent_fields.items():
+        if key in data:
+            lines.append(f"- **{label}**: {_fmt_percent(data[key])}")
+    for key, label in verbatim_fields.items():
         if key in data:
             lines.append(f"- **{label}**: {data[key]}")
     return "\n".join(lines) if lines else ""

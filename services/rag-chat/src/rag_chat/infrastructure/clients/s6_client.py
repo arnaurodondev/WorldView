@@ -67,7 +67,10 @@ class S6Client(BaseUpstreamClient):
         }
         if request.query_text is not None:
             payload["query_text"] = request.query_text
-        if request.query_embedding is not None:
+        # Truthy check: empty list [] means embed failed → omit field so
+        # query_text fallback path is used (prevents 422 from nlp-pipeline
+        # ChunkSearchRequest "exactly_one_query" validator). BP-183 fix.
+        if request.query_embedding:
             payload["query_embedding"] = request.query_embedding
         if request.date_from is not None:
             payload["date_from"] = request.date_from.date().isoformat()

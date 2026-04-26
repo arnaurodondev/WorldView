@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # production — only for E2E tests that run without a full S9 stack.
     internal_jwt_skip_verification: bool = False
 
+    # BP-183: Disable JTI replay check for internal-only services.
+    # Alert receives forwarded user JWTs from rag-chat (S8) on briefing calls.
+    # Re-checking the JTI here causes 401 because rag-chat already consumed it.
+    jti_replay_check_enabled: bool = False
+
     # ── Outbox dispatcher ──────────────────────────────────────────────────
     dispatcher_poll_interval_s: float = 1.0
     dispatcher_batch_size: int = 50

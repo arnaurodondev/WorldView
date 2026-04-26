@@ -23,6 +23,9 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-232](#bp-232) | Content ingestion / metadata | Article titles and URLs null in `documents` table — S4 stores content without metadata; S6 cannot build citations; morning brief shows no news context | `services/content-ingestion/src/content_ingestion/application/use_cases/execute_task.py`; `libs/contracts/src/contracts/canonical/` fetch result models |
+| [BP-231](#bp-231) | RAG-chat / intent classification | `qwen3:0.6b` CPU inference takes ~14s per call but `OllamaIntentClassifier` timeout was 5s — intent classifier always falls back to keyword heuristic | `services/rag-chat/src/rag_chat/application/pipeline/intent_classifier.py:159`; any service calling qwen3 on CPU without a latency-tuned timeout |
+| [BP-230](#bp-230) | Auth / middleware dual-instantiation | `app.add_middleware(InternalJWTMiddleware, ...)` call missing `jti_replay_check_enabled` parameter — the SERVING instance uses default `True`; all forwarded-JWT requests return 401 despite config saying `False` | `services/alert/src/alert/app.py:create_app()`; any service that configures `InternalJWTMiddleware` both in `lifespan` AND `add_middleware()` |
 | [BP-220](#bp-220) | Market ingestion / routing | `_fallback_provider()` returns `None` for intraday timeframes — zero-bar failover silently gives up instead of routing to Polygon; Polygon is never called on intraday tasks | `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py:_fallback_provider()` |
 | [BP-221](#bp-221) | Market ingestion / dispatch | Intraday dispatch set `_INTRADAY_TFS = {"1m", "5m", "1h"}` missing `"15m"`, `"30m"`, `"4h"` — those timeframes fall through to `fetch_ohlcv()` path and raise `AttributeError` on Alpaca/Polygon adapters that don't implement `fetch_ohlcv()` for intraday | `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py:_fetch()` |
 | [BP-218](#bp-218) | Market ingestion / quota | `ingestion_watermarks.last_success_at` column exists in schema since migration 0001 but `watermark_repository.save()` never writes it — pre-fetch freshness gate always skips (perpetually "fresh"), causing redundant EODHD calls | `services/market-ingestion/src/market_ingestion/infrastructure/db/repositories/watermark_repository.py:save()`; `domain/entities/watermark.py` |
@@ -6410,3 +6413,106 @@ Any service that receives `X-Internal-JWT` from another *internal service* (not 
 ### Prevention
 
 When adding a new public method to a use case (e.g., `execute_public_morning`, `execute_public_instrument`), immediately add a route test that asserts the correct method is called on the mock use case, not just that the route returns 200. The test for `uc.execute.called` is insufficient when there are multiple callable methods.
+
+
+---
+
+## BP-227 — Polymarket Adapter Crashes on Zero/One-Outcome Markets
+
+| Field | Value |
+|-------|-------|
+| **Service** | content-ingestion (S4) Polymarket adapter |
+| **Severity** | MEDIUM (recurring noisy logs; affected markets silently skipped) |
+| **Discovered** | 2026-04-26 live-stack investigation |
+| **Root cause** | The Gamma API returns markets with `tokens: []` or `tokens: [one_entry]` for closed/unresolved single-binary markets (e.g., "Harvey Weinstein sentenced to no prison time"). `PredictionMarketFetchResult.__post_init__` enforces `outcomes >= 2` and raises `ValueError`. The outer `try/except Exception` in `_process_market()` caught the error correctly but emitted a full `exc_info=True` WARNING log for each such market on every poll cycle — creating noise that looked like crashes. |
+| **Symptom** | Worker logs flood with `polymarket_market_parse_failed` WARNING + full traceback on every poll cycle. Polymarket metrics show high skip rate. |
+| **Fix** | Added a pre-guard in `_process_market()` before calling `from_gamma_response`: check `len(market.get("tokens") or []) < 2` and return `None` with a DEBUG-level log (`polymarket_market_skip_insufficient_outcomes`). This avoids constructing the domain entity only to fail validation. |
+
+### Prevention
+
+When a domain entity has a post-init invariant that can be violated by structurally valid external API responses (not malformed data), add an explicit pre-check in the adapter before constructing the entity. Reserve WARNING logs for unexpected failures, not for normal filtering. Use DEBUG for skips caused by known data variations.
+
+---
+
+## BP-228 — Content-Ingestion Sources Table Never Seeded for Finnhub/NewsAPI
+
+| Field | Value |
+|-------|-------|
+| **Service** | content-ingestion (S4) |
+| **Severity** | HIGH (entire news/sentiment pipeline produces zero data) |
+| **Discovered** | 2026-04-26 live-stack investigation |
+| **Root cause** | The `content_ingestion.sources` table drives the scheduler — only enabled rows produce tasks. The `seed_demo_data.py` script did not insert any rows for `source_type='finnhub'` or `source_type='newsapi'` despite both adapters being fully wired and API keys present in `docker.env`. Result: zero Finnhub articles or NewsAPI articles ever ingested. |
+| **Symptom** | Earnings calendar, news, and alerts tabs show no data. `content_ingestion_tasks` table empty except for Polymarket. |
+| **Fix** | Updated `seed_demo_data.py` to insert 8 Finnhub sources (one per ticker: AAPL/MSFT/NVDA/AMZN/TSLA/GOOGL/META/JPM) and 2 NewsAPI sources (tech earnings + market news queries). Also disables EODHD sources (`UPDATE sources SET enabled=false WHERE source_type='eodhd'`) because the demo API key returns 403 on news/sentiment endpoints. |
+
+### Prevention
+
+When adding a new source adapter, include a corresponding seed entry in `seed_demo_data.py` in the same PR. Add a `validate_seeding()` assertion for the new source type count. Run `make seed` as part of the acceptance criteria for new adapter waves.
+
+---
+
+## BP-229 — Market-Ingestion Scheduler Missing Dispatch for EARNINGS_CALENDAR and NEWS_SENTIMENT
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) |
+| **Severity** | HIGH (two entire dataset types never scheduled despite policies in DB) |
+| **Discovered** | 2026-04-26 live-stack investigation |
+| **Root cause** | `ScheduleDueTasksUseCase._build_incremental_task()` had dispatch branches only for `OHLCV`, `QUOTES`, and `FUNDAMENTALS`. Policies with `dataset_type=EARNINGS_CALENDAR` or `dataset_type=NEWS_SENTIMENT` fell through to the `logger.debug("scheduler_unsupported_dataset_type")` early-return, producing no tasks. The execution layer (`execute_task.py`) and the `IngestionTask` entity both had no factory methods for these types either. |
+| **Symptom** | `scheduler_unsupported_dataset_type` in market-ingestion logs for EARNINGS_CALENDAR and NEWS_SENTIMENT policies. Zero tasks in DB for these types. Earnings calendar and sentiment scores never populated. |
+| **Fix** | Added `IngestionTask.create_earnings_calendar_task()` and `create_news_sentiment_task()` factory methods. Added the corresponding `if policy.dataset_type == DatasetType.EARNINGS_CALENDAR` and `NEWS_SENTIMENT` dispatch branches in `_build_incremental_task()`. |
+
+### Prevention
+
+When defining a new `DatasetType` enum value, immediately add: (1) a factory method in `IngestionTask`, (2) a dispatch branch in `_build_incremental_task()`, (3) an execution handler in `execute_task.py`, (4) a credit cost in `_EODHD_CREDIT_COST`. Add a unit test for the scheduler that asserts all DatasetType values produce a non-None task (parametrize over all enum values).
+
+---
+
+## BP-230 — Alert `add_middleware()` Missing `jti_replay_check_enabled` (Dual-Instantiation)
+
+| Field | Value |
+|-------|-------|
+| **Service** | alert (S10) |
+| **Severity** | CRITICAL (all cross-service JWT-forwarded requests return 401) |
+| **Discovered** | 2026-04-26 QA pre-demo investigation |
+| **Root cause** | `InternalJWTMiddleware` is instantiated TWICE in FastAPI: once in the `lifespan` function (for `startup()` — JWKS fetch) and once via `app.add_middleware()` (the SERVING instance). Starlette's `add_middleware` creates a fresh instance without calling `startup()`. When `jti_replay_check_enabled=False` was added to the lifespan instance only, the serving instance kept its default `True` — meaning every forwarded JWT (already recorded in Valkey by S8/S9) was rejected as a replay, returning 401 to rag-chat. |
+| **Symptom** | `jti_replay_detected` in alert logs. rag-chat alert fetch returns 401. Morning brief shows no alert context. `alert.infrastructure.middleware.internal_jwt` warning on every request from S8. |
+| **Fix** | Pass `jti_replay_check_enabled=settings.jti_replay_check_enabled` to BOTH the lifespan `jwt_mw = InternalJWTMiddleware(app, ..., jti_replay_check_enabled=...)` and `app.add_middleware(InternalJWTMiddleware, ..., jti_replay_check_enabled=settings.jti_replay_check_enabled)`. |
+
+### Prevention
+
+**Whenever `InternalJWTMiddleware` is added to a service, the `add_middleware()` call and any startup() call must have identical parameters.** Create a shared helper `_jwt_middleware_kwargs(settings)` that returns the kwargs dict, and spread it into both call sites. This is a generalisation of BP-159 (startup instance vs serving instance divergence) for the JWT middleware specifically.
+
+---
+
+## BP-231 — qwen3:0.6b CPU Inference Latency Exceeds Default Ollama Timeout
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) intent classifier; nlp-pipeline (S6) relevance scoring |
+| **Severity** | MAJOR (intent classification always falls back to keyword heuristic) |
+| **Discovered** | 2026-04-26 QA pre-demo investigation |
+| **Root cause** | `qwen3:0.6b` is a thinking model (reasoning tokens emitted before answer). On an aarch64 CPU container with no GPU, a single inference (including reasoning) takes 13–16 seconds (`total_duration: ~13468ms` measured from Ollama `/api/generate` response). The `OllamaIntentClassifier` had a 5-second timeout — the request always timed out before Ollama responded, transparently falling back to the keyword heuristic. No error was surfaced in logs beyond `ollama_intent_classifier_fallback`. |
+| **Symptom** | `ollama_intent_classifier_fallback` emitted on every chat request. All intents resolved by keyword heuristic — COMPARISON and REASONING queries not correctly classified. Sub-questions never generated for multi-entity comparisons. |
+| **Fix** | Increase Ollama timeout to 20 seconds (`timeout=20.0`). This ensures warm inference (~14s) completes; cold model-load calls (~30s on first request) still fall back, which is acceptable. Added inline comment referencing this bug pattern. |
+
+### Prevention
+
+When targeting `qwen3:*` (thinking models) on CPU-only containers, benchmark the cold and warm inference latency first. Cold load can be 2–3× warm time. Set timeouts at `warm_latency × 1.5` minimum, and set `keep_alive=-1` in the Ollama `/api/generate` request to prevent model eviction between calls.
+
+---
+
+## BP-232 — Content-Ingestion Article Titles Null in Documents Table
+
+| Field | Value |
+|-------|-------|
+| **Service** | content-ingestion (S4) → content-store (S5) pipeline |
+| **Severity** | HIGH (RAG citations missing, morning brief shows no news) |
+| **Discovered** | 2026-04-26 QA pre-demo investigation |
+| **Root cause** | S4 fetch adapters (Finnhub, NewsAPI) populate `ArticleFetchResult.title` and `ArticleFetchResult.url`. These fields are written to `article_fetch_log.title` in S4's DB. However, S4's bronze S3 envelope stores only `raw_content` (the article body). When S5 processes the bronze object, it reconstructs the document from the bronze envelope — which contains no `title` or `source_url` fields. The `documents` table receives `title=null, source_url=null` for all articles. S6's display relevance scorer cannot build meaningful citation titles. S8 RAG output shows `title: null` citations. |
+| **Symptom** | All rows in `content_store.documents`: `title=null, source_url=null`. S6 `document_source_metadata`: `title=null, url=null`. RAG citations appear as `null` titles. Morning brief news section empty (display_relevance_score ≈ 0.20 below 0.3 threshold). |
+| **Fix** | S4 bronze envelope must include `title`, `url`, `author`, `published_at` alongside `raw_content`. S5 `ProcessArticleUseCase` must extract these fields from the envelope and populate `Document.title` and `Document.source_url`. Alternatively, use S4→S5 Kafka event (`content.article.stored.v1`) metadata fields to carry the title. |
+
+### Prevention
+
+When adding a new field to `ArticleFetchResult`, verify that the field is: (1) serialised into the S3 bronze envelope by S4, (2) deserialised and written to `documents.title` by S5, (3) tested in S4→S5 integration tests with a non-null assertion. Never assume "stored in `article_fetch_log`" means "available to downstream services".
