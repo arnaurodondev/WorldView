@@ -6376,3 +6376,37 @@ Whenever converting an optional payload field to a string for use as a unique ke
 ### Prevention
 
 All Playwright tests on `app/(app)/` routes must use `domcontentloaded` not `networkidle`. Mock `**/api/v1/auth/ws-token` to return 401 in E2E test setup to prevent the AlertStreamProvider reconnect loop from generating background traffic.
+
+---
+
+## BP-183 — JTI Replay Destroys Cross-Service RAG Retrieval
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) → nlp-pipeline (S6) / knowledge-graph (S7) |
+| **Severity** | CRITICAL (complete silent RAG failure) |
+| **Discovered** | 2026-04-26 QA pre-demo investigation |
+| **Root cause** | S9 issues one `X-Internal-JWT` per user request (unique JTI). S8 validates the JWT → records `jti:{JTI}` in the shared Valkey instance. S8 then forwards the same JWT to S6/S7 via ContextVar. S6's `InternalJWTMiddleware` runs its own JTI replay check, finds the JTI already in Valkey (recorded by S8), and returns 401. All vector embedding and chunk-search calls fail silently → zero retrieved context → LLM responds entirely from pre-training data. |
+| **Symptom** | `jti_replay_detected` in S6/S7 logs on every request. Chat returns plausible-sounding answers with `citations: []`. RAG retrieval metrics show 0 chunks. No error surfaced to the user. |
+| **Fix** | Add `jti_replay_check_enabled: bool = False` to internal-only services (S6, S7). JTI replay enforcement belongs only at user-facing service boundaries (S8, S9). Internal services trust that the calling service already validated the JWT. Configurable via env var (`NLP_PIPELINE_JTI_REPLAY_CHECK_ENABLED`, `KNOWLEDGE_GRAPH_JTI_REPLAY_CHECK_ENABLED`). |
+
+### Prevention
+
+Any service that receives `X-Internal-JWT` from another *internal service* (not from S9 directly) must NOT perform JTI replay checking. Only user-facing entry points (S8, S9) should enforce JTI uniqueness. Document the `jti_replay_check_enabled` flag in every service's `.claude-context.md`.
+
+---
+
+## BP-184 — Morning Brief Route Calls Wrong Use Case Method
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) `public_briefings.py` route |
+| **Severity** | CRITICAL (endpoint returns wrong content format) |
+| **Discovered** | 2026-04-26 QA pre-demo investigation |
+| **Root cause** | The `GET /v1/briefings/morning` route called `uc.execute()` — the email deep-briefing use case that generates HTML-formatted portfolio risk digests using `EMAIL_DEEP_BRIEF_PROMPT`. The correct method is `uc.execute_public_morning()`, which invokes `BriefingContextGatherer`, renders `MORNING_BRIEFING` v2.1 with `{current_date}`, and returns structured markdown with 4 required sections. Because `execute()` receives empty context, it also could not gather data from S1/S3/S5/S6/S7. |
+| **Symptom** | `GET /v1/briefings/morning` returns 503 (LLM providers fail trying to fill HTML email template) or returns HTML `<h2>` content instead of markdown. Context gathering never runs. |
+| **Fix** | Change route to `await uc.execute_public_morning(user_id=..., tenant_id=..., internal_jwt=...)`. Map returned `content` key to `narrative` in `PublicBriefingResponse`. |
+
+### Prevention
+
+When adding a new public method to a use case (e.g., `execute_public_morning`, `execute_public_instrument`), immediately add a route test that asserts the correct method is called on the mock use case, not just that the route returns 200. The test for `uc.execute.called` is insufficient when there are multiple callable methods.
