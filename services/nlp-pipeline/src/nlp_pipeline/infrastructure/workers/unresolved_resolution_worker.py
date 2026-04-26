@@ -283,7 +283,9 @@ class UnresolvedResolutionWorker:
             "think": False,
         }
 
-        async with httpx.AsyncClient() as client:
+        # Pass explicit timeout to httpx so its read-timeout (default 5s) does not
+        # fire before asyncio.wait_for's outer deadline.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
             try:
                 response = await asyncio.wait_for(
                     client.post(f"{ollama_url}/api/generate", json=payload),
