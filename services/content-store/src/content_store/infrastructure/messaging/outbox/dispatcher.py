@@ -27,7 +27,18 @@ if TYPE_CHECKING:
     from content_store.config import Settings
     from messaging.kafka.dispatcher.base import UnitOfWorkWithOutboxProtocol
 
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    msg = f"Could not locate infra/kafka/schemas/ from {__file__}"
+    raise FileNotFoundError(msg)
+
+
+_SCHEMA_DIR = _find_schema_dir()
 logger = get_logger(__name__)
 
 

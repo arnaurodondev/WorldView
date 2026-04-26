@@ -66,6 +66,9 @@ class EntityMention:
     confidence: float
     char_start: int
     char_end: int
+    # F-009: tenant isolation — stamped from Kafka envelope at ingestion time.
+    # Nullable so legacy rows (NULL tenant_id) work with IS NULL fallback.
+    tenant_id: UUID | None = None
     # Set by Block 9 entity resolution
     resolved_entity_id: UUID | None = None
     resolution_confidence: float | None = None

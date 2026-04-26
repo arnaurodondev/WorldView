@@ -16,6 +16,7 @@ class Provider(StrEnum):
     POLYGON = "polygon"
     YAHOO_FINANCE = "yahoo_finance"
     FINNHUB = "finnhub"
+    ALPACA = "alpaca"
 
 
 class DatasetType(StrEnum):

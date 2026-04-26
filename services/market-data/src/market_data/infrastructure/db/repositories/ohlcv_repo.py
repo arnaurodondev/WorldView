@@ -48,6 +48,7 @@ class PgOHLCVRepository(OHLCVRepository):
             source=row.source or "",
             provider_priority=ProviderPriority(provider="unknown", priority=int(row.provider_priority)),
             is_derived=bool(row.is_derived),
+            is_partial=bool(row.is_partial),
         )
 
     # ── commands ───────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ class PgOHLCVRepository(OHLCVRepository):
                 "adjusted_close": bar.adjusted_close,
                 "source": bar.source,
                 "provider_priority": bar.provider_priority.priority,
+                "is_partial": bar.is_partial,
             }
             for bar in bars
         ]
@@ -95,6 +97,7 @@ class PgOHLCVRepository(OHLCVRepository):
                     "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
                     "source": insert(OHLCVBarModel).excluded.source,
                     "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
                 },
                 where=(insert(OHLCVBarModel).excluded.provider_priority >= OHLCVBarModel.provider_priority),
             )
@@ -172,6 +175,7 @@ class PgOHLCVRepository(OHLCVRepository):
                 "source": bar.source,
                 "provider_priority": bar.provider_priority.priority,
                 "is_derived": True,
+                "is_partial": bar.is_partial,
             }
             for bar in bars
         ]
@@ -191,10 +195,31 @@ class PgOHLCVRepository(OHLCVRepository):
                     "source": insert(OHLCVBarModel).excluded.source,
                     "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
                     "is_derived": insert(OHLCVBarModel).excluded.is_derived,
+                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
                 },
             )
         )
         await self._session.execute(stmt)
+
+    async def find_by_instrument_timeframe_datetime_range(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> list[OHLCVBar]:
+        """Return bars within ``[start_dt, end_dt]`` (inclusive), ordered ascending."""
+        result = await self._session.execute(
+            select(OHLCVBarModel)
+            .where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == str(timeframe),
+                OHLCVBarModel.bar_date >= start_dt,
+                OHLCVBarModel.bar_date <= end_dt,
+            )
+            .order_by(OHLCVBarModel.bar_date.asc())
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]
 
     async def find_derived(
         self,

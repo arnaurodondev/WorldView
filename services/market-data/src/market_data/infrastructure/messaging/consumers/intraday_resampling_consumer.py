@@ -1,4 +1,10 @@
-"""OHLCV materializer Kafka consumer."""
+"""Intraday resampling Kafka consumer.
+
+Subscribes to ``market.dataset.fetched`` and filters for 1-minute OHLCV
+datasets.  For each matching event it downloads the JSONL bars from
+object storage and feeds them through :class:`ResampledOHLCVUseCase`
+to derive coarser intraday timeframes (5m, 15m, 30m, 1h, 4h).
+"""
 
 from __future__ import annotations
 
@@ -9,11 +15,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
-from market_data.domain.entities import Instrument, OHLCVBar, Security
-from market_data.domain.enums import Provider, Timeframe
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
-from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
-from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
+from market_data.application.use_cases.resample_ohlcv import ResampledOHLCVUseCase
+from market_data.domain.entities import OHLCVBar
+from market_data.domain.enums import Timeframe
+from market_data.domain.value_objects import ProviderPriority
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -42,7 +47,8 @@ def _find_schema_dir() -> Path:
 _SCHEMA_DIR = _find_schema_dir()
 _TOPIC = "market.dataset.fetched"
 _DATASET_TYPE = "ohlcv"  # market-ingestion publishes lowercase DatasetType StrEnum values
-_GROUP_ID = "market-data-ohlcv"
+_TIMEFRAME = "1m"  # Only process 1-minute bars for intraday resampling
+_GROUP_ID = "market-data-intraday-resampling"
 
 
 def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
@@ -51,8 +57,21 @@ def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
     return [CanonicalOHLCVBar.from_dict(json.loads(line)) for line in lines if line.strip()]
 
 
-class OHLCVConsumer(BaseKafkaConsumer[dict]):
-    """Materializes OHLCV datasets from object storage into the database."""
+class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
+    """Resamples 1-minute OHLCV bars into coarser intraday timeframes.
+
+    Filters ``market.dataset.fetched`` events for ``dataset_type == "ohlcv"``
+    AND ``timeframe == "1m"``.  All other events are silently skipped.
+
+    For matching events the consumer:
+    1. Downloads the 1m bars from MinIO silver/canonical bucket.
+    2. Parses JSONL into domain :class:`OHLCVBar` entities.
+    3. Calls :meth:`ResampledOHLCVUseCase.execute` per bar to derive
+       5m/15m/30m/1h/4h bars.
+
+    The base class owns the single UoW commit (M-04) — this consumer
+    must NOT call ``uow.commit()`` in ``process_message``.
+    """
 
     def __init__(
         self,
@@ -109,7 +128,7 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
             "topic": failure.topic,
             "error": str(failure.last_error),
         }
-        await self._current_uow.failed_tasks.create(task_type="ohlcv_consumer", payload=payload)
+        await self._current_uow.failed_tasks.create(task_type="intraday_resampling_consumer", payload=payload)
         return payload
 
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
@@ -123,7 +142,7 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 "error": str(failure.last_error),
             }
             await self._current_uow.failed_tasks.create(
-                task_type="ohlcv_consumer_dead", payload=payload, max_attempts=0
+                task_type="intraday_resampling_consumer_dead", payload=payload, max_attempts=0
             )
 
     async def get_pending_retries(self) -> list[FailureInfo[dict]]:
@@ -138,47 +157,49 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         value: dict[str, Any],
         headers: dict[str, str],
     ) -> None:
-        """Materialise OHLCV bars from the claim-check into the database."""
+        """Resample 1m OHLCV bars into coarser intraday timeframes."""
+        # ── Filter: only dataset_type=ohlcv AND timeframe=1m ──────────────────
         dataset_type = value.get("dataset_type", "")
         if dataset_type != _DATASET_TYPE:
+            logger.debug("intraday_resampling.skip_non_ohlcv", dataset_type=dataset_type)
+            return
+
+        timeframe_str = value.get("timeframe") or ""
+        if timeframe_str != _TIMEFRAME:
+            logger.debug("intraday_resampling.skip_non_1m", timeframe=timeframe_str)
             return
 
         uow = self._current_uow
         if uow is None:
             raise RuntimeError("process_message called without an active unit of work — this is a programming error")
 
-        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
-        # Returns True if newly inserted (new event), False if already processed (duplicate).
-        # This replaces the separate is_duplicate() + mark_processed() pattern (BP-035).
+        # ── Atomic event-id dedup ─────────────────────────────────────────────
         event_id_raw = value.get("event_id")
         if not event_id_raw:
             raise MalformedDataError("Missing or null event_id in message")
         event_id = str(event_id_raw)
-        sha256 = value.get("canonical_ref_sha256") or ""
 
-        # Content-hash dedup: check BEFORE inserting the event so that
-        # exists_by_content_hash does not find the record we are about to insert
-        # (BP-035 follow-up: create_if_not_exists stores sha256 immediately).
-        if sha256 and await uow.ingestion_events.exists_by_content_hash(sha256, _DATASET_TYPE):
-            logger.debug("ohlcv_consumer.skip_unchanged", sha256_prefix=sha256[:8])
-            # Still record event_id so repeated deliveries are fast-path deduped.
-            await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
-            return
-
-        # Atomic event-id dedup: INSERT … ON CONFLICT DO NOTHING … RETURNING.
-        is_new = await uow.ingestion_events.create_if_not_exists(event_id, _DATASET_TYPE, sha256 or None)
+        is_new = await uow.ingestion_events.create_if_not_exists(event_id, "intraday_resampling", None)
         if not is_new:
-            logger.debug("ohlcv_consumer.duplicate_event", event_id=str(event_id)[:8])
+            logger.debug("intraday_resampling.duplicate_event", event_id=event_id[:8])
             return
 
-        bucket = value["canonical_ref_bucket"]
-        object_key = value["canonical_ref_key"]
-        symbol = value["symbol"]
-        exchange = value.get("exchange") or ""
-        provider_str = value.get("provider", "unknown")
-        timeframe_str = value.get("timeframe") or "1d"
+        # ── Resolve silver_ref (or canonical_ref) for object storage key ──────
+        bucket = value.get("silver_ref_bucket") or value.get("canonical_ref_bucket")
+        object_key = value.get("silver_ref_key") or value.get("canonical_ref_key")
+        if not bucket or not object_key:
+            logger.warning(
+                "intraday_resampling.missing_silver_ref",
+                event_id=event_id[:8],
+                has_bucket=bool(bucket),
+                has_key=bool(object_key),
+            )
+            return
 
-        # Download from object storage
+        instrument_id = value.get("instrument_id", "")
+        symbol = value.get("symbol", "")
+
+        # ── Download from object storage ──────────────────────────────────────
         if self._object_storage is None:
             raise StorageUnavailableError("Object storage is not configured")
         try:
@@ -186,74 +207,16 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         except Exception as exc:
             raise StorageUnavailableError(f"S3 download failed: {exc}") from exc
 
-        # Parse
+        # ── Parse JSONL into CanonicalOHLCVBar then to domain OHLCVBar ────────
         try:
-            bars = _parse_ohlcv_bytes(raw)
+            canonical_bars = _parse_ohlcv_bytes(raw)
         except Exception as exc:
             raise MalformedDataError(f"OHLCV parse failed: {exc}") from exc
 
-        # Resolve provider priority
-        try:
-            provider = Provider(provider_str)
-        except ValueError:
-            provider = Provider.UNKNOWN
-        provider_priority = ProviderPriority.for_provider(provider)
-
-        # Resolve or create instrument
-        instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
-        if instrument is None:
-            security = await uow.securities.upsert(Security(name=symbol))
-            instrument = Instrument(
-                security_id=security.id,
-                symbol=symbol,
-                exchange=exchange,
-                flags=InstrumentFlags(has_ohlcv=True),
-            )
-            instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
-                instrument_id=instrument.id,
-                security_id=instrument.security_id,
-                symbol=symbol,
-                exchange=exchange,
-            )
-            await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
-            )
-        elif not instrument.flags.has_ohlcv:
-            updated_flags = InstrumentFlags(
-                has_ohlcv=True,
-                has_quotes=instrument.flags.has_quotes,
-                has_fundamentals=instrument.flags.has_fundamentals,
-            )
-            await uow.instruments.update_flags(instrument.id, updated_flags)
-            updated_event = InstrumentUpdated(
-                instrument_id=instrument.id,
-                symbol=symbol,
-                exchange=exchange,
-                has_ohlcv=True,
-                has_quotes=instrument.flags.has_quotes,
-                has_fundamentals=instrument.flags.has_fundamentals,
-                fields_updated=("has_ohlcv",),
-            )
-            await uow.outbox_events.create(
-                event_type=updated_event.event_type,
-                topic=EVENT_TOPIC_MAP[updated_event.event_type],
-                payload=event_to_outbox_payload(updated_event),
-            )
-
-        # Resolve timeframe
-        try:
-            tf = Timeframe(timeframe_str)
-        except ValueError:
-            tf = Timeframe.ONE_DAY
-
-        # Map canonical bars → domain entities
         domain_bars = [
             OHLCVBar(
-                instrument_id=instrument.id,
-                timeframe=tf,
+                instrument_id=instrument_id,
+                timeframe=Timeframe.ONE_MIN,
                 bar_date=(bar.date if bar.date.tzinfo is not None else bar.date.replace(tzinfo=UTC)),
                 open=Decimal(str(bar.open)),
                 high=Decimal(str(bar.high)),
@@ -261,19 +224,24 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 close=Decimal(str(bar.close)),
                 volume=bar.volume,
                 adjusted_close=(Decimal(str(bar.adjusted_close)) if bar.adjusted_close is not None else None),
-                source=bar.source or provider_str,
-                provider_priority=provider_priority,
+                source=bar.source or "intraday",
+                provider_priority=ProviderPriority(provider="unknown", priority=0),
                 ingested_at=datetime.now(tz=UTC),
             )
-            for bar in bars
+            for bar in canonical_bars
         ]
 
-        # Bulk upsert
-        await uow.ohlcv.bulk_upsert_with_priority(domain_bars)
+        # ── Resample each 1m bar into 5m/15m/30m/1h/4h derived bars ──────────
+        use_case = ResampledOHLCVUseCase(uow)
+        total_derived = 0
+        for bar in domain_bars:
+            derived = await use_case.execute(bar)
+            total_derived += len(derived)
 
         logger.info(
-            "ohlcv_consumer.materialized",
+            "intraday_resampling.processed",
             symbol=symbol,
-            exchange=exchange,
-            bar_count=len(domain_bars),
+            instrument_id=instrument_id[:8] if instrument_id else "",
+            source_bars=len(domain_bars),
+            derived_bars=total_derived,
         )

@@ -109,6 +109,14 @@ class OHLCVBar:
     # True for bars derived locally from finer-grained bars (e.g. 1w/1M from 1d).
     # Forward-compatible addition: defaults to False so existing code is unaffected.
     is_derived: bool = False
+    # True when this bar represents an incomplete period (e.g. the current week/month
+    # whose trading days have not all elapsed).  A partial bar is always derived — it
+    # makes no sense for a directly-ingested bar to be partial.
+    is_partial: bool = False
+
+    def __post_init__(self) -> None:
+        if self.is_partial and not self.is_derived:
+            raise ValueError("is_partial=True implies is_derived=True; a directly-ingested bar cannot be partial")
 
 
 @dataclass

@@ -22,8 +22,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Schema directory relative to repo root
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
+
+# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
+# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
 _GROUP_ID = "market-data-prediction-markets"
 
 

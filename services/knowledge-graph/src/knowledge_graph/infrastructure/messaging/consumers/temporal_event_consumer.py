@@ -46,9 +46,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# 6 parents up from this file reaches the container /app root (or repo root
-# in development), matching the pattern used by ArticleProcessingConsumer.
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+
+# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
+# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
 _TEMPORAL_EVENT_SCHEMA_PATH = str(_SCHEMA_DIR / "intelligence.temporal_event.v1.avsc")
 
 # Entity types that qualify for GLOBAL-scope event exposure (PRD-0018 §6.2).
@@ -102,7 +112,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -126,9 +136,11 @@ class TemporalEventConsumer(BaseKafkaConsumer[None]):
     ``TemporalEventRepository`` and ``EntityEventExposureRepository``.
 
     Args:
+    ----
         config:          Consumer configuration (group_id, topics, bootstrap_servers).
         session_factory: async_sessionmaker for ``intelligence_db``.
         dedup_client:    Optional Valkey client for event-id deduplication.
+
     """
 
     def __init__(
@@ -255,7 +267,6 @@ class TemporalEventConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
