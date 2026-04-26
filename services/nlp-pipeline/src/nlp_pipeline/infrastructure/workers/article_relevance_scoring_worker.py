@@ -165,7 +165,9 @@ class ArticleRelevanceScoringWorker:
         prompt = _SYSTEM_PROMPT + f"\nUser: Title: {title or 'Unknown'}\nSource: {source_type or 'Unknown'}"
         resp = await client.post(
             f"{self._ollama_url}/api/generate",
-            json={"model": self._model, "prompt": prompt, "format": "json", "stream": False},
+            # BP-231: qwen3 is a thinking model — "think": False disables reasoning mode,
+            # dropping inference from 90-146s to ~2-5s on CPU. Required for non-chat use cases.
+            json={"model": self._model, "prompt": prompt, "format": "json", "stream": False, "think": False},
         )
         raw = resp.text
         try:

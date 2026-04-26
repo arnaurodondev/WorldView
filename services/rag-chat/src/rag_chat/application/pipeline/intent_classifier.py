@@ -157,10 +157,11 @@ class OllamaIntentClassifier:
         try:
             response = await self._client.post(
                 f"{self._ollama_url}/api/generate",
-                # BP-F-008: qwen3:0.6b on CPU takes ~14s per inference (prefill bottleneck).
-                # 20s timeout ensures warm calls complete; cold model-load calls (~30s first)
-                # still fall back to keyword heuristic which is adequate for most intents.
-                json={"model": self._model, "prompt": prompt, "stream": False, "format": "json"},
+                # BP-231: qwen3:0.6b is a thinking model — in thinking mode it emits reasoning
+                # tokens first, pushing CPU inference to 90-146s (always times out).
+                # "think": False disables the reasoning block, dropping latency to ~2-5s warm.
+                # This is a native Ollama parameter (added in v0.21.x) — no system prompt hack.
+                json={"model": self._model, "prompt": prompt, "stream": False, "format": "json", "think": False},
                 timeout=20.0,
             )
             response.raise_for_status()

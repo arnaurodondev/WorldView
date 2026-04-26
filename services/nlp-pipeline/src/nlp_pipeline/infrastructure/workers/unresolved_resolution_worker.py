@@ -279,6 +279,8 @@ class UnresolvedResolutionWorker:
             "model": model_id,
             "prompt": prompt,
             "stream": False,
+            # BP-231: qwen3 thinking mode adds 90-146s on CPU; think=False disables it.
+            "think": False,
         }
 
         async with httpx.AsyncClient() as client:
