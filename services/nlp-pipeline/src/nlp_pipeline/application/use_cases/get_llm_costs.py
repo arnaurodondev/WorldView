@@ -12,6 +12,7 @@ replica session factory.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -137,7 +138,7 @@ class GetNlpLlmCostsUseCase:
         sql = _BREAKDOWN_QUERIES[breakdown]  # safe: caller validates against ALLOWED_BREAKDOWNS
         result = await session.execute(
             text(sql),
-            {"period_date": f"{period}-01", "provider": provider},
+            {"period_date": date.fromisoformat(f"{period}-01"), "provider": provider},
         )
         rows = result.fetchall()
 

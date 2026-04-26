@@ -130,12 +130,17 @@ _ENTITY_ARTICLES_SQL = (
     "    SELECT DISTINCT em.doc_id AS article_id\n"
     "    FROM entity_mentions em\n"
     "    WHERE em.resolved_entity_id = :entity_id\n"
+    "      AND (em.tenant_id IS NULL OR em.tenant_id = CAST(:tenant_id AS UUID))\n"
     "),\n"
     "article_windows AS (\n"
     + _WINDOW_PIVOT_FRAGMENT
     + "    WHERE article_id IN (SELECT article_id FROM entity_article_ids)\n"
     "    GROUP BY article_id\n"
-    ")\n"
+    # ranked CTE materialises display_relevance_score so ORDER BY can reference it by alias.
+    # PostgreSQL resolves column aliases from SELECT in ORDER BY, but NOT inside CASE expressions
+    # within ORDER BY (BP-TODO). Wrapping in a CTE avoids the UndefinedColumnError.
+    "),\n"
+    "ranked AS (\n"
     """SELECT dsm.doc_id,
        dsm.title,
        dsm.url,
@@ -163,9 +168,11 @@ JOIN  document_source_metadata dsm ON dsm.doc_id = ea.article_id
 LEFT JOIN article_windows aw       ON aw.article_id  = ea.article_id
 LEFT JOIN routing_decisions rd     ON rd.doc_id      = ea.article_id
 WHERE dsm.published_at BETWEEN :start_date AND :end_date
+)
+SELECT * FROM ranked
 ORDER BY
-    CASE WHEN :order_by = 'published_at'  THEN dsm.published_at        END DESC,
-    CASE WHEN :order_by != 'published_at' THEN display_relevance_score END DESC
+    CASE WHEN :order_by = 'published_at'  THEN ranked.published_at           END DESC,
+    CASE WHEN :order_by != 'published_at' THEN ranked.display_relevance_score END DESC
 LIMIT :limit OFFSET :offset
 """
 )
@@ -236,12 +243,18 @@ class SqlaNewsQueryRepo(NewsQueryPort):
         order_by: str,
         limit: int,
         offset: int,
+        tenant_id: str | None = None,
     ) -> tuple[list[RankedArticleData], int]:
-        """Execute Flow D: 2-CTE entity-articles query (PRD-0026 §6.7)."""
+        """Execute Flow D: 2-CTE entity-articles query (PRD-0026 §6.7).
+
+        F-009 Option B: tenant_id filters entity_mentions so only rows belonging
+        to the requesting tenant (or legacy NULL rows) are included.
+        """
         result = await self._session.execute(
             text(_ENTITY_ARTICLES_SQL),
             {
                 "entity_id": str(entity_id),
+                "tenant_id": tenant_id,
                 "start_date": start_date,
                 "end_date": end_date,
                 "order_by": order_by,

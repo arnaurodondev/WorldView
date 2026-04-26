@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
+    # Deep extraction via external API (DeepInfra / OpenAI-compatible)
+    # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
+    # qwen2.5:7b-instruct is not available locally (too large for CPU); DeepInfra hosts it at $0.03/M tokens.
+    extraction_api_key: str = ""  # NLP_PIPELINE_EXTRACTION_API_KEY
+    extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
+    extraction_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
+
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
     gliner_base_url: str = ""
@@ -84,7 +91,8 @@ class Settings(BaseSettings):
 
     # Routing tier thresholds (PRD §6.7 Block 5)
     routing_tier_deep: float = 0.70  # score >= this → DEEP processing
-    routing_tier_medium: float = 0.45  # score >= this → MEDIUM processing
+    # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44
+    routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
 
     # Entity resolution thresholds (PRD §6.7 Block 9)
