@@ -20,6 +20,7 @@ the CONFLICT guard at DB level).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
 from datetime import UTC, datetime
@@ -104,9 +105,19 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _TOPIC = "content.article.stored.v1"
 
-# Avro schema directory — 6 parents up from this file reaches /app in the container
-# (/app/src/nlp_pipeline/infrastructure/messaging/consumers/ → /app)
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+
+# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
+# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
 
 # Default source trust weight — used when intelligence_db source_trust_weights table
 # is not queried. Contribution = 0.20 * 0.5 = 0.10 to routing score.
@@ -186,6 +197,14 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         is_backfill = bool(value.get("is_backfill", False))
         correlation_id: str | None = value.get("correlation_id") or None
 
+        # F-009: Extract tenant_id from Kafka headers or event value if present.
+        # Articles are platform-global but entity_mentions need tenant isolation.
+        raw_tenant = headers.get("tenant_id") or value.get("tenant_id") or None
+        tenant_id: uuid.UUID | None = None
+        if raw_tenant:
+            with contextlib.suppress(ValueError, AttributeError):
+                tenant_id = uuid.UUID(str(raw_tenant))
+
         raw_published = value.get("published_at")
         published_at: datetime | None = None
         if raw_published:
@@ -219,6 +238,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 extracted_at=extracted_at,
                 is_backfill=is_backfill,
                 correlation_id=correlation_id,
+                tenant_id=tenant_id,
             )
 
         # Best-effort: cache citation metadata for S8 RAG inline citations.
@@ -243,6 +263,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         extracted_at: datetime,
         is_backfill: bool,
         correlation_id: str | None,
+        tenant_id: uuid.UUID | None = None,
     ) -> None:
         """Download text and run Blocks 3-10 with D-004 dual-DB commit ordering.
 
@@ -274,6 +295,12 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             ner_model_id=self._settings.ner_model_id,
             section_token_limit=self._settings.gliner_section_token_limit,
         )
+
+        # F-009: Stamp tenant_id from Kafka envelope onto every mention so
+        # entity_mentions can be filtered by tenant at query time.
+        if tenant_id is not None:
+            for mention in mentions:
+                mention.tenant_id = tenant_id
 
         s6_ner_mentions_total.inc(len(mentions))
 
@@ -739,6 +766,19 @@ async def _enqueue_enriched(
 ) -> None:
     effective_tier = routing_decision.final_routing_tier or routing_decision.routing_tier
     resolved_ids = [str(m.resolved_entity_id) for m in mentions if m.resolved_entity_id is not None]
+
+    # Build entity_id lookup from resolved mentions so extraction results
+    # (which use entity_ref text names) can be mapped to canonical UUIDs
+    # that S7 (knowledge-graph) expects in raw_relations/raw_events/raw_claims.
+    entity_id_by_ref: dict[str, str] = {}
+    for m in mentions:
+        if m.resolved_entity_id is not None:
+            entity_id_by_ref[m.mention_text.lower()] = str(m.resolved_entity_id)
+
+    raw_relations = _build_raw_relations(extraction_result.get("relations", []), entity_id_by_ref)
+    raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref)
+    raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref)
+
     payload: dict[str, Any] = {
         "event_id": str(common.ids.new_uuid7()),
         "event_type": "nlp.article.enriched",
@@ -754,9 +794,14 @@ async def _enqueue_enriched(
         "chunk_count": len(chunks),
         "mention_count": len(mentions),
         "resolved_entity_ids": resolved_ids,
+        # KG-001 fix: include actual extracted data arrays for S7 graph materialization.
+        # Keep counts for backwards compatibility with existing consumers / dashboards.
         "relation_count": len(list(extraction_result.get("relations", []))),
         "claim_count": len(list(extraction_result.get("claims", []))),
         "event_count": len(list(extraction_result.get("events", []))),
+        "raw_relations": raw_relations,
+        "raw_events": raw_events,
+        "raw_claims": raw_claims,
         "provisional_entity_count": sum(1 for m in mentions if m.resolved_entity_id is None),
         "extraction_model_id": extraction_model_id,
         "correlation_id": correlation_id,
@@ -766,6 +811,102 @@ async def _enqueue_enriched(
         partition_key=str(doc_id),
         payload_avro=json.dumps(payload).encode(),
     )
+
+
+def _build_raw_relations(
+    relations: list[Any],
+    entity_id_by_ref: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert LLM extraction relations into the dict format S7 expects.
+
+    S7's ``_parse_raw_relations`` requires ``subject_entity_id``, ``object_entity_id``,
+    and ``raw_type``.  Skips relations where either entity ref cannot be resolved.
+    """
+    result: list[dict[str, Any]] = []
+    for rel in relations:
+        rel_d: dict[str, Any] = dict(rel) if not isinstance(rel, dict) else rel  # type: ignore[call-overload]
+        subject_ref = str(rel_d.get("subject_ref", "")).lower()
+        object_ref = str(rel_d.get("object_ref", "")).lower()
+        subject_id = entity_id_by_ref.get(subject_ref)
+        object_id = entity_id_by_ref.get(object_ref)
+        if subject_id is None or object_id is None:
+            continue  # skip unresolved — S7 cannot materialize without entity UUIDs
+        result.append(
+            {
+                "subject_entity_id": subject_id,
+                "object_entity_id": object_id,
+                "raw_type": str(rel_d.get("predicate", "")),
+                "extraction_confidence": float(rel_d.get("confidence", 0.5)),
+                "entity_provisional": bool(rel_d.get("entity_provisional", False)),
+                "provisional_queue_id": rel_d.get("provisional_queue_id"),
+            }
+        )
+    return result
+
+
+def _build_raw_events(
+    events: list[Any],
+    entity_id_by_ref: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert LLM extraction events into the dict format S7 expects.
+
+    S7's ``_parse_raw_events`` requires ``subject_entity_id`` and ``event_type``.
+    Uses the first resolvable entity_ref as subject.  Skips events with no
+    resolvable entity.
+    """
+    result: list[dict[str, Any]] = []
+    for evt in events:
+        evt_d: dict[str, Any] = dict(evt) if not isinstance(evt, dict) else evt  # type: ignore[call-overload]
+        # Find the first resolvable entity ref from the entity_refs list
+        entity_refs = evt_d.get("entity_refs", [])
+        subject_id: str | None = None
+        participant_ids: list[str] = []
+        for ref in entity_refs:  # type: ignore[union-attr]
+            eid = entity_id_by_ref.get(str(ref).lower())
+            if eid is not None:
+                if subject_id is None:
+                    subject_id = eid
+                participant_ids.append(eid)
+        if subject_id is None:
+            continue  # skip unresolved
+        result.append(
+            {
+                "subject_entity_id": subject_id,
+                "event_type": str(evt_d.get("event_type", "")),
+                "event_text": str(evt_d.get("description", "")),
+                "extraction_confidence": float(evt_d.get("confidence", 0.5)),
+                "participant_entity_ids": participant_ids,
+            }
+        )
+    return result
+
+
+def _build_raw_claims(
+    claims: list[Any],
+    entity_id_by_ref: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Convert LLM extraction claims into the dict format S7 expects.
+
+    S7's ``_parse_raw_claims`` requires ``subject_entity_id`` and ``claim_type``.
+    Skips claims where the entity ref cannot be resolved.
+    """
+    result: list[dict[str, Any]] = []
+    for claim in claims:
+        claim_d: dict[str, Any] = dict(claim) if not isinstance(claim, dict) else claim  # type: ignore[call-overload]
+        entity_ref = str(claim_d.get("entity_ref", "")).lower()
+        subject_id = entity_id_by_ref.get(entity_ref)
+        if subject_id is None:
+            continue  # skip unresolved
+        result.append(
+            {
+                "subject_entity_id": subject_id,
+                "claim_type": str(claim_d.get("claim_type", "")),
+                "polarity": str(claim_d.get("polarity", "neutral")),
+                "claim_text": str(claim_d.get("evidence_text", "")),
+                "extraction_confidence": float(claim_d.get("confidence", 0.5)),
+            }
+        )
+    return result
 
 
 async def _enqueue_signal_events(

@@ -39,6 +39,7 @@ COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/portfolio/src /app/src
 COPY --from=builder /build/services/portfolio/alembic /app/alembic
 COPY --from=builder /build/services/portfolio/alembic.ini /app/alembic.ini
+COPY infra/kafka/schemas /app/infra/kafka/schemas
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/storage/src"

@@ -186,6 +186,21 @@ class OHLCVRepository(ABC):
         """
 
     @abstractmethod
+    async def find_by_instrument_timeframe_datetime_range(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> list[OHLCVBar]:
+        """Return bars for the given datetime range (inclusive on both ends).
+
+        Unlike ``find_by_instrument_timeframe_range`` which accepts ``date``
+        boundaries, this method accepts full ``datetime`` objects — required
+        for intraday period queries (e.g. 5m/1h resampling windows).
+        """
+
+    @abstractmethod
     async def find_derived(
         self,
         instrument_id: str,
