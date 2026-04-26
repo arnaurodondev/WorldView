@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app,
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
     )
     await jwt_mw.startup()
 
@@ -148,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         InternalJWTMiddleware,
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
         skip_verification=settings.internal_jwt_skip_verification,
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
     )
     metrics: Any = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)

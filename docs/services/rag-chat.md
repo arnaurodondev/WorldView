@@ -246,7 +246,7 @@ services/rag-chat/src/rag_chat/
 | `RAG_CHAT_OPENROUTER_API_KEY` | — | No | Fallback LLM |
 | `RAG_CHAT_OLLAMA_BASE_URL` | `http://localhost:11434` | No | Emergency + local models |
 | `RAG_CHAT_OLLAMA_COMPLETION_MODEL` | `deepseek-r1:32b` | No | |
-| `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen2.5:3b` | No | |
+| `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen3:0.6b` | No | |
 | `RAG_CHAT_OLLAMA_RERANKER_MODEL` | `bge-reranker-v2-m3` | No | |
 | `RAG_CHAT_S1_INTERNAL_TOKEN` | — | Yes | Portfolio service auth |
 | `RAG_CHAT_CYPHER_ENABLED` | `false` | No | Enable Cypher retrieval |

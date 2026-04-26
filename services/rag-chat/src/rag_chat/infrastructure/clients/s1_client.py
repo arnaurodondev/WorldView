@@ -1,7 +1,7 @@
 """S1 Portfolio HTTP client adapter (T-E-3-03).
 
 Endpoints:
-  GET /api/v1/users/{user_id}/portfolio/context → portfolio context (cached)
+  GET /internal/v1/users/{user_id}/portfolio/context → portfolio context (cached)
 
 Auth: X-Internal-JWT propagated from ContextVar (PRD-0025 InternalJWTMiddleware).
       S1 Portfolio validates X-Internal-JWT like all other backend services.
@@ -54,7 +54,7 @@ class S1Client(BaseUpstreamClient):
         tenant_id: UUID,
         x_internal_token: str = "",  # — kept for protocol compat; JWT from ContextVar
     ) -> PortfolioContext | None:
-        """GET /api/v1/users/{user_id}/portfolio/context.
+        """GET /internal/v1/users/{user_id}/portfolio/context.
 
         Checks Valkey cache first (TTL=300 s).  On cache miss, calls S1 and
         stores the result.  Returns ``None`` on timeout or HTTP error.
@@ -94,25 +94,25 @@ class S1Client(BaseUpstreamClient):
 
         try:
             resp = await self._client.get(
-                f"/api/v1/users/{user_id}/portfolio/context",
+                f"/internal/v1/users/{user_id}/portfolio/context",
                 headers=headers,
             )
             resp.raise_for_status()
             raw: dict = resp.json()
         except httpx.TimeoutException:
-            logger.warning("upstream_timeout", path=f"/api/v1/users/{user_id}/portfolio/context")
+            logger.warning("upstream_timeout", path=f"/internal/v1/users/{user_id}/portfolio/context")
             return None
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "upstream_http_error",
-                path=f"/api/v1/users/{user_id}/portfolio/context",
+                path=f"/internal/v1/users/{user_id}/portfolio/context",
                 status=exc.response.status_code,
             )
             return None
         except httpx.RequestError as exc:
             logger.warning(
                 "upstream_request_error",
-                path=f"/api/v1/users/{user_id}/portfolio/context",
+                path=f"/internal/v1/users/{user_id}/portfolio/context",
                 error=str(exc),
             )
             return None
