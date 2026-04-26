@@ -6516,3 +6516,37 @@ When targeting `qwen3:*` (thinking models) on CPU-only containers, benchmark the
 ### Prevention
 
 When adding a new field to `ArticleFetchResult`, verify that the field is: (1) serialised into the S3 bronze envelope by S4, (2) deserialised and written to `documents.title` by S5, (3) tested in S4→S5 integration tests with a non-null assertion. Never assume "stored in `article_fetch_log`" means "available to downstream services".
+
+---
+
+## BP-233 — asyncpg Vector ANN Parameter Must Be str, Not list[float]
+
+| Field | Value |
+|-------|-------|
+| **Service** | knowledge-graph (S7) — any service using pgvector via asyncpg |
+| **Severity** | HIGH (search/relations returns 500 on every request) |
+| **Discovered** | 2026-04-27 live pipeline investigation |
+| **Root cause** | asyncpg cannot directly bind a Python `list[float]` as a PostgreSQL `vector` type parameter. Passing a list raises `DataError: invalid input for query argument $N (expected str, got list)`. The `CAST($N AS vector)` CAST hint helps PostgreSQL infer the type but does NOT change how asyncpg encodes the Python value — it still needs a string in pgvector wire format `[f1,f2,...,fN]`. The `entity_embedding_ann.py` already used `str(query_embedding)` correctly; `relation_summary.py` and `relation_type_registry.py` did not. |
+| **Symptom** | `sqlalchemy.exc.DBAPIError: DataError: invalid input for query argument $1: [0.1, 0.1, ...] (expected str, got list)`. All ANN relation searches fail with 500. |
+| **Fix** | Convert embedding list to string before binding: `"query_embedding": str(query_embedding)`. Pattern confirmed in `entity_embedding_ann.py:55`. |
+
+### Prevention
+
+Any repository that uses `CAST(:param AS vector)` with asyncpg must pass the embedding as `str(embedding)`, NOT as a `list[float]`. Add this to vector search repository code review checklist. The `str()` of a Python list produces `[f1, f2, ...]` which pgvector accepts.
+
+---
+
+## BP-234 — asyncpg DATE Parameter Requires Python date Object, Not ISO String
+
+| Field | Value |
+|-------|-------|
+| **Service** | nlp-pipeline (S6) — `get_llm_costs.py` |
+| **Severity** | MEDIUM (LLM cost dashboard endpoint returns 500) |
+| **Discovered** | 2026-04-27 live pipeline log scan |
+| **Root cause** | asyncpg infers the type of `CAST($N AS DATE)` as `DATE`, then tries to encode the Python value as a PostgreSQL date. When the value is a string `'2026-04-01'`, asyncpg fails with `AttributeError: 'str' object has no attribute 'toordinal'` (asyncpg tries to call `.toordinal()` which is a `datetime.date` method). |
+| **Symptom** | `asyncpg.exceptions.DataError: invalid input for query argument $1: '2026-04-01' ('str' object has no attribute 'toordinal')`. Endpoint returns 500. |
+| **Fix** | Pass a Python `datetime.date` object: `date.fromisoformat(f"{period}-01")`. Never pass ISO date strings when the SQL uses `CAST(:param AS DATE)`. |
+
+### Prevention
+
+asyncpg requires native Python types for typed parameters: `datetime.date` for DATE, `datetime.datetime` for TIMESTAMP, `list[float]` does NOT work for vector (use `str()`). When writing raw SQL with `CAST(:param AS TYPE)`, use the matching Python type in the parameters dict.
