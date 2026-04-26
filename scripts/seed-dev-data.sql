@@ -36,6 +36,28 @@ INSERT INTO watchlists (id, tenant_id, user_id, name, status, created_at) VALUES
     ('01900000-0000-7000-8000-000000000200', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'Tech Watchlist', 'active', NOW())
 ON CONFLICT (id) DO NOTHING;
 
+-- Portfolio instruments — must match the UUIDs referenced by holdings below.
+-- source_event_id is a dummy UUIDv4 used only for audit; it is NOT a FK.
+-- entity_id links to intelligence_db.canonical_entities (seeded separately via
+-- infra/postgres/init/seed_intelligence.sql or intelligence-migrations).
+INSERT INTO instruments (id, symbol, exchange, name, currency, asset_class, entity_id, source_event_id) VALUES
+    ('01900000-0000-7000-8000-000000001001', 'AAPL', 'US', 'Apple Inc.', 'USD', 'equity', '11111111-0001-7000-8000-000000000001', '23f6eeba-0cd6-4e4f-8824-db0a1b3b4257'),
+    ('01900000-0000-7000-8000-000000001002', 'MSFT', 'US', 'Microsoft Corporation', 'USD', 'equity', '11111111-0002-7000-8000-000000000001', 'c77268c3-bbff-4b99-971d-c8cc7f43ab28'),
+    ('01900000-0000-7000-8000-000000001003', 'NVDA', 'US', 'NVIDIA Corporation', 'USD', 'equity', '11111111-0003-7000-8000-000000000001', '69722c9f-13bd-4c55-91e0-776661e7789e'),
+    ('01900000-0000-7000-8000-000000001004', 'TSLA', 'US', 'Tesla Inc.', 'USD', 'equity', '11111111-0005-7000-8000-000000000001', 'f8e652de-e7ca-4576-b270-6a7a701bb8de'),
+    ('01900000-0000-7000-8000-000000001005', 'AMZN', 'US', 'Amazon.com Inc.', 'USD', 'equity', '11111111-0004-7000-8000-000000000001', '030536a9-444f-49a6-9987-73baa7cef7e9')
+ON CONFLICT (id) DO NOTHING;
+
+-- Holdings for the demo portfolio — 5 positions across AAPL/MSFT/NVDA/TSLA/AMZN.
+-- tenant_id must match the demo tenant above (foreign-key enforced via index only).
+INSERT INTO holdings (id, portfolio_id, instrument_id, quantity, average_cost, currency, tenant_id, updated_at) VALUES
+    ('01900000-0000-7000-8000-000000000400', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001001', 50.0, 178.50, 'USD', '01900000-0000-7000-8000-000000000001', NOW()),
+    ('01900000-0000-7000-8000-000000000401', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001002', 30.0, 412.75, 'USD', '01900000-0000-7000-8000-000000000001', NOW()),
+    ('01900000-0000-7000-8000-000000000402', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001003', 20.0, 141.20, 'USD', '01900000-0000-7000-8000-000000000001', NOW()),
+    ('01900000-0000-7000-8000-000000000403', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001004', 15.0, 245.30, 'USD', '01900000-0000-7000-8000-000000000001', NOW()),
+    ('01900000-0000-7000-8000-000000000404', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001005', 25.0, 185.60, 'USD', '01900000-0000-7000-8000-000000000001', NOW())
+ON CONFLICT (id) DO NOTHING;
+
 
 -- ── Market Data DB ───────────────────────────────────────────────────────────
 -- Schema: securities(id, figi, isin, name, sector, industry, country, currency, created_at, updated_at)
