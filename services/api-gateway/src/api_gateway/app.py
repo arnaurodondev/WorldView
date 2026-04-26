@@ -122,7 +122,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("rsa_keypair_loaded", kid=kid)
 
     # 6. Downstream service clients
+    # Default timeout for fast services (DB-backed, no external LLM).
     timeout = httpx.Timeout(30.0, connect=5.0)
+    # rag-chat proxies DeepInfra LLM calls (P50 ~48s, P95 ~90s).
+    # Non-streaming /v1/chat must wait for the full completion — use 120s read timeout.
+    # Streaming /v1/chat/stream is unaffected by read timeout (chunked transfer).
+    rag_chat_timeout = httpx.Timeout(120.0, connect=5.0)
     clients = ServiceClients(
         portfolio=httpx.AsyncClient(base_url=settings.portfolio_url, timeout=timeout),
         market_data=httpx.AsyncClient(base_url=settings.market_data_url, timeout=timeout),
@@ -131,7 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         content_store=httpx.AsyncClient(base_url=settings.content_store_url, timeout=timeout),
         nlp_pipeline=httpx.AsyncClient(base_url=settings.nlp_pipeline_url, timeout=timeout),
         knowledge_graph=httpx.AsyncClient(base_url=settings.knowledge_graph_url, timeout=timeout),
-        rag_chat=httpx.AsyncClient(base_url=settings.rag_chat_url, timeout=timeout),
+        rag_chat=httpx.AsyncClient(base_url=settings.rag_chat_url, timeout=rag_chat_timeout),
         alert=httpx.AsyncClient(base_url=settings.alert_url, timeout=timeout),
     )
     app.state.clients = clients
