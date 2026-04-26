@@ -65,17 +65,21 @@ async def resolve_entities(
     )
 
 
-@router.get("/entities/{entity_id}/articles", response_model=EntityArticlesResponse)
+@router.get("/entities/{entity_id}/briefing-articles", response_model=EntityArticlesResponse)
 async def get_entity_articles_feed(
     entity_id: UUID,
     repo: EntityMentionRepoDep,
     limit: int = Query(default=10, ge=1, le=50, description="Max articles to return (1-50)."),
 ) -> EntityArticlesResponse:
-    """Return articles mentioning *entity_id*, newest-first.
+    """Return articles mentioning *entity_id*, newest-first (internal briefing feed).
 
     Called by rag-chat's BriefingContextGatherer._fetch_entity_articles() to
     gather recent news for an instrument briefing.  Returns an empty list (not 404)
     when the entity has no articles.
+
+    Path is /briefing-articles (not /articles) to avoid shadowing the signals
+    router's GET /entities/{entity_id}/articles which applies a watchlist
+    ownership guard unsuitable for the rag-chat briefing use case.
 
     Response shape matches what rag-chat's _map_news_articles() expects:
     ``{"articles": [...], "entity_id": "...", "total": N}``.

@@ -134,7 +134,7 @@ class TestGetEntityArticlesFeed:
 
         app = _make_articles_app(repo)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(f"/api/v1/entities/{_ENTITY_ID}/articles")
+            response = await client.get(f"/api/v1/entities/{_ENTITY_ID}/briefing-articles")
 
         assert response.status_code == 200
         data = response.json()
@@ -165,7 +165,7 @@ class TestGetEntityArticlesFeed:
 
         app = _make_articles_app(repo)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(f"/api/v1/entities/{_ENTITY_ID}/articles?limit=1")
+            response = await client.get(f"/api/v1/entities/{_ENTITY_ID}/briefing-articles?limit=1")
 
         assert response.status_code == 200
         data = response.json()
@@ -184,7 +184,7 @@ class TestGetEntityArticlesFeed:
 
         app = _make_articles_app(repo)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(f"/api/v1/entities/{unknown_id}/articles")
+            response = await client.get(f"/api/v1/entities/{unknown_id}/briefing-articles")
 
         assert response.status_code == 200
         data = response.json()
@@ -200,7 +200,7 @@ class TestGetEntityArticlesFeed:
 
         app = _make_articles_app(repo)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/v1/entities/not-a-uuid/articles")
+            response = await client.get("/api/v1/entities/not-a-uuid/briefing-articles")
 
         assert response.status_code == 422
         repo.get_articles_for_entity.assert_not_called()
@@ -213,8 +213,8 @@ class TestGetEntityArticlesFeed:
 
         app = _make_articles_app(repo)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            r1 = await client.get(f"/api/v1/entities/{_ENTITY_ID}/articles?limit=0")
-            r2 = await client.get(f"/api/v1/entities/{_ENTITY_ID}/articles?limit=51")
+            r1 = await client.get(f"/api/v1/entities/{_ENTITY_ID}/briefing-articles?limit=0")
+            r2 = await client.get(f"/api/v1/entities/{_ENTITY_ID}/briefing-articles?limit=51")
 
         assert r1.status_code == 422
         assert r2.status_code == 422
