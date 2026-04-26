@@ -68,7 +68,7 @@ def _make_worker(factory: MagicMock) -> ArticleRelevanceScoringWorker:
     return ArticleRelevanceScoringWorker(
         nlp_session_factory=factory,
         ollama_url="http://ollama:11434",
-        model="qwen2.5:3b",
+        model="qwen3:0.6b",
         batch_size=10,
         timeout_seconds=5,
         cycle_seconds=1,

@@ -1,7 +1,7 @@
 """Intent classifier for the RAG-Chat pipeline (T-E-2-01).
 
 Two-tier classification strategy:
-  1. ``OllamaIntentClassifier`` — primary, calls local qwen2.5:3b via Ollama.
+  1. ``OllamaIntentClassifier`` — primary, calls local qwen3:0.6b via Ollama.
   2. ``KeywordHeuristicClassifier`` — fallback when Ollama is unavailable or times out.
 
 Both return ``(intent, sub_questions, rephrased_query)`` so callers are agnostic to
@@ -119,7 +119,7 @@ class OllamaIntentClassifier:
 
     Args:
         ollama_base_url: Base URL for the Ollama API (e.g. ``http://localhost:11434``).
-        model:           Ollama model name (default: ``qwen2.5:3b``).
+        model:           Ollama model name (default: ``qwen3:0.6b``).
         http_client:     Optional pre-configured ``httpx.AsyncClient`` — injected
                          in tests to avoid real network calls.
     """
@@ -127,7 +127,7 @@ class OllamaIntentClassifier:
     def __init__(
         self,
         ollama_base_url: str,
-        model: str = "qwen2.5:3b",
+        model: str = "qwen3:0.6b",
         *,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:

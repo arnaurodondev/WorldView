@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select, text, update
@@ -34,6 +34,7 @@ class EntityMentionRepository:
             char_start=mention.char_start,
             char_end=mention.char_end,
             resolved_entity_id=mention.resolved_entity_id,
+            tenant_id=mention.tenant_id,
             resolution_confidence=mention.resolution_confidence,
             resolution_stage=mention.resolution_stage,
             ner_model_id=mention.ner_model_id,
@@ -180,3 +181,66 @@ class EntityMentionRepository:
             {"minutes": stale_minutes},
         )
         return len(result.fetchall())
+
+    async def get_articles_for_entity(
+        self,
+        entity_id: UUID,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return articles that mention *entity_id*, joined with source metadata.
+
+        Uses a CTE to deduplicate doc_ids across multiple mentions of the same
+        entity in a document, then joins ``document_source_metadata`` and
+        LEFT JOINs ``routing_decisions`` for composite_score used as
+        display_relevance_score.  Results are ordered newest-first.
+
+        Args:
+        ----
+            entity_id: The resolved entity UUID to filter mentions by.
+            limit:     Maximum number of articles to return (1-50).
+
+        Returns:
+        -------
+            A list of dicts with keys: doc_id, title, url, published_at,
+            source_name, source_type, display_relevance_score.
+
+        """
+        result = await self._session.execute(
+            text(
+                """
+                WITH entity_docs AS (
+                    SELECT DISTINCT doc_id
+                    FROM entity_mentions
+                    WHERE resolved_entity_id = :entity_id
+                )
+                SELECT dsm.doc_id,
+                       dsm.title,
+                       dsm.url,
+                       dsm.published_at,
+                       dsm.source_name,
+                       dsm.source_type,
+                       rd.composite_score AS display_relevance_score
+                FROM entity_docs ed
+                JOIN  document_source_metadata dsm ON dsm.doc_id = ed.doc_id
+                LEFT JOIN routing_decisions rd      ON rd.doc_id  = ed.doc_id
+                ORDER BY dsm.published_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"entity_id": str(entity_id), "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "doc_id": row.doc_id,
+                "title": row.title,
+                "url": row.url,
+                "published_at": row.published_at,
+                "source_name": row.source_name,
+                "source_type": row.source_type,
+                "display_relevance_score": (
+                    float(row.display_relevance_score) if row.display_relevance_score is not None else None
+                ),
+            }
+            for row in rows
+        ]

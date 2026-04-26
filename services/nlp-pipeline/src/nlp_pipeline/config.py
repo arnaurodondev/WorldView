@@ -140,7 +140,7 @@ class Settings(BaseSettings):
     relevance_scoring_cycle_seconds: int = 1800  # RELEVANCE_SCORING_CYCLE_SECONDS
     relevance_scoring_batch_size: int = 50  # RELEVANCE_SCORING_BATCH_SIZE
     relevance_scoring_ollama_url: str = "http://ollama:11434"  # RELEVANCE_SCORING_OLLAMA_URL
-    relevance_scoring_model: str = "qwen2.5:3b"  # RELEVANCE_SCORING_MODEL
+    relevance_scoring_model: str = "qwen3:0.6b"  # RELEVANCE_SCORING_MODEL
     relevance_scoring_timeout_seconds: int = 30  # RELEVANCE_SCORING_TIMEOUT_SECONDS
     # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
     s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     unresolved_resolution_llm_retries: int = 2  # Ollama retries on JSON parse failure
     unresolved_resolution_stale_escalated_minutes: int = 30  # stale lock recovery threshold
     unresolved_resolution_ollama_base_url: str = "http://ollama:11434"
-    unresolved_resolution_classification_model: str = "qwen2.5:3b"
+    unresolved_resolution_classification_model: str = "qwen3:0.6b"
     unresolved_resolution_max_llm_batch: int = 20  # max mentions per Ollama call
 
     # LLM usage logging (PLAN-0033)

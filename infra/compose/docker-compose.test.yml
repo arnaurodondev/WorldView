@@ -839,6 +839,24 @@ services:
       retries: 5
       start_period: 30s
 
+  # ── Ollama model init — pre-pulls qwen3:0.6b + bge-large for CI/test runs ──
+  ollama-init:
+    image: ollama/ollama:0.6.7
+    profiles: [intelligence-test, all]
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        ollama pull qwen3:0.6b &&
+        ollama pull bge-large
+      "
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
   # ── GLiNER server — NER inference ──────────────────────────────────────────
   gliner-server:
     build:

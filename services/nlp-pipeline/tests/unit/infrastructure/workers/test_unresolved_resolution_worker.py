@@ -41,7 +41,7 @@ def _make_settings(
     lookback_days: int = 30,
     stale_minutes: int = 30,
     ollama_url: str = "http://localhost:11434",
-    model_id: str = "qwen2.5:3b",
+    model_id: str = "qwen3:0.6b",
     llm_timeout_s: float = 30.0,
 ) -> MagicMock:
     s = MagicMock()
