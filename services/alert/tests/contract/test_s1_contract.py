@@ -24,7 +24,7 @@ def _make_client(httpserver: HTTPServer) -> S1Client:
 
     settings = Settings(
         s1_portfolio_base_url=httpserver.url_for(""),
-        s8_internal_token="test-s8-token",
+        s8_internal_jwt="test-s8-token",
         s1_internal_token="test-s1-token",
     )
     return S1Client(settings, client=AsyncClient(timeout=5.0))

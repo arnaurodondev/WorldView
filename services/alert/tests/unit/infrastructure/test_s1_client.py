@@ -13,7 +13,7 @@ from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
 def _settings(**overrides: object) -> Settings:
     defaults = {
         "s1_portfolio_base_url": "http://s1:8001",
-        "s8_internal_token": "test-s8-token",
+        "s8_internal_jwt": "test-s8-token",
         "s1_internal_token": "test-s1-token",
     }
     defaults.update(overrides)

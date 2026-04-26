@@ -13,7 +13,9 @@ routes never call ``session.commit()`` directly.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Request
 
 from alert.api.dependencies import (
     AdminAuthDep,
@@ -113,14 +115,17 @@ async def update_email_preferences(
 @router.post("/admin/email/digest/trigger", response_model=DigestTriggerResponse, status_code=202)
 async def trigger_digest(
     body: DigestTriggerRequest,
+    request: Request,
     _auth: AdminAuthDep,
 ) -> DigestTriggerResponse:
     """Manually trigger a digest email for a specific user (admin/testing).
 
+    Immediately fires a single-user digest via EmailScheduler._process_user()
+    using asyncio.create_task so the response returns before the LLM call
+    completes (non-blocking from the caller's perspective).
+
     Auth: ``X-Admin-Token`` header.
-    Response: 202 Accepted with a job_id (async execution not implemented in v1 --
-    the response indicates the request was queued; actual send is synchronous in
-    the scheduler process).
+    Response: 202 Accepted with a job_id.
     """
     job_id = new_uuid7()
     logger.info(  # type: ignore[no-any-return]
@@ -129,4 +134,65 @@ async def trigger_digest(
         tenant_id=str(body.tenant_id),
         job_id=str(job_id),
     )
+
+    # Build a per-request EmailScheduler and fire _process_user() in the
+    # background.  We construct the scheduler lazily here (not in app startup)
+    # because this endpoint is admin-only and rarely called.
+    # WHY asyncio.create_task: the S8 LLM call takes up to 90 s; returning 202
+    # immediately lets the caller poll for the email rather than waiting inline.
+    async def _run_digest() -> None:
+        # Late imports keep infrastructure out of the module scope (R25).
+        from alert.domain.entities import EmailPreference
+        from alert.infrastructure.clients.s1_client import S1Client
+        from alert.infrastructure.clients.s3_client import S3MarketDataClient
+        from alert.infrastructure.clients.s8_client import S8BriefingClient
+        from alert.infrastructure.email import build_email_provider
+        from alert.infrastructure.email.scheduler import EmailScheduler
+
+        settings = request.app.state.settings
+        session_factory = request.app.state.session_factory
+
+        # Build per-call clients — these are lightweight wrappers around httpx.
+        # S1Client is already in app.state but create a fresh one here so we
+        # can close it after the digest without affecting the shared instance.
+        s1_client = S1Client(settings)
+        s3_client = S3MarketDataClient(settings)
+        s8_client = S8BriefingClient(settings)
+        email_provider = build_email_provider(settings)
+
+        try:
+            scheduler = EmailScheduler(
+                session_factory=session_factory,
+                email_provider=email_provider,
+                settings=settings,
+                s1_client=s1_client,
+                s3_client=s3_client,
+                s8_client=s8_client,
+            )
+            # Build a minimal EmailPreference to direct the digest to this user.
+            # email_address=None causes the scheduler to look up the address via S1.
+            pref = EmailPreference(
+                user_id=body.user_id,
+                tenant_id=body.tenant_id,
+                email_address=None,
+            )
+            await scheduler._process_user(pref)  # — admin-only internal trigger
+            logger.info(  # type: ignore[no-any-return]
+                "digest_trigger_completed",
+                user_id=str(body.user_id),
+                job_id=str(job_id),
+            )
+        except Exception:
+            logger.exception(  # type: ignore[no-any-return]
+                "digest_trigger_failed",
+                user_id=str(body.user_id),
+                job_id=str(job_id),
+            )
+        finally:
+            await s1_client.close()
+            await s3_client.close()
+            await s8_client.close()
+
+    asyncio.create_task(_run_digest())  # noqa: RUF006 — intentional fire-and-forget (admin trigger)
+
     return DigestTriggerResponse(job_id=job_id, status="queued")

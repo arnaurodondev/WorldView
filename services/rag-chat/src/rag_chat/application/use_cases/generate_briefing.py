@@ -92,6 +92,37 @@ class GenerateBriefingUseCase:
             RateLimitExceededError: User has exceeded 100 briefings today.
             ProviderUnavailableError: All LLM providers failed.
         """
+        # ── 0. Anti-hallucination guard (BP-184) ─────────────────────────────
+        # When portfolio_context is empty or contains no meaningful holdings/
+        # positions, the LLM fabricates realistic-looking but false portfolio data.
+        # Instead of letting that happen, return an empty narrative immediately so
+        # the email template can render a "no data available" message rather than
+        # fictional risk analysis.
+        # WHY check market_snapshots type: the API schema validates it as
+        # list[dict] with min_length=1 but we guard defensively here.
+        _context_has_data = any(
+            [
+                portfolio_context.get("holdings"),
+                portfolio_context.get("positions"),
+                # Exclude the sentinel "morning_overview" type which carries no
+                # real per-holding data — only real position snapshots count.
+                bool(market_snapshots)
+                and any(isinstance(s, dict) and s.get("type") != "morning_overview" for s in market_snapshots),
+            ]
+        )
+        if not _context_has_data:
+            log.warning(  # type: ignore[no-any-return]
+                "briefing_empty_context_guard",
+                user_id=str(user_id),
+                detail="All context empty — returning placeholder narrative to prevent hallucination",
+            )
+            return {
+                "narrative": "",
+                "risk_summary": {},
+                "citations": [],
+                "generated_at": datetime.now(tz=UTC).isoformat(),
+            }
+
         # ── 1. Daily rate limit (100/day per user_id) ─────────────────────────
         await self._check_daily_rate_limit(user_id)
 

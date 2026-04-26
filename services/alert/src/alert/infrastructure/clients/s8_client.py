@@ -1,7 +1,8 @@
 """HTTP client for S8 RAG/Chat internal briefing endpoint.
 
-Calls ``POST {s8_base_url}/internal/v1/briefings`` with an ``X-Internal-Token``
-header.  Raises :class:`BriefingClientError` on authentication failure (401),
+Calls ``POST {s8_base_url}/internal/v1/briefings`` with an ``X-Internal-JWT``
+header (RS256 service JWT required by S8's InternalJWTMiddleware, PRD-0025).
+Raises :class:`BriefingClientError` on authentication failure (401),
 service unavailability (503), or any transport error.
 
 Timeout is set to 90 s to accommodate large-model inference latency.
@@ -35,7 +36,9 @@ class S8BriefingClient:
 
     def __init__(self, settings: Settings, client: AsyncClient | None = None) -> None:
         self._base_url = settings.s8_base_url.rstrip("/")
-        self._token = settings.s8_internal_token
+        # PRD-0025: S8 requires X-Internal-JWT (RS256-signed service JWT), not a
+        # static token.  The JWT is configured via ALERT_S8_INTERNAL_JWT env var.
+        self._jwt = settings.s8_internal_jwt
         self._client = client or AsyncClient(timeout=90.0)
 
     async def close(self) -> None:
@@ -86,7 +89,10 @@ class S8BriefingClient:
                 url,
                 json=payload,
                 headers={
-                    "X-Internal-Token": self._token,
+                    # PRD-0025: S8's InternalJWTMiddleware requires X-Internal-JWT
+                    # (RS256-signed JWT issued by S9/api-gateway).  Using X-Internal-Token
+                    # would result in a 401 because the middleware only checks this header.
+                    "X-Internal-JWT": self._jwt,
                     "Content-Type": "application/json",
                 },
             )
