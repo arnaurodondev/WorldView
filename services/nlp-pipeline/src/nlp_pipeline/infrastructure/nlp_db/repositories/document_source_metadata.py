@@ -28,19 +28,30 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
         self._session = session
 
     async def upsert(self, metadata: DocumentSourceMetadata) -> None:
-        stmt = (
-            pg_insert(DocumentSourceMetadataModel)
-            .values(
-                doc_id=metadata.doc_id,
-                title=metadata.title,
-                url=metadata.url,
-                published_at=metadata.published_at,
-                source_name=metadata.source_name,
-                source_type=metadata.source_type,
-                word_count=metadata.word_count,
-                created_at=metadata.created_at,
-            )
-            .on_conflict_do_nothing(index_elements=["doc_id"])
+        insert_stmt = pg_insert(DocumentSourceMetadataModel).values(
+            doc_id=metadata.doc_id,
+            title=metadata.title,
+            url=metadata.url,
+            published_at=metadata.published_at,
+            source_name=metadata.source_name,
+            source_type=metadata.source_type,
+            word_count=metadata.word_count,
+            created_at=metadata.created_at,
+        )
+        # On conflict: update title and url only if they were previously NULL,
+        # so backfilled values are never overwritten by subsequent NULL events.
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["doc_id"],
+            set_={
+                "title": sa.case(
+                    (DocumentSourceMetadataModel.title.is_(None), insert_stmt.excluded.title),
+                    else_=DocumentSourceMetadataModel.title,
+                ),
+                "url": sa.case(
+                    (DocumentSourceMetadataModel.url.is_(None), insert_stmt.excluded.url),
+                    else_=DocumentSourceMetadataModel.url,
+                ),
+            },
         )
         await self._session.execute(stmt)
 

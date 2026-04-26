@@ -243,10 +243,13 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
 
         # Best-effort: cache citation metadata for S8 RAG inline citations.
         # Failure must never cause NLP processing to fail.
+        # url and source_name are not in the content.article.stored.v1 Avro schema;
+        # fall back to reading source_url from the silver JSON envelope.
+        url = value.get("url") or await self._extract_url_from_silver(minio_key)
         await self._write_source_metadata(
             doc_id=doc_id,
             title=value.get("title"),
-            url=value.get("url"),
+            url=url,
             published_at=published_at,
             source_name=value.get("source_name"),
             source_type=source_type,
@@ -337,7 +340,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             mentions=mentions,
             section_count=len(sections),
             source_trust_weight=_DEFAULT_SOURCE_TRUST,
-            novelty_score=0.0,
+            novelty_score=1.0,  # Assume novel for initial routing; Block 8 novelty gate downgrades near-duplicates
             watched_entity_ids=watched_ids,
             price_impact_score=price_impact_score,
             tier_deep=self._settings.routing_tier_deep,
@@ -569,6 +572,23 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         except (json.JSONDecodeError, ValueError):
             pass
         return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+
+    async def _extract_url_from_silver(self, minio_key: str) -> str | None:
+        """Best-effort: extract source_url from the silver JSON envelope.
+
+        The silver object written by content-store includes ``source_url``
+        which is the original article URL. Falls back to None on any error.
+        """
+        if self._storage is None:
+            return None
+        try:
+            raw = await self._storage.get_bytes(self._settings.silver_bucket, minio_key)
+            envelope = json.loads(raw)
+            if isinstance(envelope, dict):
+                return envelope.get("source_url") or None
+        except Exception:
+            return None
+        return None
 
     # ── Source metadata cache (best-effort) ──────────────────────────────────
 

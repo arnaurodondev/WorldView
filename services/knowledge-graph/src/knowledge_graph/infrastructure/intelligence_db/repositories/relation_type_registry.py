@@ -85,7 +85,7 @@ WHERE canonical_type = :canonical_type AND is_active = true
             text("""
 SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence,
              dcc.decay_alpha,
-       embedding <=> :query_embedding::vector AS cosine_distance
+       embedding <=> CAST(:query_embedding AS vector) AS cosine_distance
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE is_active  = true
@@ -94,7 +94,7 @@ ORDER BY cosine_distance
 LIMIT :limit
 """),
             {
-                "query_embedding": query_embedding,
+                "query_embedding": str(query_embedding),
                 "limit": limit,
             },
         )

@@ -151,7 +151,7 @@ SELECT rs.relation_id, r.subject_entity_id, r.object_entity_id,
        se.canonical_name AS subject_name, oe.canonical_name AS object_name,
        r.canonical_type, rs.summary_text, r.confidence, r.evidence_count,
        r.latest_evidence_at, r.semantic_mode,
-       rs.summary_embedding <=> :query_embedding::vector AS distance
+       rs.summary_embedding <=> CAST(:query_embedding AS vector) AS distance
 FROM relation_summaries rs
 JOIN relations r ON rs.relation_id = r.relation_id
 JOIN canonical_entities se ON r.subject_entity_id = se.entity_id
@@ -159,14 +159,16 @@ JOIN canonical_entities oe ON r.object_entity_id = oe.entity_id
 WHERE rs.is_current = true
   AND rs.summary_embedding IS NOT NULL
   AND r.confidence >= :min_confidence
-  AND (:entity_ids IS NULL OR r.subject_entity_id = ANY(:entity_ids) OR r.object_entity_id = ANY(:entity_ids))
-  AND (:relation_types IS NULL OR r.canonical_type = ANY(:relation_types))
-  AND (:semantic_mode IS NULL OR r.semantic_mode = :semantic_mode)
+  AND (CAST(:entity_ids AS uuid[]) IS NULL
+        OR r.subject_entity_id = ANY(CAST(:entity_ids AS uuid[]))
+        OR r.object_entity_id = ANY(CAST(:entity_ids AS uuid[])))
+  AND (CAST(:relation_types AS text[]) IS NULL OR r.canonical_type = ANY(CAST(:relation_types AS text[])))
+  AND (CAST(:semantic_mode AS text) IS NULL OR r.semantic_mode = CAST(:semantic_mode AS text))
 ORDER BY distance ASC
 LIMIT :top_k
 """),
             {
-                "query_embedding": query_embedding,
+                "query_embedding": str(query_embedding),
                 "min_confidence": min_confidence,
                 "entity_ids": [str(e) for e in entity_ids] if entity_ids else None,
                 "relation_types": relation_types if relation_types else None,

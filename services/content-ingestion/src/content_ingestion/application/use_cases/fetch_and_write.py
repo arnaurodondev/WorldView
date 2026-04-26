@@ -42,6 +42,7 @@ def build_raw_article_payload(
     fetch_id: UUID,
     published_at: str | None,
     is_backfill: bool,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Build outbox payload matching ``content.article.raw.v1`` Avro schema exactly."""
     return {
@@ -55,7 +56,7 @@ def build_raw_article_payload(
         "minio_bronze_key": minio_bronze_key,
         "content_hash": hashlib.sha256(raw_bytes).hexdigest(),
         "fetch_id": str(fetch_id),
-        "title": None,
+        "title": title,
         "published_at": published_at,
         "is_backfill": is_backfill,
         "correlation_id": None,
@@ -193,6 +194,7 @@ class FetchAndWriteUseCase:
                     fetch_id=fetch_log_id,
                     published_at=ct.to_iso8601(result.published_at) if result.published_at else None,
                     is_backfill=result.is_backfill,
+                    title=result.title,
                 )
 
                 await self._outbox.append(

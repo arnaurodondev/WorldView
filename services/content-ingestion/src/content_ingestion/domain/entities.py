@@ -56,6 +56,7 @@ class FetchResult:
     content_type: str
     published_at: datetime | None = None
     is_backfill: bool = False
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,11 @@ class ContentIngestionTask:
     # Retry backoff — earliest time this task may be picked up by the scheduler.
     # NULL means the task is ready to be claimed immediately.
     next_attempt_at: datetime | None = None
+
+    # Source configuration — carried from the sources table so adapters can
+    # read symbol, from_date, to_date, etc. without a second DB round-trip.
+    # Populated by TaskRepository.claim_batch via JOIN on sources.
+    source_config: dict = field(default_factory=dict)
 
     # Audit
     id: UUID = field(default_factory=common.ids.new_uuid7)
