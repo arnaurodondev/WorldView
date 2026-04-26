@@ -218,12 +218,40 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
 
 def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
-    """Build and attach GenerateBriefingUseCase to app.state."""
+    """Build and attach GenerateBriefingUseCase (with BriefingContextGatherer) to app.state.
+
+    Creates separate client instances for the BriefingContextGatherer rather than
+    re-using the ChatOrchestrator's clients.  WHY separate: the orchestrator clients
+    were created inside _wire_orchestrator() without being stored on app.state, so
+    they are not accessible here.  Creating new instances is lightweight (no persistent
+    connections — httpx clients open connections lazily per-request).
+    """
+    from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
     from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+    from rag_chat.infrastructure.clients.s1_client import S1Client
+    from rag_chat.infrastructure.clients.s3_client import S3Client
+    from rag_chat.infrastructure.clients.s5_client import S5Client
+    from rag_chat.infrastructure.clients.s6_client import S6Client
+    from rag_chat.infrastructure.clients.s7_client import S7Client
+
+    s1 = S1Client(
+        base_url=settings.s1_base_url,
+        valkey=valkey_client,
+        timeout=settings.upstream_timeout_seconds,
+    )
+    s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    # S5Client accepts an optional internal_jwt at construction for default auth; passing
+    # None here means each gather call supplies the per-request JWT via x_internal_jwt kwarg.
+    s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
+
+    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
 
     app.state.briefing_uc = GenerateBriefingUseCase(
         llm_chain=app.state.llm_chain,  # same chain as ChatOrchestrator
         valkey=valkey_client,
+        context_gatherer=context_gatherer,
     )
 
 

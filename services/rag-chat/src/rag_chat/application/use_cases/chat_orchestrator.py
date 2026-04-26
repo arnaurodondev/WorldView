@@ -56,6 +56,85 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _MIN_RETRIEVAL_ITEMS = 0  # allow empty retrieval for graceful response
 
 
+class _ThinkBlockFilter:
+    """Real-time streaming filter that strips DeepSeek <think>/<reasoning>/<scratchpad> blocks.
+
+    WHY NEEDED: DeepSeek R1 outputs a <think>...</think> reasoning block at the start
+    of every response. This block must not be shown to users — it is internal chain-of-thought.
+    We use a stateful buffer (not regex) because tokens arrive in arbitrary-length chunks
+    and tag boundaries can be split across multiple chunks.
+    """
+
+    _OPEN_TAGS: frozenset[str] = frozenset({"think", "reasoning", "scratchpad"})
+
+    def __init__(self) -> None:
+        self._buf: str = ""
+        self._in_block: bool = False
+        self._block_tag: str = ""
+
+    def feed(self, chunk: str) -> str:
+        """Feed a streaming chunk; return the portion that should be emitted."""
+        self._buf += chunk
+        out = ""
+
+        while self._buf:
+            if self._in_block:
+                # Suppress tokens until we find the closing tag for the active block.
+                close = f"</{self._block_tag}>"
+                idx = self._buf.lower().find(close)
+                if idx >= 0:
+                    # Found the closing tag — discard up to and including it, then exit block.
+                    self._buf = self._buf[idx + len(close) :]
+                    self._in_block = False
+                    self._block_tag = ""
+                else:
+                    # Closing tag not yet fully received — keep the last (len(close)-1) chars
+                    # in the buffer in case the close tag is split across this chunk boundary.
+                    keep = len(close) - 1
+                    if len(self._buf) > keep:
+                        self._buf = self._buf[-keep:]
+                    break
+            else:
+                buf_lower = self._buf.lower()
+                # Find the earliest open tag in the buffer.
+                earliest = len(self._buf)
+                found_tag = ""
+                for tag in self._OPEN_TAGS:
+                    open_tag = f"<{tag}>"
+                    idx = buf_lower.find(open_tag)
+                    if 0 <= idx < earliest:
+                        earliest = idx
+                        found_tag = tag
+                if found_tag:
+                    # Emit everything before the opening tag, then enter block-suppression mode.
+                    out += self._buf[:earliest]
+                    self._buf = self._buf[earliest + len(f"<{found_tag}>") :]
+                    self._in_block = True
+                    self._block_tag = found_tag
+                else:
+                    # No open tag found — emit all but the last (max_tag_len - 1) chars in case
+                    # an open tag is split at the current chunk boundary.
+                    max_tag_len = max(len(f"<{t}>") for t in self._OPEN_TAGS)
+                    safe = len(self._buf) - (max_tag_len - 1)
+                    if safe > 0:
+                        out += self._buf[:safe]
+                        self._buf = self._buf[safe:]
+                    break
+        return out
+
+    def flush(self) -> str:
+        """Return any remaining buffer content after the stream ends.
+
+        If we are still inside a think block when the stream ends, discard the
+        buffer (incomplete block — never show to users).
+        """
+        if self._in_block:
+            self._buf = ""
+        result = self._buf
+        self._buf = ""
+        return result
+
+
 class ChatOrchestrator:
     """Coordinate all pipeline steps for a single chat request.
 
@@ -226,20 +305,48 @@ class ChatOrchestrator:
             intent=intent,
         )
 
-        # Step 11: LLM streaming
+        # Step 11: LLM streaming — filter out <think> blocks in real time (Bug 1 Fix B).
+        # WHY: DeepSeek R1 prepends a <think>...</think> chain-of-thought block.
+        # We must suppress it from the SSE stream; _ThinkBlockFilter handles tokens
+        # that arrive with tag boundaries split across chunk boundaries.
         full_text = ""
         provider_name = "unknown"
+        think_filter = _ThinkBlockFilter()
         async for chunk in self._llm_chain.stream(prompt, max_tokens=4000, temperature=0.1):
             full_text += chunk
-            yield self._emitter.emit_token(chunk)
+            filtered = think_filter.feed(chunk)
+            if filtered:
+                yield self._emitter.emit_token(filtered)
+        # Flush any buffered content that didn't need holding for tag detection.
+        remaining = think_filter.flush()
+        if remaining:
+            yield self._emitter.emit_token(remaining)
         provider_name = self._llm_chain.last_provider_name
 
-        # Step 12: output processing + citation injection
+        # Step 12: output processing + citation injection.
+        # OutputProcessor.process() re-strips <think> blocks on the accumulated full_text
+        # (catching anything the streaming filter may have missed) and extracts citations.
         answer, citations = self._output_processor.process(full_text, reranked)
         latency_ms = int((datetime.now(tz=UTC) - start).total_seconds() * 1000)
 
         yield self._emitter.emit_citations(citations)
         yield self._emitter.emit_contradictions(contradiction_refs)
+
+        # Bug 4 Fix: retrieve model identifier from the active provider for the audit trail.
+        # The LLMProviderChain sets _last_provider_name but the provider object itself holds
+        # the model_id attribute. We retrieve it via the provider list to avoid a new public API.
+        _model_id = ""
+        for _p in self._llm_chain._providers:
+            if getattr(_p, "name", None) == provider_name:
+                _model_id = (
+                    getattr(_p, "model_id", None) or getattr(_p, "model", None) or getattr(_p, "_model", None) or ""
+                )
+                break
+
+        # Bug 4 Fix: estimate prompt token count from the built prompt text.
+        # DeepInfra stream does not return token counts, so we use the industry-standard
+        # 4-chars-per-token heuristic (same approach already used in provider_chain.py).
+        token_count_in_est = len(prompt) // 4
 
         # Step 13: persist (best-effort)
         asst_msg_id = _new_thread_id()  # fallback if persistence fails
@@ -255,12 +362,14 @@ class ChatOrchestrator:
                     citations=tuple(citations),
                     contradiction_refs=tuple(contradiction_refs),
                     provider=provider_name,
-                    model="",
-                    token_count_in=None,
+                    model=_model_id,
+                    token_count_in=token_count_in_est,
                     token_count_out=len(full_text.split()),
                     latency_ms=latency_ms,
                 ),
                 uow=uow,
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
             )
         except Exception as exc:
             log.error("chat_persistence_failed", error=str(exc))  # type: ignore[no-any-return]
@@ -286,6 +395,11 @@ class ChatOrchestrator:
 
         yield self._emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
 
+        # Terminal event: signals to the frontend EventSource that the stream is fully
+        # complete.  Without this, some reverse-proxy setups (nginx, S9 proxy) buffer
+        # the final metadata frame and the UI spinner never stops.
+        yield self._emitter.emit_done()
+
     async def execute_sync(
         self,
         request: ChatRequest,
@@ -308,6 +422,11 @@ class ChatOrchestrator:
                 contradictions = data
             elif event_type == "metadata":
                 metadata = data
+
+        # Bug 1 Fix A — sync path safety net: strip any residual <think> blocks from the
+        # accumulated token stream. The SSE path uses _ThinkBlockFilter but regex is applied
+        # here too in case a think block boundary was not caught by the real-time filter.
+        answer = self._output_processor.process(answer, [])[0]
 
         return {
             "answer": answer,

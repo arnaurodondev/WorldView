@@ -88,3 +88,13 @@ class SSEEmitter:
     def emit_error(self, code: str, message: str) -> dict[str, str]:
         """Emit an error event (pipeline failure, rate limit, etc.)."""
         return {"event": "error", "data": json.dumps({"code": code, "message": message})}
+
+    def emit_done(self) -> dict[str, str]:
+        """Emit the terminal SSE event signalling the stream is complete.
+
+        WHY NEEDED: Without a ``done`` event the frontend EventSource listener has no
+        reliable signal to close the connection — it relies on the server closing the
+        HTTP stream, which some proxies buffer.  An explicit ``event: done`` lets the
+        frontend close the EventSource immediately and mark the response as finished.
+        """
+        return {"event": "done", "data": json.dumps({"type": "done"})}

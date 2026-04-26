@@ -101,16 +101,16 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
     # ── Generate briefing via use case ────────────────────────────────────────
+    # WHY execute_public_morning() not execute(): the morning route must use the
+    # portfolio-aware path that invokes BriefingContextGatherer (S1/S3/S5/S6/S7),
+    # renders the MORNING_BRIEFING prompt, and returns content/risk_summary/citations.
+    # Calling execute() here would use the email brief path with no frontend context.
     uc = _get_briefing_uc(request)
     try:
-        result = await uc.execute(
-            user_id=_to_uuid(user_id),
-            tenant_id=_to_uuid(tenant_id),
-            # TODO: Enrich with user's actual portfolio context via S1->S8 internal call
-            portfolio_context={},
-            market_snapshots=[{"type": "morning_overview"}],
-            active_signals=[],
-            lookback_days=1,
+        result = await uc.execute_public_morning(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            internal_jwt=request.headers.get("X-Internal-JWT"),
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
@@ -121,7 +121,8 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         raise HTTPException(status_code=503, detail="Briefing generation unavailable") from e
 
     response_data = {
-        "narrative": result["narrative"],
+        # execute_public_morning() returns 'content' (not 'narrative') — map to schema field
+        "narrative": result.get("content", ""),
         "risk_summary": result.get("risk_summary", {}),
         "citations": result.get("citations", []),
         "generated_at": result["generated_at"],
@@ -151,7 +152,7 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
     """
     user_id = _extract_user_id(request)
-    tenant_id = _extract_tenant_id(request)
+    tenant_id = _extract_tenant_id(request)  # noqa: F841 — reserved for future cache-key scope
     valkey = _get_valkey(request)
     cache_key = f"briefing:instrument:{entity_id}:{user_id}"
 
@@ -168,17 +169,14 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
     # ── Generate briefing via use case ────────────────────────────────────────
+    # WHY execute_public_instrument() not execute(): the instrument brief route
+    # must use the entity-focused path that invokes BriefingContextGatherer,
+    # assembles S7 graph + S3 fundamentals + S6 news, and renders the v3.0
+    # INSTRUMENT_BRIEFING prompt.  Calling execute() here would use the
+    # portfolio/email brief path with no entity context (PRD-0030 bug fix).
     uc = _get_briefing_uc(request)
     try:
-        result = await uc.execute(
-            user_id=_to_uuid(user_id),
-            tenant_id=_to_uuid(tenant_id),
-            # TODO: Enrich with entity-specific holdings from user's portfolio via S1->S8 internal call
-            portfolio_context={"entity_focus": entity_id},
-            market_snapshots=[{"type": "instrument_overview", "entity_id": entity_id}],
-            active_signals=[],
-            lookback_days=1,
-        )
+        result = await uc.execute_public_instrument(entity_id=entity_id)
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
     except ProviderUnavailableError as e:
@@ -193,8 +191,9 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         raise HTTPException(status_code=503, detail="Briefing generation unavailable") from e
 
     response_data = {
-        "narrative": result["narrative"],
-        "risk_summary": result.get("risk_summary", {}),
+        # execute_public_instrument() returns 'content' (not 'narrative') — map to schema field
+        "narrative": result.get("content", result.get("narrative", "")),
+        "risk_summary": result.get("risk_summary") or {},
         "citations": result.get("citations", []),
         "generated_at": result["generated_at"],
         "cached": False,

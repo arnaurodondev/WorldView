@@ -61,6 +61,8 @@ def app():
     valkey.ping = AsyncMock(return_value=True)
     application.state.valkey = valkey
     application.state.dispatcher_healthy = True
+    # Satisfy F-003B JWKS readiness check (readyz returns 503 if None)
+    application.state._internal_jwt_public_key = "fake-test-pubkey"
     return application
 
 

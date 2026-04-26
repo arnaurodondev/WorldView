@@ -95,11 +95,9 @@ _GENERAL_PROMPT = (
     "If specific entities were identified in the query, use the retrieved context to anchor your answer.\n"
     "If no entities were identified, answer from your general financial knowledge.\n"
     "Keep the answer educational, clear, and concise (3-5 paragraphs maximum).\n"
-    "End your response with exactly 2-3 suggested follow-up questions the user might ask next.\n"
-    "Format follow-ups as:\n"
-    "  Suggested follow-ups:\n"
-    "  - [Question 1]\n"
-    "  - [Question 2]\n"
+    # WHY REMOVED: This is an institutional terminal, not a consumer chatbot.
+    # Suggested follow-ups clutter the output and are inappropriate in a Bloomberg-style
+    # UI where the analyst controls the conversation flow.
     f"{_SAFETY}"
 )
 

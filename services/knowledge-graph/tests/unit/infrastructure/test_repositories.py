@@ -629,3 +629,90 @@ class TestEntityEmbeddingStateUpsertCoalesce:
         # Both embedding and model_id should use COALESCE
         coalesce_count = call_sql.upper().count("COALESCE")
         assert coalesce_count >= 2, f"Expected ≥2 COALESCE uses, found {coalesce_count}"
+
+
+# ---------------------------------------------------------------------------
+# EventRepository — BP-180 regression: CAST for NULL type disambiguation
+# ---------------------------------------------------------------------------
+
+
+class TestEventRepositoryBP180:
+    """Regression tests for BP-180: asyncpg NULL type ambiguity in search_events.
+
+    asyncpg raises AmbiguousParameterError when a Python None is bound to a
+    parameter that appears in ':param IS NULL' — it cannot infer the PostgreSQL
+    type from None.  Fix: CAST(:param AS TYPE) IS NULL so the type is always
+    explicit even when the value is None.
+    """
+
+    def _make_repo(self, fetchall_return: list | None = None):  # type: ignore[no-untyped-def]
+        from knowledge_graph.infrastructure.intelligence_db.repositories.event_repository import (
+            EventRepository,
+        )
+
+        session = _make_session(fetchall_return=fetchall_return)
+        return EventRepository(session), session
+
+    def test_search_events_sql_uses_cast_for_entity_ids(self) -> None:
+        """The entity_ids filter must use CAST(:entity_ids AS UUID[]) — not bare IS NULL."""
+        import asyncio
+
+        repo, session = self._make_repo()
+        asyncio.run(repo.search_events(entity_ids=[]))
+
+        sql_text: str = str(session.execute.call_args[0][0].text)
+        assert (
+            "cast(:entity_ids as uuid[])" in sql_text.lower()
+        ), f"BP-180 CAST for entity_ids not found in SQL: {sql_text}"
+
+    def test_search_events_sql_uses_cast_for_event_types(self) -> None:
+        """The event_types filter must use CAST(:event_types AS TEXT[]) — not bare IS NULL."""
+        import asyncio
+
+        repo, session = self._make_repo()
+        asyncio.run(repo.search_events(entity_ids=[], event_types=None))
+
+        sql_text: str = str(session.execute.call_args[0][0].text)
+        assert (
+            "cast(:event_types as text[])" in sql_text.lower()
+        ), f"BP-180 CAST for event_types not found in SQL: {sql_text}"
+
+    def test_search_events_none_entity_ids_passes_none_param(self) -> None:
+        """Empty entity_ids list → None param (the CAST handles type disambiguation)."""
+        import asyncio
+
+        repo, session = self._make_repo()
+        asyncio.run(repo.search_events(entity_ids=[]))
+
+        params: dict = session.execute.call_args[0][1]
+        # Empty list → None param (filter disabled — all entities included)
+        assert params["entity_ids"] is None
+
+    def test_search_events_none_event_types_passes_none_param(self) -> None:
+        """event_types=None → None param (the CAST handles type disambiguation)."""
+        import asyncio
+
+        repo, session = self._make_repo()
+        asyncio.run(repo.search_events(entity_ids=[], event_types=None))
+
+        params: dict = session.execute.call_args[0][1]
+        assert params["event_types"] is None
+
+    def test_search_events_with_entity_ids_passes_list(self) -> None:
+        """Non-empty entity_ids list is converted to string UUIDs and forwarded."""
+        import asyncio
+
+        entity_id = uuid4()
+        repo, session = self._make_repo()
+        asyncio.run(repo.search_events(entity_ids=[entity_id]))
+
+        params: dict = session.execute.call_args[0][1]
+        assert params["entity_ids"] == [str(entity_id)]
+
+    def test_search_events_empty_result_returns_empty_list(self) -> None:
+        """Empty DB result → returns empty list."""
+        import asyncio
+
+        repo, session = self._make_repo(fetchall_return=[])
+        result = asyncio.run(repo.search_events(entity_ids=[]))
+        assert result == []

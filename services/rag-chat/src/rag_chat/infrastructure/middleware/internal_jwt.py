@@ -187,6 +187,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 request.state.tenant_id = ""
                 request.state.user_id = ""
                 request.state.role = ""
+            # Set ContextVar so upstream service clients can include X-Internal-JWT
+            # in outgoing calls without threading the token through every method signature.
+            from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+            set_current_jwt(token)
             return cast("Response", await call_next(request))
 
         try:
@@ -231,6 +236,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
+            # Set ContextVar so upstream service clients can include X-Internal-JWT
+            # in outgoing calls without threading the token through every method signature.
+            from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+            set_current_jwt(token)
         except jwt.ExpiredSignatureError:
             return Response(
                 content='{"detail":"Internal JWT expired"}',

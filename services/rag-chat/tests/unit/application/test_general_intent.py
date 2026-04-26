@@ -5,8 +5,8 @@ Covers:
 - GENERAL plan: use_chunks=True, all other sources False
 - Entity IDs are populated from resolved entities when present
 - GENERAL plan with no entities: entity_ids empty tuple
-- ChatOrchestrator passes intent to PromptBuilder (follow-up routing)
-- GENERAL prompt produces follow-up suggestion block in LLM call
+- ChatOrchestrator passes intent to PromptBuilder (intent routing)
+- GENERAL prompt does NOT produce follow-up suggestions (institutional terminal)
 - KeywordHeuristicClassifier GENERAL keyword paths
 """
 
@@ -103,8 +103,12 @@ class TestGeneralFollowUpRouting:
         block.text = ""
         return block
 
-    def test_prompt_builder_general_includes_follow_up_instruction(self) -> None:
-        """PromptBuilder with intent=GENERAL produces a prompt containing follow-up instruction."""
+    def test_prompt_builder_general_no_follow_up_instruction(self) -> None:
+        """PromptBuilder with intent=GENERAL must NOT produce follow-up suggestions.
+
+        Follow-up suggestions were removed (Fix 4 — institutional terminal design).
+        The GENERAL prompt now ends with the answer, not a consumer-chatbot question list.
+        """
         from rag_chat.application.pipeline.prompt_builder import PromptBuilder
 
         builder = PromptBuilder()
@@ -116,7 +120,7 @@ class TestGeneralFollowUpRouting:
             contradiction_block=self._make_contradiction_block(),
             intent=QueryIntent.GENERAL,
         )
-        assert "follow-up" in prompt.lower() or "suggested" in prompt.lower()
+        assert "follow-up" not in prompt.lower() and "suggested" not in prompt.lower()
 
     def test_prompt_builder_non_general_no_follow_up_instruction(self) -> None:
         """Non-GENERAL prompts do NOT contain follow-up instructions."""

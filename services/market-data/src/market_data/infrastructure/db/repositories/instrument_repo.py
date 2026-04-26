@@ -54,12 +54,14 @@ class PgInstrumentRepository(InstrumentRepository):
     # ── queries ────────────────────────────────────────────────────────────────
 
     async def find_by_symbol_exchange(self, symbol: str, exchange: str) -> Instrument | None:
-        result = await self._session.execute(
-            select(InstrumentModel).where(
-                InstrumentModel.symbol == symbol,
-                InstrumentModel.exchange == exchange,
-            )
-        )
+        # When exchange is empty string, treat it as "no exchange filter" so that
+        # callers (e.g. rag-chat BriefingContextGatherer) can look up a ticker
+        # without knowing its exchange.  An exact empty-string exchange would
+        # never match any real instrument (all have values like 'US', 'CC', etc.).
+        conditions = [InstrumentModel.symbol == symbol]
+        if exchange:
+            conditions.append(InstrumentModel.exchange == exchange)
+        result = await self._session.execute(select(InstrumentModel).where(*conditions))
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row else None
 

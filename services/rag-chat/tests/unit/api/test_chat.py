@@ -115,6 +115,16 @@ def app_with_overrides(settings: RagChatSettings):  # type: ignore[return]
 
     app.dependency_overrides[get_uow] = _override_uow
     app.dependency_overrides[get_auth_context] = _override_auth
+
+    # WHY write_factory mock: chat_stream no longer uses UoWDep (Bug 2 fix — FastAPI
+    # tears down yield deps before the SSE generator runs). It creates a fresh RagUnitOfWork
+    # directly from app.state.write_factory. We need a mock session factory callable so
+    # RagUnitOfWork.__aenter__ does not attempt a real DB connection.
+    mock_session = MagicMock()
+    mock_session.close = AsyncMock(return_value=None)
+    mock_session_factory = MagicMock(return_value=mock_session)
+    app.state.write_factory = mock_session_factory
+
     yield app
     app.dependency_overrides.clear()
 

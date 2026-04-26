@@ -78,6 +78,11 @@ class S7Client(BaseUpstreamClient):
     ) -> EgocentricGraph:
         """GET /api/v1/entities/{id}/graph → egocentric sub-graph.
 
+        WHY MAPPING: S7 returns {center, relations, entities} format (S7 native format).
+        S9 transforms this to {nodes, edges} before sending to the frontend. Here we
+        perform the same transformation so BriefingContextGatherer.gather_instrument_context()
+        gets a populated EgocentricGraph instead of always receiving empty nodes/edges.
+
         Returns an empty graph on timeout or HTTP error.
         """
         raw = await self._get(
@@ -86,10 +91,59 @@ class S7Client(BaseUpstreamClient):
         )
         if not raw:
             return EgocentricGraph(entity_id=str(entity_id))
+
+        # ── Map S7 native format → EgocentricGraph ──────────────────────────────
+        # S7 returns: {center: dict, relations: list[dict], entities: dict[str, dict]}
+        # S7 native field names differ from the frontend-facing S9 transformation:
+        #   - relations use "object_entity_id" (not "target_entity_id")
+        #   - relations use "canonical_type" (not "relation_type")
+        #   - entity names must be looked up from the "entities" dict by UUID key
+        # EgocentricGraph expects: nodes=list[dict], edges=list[dict]
+
+        nodes: list[dict] = []
+
+        # Center entity — always include it as a node
+        center = raw.get("center")
+        if isinstance(center, dict):
+            nodes.append(center)
+
+        # All neighbouring entities (keyed by entity_id string)
+        entities_by_id: dict[str, dict] = {}
+        for _eid, entity_data in raw.get("entities", {}).items():
+            if isinstance(entity_data, dict):
+                entities_by_id[_eid] = entity_data
+                if entity_data not in nodes:
+                    nodes.append(entity_data)
+
+        # Relations → edges
+        # S7 native format: {relation_id, subject_entity_id, object_entity_id,
+        #   canonical_type, confidence, ...}
+        # BriefingContextGatherer._map_entity_graph() reads: relation_type, confidence,
+        # target (or object), target_name (or object_name)
+        edges: list[dict] = []
+        for rel in raw.get("relations", []):
+            if not isinstance(rel, dict):
+                continue
+            target_id = str(rel.get("object_entity_id", ""))
+            # Look up the canonical name from the entities dict
+            target_entity = entities_by_id.get(target_id, {})
+            target_name = target_entity.get("canonical_name", "")
+            edges.append(
+                {
+                    # Map S7 native field names to keys expected by _map_entity_graph()
+                    "relation_type": rel.get("canonical_type", rel.get("relation_type", "")),
+                    "confidence": float(rel.get("confidence", 0.0)),
+                    "target": target_id,
+                    "object": target_id,
+                    "target_name": target_name,
+                    "object_name": target_name,
+                }
+            )
+
         return EgocentricGraph(
             entity_id=raw.get("entity_id", str(entity_id)),
-            nodes=raw.get("nodes", []),
-            edges=raw.get("edges", []),
+            nodes=nodes,
+            edges=edges,
         )
 
     # ── Claims search ──────────────────────────────────────────────────────────

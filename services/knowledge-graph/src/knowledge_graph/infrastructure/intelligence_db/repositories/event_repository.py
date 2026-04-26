@@ -46,14 +46,18 @@ class EventRepository(EventRepositoryPort):
         Passing an empty ``entity_ids`` list disables the entity filter
         (returns events across all entities, subject to other filters).
         """
+        # BP-180: asyncpg raises AmbiguousParameterError when a Python None is
+        # bound to a parameter used in "IS NULL" inside a WHERE clause — it cannot
+        # infer the PostgreSQL type from None alone.
+        # Fix: use CAST(:param AS TYPE) IS NULL so the type is always explicit.
         result = await self._session.execute(
             text("""
 SELECT event_id, event_type, event_subtype, subject_entity_id,
        event_date, event_text, structured_data, extraction_confidence,
        doc_id, source_type
 FROM events
-WHERE (:entity_ids IS NULL OR subject_entity_id = ANY(:entity_ids))
-  AND (:event_types IS NULL OR event_type = ANY(:event_types))
+WHERE (CAST(:entity_ids AS UUID[]) IS NULL OR subject_entity_id = ANY(CAST(:entity_ids AS UUID[])))
+  AND (CAST(:event_types AS TEXT[]) IS NULL OR event_type = ANY(CAST(:event_types AS TEXT[])))
   AND (:date_from IS NULL OR event_date >= :date_from)
   AND (:date_to   IS NULL OR event_date <= :date_to)
 ORDER BY event_date DESC

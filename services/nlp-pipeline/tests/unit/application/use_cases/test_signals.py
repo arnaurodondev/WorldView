@@ -410,6 +410,7 @@ class TestGetEntityArticlesUseCase:
             order_by="published_at",
             limit=25,
             offset=5,
+            tenant_id=None,
         )
 
     async def test_empty_result_returns_empty_list(self) -> None:

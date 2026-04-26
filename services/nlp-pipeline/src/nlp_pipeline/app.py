@@ -217,12 +217,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        # S6 is internal-only: S8 forwards the same JWT multiple times per request.
+        # JTI replay check is done at the S8 user-facing boundary; disabling here
+        # prevents false 401s on the second S6 call (embed then chunk search).
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
     )
     app.state._jwt_middleware = jwt_middleware
     app.add_middleware(
         InternalJWTMiddleware,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
     )
 
     # Middleware (must be registered before lifespan starts)

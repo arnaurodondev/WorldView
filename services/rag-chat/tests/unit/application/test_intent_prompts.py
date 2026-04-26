@@ -5,7 +5,7 @@ Covers:
 - get_system_prompt() returns correct module for each intent
 - EMAIL_DEEP_BRIEF_PROMPT is distinct from all query-intent prompts
 - PromptBuilder.build() routes to the correct intent prompt
-- GENERAL prompt includes follow-up suggestion instruction
+- GENERAL prompt does NOT include follow-up suggestions (institutional terminal)
 - Graceful fallback for unknown intent values
 - QueryIntent enum has GENERAL as 9th value
 - Keyword classifier GENERAL path
@@ -87,10 +87,15 @@ class TestGetSystemPrompt:
         prompt = get_system_prompt(QueryIntent.SIGNAL_INTEL)
         assert "recent" in prompt.lower() or "event" in prompt.lower()
 
-    def test_general_prompt_contains_follow_up_instruction(self) -> None:
-        """GENERAL intent must instruct the LLM to suggest follow-ups (F03)."""
+    def test_general_prompt_does_not_contain_follow_up_instruction(self) -> None:
+        """GENERAL prompt must NOT suggest follow-ups — institutional terminal, not chatbot.
+
+        Follow-up suggestions were removed because this is a Bloomberg-style professional
+        terminal where the analyst controls the conversation flow.  Consumer-chatbot patterns
+        (suggested next questions) are inappropriate here.
+        """
         prompt = get_system_prompt(QueryIntent.GENERAL)
-        assert "follow-up" in prompt.lower() or "suggested" in prompt.lower()
+        assert "follow-up" not in prompt.lower() and "suggested" not in prompt.lower()
 
     def test_general_prompt_allows_no_entity(self) -> None:
         """GENERAL prompt must acknowledge entity-optional path (F03)."""
@@ -178,8 +183,12 @@ class TestPromptBuilderIntentRouting:
         expected_fragment = get_system_prompt(intent)[:40]
         assert expected_fragment in prompt
 
-    def test_prompt_builder_general_includes_follow_up_hint(self) -> None:
-        """GENERAL intent prompt instructs LLM to suggest follow-ups."""
+    def test_prompt_builder_general_no_follow_up_hint(self) -> None:
+        """GENERAL intent prompt must NOT suggest follow-ups — institutional terminal.
+
+        Follow-up suggestions were removed (Fix 4) because this is a Bloomberg-style
+        professional terminal.  The prompt must end with the answer, not suggested questions.
+        """
         from rag_chat.application.pipeline.prompt_builder import PromptBuilder
 
         builder = PromptBuilder()
@@ -191,7 +200,7 @@ class TestPromptBuilderIntentRouting:
             contradiction_block=self._make_no_contradiction(),
             intent=QueryIntent.GENERAL,
         )
-        assert "follow-up" in prompt.lower() or "suggested" in prompt.lower()
+        assert "follow-up" not in prompt.lower() and "suggested" not in prompt.lower()
 
 
 # ── Keyword classifier GENERAL path ──────────────────────────────────────────

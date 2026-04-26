@@ -46,13 +46,17 @@ class ClaimRepository(ClaimRepositoryPort):
         Optional filters: claim_types, date range, minimum extraction confidence.
         The ``claims`` table is RANGE-partitioned by ``created_at``.
         """
+        # BP-180: asyncpg raises AmbiguousParameterError when a Python None is
+        # bound to a parameter used in "IS NULL" — it cannot infer the PostgreSQL
+        # type from None alone.  Fix: CAST(:param AS TYPE) IS NULL so the type
+        # is always explicit.
         result = await self._session.execute(
             text("""
 SELECT claim_id, subject_entity_id, claim_type, polarity, claim_text,
        extraction_confidence, doc_id, created_at
 FROM claims
-WHERE subject_entity_id = ANY(:entity_ids)
-  AND (:claim_types IS NULL OR claim_type = ANY(:claim_types))
+WHERE subject_entity_id = ANY(CAST(:entity_ids AS UUID[]))
+  AND (CAST(:claim_types AS TEXT[]) IS NULL OR claim_type = ANY(CAST(:claim_types AS TEXT[])))
   AND (:date_from IS NULL OR created_at >= :date_from)
   AND (:date_to   IS NULL OR created_at <= :date_to)
   AND extraction_confidence >= :min_confidence
@@ -157,7 +161,7 @@ LIMIT :top_k
                         doc_id=UUID(str(r[6])) if r[6] else None,
                         claim_text=str(r[7]),
                         evidence_date=r[8],
-                    )
+                    ),
                 )
             # Side B (always present — inner join)
             sides.append(
@@ -167,7 +171,7 @@ LIMIT :top_k
                     doc_id=UUID(str(r[11])) if r[11] else None,
                     claim_text=str(r[12]),
                     evidence_date=r[13],
-                )
+                ),
             )
             out.append(
                 ContradictionData(
@@ -176,6 +180,6 @@ LIMIT :top_k
                     strength=float(r[2]),
                     detected_at=r[3],
                     sides=sides,
-                )
+                ),
             )
         return out
