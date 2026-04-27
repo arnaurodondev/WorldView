@@ -14,7 +14,7 @@
 | PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
 | PLAN-0039 | Terminal UI v3 Ground-Up Redesign — Bloomberg/CLI terminal quality: 48px icon rail, resizable panels, 12-col screener, 22px rows, §0 Terminal CLI Quality Standard (zero shadows/gradients/rounding, gap-px seams, 10px ALL CAPS headers) | PRD-0031 | **complete** | 8/8 | INSTITUTIONAL_DEMO_READY | 2026-04-25 |
 | PLAN-0043 | Dashboard UX Refinement — MorningBrief compact layout, grid borders, 1D/1W/1M period wiring (new S3+S9 endpoints), AI Signals widget, Polymarket URL fix + economics filter | user feedback 2026-04-27 | in-progress | 9/9 (all waves done) | — | 2026-04-28 |
-| PLAN-0044 | Portfolio Page Enhancement — sidebar edge bug, holdings DAY CHG columns + weight bars + sort, watchlist delete/create, brokerages merged into transactions tab | user feedback 2026-04-28 | completed | 3/3 | — | 2026-04-28 |
+| PLAN-0044 | Portfolio Page Enhancement — sidebar edge bug, holdings DAY CHG columns + weight bars + sort, watchlist delete/create, brokerages merged into transactions tab | user feedback 2026-04-28 | completed | 3/3 | 2026-04-28 | 2026-04-28 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
