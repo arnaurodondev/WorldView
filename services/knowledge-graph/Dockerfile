@@ -6,25 +6,37 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
-COPY libs/common /build/libs/common
-COPY libs/contracts /build/libs/contracts
-COPY libs/messaging /build/libs/messaging
-COPY libs/observability /build/libs/observability
-COPY libs/ml-clients /build/libs/ml-clients
-COPY libs/storage /build/libs/storage
-COPY libs/prompts /build/libs/prompts
-COPY services/knowledge-graph /build/services/knowledge-graph
+# Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
+COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
+COPY libs/common/src /build/libs/common/src
+COPY libs/contracts/pyproject.toml /build/libs/contracts/pyproject.toml
+COPY libs/contracts/src /build/libs/contracts/src
+COPY libs/messaging/pyproject.toml /build/libs/messaging/pyproject.toml
+COPY libs/messaging/src /build/libs/messaging/src
+COPY libs/observability/pyproject.toml /build/libs/observability/pyproject.toml
+COPY libs/observability/src /build/libs/observability/src
+COPY libs/ml-clients/pyproject.toml /build/libs/ml-clients/pyproject.toml
+COPY libs/ml-clients/src /build/libs/ml-clients/src
+COPY libs/storage/pyproject.toml /build/libs/storage/pyproject.toml
+COPY libs/storage/src /build/libs/storage/src
+COPY libs/prompts/pyproject.toml /build/libs/prompts/pyproject.toml
+COPY libs/prompts/src /build/libs/prompts/src
 
-RUN uv venv /app/.venv && \
-    uv pip install --no-cache --python /app/.venv \
-        -e /build/libs/common \
-        -e /build/libs/contracts \
-        -e /build/libs/messaging \
-        -e /build/libs/observability \
-        -e /build/libs/ml-clients \
-        -e /build/libs/storage \
-        -e /build/libs/prompts \
-        -e /build/services/knowledge-graph
+COPY services/knowledge-graph/pyproject.toml /build/services/knowledge-graph/pyproject.toml
+COPY services/knowledge-graph/src /build/services/knowledge-graph/src
+
+# Non-editable install with uv cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv && \
+    uv pip install --python /app/.venv \
+        /build/libs/common \
+        /build/libs/contracts \
+        /build/libs/messaging \
+        /build/libs/observability \
+        /build/libs/ml-clients \
+        /build/libs/storage \
+        /build/libs/prompts \
+        /build/services/knowledge-graph
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -34,16 +46,13 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/knowledge-graph/src /app/src
-COPY --from=builder /build/services/knowledge-graph/alembic /app/alembic
-COPY --from=builder /build/services/knowledge-graph/alembic.ini /app/alembic.ini
-
+COPY services/knowledge-graph/alembic /app/alembic
+COPY services/knowledge-graph/alembic.ini /app/alembic.ini
 COPY infra/kafka/schemas /app/infra/kafka/schemas
+
 ENV PATH="/app/.venv/bin:$PATH"
-# RH-001 fix: added libs/storage/src and libs/prompts/src (fundamentals consumer
-# imports storage.factory, provisional_enrichment imports prompts.description)
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src:/app/libs/storage/src:/app/libs/prompts/src"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 

@@ -6,21 +6,31 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
-COPY libs/common /build/libs/common
-COPY libs/contracts /build/libs/contracts
-COPY libs/messaging /build/libs/messaging
-COPY libs/observability /build/libs/observability
-COPY libs/storage /build/libs/storage
-COPY services/content-store /build/services/content-store
+# Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
+COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
+COPY libs/common/src /build/libs/common/src
+COPY libs/contracts/pyproject.toml /build/libs/contracts/pyproject.toml
+COPY libs/contracts/src /build/libs/contracts/src
+COPY libs/messaging/pyproject.toml /build/libs/messaging/pyproject.toml
+COPY libs/messaging/src /build/libs/messaging/src
+COPY libs/observability/pyproject.toml /build/libs/observability/pyproject.toml
+COPY libs/observability/src /build/libs/observability/src
+COPY libs/storage/pyproject.toml /build/libs/storage/pyproject.toml
+COPY libs/storage/src /build/libs/storage/src
 
-RUN uv venv /app/.venv && \
-    uv pip install --no-cache --python /app/.venv \
-        -e /build/libs/common \
-        -e /build/libs/contracts \
-        -e /build/libs/messaging \
-        -e /build/libs/observability \
-        -e /build/libs/storage \
-        -e /build/services/content-store
+COPY services/content-store/pyproject.toml /build/services/content-store/pyproject.toml
+COPY services/content-store/src /build/services/content-store/src
+
+# Non-editable install with uv cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv && \
+    uv pip install --python /app/.venv \
+        /build/libs/common \
+        /build/libs/contracts \
+        /build/libs/messaging \
+        /build/libs/observability \
+        /build/libs/storage \
+        /build/services/content-store
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -30,14 +40,13 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/content-store/src /app/src
-COPY --from=builder /build/services/content-store/alembic /app/alembic
-COPY --from=builder /build/services/content-store/alembic.ini /app/alembic.ini
-
+COPY services/content-store/alembic /app/alembic
+COPY services/content-store/alembic.ini /app/alembic.ini
 COPY infra/kafka/schemas /app/infra/kafka/schemas
+
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/storage/src"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
