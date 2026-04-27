@@ -1023,11 +1023,33 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/entities/{entity_id}/graph")
-async def get_entity_graph(entity_id: str, request: Request) -> Any:
+async def get_entity_graph(
+    entity_id: str,
+    request: Request,
+    limit: int = Query(default=40, ge=1, le=50),
+) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
-    Requires authentication. Forwards query parameters (depth, etc.) for
-    entity relationship graph traversal.
+    Requires authentication. Forwards query parameters (min_confidence, etc.)
+    for entity relationship graph traversal.
+
+    WHY explicit limit param (was pass-through):
+    S7's GetEntityGraphUseCase does N+1 DB round-trips — one entity lookup per
+    unique entity referenced in the returned relations. With S7's default of
+    limit=50 relations and a dense entity graph, this means up to 50 sequential
+    entity fetches. By capping at 50 here and defaulting to 40, we bound the
+    worst-case DB latency.
+
+    The frontend now sends explicit limits (15 for sidebar depth=1, 40 for
+    Intelligence tab depth=2) so the default of 40 is just a safety fallback.
+
+    WHY le=50 (not le=200 like S7 allows): S7 accepts up to 200 relations, but
+    the frontend graph renderers (SVG sidebar: 15 nodes, sigma.js full: 40 nodes)
+    have no benefit from more. Capping at 50 prevents accidental high-cost queries
+    while still leaving headroom above the frontend's 40-relation maximum.
+
+    WHY strip depth from params: S7 has no depth param — it silently ignores it.
+    We explicitly forward only known, meaningful params to avoid confusion.
 
     WHY transform instead of raw proxy: S7 returns GraphNeighborhoodResponse
     {center, relations, entities} but the frontend Cytoscape.js renderer
@@ -1039,9 +1061,20 @@ async def get_entity_graph(entity_id: str, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+
+    # Build params: forward known S7 params, strip unknown ones like `depth`
+    # (S7 silently ignores unknown params, but filtering avoids log noise and
+    # makes the intent of each forwarded param explicit).
+    raw_params = dict(request.query_params)
+    s7_params: dict[str, str] = {"limit": str(limit)}
+    if "min_confidence" in raw_params:
+        s7_params["min_confidence"] = raw_params["min_confidence"]
+    if "semantic_mode" in raw_params:
+        s7_params["semantic_mode"] = raw_params["semantic_mode"]
+
     resp = await clients.knowledge_graph.get(
         f"/api/v1/entities/{entity_id}/graph",
-        params=dict(request.query_params),
+        params=s7_params,
         headers=headers,
     )
     # Pass non-2xx responses through unchanged (404 = entity not found, etc.)

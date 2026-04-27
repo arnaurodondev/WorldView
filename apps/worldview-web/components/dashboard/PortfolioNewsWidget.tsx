@@ -39,7 +39,12 @@ export function PortfolioNewsWidget() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-portfolio-news"],
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 10 }),
+    // WHY limit: 4 (was 10): this widget renders exactly 4 rows. Requesting 10
+    // articles and slicing to 4 meant S6 ran a heavier SQL query, serialised 10
+    // RankedArticle objects, transmitted them over the wire, and then the browser
+    // discarded 6 of them. Sending limit=4 trims the query result set at the
+    // source — less DB I/O, less network payload, same rendered output.
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 4 }),
     enabled: !!accessToken,
     // WHY 60_000: news feed refreshes frequently; 1-min stale time ensures we
     // catch breaking stories while not hammering S9.
@@ -47,6 +52,9 @@ export function PortfolioNewsWidget() {
     refetchInterval: 60_000,
   });
 
+  // WHY no .slice() here: limit: 4 already constrains the API response.
+  // Keeping .slice(0, 4) as a safety guard in case the backend returns more
+  // than requested (should not happen, but defensive programming).
   const articles = (data?.articles ?? []).slice(0, 4);
 
   return (

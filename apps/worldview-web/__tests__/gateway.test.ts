@@ -148,8 +148,11 @@ describe("createGateway() — POST body", () => {
 
     const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
     expect(calledInit?.method).toBe("POST");
-    const body = JSON.parse(calledInit?.body as string) as { ids: string[] };
-    expect(body.ids).toEqual(["id-1", "id-2", "id-3"]);
+    // WHY instrument_ids (not ids): BatchQuoteRequest Pydantic model in S3
+    // uses instrument_ids as the field name (F-SEC-006: explicit field prevents
+    // ambiguity with entity_id). Gateway was updated to match.
+    const body = JSON.parse(calledInit?.body as string) as { instrument_ids: string[] };
+    expect(body.instrument_ids).toEqual(["id-1", "id-2", "id-3"]);
   });
 
   it("serialises screener request correctly", async () => {

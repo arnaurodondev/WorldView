@@ -205,12 +205,14 @@ export function GlobalSearch() {
         {open && (
           <div
             // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
+            // WHY no onMouseDown preventDefault here: the original e.preventDefault()
+            // was meant to prevent input blur on result click. In WebKit/Safari, calling
+            // preventDefault on a parent's mousedown suppresses the click event on
+            // children entirely — so clicking a result never fires cmdk's internal
+            // onClick → onSelect. The click-outside mousedown listener on document is
+            // the PRIMARY close guard (it only closes when clicking OUTSIDE the container),
+            // so this belt-and-suspenders is unnecessary and harmful. Removed.
             className="absolute left-0 top-full z-50 mt-1 w-full rounded-[2px] border border-border bg-popover"
-            // WHY onMouseDown preventDefault: belt-and-suspenders — prevents the
-            // input from blurring when the user presses down on a result item.
-            // The primary close guard is the click-outside mousedown listener above;
-            // this handles the edge case where blur fires between mousedown and mouseup.
-            onMouseDown={(e) => e.preventDefault()}
           >
             <CommandList>
               {/* ── Recent instruments (shown when query is empty) ────────── */}
