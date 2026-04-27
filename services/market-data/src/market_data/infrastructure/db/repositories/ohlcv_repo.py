@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import OHLCVRepository
@@ -240,3 +240,95 @@ class PgOHLCVRepository(OHLCVRepository):
             .limit(limit)
         )
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def get_sector_period_returns(self, timeframe: str) -> list[dict]:
+        """Compute average period return per GICS sector from OHLCV bars.
+
+        Uses LATERAL JOINs to get latest and previous bars per instrument,
+        then averages the single-period return across all instruments in each sector.
+        WHY LATERAL: we need the last 2 bars per instrument — LATERAL allows
+        per-row subqueries with ORDER BY + LIMIT that a plain JOIN cannot do.
+        """
+        sql = text(
+            """
+            SELECT
+                i.sector AS name,
+                AVG(
+                    (latest.close - prev.close) / NULLIF(prev.close, 0)
+                ) * 100 AS change_pct,
+                COUNT(DISTINCT i.id)::int AS instrument_count
+            FROM instruments i
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = :tf
+                ORDER BY bar_date DESC LIMIT 1
+            ) latest ON true
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = :tf
+                ORDER BY bar_date DESC LIMIT 1 OFFSET 1
+            ) prev ON true
+            WHERE i.sector IS NOT NULL
+            GROUP BY i.sector
+            ORDER BY change_pct DESC NULLS LAST
+            """
+        )
+        result = await self._session.execute(sql, {"tf": timeframe})
+        rows = result.mappings().all()
+        return [
+            {
+                "name": row["name"],
+                "change_pct": round(float(row["change_pct"]), 2) if row["change_pct"] is not None else None,
+                "instrument_count": int(row["instrument_count"]),
+            }
+            for row in rows
+        ]
+
+    async def get_period_movers(
+        self,
+        timeframe: str,
+        mover_type: str,
+        limit: int,
+    ) -> list[dict]:
+        """Return top gainers or losers by period return from OHLCV bars.
+
+        WHY LATERAL: same reason as get_sector_period_returns — need last 2 bars
+        per instrument for computing the period return.
+        """
+        order = "DESC" if mover_type == "gainers" else "ASC"
+        sql = text(
+            f"""
+            SELECT
+                i.id AS instrument_id,
+                i.symbol AS ticker,
+                i.name AS name,
+                (latest.close - prev.close) / NULLIF(prev.close, 0) * 100 AS period_return_pct
+            FROM instruments i
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = :tf
+                ORDER BY bar_date DESC LIMIT 1
+            ) latest ON true
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = :tf
+                ORDER BY bar_date DESC LIMIT 1 OFFSET 1
+            ) prev ON true
+            WHERE i.sector IS NOT NULL
+            ORDER BY period_return_pct {order} NULLS LAST
+            LIMIT :lim
+            """
+        )
+        result = await self._session.execute(sql, {"tf": timeframe, "lim": limit})
+        rows = result.mappings().all()
+        return [
+            {
+                "instrument_id": row["instrument_id"],
+                "ticker": row["ticker"],
+                "name": row["name"],
+                "period_return_pct": (
+                    round(float(row["period_return_pct"]), 2) if row["period_return_pct"] is not None else None
+                ),
+            }
+            for row in rows
+        ]

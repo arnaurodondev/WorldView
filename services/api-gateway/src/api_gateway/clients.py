@@ -386,20 +386,38 @@ async def _screener_for_sector(
 async def get_market_heatmap(
     clients: ServiceClients,
     *,
+    period: str = "1D",
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Compute sector heatmap from S3 screener data.
+    """Compute sector heatmap from S3 screener data (1D) or OHLCV aggregate (1W/1M).
 
-    Makes 11 parallel S3 screener calls (one per GICS sector), computes average
-    daily_return per sector. Uses asyncio.gather with return_exceptions=True
+    For 1D: makes 11 parallel S3 screener calls (one per GICS sector), computes
+    average daily_return per sector. Uses asyncio.gather with return_exceptions=True
     so partial failures don't crash the whole heatmap (BP-114).
+
+    For 1W/1M: calls the dedicated S3 /api/v1/market/sector-returns endpoint that
+    computes period returns from OHLCV bars using LATERAL JOINs — far more efficient
+    than 11 parallel screener calls, and uses proper weekly/monthly bar data.
 
     ``make_headers`` factory is called once per sector so each parallel call
     gets a unique JTI, preventing replay detection on market-data.
     ``headers`` is the fallback for backwards compatibility.
     """
     import asyncio
+
+    # For weekly/monthly periods, call the dedicated S3 aggregate endpoint
+    # rather than making 11 parallel screener calls. The S3 endpoint computes
+    # averages from OHLCV bars for these longer timeframes.
+    if period in ("1W", "1M"):
+        _h = make_headers if make_headers is not None else (lambda: headers or {})
+        resp = await clients.market_data.get(
+            f"/api/v1/market/sector-returns?period={period}",
+            headers=_h(),
+        )
+        if resp.status_code >= 400:
+            raise DownstreamError("market-data", resp.status_code, resp.text)
+        return cast("dict[str, Any]", resp.json())
 
     _h = make_headers if make_headers is not None else (lambda: headers or {})
     # _h() called 11x in the comprehension (before gather), each producing a
@@ -423,7 +441,10 @@ async def get_market_heatmap(
         sectors.append(
             {
                 "name": sector_name,
-                "change_pct": round(avg_change, 4) if avg_change is not None else None,
+                # WHY * 100: S3 stores daily_return as a decimal fraction (0.031 = 3.1%).
+                # The frontend HeatmapSector.change_pct field is treated as a percentage
+                # value (0.16 = 0.16%) — multiply here so the display shows correct values.
+                "change_pct": round(avg_change * 100, 2) if avg_change is not None else None,
                 "instrument_count": len(instruments),
             }
         )
@@ -435,18 +456,33 @@ async def get_top_movers(
     clients: ServiceClients,
     mover_type: str = "gainers",
     limit: int = 10,
+    period: str = "1D",
     *,
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Get top gainers or losers from the screener.
+    """Get top gainers or losers from the screener (1D) or OHLCV bars (1W/1M).
 
-    Composes a single S3 screener call with sort_by=daily_return and the appropriate
-    sort order (desc for gainers, asc for losers).
+    For 1D: composes a single S3 screener call with sort_by=daily_return and the
+    appropriate sort order (desc for gainers, asc for losers).
+
+    For 1W/1M: calls the dedicated S3 /api/v1/market/period-movers endpoint that
+    computes period returns from OHLCV bars — more accurate than screener which
+    only has the current day's daily_return metric.
 
     ``headers`` are forwarded so ``X-Internal-JWT`` reaches S3's
     InternalJWTMiddleware.
     """
     import json as _json
+
+    # For weekly/monthly periods, call the dedicated S3 period-movers endpoint.
+    if period in ("1W", "1M"):
+        resp = await clients.market_data.get(
+            f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
+            headers=headers or {},
+        )
+        if resp.status_code >= 400:
+            raise DownstreamError("market-data", resp.status_code, resp.text)
+        return cast("dict[str, Any]", resp.json())
 
     sort_order = "desc" if mover_type == "gainers" else "asc"
     body = _json.dumps(

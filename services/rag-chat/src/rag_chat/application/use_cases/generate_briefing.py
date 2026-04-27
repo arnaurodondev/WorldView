@@ -39,21 +39,27 @@ _BRIEFING_RL_TTL = 90_000  # 25 hours — covers DST edge cases
 # the briefing to the frontend.
 _REASONING_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-
 # Matches both [N] (literal letter N used by LLM as a citation placeholder) and
 # [1], [2], [3] etc. (digit-indexed citations the LLM emits when items are present).
 _ORPHAN_CITATION_RE = re.compile(r"\s*\[(?:\d+|N)\]")
 
+# Some LLMs wrap their output in a ```markdown ... ``` code fence even when not asked.
+# Strip leading/trailing fence markers so the frontend receives raw markdown.
+_CODE_FENCE_RE = re.compile(r"^\s*```(?:markdown)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+
 
 def _strip_reasoning(text: str) -> str:
-    """Remove <think>…</think> reasoning blocks and orphaned [N] citation markers.
+    """Remove <think>…</think> blocks, markdown code fences, and orphaned [N] markers.
 
     DeepSeek R1 models prepend chain-of-thought within <think> tags before the
-    final answer.  We strip those before storing or returning the briefing content.
-    Orphaned [N] markers (no citations array in briefings) are also stripped so
-    the user does not see dangling references.
+    final answer.  Some LLMs also wrap the answer in ```markdown ... ``` fences.
+    Both are stripped before returning the briefing to the frontend.
     """
     text = _REASONING_RE.sub("", text).strip()
+    # Strip outer ```markdown ... ``` or ``` ... ``` code fences the LLM may emit.
+    m = _CODE_FENCE_RE.match(text)
+    if m:
+        text = m.group(1).strip()
     # Strip [N] citation markers — briefings never have a citations array so any
     # [N] the LLM emits are orphaned and confusing to the end user.
     text = _ORPHAN_CITATION_RE.sub("", text)

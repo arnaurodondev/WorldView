@@ -11,6 +11,8 @@ from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
 
 if TYPE_CHECKING:
     from market_data.application.ports.cache import QuoteCachePort, ScreenFieldsCachePort
+    from market_data.application.use_cases.get_period_movers import GetPeriodMoversUseCase
+    from market_data.application.use_cases.get_sector_returns import GetSectorReturnsUseCase
     from market_data.application.use_cases.query_fundamental_metrics import (
         GetAvailableFundamentalMetricsUseCase,
         GetFundamentalMetricsTimeseriesUseCase,
@@ -224,3 +226,18 @@ def get_prediction_market_history_uc(
     from market_data.application.use_cases.query_prediction_markets import GetPredictionMarketHistoryUseCase
 
     return GetPredictionMarketHistoryUseCase(uow)
+
+
+# ── Period aggregation use case deps ─────────────────────────────────────────
+
+
+def get_sector_returns_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetSectorReturnsUseCase:
+    from market_data.application.use_cases.get_sector_returns import GetSectorReturnsUseCase
+
+    return GetSectorReturnsUseCase(uow)
+
+
+def get_period_movers_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetPeriodMoversUseCase:
+    from market_data.application.use_cases.get_period_movers import GetPeriodMoversUseCase
+
+    return GetPeriodMoversUseCase(uow)

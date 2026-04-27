@@ -1623,18 +1623,27 @@ async def search_instruments(
 
 
 @router.get("/market/heatmap")
-async def market_heatmap(request: Request) -> dict[str, Any]:
+async def market_heatmap(
+    request: Request,
+    period: str = Query("1D", description="Period: 1D, 1W, or 1M"),
+) -> dict[str, Any]:
     """Sector heatmap — aggregated daily_return per GICS sector.
 
-    Composed endpoint: makes 11 parallel S3 screener calls (one per sector),
-    computes average daily_return, returns HeatCell-ready data.
+    For 1D: composed endpoint using 11 parallel S3 screener calls (one per sector).
+    For 1W/1M: delegates to S3 /api/v1/market/sector-returns (OHLCV-based aggregate).
     Uses asyncio.gather with return_exceptions=True (BP-114).
-    Auth required. Forwards X-Internal-JWT to all downstream screener calls.
+    Auth required. Forwards X-Internal-JWT to all downstream calls.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    if period not in ("1D", "1W", "1M"):
+        raise HTTPException(status_code=400, detail="period must be '1D', '1W', or '1M'")
     try:
-        return await get_market_heatmap(_clients(request), make_headers=lambda: _auth_headers(request))
+        return await get_market_heatmap(
+            _clients(request),
+            period=period,
+            make_headers=lambda: _auth_headers(request),
+        )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -1647,21 +1656,26 @@ async def top_movers(
     request: Request,
     mover_type: str = Query("gainers", alias="type", description="gainers or losers"),
     limit: int = Query(10, ge=1, le=20),
+    period: str = Query("1D", description="Period: 1D, 1W, or 1M"),
 ) -> dict[str, Any]:
-    """Top gainers or losers — screener sorted by daily_return.
+    """Top gainers or losers — screener sorted by daily_return (1D) or OHLCV bars (1W/1M).
 
-    Composed endpoint: single S3 screener call with sort_by=daily_return.
-    Auth required. Forwards X-Internal-JWT to the downstream screener call.
+    For 1D: single S3 screener call with sort_by=daily_return.
+    For 1W/1M: delegates to S3 /api/v1/market/period-movers (OHLCV-based).
+    Auth required. Forwards X-Internal-JWT to the downstream call.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     if mover_type not in ("gainers", "losers"):
         raise HTTPException(status_code=400, detail="type must be 'gainers' or 'losers'")
+    if period not in ("1D", "1W", "1M"):
+        raise HTTPException(status_code=400, detail="period must be '1D', '1W', or '1M'")
     try:
         return await get_top_movers(
             _clients(request),
             mover_type=mover_type,
             limit=limit,
+            period=period,
             headers=_auth_headers(request),
         )
     except DownstreamError as e:
@@ -1670,12 +1684,60 @@ async def top_movers(
 
 # ── AI Signals (PRD-0028 Wave S9-3 → real proxy to S6) ────────────────────
 
+# Maps S6 claim_type values to frontend AiSignal label.
+# Positive events: mergers, beats, upgrades, capital allocation, strategic growth.
+# Negative events: misses, downgrades, regulatory/legal risk, distress.
+_POSITIVE_SIGNAL_TYPES = frozenset(
+    {
+        "M_AND_A",
+        "EARNINGS_BEAT",
+        "UPGRADE",
+        "BUYBACK",
+        "ACQUISITION",
+        "DIVIDEND",
+        "EXPANSION",
+        "PARTNERSHIP",
+        "JOINT_VENTURE",
+        "IPO",
+        "REVENUE_BEAT",
+        "GUIDANCE_RAISE",
+        "CONTRACT_WIN",
+    }
+)
+_NEGATIVE_SIGNAL_TYPES = frozenset(
+    {
+        "EARNINGS_MISS",
+        "DOWNGRADE",
+        "REGULATORY_ACTION",
+        "LAWSUIT",
+        "BANKRUPTCY",
+        "RESTRUCTURING",
+        "GUIDANCE_CUT",
+        "REVENUE_MISS",
+        "INVESTIGATION",
+        "FINE",
+        "RECALL",
+        "LAYOFF",
+    }
+)
+
+
+def _signal_type_to_label(signal_type: str) -> str:
+    st = signal_type.upper()
+    if st in _POSITIVE_SIGNAL_TYPES:
+        return "POSITIVE"
+    if st in _NEGATIVE_SIGNAL_TYPES:
+        return "NEGATIVE"
+    return "NEUTRAL"
+
 
 @router.get("/signals/ai")
 async def ai_signals(request: Request) -> Any:
-    """Proxy GET /api/v1/signals → S6 NLP Pipeline.
+    """Proxy GET /api/v1/signals → S6 NLP Pipeline, transforming to frontend shape.
 
-    Returns price-impact signals. Forwards query parameters (e.g., min_impact_score).
+    S6 returns {items: [...], total, limit, offset} with signal_type/confidence/detected_at.
+    The frontend expects {signals: [...]} with label/score/article_title/created_at.
+    This transform bridges the two without changing the S6 contract.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1686,4 +1748,24 @@ async def ai_signals(request: Request) -> Any:
         params=dict(request.query_params),
         headers=headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    if resp.status_code != 200:
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+    try:
+        body = json.loads(resp.content)
+        signals = [
+            {
+                "signal_id": str(item.get("signal_id", "")),
+                "entity_id": str(item.get("entity_id", "")),
+                "ticker": None,  # S6 does not return ticker; resolved client-side via entity_id
+                "label": _signal_type_to_label(str(item.get("signal_type", ""))),
+                "score": float(item.get("confidence", 0.0)),
+                "article_title": None,  # evidence_text is a claim UUID, not a title
+                "created_at": str(item.get("detected_at", "")),
+            }
+            for item in body.get("items", [])
+        ]
+        return {"signals": signals}
+    except Exception:
+        logger.warning("ai_signals_transform_failed", exc_info=True)
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
