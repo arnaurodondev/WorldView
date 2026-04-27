@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from typing import Any
 
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
@@ -99,7 +100,7 @@ async def main() -> None:
             DeepInfraEmbeddingAdapter,
         )
 
-        embedding_client = DeepInfraEmbeddingAdapter(
+        embedding_client: Any = DeepInfraEmbeddingAdapter(
             api_key=settings.embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
