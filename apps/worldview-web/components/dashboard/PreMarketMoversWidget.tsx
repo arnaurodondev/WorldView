@@ -16,9 +16,11 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery and useAuth.
+// WHY "use client": uses useQuery, useAuth, useState for period selector, and useRouter for nav.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,8 +34,24 @@ import type { Mover } from "@/types/api";
  * PreMarketMoversWidget — shows top 5 gainers | losers from getTopMovers().
  * Uses a single query and sorts client-side to avoid two round-trips.
  */
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/**
+ * WHY 1D/1W/1M period selector:
+ * Traders care about movers over different horizons. 1D = today's session,
+ * 1W = weekly trend, 1M = monthly momentum. The period state is local for now —
+ * the API call will be wired to filter by period in a future wave when S9 exposes
+ * a period parameter on the top-movers endpoint.
+ */
+type MoverPeriod = "1D" | "1W" | "1M";
+
 export function PreMarketMoversWidget() {
   const { accessToken } = useAuth();
+
+  // WHY local state (not URL param): the period selection is scoped to this widget
+  // and doesn't need to be bookmarkable or synced with other components.
+  // Default 1D (today's session) is the most relevant view at market open.
+  const [period, setPeriod] = useState<MoverPeriod>("1D");
 
   // WHY fetch gainers and get a combined list: getTopMovers returns one side at
   // a time. For the dashboard we need both — we make two queries (gainers + losers)
@@ -62,13 +80,42 @@ export function PreMarketMoversWidget() {
   const losers = (losersData?.movers ?? []).slice(0, 5);
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background: see PortfolioNewsWidget for rationale — consistent with
+    // all other dashboard widgets. gap-px grid provides hairline panel borders.
+    <div className="flex h-full flex-col bg-background">
 
-      {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+      {/* ── Section header §0.9 pattern with period selector ─────────────── */}
+      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           TOP MOVERS
         </span>
+        {/* WHY period buttons in header: follows Bloomberg convention — time period
+            controls live in the panel header, not below the data, so traders can
+            see the selector without scrolling to the bottom of a long list.
+            WHY gap-px (not gap-1): hairline between buttons matches the grid seam
+            aesthetic — consistent with all other panel-separator patterns in the app. */}
+        <div className="flex gap-px">
+          {(["1D", "1W", "1M"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              // WHY px-1.5 text-[9px]: minimal footprint — period buttons live in a
+              // 24px header row alongside a label. At 9px they're clearly readable
+              // without competing with the section title for vertical space.
+              className={cn(
+                "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                period === p
+                  ? "bg-primary/20 text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              // WHY aria-pressed: these are toggle buttons (one is always active).
+              // aria-pressed communicates the selected state to screen readers.
+              aria-pressed={period === p}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Sub-headers: GAINERS | LOSERS ─────────────────────────────────── */}
@@ -135,7 +182,7 @@ export function PreMarketMoversWidget() {
           </div>
         )}
 
-        {/* ── Losers column ─────────────────────────────────────────────── */}
+        {/* ── Losers column ──────────────────────────────────────────────── */}
         {!isLoading && (
           <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
             {losers.map((mover) => (
@@ -176,11 +223,33 @@ interface MoverRowProps {
  * the absolute price alongside the percentage move. "AAPL +3.2%" without the
  * price is incomplete — a 3.2% move on a $5 stock is very different from $190.
  * The col-span-5 cell is wide enough to fit both in 22px rows (tested at 1280px).
+ *
+ * WHY clickable: rows navigate to the instrument detail page so traders can
+ * dive directly from the mover list into the full chart + fundamentals view.
+ * ADR-F-12: prefer entity_id in the URL; fall back to instrument_id (S9 overview
+ * accepts either).
  */
 function MoverRow({ mover, side }: MoverRowProps) {
+  const router = useRouter();
+
+  // WHY prefer entity_id over instrument_id: ADR-F-12 — entity_id is the stable
+  // cross-system identifier used in all instrument detail URLs. instrument_id is
+  // accepted as fallback by S9's overview endpoint until entity linking is complete.
+  const navId = mover.entity_id ?? mover.instrument_id;
+
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-    <div className="flex h-[22px] items-center gap-1.5 px-2">
+    // WHY cursor-pointer + hover:bg-muted/30: signals clickability to the user;
+    // faint hover tint follows the terminal hover-state convention.
+    // WHY role="button" + tabIndex: keyboard nav — traders can Tab and Enter to navigate.
+    <div
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      onClick={() => router.push(`/instruments/${navId}`)}
+      onKeyDown={(e) => { if (e.key === "Enter") router.push(`/instruments/${navId}`); }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Navigate to ${mover.ticker} instrument page`}
+    >
 
       {/* Ticker — fixed 38px for column alignment */}
       <span className="w-[38px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">

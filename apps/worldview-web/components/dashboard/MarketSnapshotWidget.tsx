@@ -21,9 +21,10 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery + useAuth.
+// WHY "use client": uses useQuery, useAuth, and useRouter (for row click navigation).
 
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -85,10 +86,13 @@ export function MarketSnapshotWidget() {
   const isLoading = idsLoading || quotesLoading;
 
   // Build display rows: ticker → resolved quote (or undefined if not available)
+  // WHY include instrumentId in row: SnapshotRow needs it to navigate to the instrument
+  // detail page on click. The instrument detail page accepts instrument_id as the URL
+  // segment (S9 overview accepts entity_id or instrument_id — see ADR-F-12 note).
   const rows = SNAPSHOT_TICKERS.map((ticker) => {
     const instrumentId = instrumentMap?.[ticker];
     const quote = instrumentId ? quotesData?.quotes?.[instrumentId] : undefined;
-    return { ticker, quote };
+    return { ticker, instrumentId: instrumentId ?? null, quote };
   });
 
   return (
@@ -115,8 +119,8 @@ export function MarketSnapshotWidget() {
                 <Skeleton className="h-3 w-[64px]" />
               </div>
             ))
-          : rows.map(({ ticker, quote }) => (
-              <SnapshotRow key={ticker} ticker={ticker} quote={quote} />
+          : rows.map(({ ticker, instrumentId, quote }) => (
+              <SnapshotRow key={ticker} ticker={ticker} instrumentId={instrumentId} quote={quote} />
             ))}
       </div>
 
@@ -139,17 +143,44 @@ export function MarketSnapshotWidget() {
 
 interface SnapshotRowProps {
   ticker: string;
+  // WHY instrumentId: needed for navigation to instrument detail page.
+  // null when search hasn't resolved this ticker yet (widget is loading).
+  instrumentId: string | null;
   quote?: { price: number; change: number; change_pct: number } | null;
 }
 
-function SnapshotRow({ ticker, quote }: SnapshotRowProps) {
+function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
+  const router = useRouter();
   const changePct = quote?.change_pct;
   const isPositive = changePct != null && changePct >= 0;
   const isNegative = changePct != null && changePct < 0;
 
+  // WHY only navigate when instrumentId is resolved: if the search step hasn't
+  // returned yet, clicking would navigate to /instruments/null — a broken URL.
+  // Disabling the cursor when not resolved avoids a confusing no-op.
+  const canNavigate = !!instrumentId;
+
   return (
     <div
-      className="flex h-[22px] items-center justify-between px-2"
+      className={cn(
+        "flex h-[22px] items-center justify-between px-2",
+        // WHY cursor-pointer + hover:bg-muted/30 only when navigable: shows
+        // interactivity cue only once the instrument_id is resolved.
+        // terminal hover-state convention: faint tint, no transition delay.
+        canNavigate && "cursor-pointer transition-colors hover:bg-muted/30",
+      )}
+      onClick={() => {
+        // WHY instrument_id in URL: the S9 /v1/companies/{id}/overview endpoint
+        // accepts both entity_id and instrument_id. Since the search step returns
+        // instrument_id, we use it here; the detail page resolves it correctly.
+        if (canNavigate) router.push(`/instruments/${instrumentId}`);
+      }}
+      onKeyDown={(e) => {
+        if (canNavigate && e.key === "Enter") router.push(`/instruments/${instrumentId}`);
+      }}
+      role={canNavigate ? "button" : undefined}
+      tabIndex={canNavigate ? 0 : undefined}
+      aria-label={canNavigate ? `Navigate to ${ticker} instrument page` : ticker}
       // WHY title: tooltip shows full ticker for future expansion when labels
       // are abbreviated (e.g., if we add sector labels)
       title={ticker}

@@ -72,17 +72,25 @@ export default function DashboardPage() {
           WHY border border-primary: the Morning Brief is the single most important
           widget — a yellow/amber accent border marks it visually as the primary
           intelligence signal, following Bloomberg Terminal's amber-on-black hierarchy. */}
-      <div className="col-span-12 border border-primary/60">
+      {/* WHY bg-background p-2: the brief card renders raw (no wrapper bg).
+          Setting bg here makes the Row 1 band match all other row cells. p-2 gives
+          the MorningBriefCard content breathing room within the border frame. */}
+      <div className="col-span-12 border border-primary/60 bg-background p-2">
         <MorningBriefCard />
       </div>
 
       {/* ── Row 2: Market Snapshot (4) + Sector Heatmap (8) ─────────────── */}
       {/* WHY 4+8 split: MarketSnapshot is a 6-row list (compact); SectorHeatmap
           shows 11 GICS sectors as horizontal bars — needs the wider slot */}
-      <div className="col-span-4">
+      {/* WHY h-full on all col-span wrappers: widgets use `h-full` internally to
+          fill the grid cell height (flex flex-col h-full). Without h-full on the
+          wrapper the CSS h-full inside has no containing block height to reference —
+          the inner h-full becomes 0. The grid auto-rows give each row a fixed height;
+          h-full here makes the wrapper fill that row height so inner flex panels stretch. */}
+      <div className="col-span-4 h-full">
         <MarketSnapshotWidget />
       </div>
-      <div className="col-span-8">
+      <div className="col-span-8 h-full">
         <SectorHeatmapWidget />
       </div>
 
@@ -90,29 +98,29 @@ export default function DashboardPage() {
       {/* WHY 4+5+3: Portfolio is content-rich (needs 4); Movers uses 2-col
           layout (needs 5 for two sub-columns); Prediction Markets is a short
           3-row list (3 columns is sufficient) */}
-      <div className="col-span-4">
+      <div className="col-span-4 h-full">
         <PortfolioSummary />
       </div>
-      <div className="col-span-5">
+      <div className="col-span-5 h-full">
         <PreMarketMoversWidget />
       </div>
-      <div className="col-span-3">
+      <div className="col-span-3 h-full">
         <PredictionMarketsWidget />
       </div>
 
       {/* ── Row 4: Econ Calendar (3) + Earnings (3) + News (3) + Alerts (3) ─ */}
       {/* WHY symmetric 3+3+3+3: all four widgets are equally important context
           for end-of-morning review — no one panel deserves more space */}
-      <div className="col-span-3">
+      <div className="col-span-3 h-full">
         <EconomicCalendar />
       </div>
-      <div className="col-span-3">
+      <div className="col-span-3 h-full">
         <EarningsCalendarWidget />
       </div>
-      <div className="col-span-3">
+      <div className="col-span-3 h-full">
         <PortfolioNewsWidget />
       </div>
-      <div className="col-span-3">
+      <div className="col-span-3 h-full">
         <RecentAlerts />
       </div>
 

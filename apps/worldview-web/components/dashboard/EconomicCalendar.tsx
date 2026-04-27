@@ -37,89 +37,105 @@ export function EconomicCalendar() {
     refetchInterval: 10 * 60_000,
   });
 
-  // ── Loading state ──────────────────────────────────────────────────────────
-  if (isLoading) {
-    return (
-      <div className="space-y-2">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="flex gap-2">
-            <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
-            <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
-            <Skeleton className="h-5 w-8" style={{ animationDelay: `${i * 50}ms` }} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // ── Error state ────────────────────────────────────────────────────────────
-  // WHY muted (not destructive red): backend service offline is not a user error.
-  // Muted text avoids making the dashboard look broken.
-  if (isError) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Economic calendar unavailable — events will appear once macro data is ingested.
-      </p>
-    );
-  }
-
   const events = data?.events ?? [];
 
-  if (events.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">No upcoming events</p>
-    );
-  }
-
+  // WHY single outer wrapper for all render paths:
+  // All states (loading, error, empty, data) live inside the same bg-background
+  // h-full flex-col shell so the panel cell is consistently filled regardless of
+  // data state — no "pop" from transparent empty state to filled data state.
   return (
-    <div className="space-y-1">
-      {events.slice(0, 8).map((event) => {
-        const date = new Date(event.event_date);
-        const dateStr = date.toISOString().slice(5, 10); // "MM-DD"
-        const timeStr = date.toISOString().slice(11, 16); // "HH:MM"
+    // WHY bg-background + h-full flex-col: consistent with EarningsCalendarWidget,
+    // PortfolioNewsWidget, and PredictionMarketsWidget — all Row-4 panels use this
+    // outer container pattern so the gap-px hairline separators look uniform.
+    <div className="flex h-full flex-col bg-background">
 
-        return (
-          <div
-            key={event.event_id}
-            // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
-            className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40"
-          >
-            {/* Date + time — monospace for column alignment */}
-            <div className="shrink-0">
-              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                {dateStr}
-              </span>
-              <span className="ml-1 font-mono text-[10px] tabular-nums text-muted-foreground">
-                {timeStr}
-              </span>
+      {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
+      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          ECONOMIC CALENDAR
+        </span>
+      </div>
+
+      {/* ── Loading state ──────────────────────────────────────────────── */}
+      {isLoading && (
+        <div className="flex-1 space-y-2 px-2 pt-1">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex gap-2">
+              <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-5 w-8" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
+          ))}
+        </div>
+      )}
 
-            {/* Event name */}
-            <p className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={event.title}>
-              {event.title}
-            </p>
+      {/* ── Error state ─────────────────────────────────────────────────── */}
+      {/* WHY muted (not destructive red): backend service offline is not a user error.
+          Muted text avoids making the dashboard look broken. */}
+      {isError && (
+        <p className="flex-1 px-2 pt-1 text-sm text-muted-foreground">
+          Economic calendar unavailable — events will appear once macro data is ingested.
+        </p>
+      )}
 
-            {/* Forecast vs previous — monospace for alignment */}
-            {(event.forecast !== null || event.previous !== null) && (
-              <div className="flex shrink-0 gap-1 text-[10px] text-muted-foreground">
-                {event.forecast !== null && (
-                  <span className="font-mono tabular-nums" title="Forecast">
-                    F: {formatEconomicValue(event.forecast, event.unit)}
+      {/* ── Empty state ─────────────────────────────────────────────────── */}
+      {!isLoading && !isError && events.length === 0 && (
+        <p className="flex-1 px-2 pt-1 text-sm text-muted-foreground">No upcoming events</p>
+      )}
+
+      {/* ── Event rows ──────────────────────────────────────────────────── */}
+      {!isLoading && !isError && events.length > 0 && (
+        <div className="flex-1 divide-y divide-border/30 overflow-auto">
+          {events.slice(0, 8).map((event) => {
+            const date = new Date(event.event_date);
+            const dateStr = date.toISOString().slice(5, 10); // "MM-DD"
+            const timeStr = date.toISOString().slice(11, 16); // "HH:MM"
+
+            return (
+              <div
+                key={event.event_id}
+                // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
+                className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40"
+              >
+                {/* Date + time — monospace for column alignment */}
+                <div className="shrink-0">
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {dateStr}
                   </span>
-                )}
-                {event.previous !== null && (
-                  <span className="font-mono tabular-nums" title="Previous">
-                    P: {formatEconomicValue(event.previous, event.unit)}
+                  <span className="ml-1 font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {timeStr}
                   </span>
+                </div>
+
+                {/* Event name */}
+                <p className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={event.title}>
+                  {event.title}
+                </p>
+
+                {/* Forecast vs previous — monospace for alignment */}
+                {(event.forecast !== null || event.previous !== null) && (
+                  <div className="flex shrink-0 gap-1 text-[10px] text-muted-foreground">
+                    {event.forecast !== null && (
+                      <span className="font-mono tabular-nums" title="Forecast">
+                        F: {formatEconomicValue(event.forecast, event.unit)}
+                      </span>
+                    )}
+                    {event.previous !== null && (
+                      <span className="font-mono tabular-nums" title="Previous">
+                        P: {formatEconomicValue(event.previous, event.unit)}
+                      </span>
+                    )}
+                  </div>
                 )}
+
+                {/* Impact badge */}
+                <ImpactBadge impact={event.impact} />
               </div>
-            )}
+            );
+          })}
+        </div>
+      )}
 
-            {/* Impact badge */}
-            <ImpactBadge impact={event.impact} />
-          </div>
-        );
-      })}
     </div>
   );
 }

@@ -19,7 +19,7 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery and useAuth.
+// WHY "use client": uses useQuery and useAuth, and ArticleRow uses click handlers.
 
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
@@ -50,7 +50,11 @@ export function PortfolioNewsWidget() {
   const articles = (data?.articles ?? []).slice(0, 4);
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background (not bg-card): keeps all dashboard widgets visually
+    // consistent — the 1px gap-px border between cells already defines the panel
+    // boundary; a raised `bg-card` surface creates a second visual layer that
+    // contradicts the flat Bloomberg terminal aesthetic.
+    <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -108,8 +112,14 @@ export function PortfolioNewsWidget() {
  * dot pattern encodes urgency in peripheral vision — traders don't need to read
  * the exact value to know "this is high-impact" vs "background noise."
  *
- * WHY no link in dashboard row: clicking would leave the dashboard; the full
- * Alerts & News page handles article navigation. Dashboard rows are read-only.
+ * WHY click opens in new tab: the article URL points to the original publisher
+ * (Reuters, FT, etc.). Opening in the same tab would navigate the user away from
+ * the dashboard — a trader wants to skim the article alongside the terminal, not
+ * lose their dashboard context entirely. new-tab respects that workflow.
+ *
+ * WHY noopener,noreferrer: prevents the opened tab from accessing window.opener
+ * (security), and omits the Referer header (privacy). Standard practice for
+ * externally-linked content in financial apps.
  */
 function ArticleRow({ article }: { article: RankedArticle }) {
   // ── Market impact score → dot count (0–4) ──────────────────────────────────
@@ -136,9 +146,38 @@ function ArticleRow({ article }: { article: RankedArticle }) {
     ? formatRelativeTime(article.published_at)
     : "—";
 
+  // WHY click handler only fires when url is available: if S6 didn't return a
+  // URL (e.g. article is from an internal source without a public URL), we
+  // silently no-op rather than navigating to "#" or throwing an error.
+  function handleClick() {
+    if (article.url) {
+      // Open external article in new tab — keeps dashboard open in original tab
+      window.open(article.url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-    <div className="flex h-[22px] items-center gap-1.5 px-2">
+    // WHY cursor-pointer + hover:bg-muted/30: signals interactivity to the user;
+    // the faint hover tint follows the terminal hover-state convention (not a
+    // full highlight — just enough to confirm the element is clickable).
+    // WHY transition-colors: instant color shift feels snappy in a terminal UI;
+    // duration is omitted so it uses the global transition-colors default (150ms).
+    <div
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      onClick={handleClick}
+      role="button"
+      // WHY tabIndex + onKeyDown: keyboard accessibility — traders using keyboard
+      // navigation can Tab to each row and press Enter/Space to open the article.
+      tabIndex={article.url ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (article.url && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          handleClick();
+        }
+      }}
+      aria-label={article.title ? `Open article: ${article.title}` : undefined}
+    >
 
       {/* Impact dot indicator — 4 dots, filled/empty based on score */}
       {/* WHY font-mono for dots: ensures equal width per character */}

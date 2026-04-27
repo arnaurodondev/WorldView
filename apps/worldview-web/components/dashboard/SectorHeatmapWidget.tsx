@@ -18,8 +18,10 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery for data fetching and useAuth for the token.
+// WHY "use client": uses useQuery for data fetching, useAuth for the token,
+// and useState for the period selector.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -34,8 +36,21 @@ import type { HeatmapSector } from "@/types/api";
  * SectorHeatmapWidget — GICS sector performance as horizontal fill bars.
  * Shows sector name, bar fill (proportional to magnitude), and % change value.
  */
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/**
+ * WHY period selector: sector performance over different horizons tells different
+ * stories — 1D is today's rotation, 1W shows a weekly trend, 1M captures the
+ * monthly momentum shift. Local state for now; future wave will wire to S9 param.
+ */
+type SectorPeriod = "1D" | "1W" | "1M";
+
 export function SectorHeatmapWidget() {
   const { accessToken } = useAuth();
+
+  // WHY default "1D": the most critical time period at market open is today's
+  // session. Longer periods are informative context but secondary.
+  const [period, setPeriod] = useState<SectorPeriod>("1D");
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["sector-heatmap-widget"],
@@ -49,20 +64,44 @@ export function SectorHeatmapWidget() {
 
   return (
     // WHY flex flex-col h-full: fills grid cell height, header stays fixed at top
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background: consistent with all other dashboard widgets.
+    <div className="flex h-full flex-col bg-background">
 
-      {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
+      {/* ── Section header §0.9 pattern with period selector ─────────────── */}
       <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           SECTOR PERFORMANCE
         </span>
-        {/* WHY font-mono on count: numerical data, not prose */}
-        {/* WHY optional chaining: API may return {} without sectors field */}
-        {data?.sectors && (
-          <span className="font-mono text-[10px] text-muted-foreground/60">
-            {data.sectors.length} sectors
-          </span>
-        )}
+        {/* WHY right side shows period buttons + count together:
+            period buttons are small (9px) and don't visually compete with the
+            sector count. The count disappears behind the buttons intentionally —
+            it's secondary info. If both are needed, a future wave can split them. */}
+        <div className="flex items-center gap-2">
+          {/* Sector count — font-mono for numerical alignment */}
+          {data?.sectors && (
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              {data.sectors.length} sectors
+            </span>
+          )}
+          {/* Period selector — same pattern as PreMarketMoversWidget */}
+          <div className="flex gap-px">
+            {(["1D", "1W", "1M"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={cn(
+                  "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                  period === p
+                    ? "bg-primary/20 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                aria-pressed={period === p}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}

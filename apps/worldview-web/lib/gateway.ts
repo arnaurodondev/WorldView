@@ -1034,6 +1034,10 @@ export function createGateway(token?: string | null) {
       const raw = await apiFetch<{
         results?: Array<{
           instrument_id?: string;
+          // WHY entity_id optional here: S3 screener results do not always include entity_id.
+          // When present (e.g. after S7 entity-linking enrichment) we preserve it so downstream
+          // navigation can use the stable ADR-F-12 entity_id rather than instrument_id.
+          entity_id?: string;
           ticker?: string;   // S3 ScreenInstrumentResponse field name
           symbol?: string;   // legacy / alternate field name kept for forward compat
           name?: string;
@@ -1048,6 +1052,7 @@ export function createGateway(token?: string | null) {
         // S9 may also return the shaped response if it's been fixed server-side
         movers?: Array<{
           instrument_id: string;
+          entity_id?: string | null; // present when S9 enriches top-movers with knowledge graph IDs
           ticker: string;
           name: string;
           price: number;
@@ -1073,6 +1078,10 @@ export function createGateway(token?: string | null) {
       // always shows a symbol string instead of an empty cell.
       const movers = (raw.results ?? []).map((r) => ({
         instrument_id: r.instrument_id ?? "",
+        // WHY propagate entity_id when present: top-mover rows need it for correct
+        // instrument detail navigation. ADR-F-12 mandates entity_id in URLs.
+        // Falls back to undefined so the UI can degrade to instrument_id-based routing.
+        entity_id: r.entity_id ?? undefined,
         ticker: r.ticker ?? r.symbol ?? r.name?.split(" ")[0] ?? r.instrument_id?.slice(0, 6) ?? "",
         name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
         price: 0, // Not available from screener — would need a quote lookup

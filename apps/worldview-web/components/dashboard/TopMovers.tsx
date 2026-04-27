@@ -91,7 +91,15 @@ export function TopMovers() {
           {data.movers.map((mover) => (
             <button
               key={mover.instrument_id}
-              onClick={() => router.push(`/instruments/${mover.instrument_id}`)}
+              onClick={() => {
+                // WHY prefer entity_id over instrument_id: ADR-F-12 — the instrument detail
+                // route is /instruments/[entityId] and the URL must use the stable entity_id.
+                // instrument_id can change on exchange migrations; entity_id is permanent.
+                // Fallback to instrument_id because the S9 overview endpoint accepts either
+                // (confirmed in [entityId]/page.tsx comment: "accepts entity_id or instrument_id").
+                const navId = mover.entity_id ?? mover.instrument_id;
+                router.push(`/instruments/${navId}`);
+              }}
               // WHY hover:bg-surface-3/40: surface-3 is a deeper elevation token than muted,
               // giving TopMover tiles a more pronounced lift on hover. This differentiates
               // them from flat list items and signals "clickable tile" in the dashboard grid.
