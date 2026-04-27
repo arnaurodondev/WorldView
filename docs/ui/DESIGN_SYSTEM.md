@@ -184,6 +184,23 @@ Mixing sans and mono within a number column is a typography error.
 **tracking-tight** on headings: IBM Plex Sans is slightly wider than Inter. The `-tight` tracking
 compensates and prevents headings from appearing loose at small sizes.
 
+### 3.2 Font Size Exception: `text-[9px]` for Chart Axis and Ultra-Dense Labels
+
+The design minimum is `text-[10px]`. However, `text-[9px]` is permitted in the following specific
+contexts where information density requires it:
+
+| Context | Example components |
+|---------|-------------------|
+| Chart axis tick labels (x/y) | `OHLCVChart`, `RevenueTrendSparklines`, `EarningsHistoryChart` |
+| Ultra-dense table column headers (all-caps) | `InsiderTransactionsTable`, `PeerComparisonPanel` |
+| Chart legend labels | `RevenueTrendSparklines`, `EarningsHistoryChart` |
+| Secondary badges and timestamps in compact list items | `InstrumentTopNews`, `FundamentalsTopNews` |
+| Graph legend and control hints | `EntityGraph`, `EntityGraphPanel` |
+
+**Never** use `text-[9px]` for body text, primary data values, section headings, or anywhere text
+needs to be readable in isolation. Chart axis labels are scanned, not read — their 9px size is
+acceptable in that context.
+
 ---
 
 ## 4. Spacing & Layout

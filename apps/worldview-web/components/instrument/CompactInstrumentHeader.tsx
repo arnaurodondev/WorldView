@@ -236,7 +236,7 @@ export function CompactInstrumentHeader({
         >
           <div className="overflow-hidden">
             <div className="flex items-start justify-between px-2 pb-2 pt-1">
-              <p className="text-[11px] text-muted-foreground leading-relaxed max-w-prose">
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
                 {description}
               </p>
               <button

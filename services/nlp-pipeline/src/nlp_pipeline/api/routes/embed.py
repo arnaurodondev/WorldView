@@ -1,26 +1,29 @@
 """Embed endpoint — expose embedding generation to downstream services (S8/rag-chat).
 
 Endpoint:
-  POST /api/v1/embed   → compute a text embedding via Ollama bge-large
+  POST /api/v1/embed   → compute a text embedding via the configured provider
 
 This endpoint is called by rag-chat's _S6EmbeddingAdapter on every chat request
 (HyDE generation + direct query embedding).  Without it, RAG retrieval returns
 zero chunks because the query_embedding field in POST /api/v1/search/chunks is
 always None.
 
-Architecture note:
-  The nlp-pipeline API process does NOT hold an ml_clients EmbeddingClient in
-  app.state — that object lives in the separate article_consumer_main process.
-  This endpoint instantiates a lightweight per-request Ollama HTTP call instead,
-  matching the same truncation and model-id logic used by OllamaEmbeddingAdapter
-  in libs/ml-clients.
+Embedding provider selection:
+  The provider is controlled by NLP_PIPELINE_EMBEDDING_PROVIDER (and its related
+  API key/model env vars).  The embedding_client is instantiated once in the
+  lifespan (app.py) and stored on app.state.embedding_client.  Switching providers
+  here automatically applies to both ingestion (article consumer) and queries, so
+  ingestion and query embeddings always share the same vector space.
+
+  "ollama"    → local bge-large via OllamaEmbeddingAdapter (default)
+  "deepinfra" → BAAI/bge-large-en-v1.5 on DeepInfra GPU (~50-150ms)
+  "jina"      → jina-embeddings-v3 on Jina AI REST API (~100-300ms)
 
 Protected app-wide by InternalJWTMiddleware (PRD-0025). No per-route auth needed.
 """
 
 from __future__ import annotations
 
-import httpx
 import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -29,13 +32,10 @@ from pydantic import BaseModel, Field
 router = APIRouter(prefix="/api/v1", tags=["embed"])
 _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-# BGE-large BERT context window = 512 tokens.  Matches OllamaEmbeddingAdapter._MAX_WORDS
-# so the API and consumer embeddings are produced by identical pre-processing.
-_MAX_WORDS = 384
-
-# Default Ollama embedding timeout — generous because Ollama may be warming up on
-# first request and we'd rather wait than return an empty embedding.
-_OLLAMA_TIMEOUT = 30.0
+# BGE-large BERT context window = 512 tokens. Character-based truncation to match
+# OllamaEmbeddingAdapter._MAX_CHARS -- ensures query embeddings use the same
+# pre-processing as stored chunk embeddings (both 1500-char limit).
+_MAX_CHARS = 1500
 
 # Instruction prefix applied by the consumer worker (Block 7).  The API uses the same
 # prefix so query embeddings land in the same semantic space as stored chunk embeddings.
@@ -48,7 +48,7 @@ class EmbedRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Text to embed (required).")
     model: str | None = Field(
         default=None,
-        description="Optional Ollama model name override.  Defaults to settings.embedding_model_id.",
+        description="Optional model name override.  Defaults to the configured embedding model.",
     )
 
 
@@ -65,113 +65,64 @@ async def embed_text(
     body: EmbedRequest,
     request: Request,
 ) -> EmbedResponse | JSONResponse:
-    """Compute a text embedding via Ollama and return the vector.
+    """Compute a text embedding via the configured provider and return the vector.
 
     Called by rag-chat's _S6EmbeddingAdapter on every chat request:
       - HyDE hypothesis generation then embedding of the hypothesis
       - Direct query embedding when HyDE is skipped or fails
 
-    The endpoint mirrors OllamaEmbeddingAdapter (libs/ml-clients) exactly:
-      1. Prepend the instruction prefix (same as Block 7 consumer).
-      2. Truncate to _MAX_WORDS to avoid BERT context overflow.
-      3. POST to Ollama /api/embeddings.
+    The endpoint applies the same pre-processing as the article consumer (Block 7):
+      1. Prepend the instruction prefix (same as OllamaEmbeddingAdapter / DeepInfraEmbeddingAdapter).
+      2. Truncate to _MAX_CHARS to avoid BERT context overflow.
+      3. Delegate to app.state.embedding_client (provider-agnostic).
       4. Return the 1024-dim float vector.
 
-    Returns 503 when Ollama is unreachable so rag-chat can degrade gracefully.
+    Returns 503 when the embedding provider is unreachable so rag-chat degrades gracefully.
     """
+    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+    from ml_clients.errors import FatalError, RetryableError  # type: ignore[import-not-found]
+
     from nlp_pipeline.config import Settings
 
     settings: Settings = request.app.state.settings
 
-    # Resolve model: use caller's override if provided, else the service setting.
-    model_id = body.model or settings.embedding_model_id
-
-    # Build text with instruction prefix — must match Block 7 / OllamaEmbeddingAdapter.
+    # Resolve instruction prefix from settings (same value used by the consumer).
     instruction_prefix: str = settings.embedding_instruction_prefix
+
+    # Build text with instruction prefix — must match Block 7 / consumer worker.
     full_text = f"{instruction_prefix} {body.text}" if instruction_prefix else body.text
 
-    # Truncate to token limit — same word-count approximation as OllamaEmbeddingAdapter.
-    words = full_text.split()
-    if len(words) > _MAX_WORDS:
-        full_text = " ".join(words[:_MAX_WORDS])
+    # Truncate to character limit -- matches OllamaEmbeddingAdapter / DeepInfraEmbeddingAdapter._MAX_CHARS.
+    # 1500 chars ~= 500 tokens for financial text (2.0-2.2 tok/word); safe under 512.
+    if len(full_text) > _MAX_CHARS:
+        full_text = full_text[:_MAX_CHARS]
 
-    ollama_url = settings.ollama_base_url.rstrip("/")
+    _log.debug("embed_request", provider=settings.embedding_provider, text_len=len(full_text))  # type: ignore[no-any-return]
 
-    _log.debug("embed_request", model=model_id, text_len=len(full_text))  # type: ignore[no-any-return]
+    # Retrieve the pre-built embedding client from app.state (created in lifespan).
+    embedding_client = request.app.state.embedding_client
 
-    # Expected embedding dimensions for the configured model (bge-large → 1024).
-    # Used to reject fallback models that produce a different vector size, which
-    # would cause a pgvector "different vector dimensions" error (422) in S6 chunk
-    # search.  When None, any dimension is accepted (no validation).
-    #
-    # WHY: nomic-embed-text produces 768-dim vectors, but chunk_embeddings stores
-    # 1024-dim vectors (generated by bge-large during ingestion).  Allowing a 768-dim
-    # query silently produces pgvector 422 errors for every chunk ANN search, which
-    # cascades into 0 retrieved chunks for every chat/briefing request.  Better to
-    # return 503 (rag-chat degrades with an empty context) than a wrong-dim vector
-    # that poisons the retrieval.
-    expected_dims: int | None = None
-    if model_id == "bge-large":
-        expected_dims = 1024
-    elif model_id == "nomic-embed-text":
-        expected_dims = 768
-
-    # Fallback model list: only models with the SAME embedding dimensions as the
-    # primary model.  nomic-embed-text (768-dim) is NOT a valid fallback for
-    # bge-large (1024-dim) — omit it to avoid dimension mismatches.
-    fallback_models: list[str] = []  # no dim-compatible fallback available
-
-    embedding: list[float] = []
-    used_model = model_id
-    models_to_try = [model_id] + [m for m in fallback_models if m != model_id]
-
-    for candidate in models_to_try:
-        try:
-            async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
-                resp = await client.post(
-                    f"{ollama_url}/api/embeddings",
-                    json={"model": candidate, "prompt": full_text},
-                )
-                resp.raise_for_status()
-                data: dict = resp.json()
-                candidate_embedding: list[float] = data["embedding"]
-
-                # Reject the embedding if it has wrong dimensions (BP-226 class).
-                if expected_dims is not None and len(candidate_embedding) != expected_dims:
-                    _log.warning(  # type: ignore[no-any-return]
-                        "embed_dimension_mismatch_rejected",
-                        model=candidate,
-                        expected=expected_dims,
-                        actual=len(candidate_embedding),
-                    )
-                    continue
-
-                embedding = candidate_embedding
-                used_model = candidate
-                if candidate != model_id:
-                    _log.warning(  # type: ignore[no-any-return]
-                        "embed_fallback_model_used",
-                        requested=model_id,
-                        used=candidate,
-                    )
-                break  # success — stop trying
-        except httpx.TimeoutException:
-            _log.warning("embed_ollama_timeout", model=candidate)  # type: ignore[no-any-return]
-            continue
-        except httpx.HTTPStatusError as exc:
-            _log.warning(  # type: ignore[no-any-return]
-                "embed_ollama_http_error",
-                model=candidate,
-                status=exc.response.status_code,
-            )
-            continue
-        except (TimeoutError, httpx.RequestError, KeyError, ValueError) as exc:
-            _log.warning("embed_request_error", model=candidate, error=str(exc))  # type: ignore[no-any-return]
-            continue
-
-    if not embedding:
-        # All models failed — return 503 so rag-chat degrades gracefully.
+    try:
+        outputs = await embedding_client.embed(
+            # instruction_prefix=None: we already prepended the prefix to full_text above.
+            # Passing None (falsy) prevents the adapter from prepending it a second time.
+            [EmbeddingInput(text=full_text, model_id=settings.embedding_model_id, instruction_prefix=None)]
+        )
+    except RetryableError as exc:
+        _log.warning("embed_retryable_error", error=str(exc))  # type: ignore[no-any-return]
+        return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
+    except FatalError as exc:
+        _log.error("embed_fatal_error", error=str(exc))  # type: ignore[no-any-return]
+        return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
+    except Exception as exc:
+        _log.error("embed_unexpected_error", error=str(exc))  # type: ignore[no-any-return]
         return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
 
-    _log.info("embed_ok", model=used_model, dimensions=len(embedding))  # type: ignore[no-any-return]
-    return EmbedResponse(embedding=embedding, model=used_model, dimensions=len(embedding))
+    if not outputs:
+        return JSONResponse(status_code=503, content={"error": "embedding_unavailable"})
+
+    embedding = outputs[0].embedding
+    model_id = outputs[0].model_id
+
+    _log.info("embed_ok", provider=settings.embedding_provider, model=model_id, dimensions=len(embedding))  # type: ignore[no-any-return]
+    return EmbedResponse(embedding=embedding, model=model_id, dimensions=len(embedding))

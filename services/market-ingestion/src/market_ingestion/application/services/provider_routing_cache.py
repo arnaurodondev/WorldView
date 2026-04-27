@@ -59,9 +59,12 @@ class ProviderRoutingCache:
         new_cache: dict[tuple[str, str | None], list[str]] = {}
         _parse_into(new_cache, "ohlcv", _INTRADAY_TFS, settings.routing_ohlcv_intraday)  # type: ignore[attr-defined]
         _parse_into(new_cache, "ohlcv", _EOD_TFS, settings.routing_ohlcv_eod)  # type: ignore[attr-defined]
-        # quotes and fundamentals have no timeframe dimension
+        # These dataset types have no timeframe dimension.
         _parse_into(new_cache, "quotes", frozenset({None}), settings.routing_quotes)  # type: ignore[attr-defined]
         _parse_into(new_cache, "fundamentals", frozenset({None}), settings.routing_fundamentals)  # type: ignore[attr-defined]
+        _parse_into(new_cache, "news_sentiment", frozenset({None}), settings.routing_news_sentiment)  # type: ignore[attr-defined]
+        _parse_into(new_cache, "earnings_calendar", frozenset({None}), settings.routing_earnings_calendar)  # type: ignore[attr-defined]
+        _parse_into(new_cache, "insider_transactions", frozenset({None}), settings.routing_insider_transactions)  # type: ignore[attr-defined]
         self._cache = new_cache
         self._loaded_at = utc_now()
         log.info("provider_routing_cache_loaded", slots_count=len(new_cache))

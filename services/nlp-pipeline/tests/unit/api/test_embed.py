@@ -1,31 +1,33 @@
-"""Unit tests for POST /api/v1/embed (Bug fix: missing embed endpoint).
+"""Unit tests for POST /api/v1/embed (provider-agnostic embedding endpoint).
 
 Covers:
-  - Happy path: valid text → 200 with list[float] embedding
-  - Empty embedding from Ollama is returned as-is (edge case: empty model response)
-  - Ollama timeout → 503 (safe degradation for rag-chat caller)
-  - Ollama 5xx → 503
-  - Ollama connection refused → 503
+  - Happy path: valid text → 200 with {embedding, model, dimensions}
+  - Empty text fails Pydantic min_length=1 → 422
+  - RetryableError from provider → 503 (safe degradation for rag-chat caller)
+  - FatalError from provider → 503
+  - Unexpected exception from provider → 503
+  - Instruction prefix is prepended before calling the embedding client
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput  # type: ignore[import-not-found]
+from ml_clients.errors import FatalError, RetryableError  # type: ignore[import-not-found]
 from nlp_pipeline.api.routes.embed import router
 from nlp_pipeline.config import Settings
 
 
-def _make_app(settings: Settings | None = None) -> FastAPI:
-    """Build a minimal FastAPI app with the embed router and mock settings."""
+def _make_app(settings: Settings | None = None, embedding_client: Any = None) -> FastAPI:
+    """Build a minimal FastAPI app with the embed router, mock settings, and mock embedding client."""
     app = FastAPI()
     app.include_router(router)
 
-    # Attach settings to app.state as the router reads settings from there.
     s = settings or Settings(
         database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db",
         intelligence_database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
@@ -33,20 +35,29 @@ def _make_app(settings: Settings | None = None) -> FastAPI:
         intelligence_database_url_read="",
     )
     app.state.settings = s
+
+    # The embed endpoint reads app.state.embedding_client (set in lifespan in production).
+    # In tests, we provide a mock to avoid real network calls.
+    app.state.embedding_client = embedding_client or _make_mock_embedding_client()
     return app
 
 
-def _mock_ollama_response(embedding: list[float]) -> Any:
-    """Build a mock httpx.Response with the given embedding."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json = MagicMock(return_value={"embedding": embedding})
-    return mock_resp
+def _make_mock_embedding_client(
+    embedding: list[float] | None = None,
+    model_id: str = "bge-large",
+) -> Any:
+    """Return a mock embedding client that produces the given embedding on embed()."""
+    mock = MagicMock()
+    out = EmbeddingOutput(
+        embedding=embedding or [0.1] * 1024,
+        model_id=model_id,
+        dimension=len(embedding) if embedding else 1024,
+    )
+    mock.embed = AsyncMock(return_value=[out])
+    return mock
 
 
 _DUMMY_EMBEDDING = [0.1] * 1024
-# nomic-embed-text produces 768-dim vectors — must match expected_dims validation in embed.py
-_DUMMY_EMBEDDING_768 = [0.1] * 768
 
 
 @pytest.mark.unit
@@ -58,57 +69,33 @@ class TestEmbedEndpoint:
         """Valid text → 200 with {embedding, model, dimensions}."""
         app = _make_app()
 
-        # Patch httpx.AsyncClient.post to return a mock Ollama response.
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(return_value=_mock_ollama_response(_DUMMY_EMBEDDING))
-
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/embed", json={"text": "Apple Q3 revenue"})
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "Apple Q3 revenue"})
 
         assert resp.status_code == 200
         body = resp.json()
         assert isinstance(body["embedding"], list)
         assert len(body["embedding"]) == 1024
         assert body["dimensions"] == 1024
-        # model must match settings.embedding_model_id default ("bge-large")
         assert body["model"] == "bge-large"
 
     @pytest.mark.asyncio
-    async def test_model_override_is_used(self) -> None:
-        """Optional model field is forwarded to Ollama when provided.
+    async def test_embedding_client_receives_preprocessed_text(self) -> None:
+        """The embedding client receives the instruction-prefix-prepended + truncated text."""
+        mock_client = _make_mock_embedding_client()
+        app = _make_app(embedding_client=mock_client)
 
-        Uses a 768-dim mock embedding because nomic-embed-text produces 768-dim
-        vectors — the dimension validation added to embed.py rejects embeddings
-        whose dimension does not match the model's expected size (1024 for bge-large,
-        768 for nomic-embed-text).  Using _DUMMY_EMBEDDING (1024-dim) here would
-        cause the endpoint to return 503 with 'embedding_unavailable'.
-        """
-        app = _make_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post("/api/v1/embed", json={"text": "Apple Q3 revenue"})
 
-        call_args: dict = {}
-
-        async def _fake_post(url: str, *, json: dict, **_: Any) -> Any:
-            call_args["model"] = json.get("model")
-            # Return 768-dim vector so dimension validation passes for nomic-embed-text.
-            return _mock_ollama_response(_DUMMY_EMBEDDING_768)
-
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = _fake_post
-
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/embed", json={"text": "hello", "model": "nomic-embed-text"})
-
-        assert resp.status_code == 200
-        assert call_args["model"] == "nomic-embed-text"
-        assert resp.json()["model"] == "nomic-embed-text"
-        # Dimension must match nomic-embed-text's 768-dim output.
-        assert resp.json()["dimensions"] == 768
+        # embed() was called once with a single EmbeddingInput
+        mock_client.embed.assert_called_once()
+        inputs: list[EmbeddingInput] = mock_client.embed.call_args[0][0]
+        assert len(inputs) == 1
+        # instruction_prefix is None (already prepended to .text in the route handler)
+        assert inputs[0].instruction_prefix is None
+        # The text contains the instruction prefix prepended by the route handler
+        assert "Apple Q3 revenue" in inputs[0].text
 
     @pytest.mark.asyncio
     async def test_empty_text_field_returns_422(self) -> None:
@@ -120,63 +107,43 @@ class TestEmbedEndpoint:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_ollama_timeout_returns_503(self) -> None:
-        """Ollama timeout → 503 (safe degradation; rag-chat returns empty embedding)."""
-        import httpx
+    async def test_retryable_error_returns_503(self) -> None:
+        """RetryableError from provider → 503 (safe degradation; rag-chat degrades gracefully)."""
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=RetryableError("Ollama timeout"))
 
-        app = _make_app()
+        app = _make_app(embedding_client=mock_client)
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
-
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/embed", json={"text": "test text"})
-
-        assert resp.status_code == 503
-        # All fallback models also timeout → embedding_unavailable (not embedding_timeout)
-        assert resp.json()["error"] == "embedding_unavailable"
-
-    @pytest.mark.asyncio
-    async def test_ollama_5xx_returns_503(self) -> None:
-        """Ollama HTTP 500 → 503 with error field."""
-        import httpx
-
-        app = _make_app()
-
-        error_resp = MagicMock()
-        error_resp.status_code = 500
-        http_err = httpx.HTTPStatusError("500 Internal Server Error", request=MagicMock(), response=error_resp)
-
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(side_effect=http_err)
-
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/embed", json={"text": "Apple earnings"})
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "test text"})
 
         assert resp.status_code == 503
         assert resp.json()["error"] == "embedding_unavailable"
 
     @pytest.mark.asyncio
-    async def test_ollama_connection_refused_returns_503(self) -> None:
-        """Connection refused to Ollama → 503."""
-        import httpx
+    async def test_fatal_error_returns_503(self) -> None:
+        """FatalError from provider (e.g. dimension mismatch, 4xx) → 503."""
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=FatalError("Unexpected dimension"))
 
-        app = _make_app()
+        app = _make_app(embedding_client=mock_client)
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "Apple earnings"})
 
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                resp = await client.post("/api/v1/embed", json={"text": "NVDA revenue"})
+        assert resp.status_code == 503
+        assert resp.json()["error"] == "embedding_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_returns_503(self) -> None:
+        """Unexpected exception from provider → 503 (never propagates to caller)."""
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+        app = _make_app(embedding_client=mock_client)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "NVDA revenue"})
 
         assert resp.status_code == 503
         assert resp.json()["error"] == "embedding_unavailable"
@@ -184,25 +151,29 @@ class TestEmbedEndpoint:
     @pytest.mark.asyncio
     async def test_instruction_prefix_prepended(self) -> None:
         """The instruction_prefix from settings is prepended to the text before embedding."""
-        app = _make_app()
+        mock_client = _make_mock_embedding_client()
+        app = _make_app(embedding_client=mock_client)
 
-        captured_prompt: list[str] = []
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "TSLA quarterly results"})
 
-        async def _fake_post(url: str, *, json: dict, **_: Any) -> Any:
-            captured_prompt.append(json.get("prompt", ""))
-            return _mock_ollama_response(_DUMMY_EMBEDDING)
+        assert resp.status_code == 200
+        inputs: list[EmbeddingInput] = mock_client.embed.call_args[0][0]
+        assert len(inputs) == 1
+        # Default instruction prefix is non-empty and prepended
+        assert "TSLA quarterly results" in inputs[0].text
+        assert "Represent this financial document" in inputs[0].text
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.post = _fake_post
+    @pytest.mark.asyncio
+    async def test_empty_output_from_client_returns_503(self) -> None:
+        """Empty outputs list from provider → 503 (defensive guard)."""
+        mock_client = MagicMock()
+        mock_client.embed = AsyncMock(return_value=[])  # empty list, no outputs
 
-        with patch("nlp_pipeline.api.routes.embed.httpx.AsyncClient", return_value=mock_client):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                await client.post("/api/v1/embed", json={"text": "TSLA quarterly results"})
+        app = _make_app(embedding_client=mock_client)
 
-        # The default instruction prefix is prepended
-        assert len(captured_prompt) == 1
-        assert "TSLA quarterly results" in captured_prompt[0]
-        # Instruction prefix must be present (default is non-empty)
-        assert "Represent this financial document" in captured_prompt[0]
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/v1/embed", json={"text": "test text"})
+
+        assert resp.status_code == 503
+        assert resp.json()["error"] == "embedding_unavailable"

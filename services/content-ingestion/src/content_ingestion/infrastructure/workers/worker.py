@@ -13,6 +13,7 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 from typing import TYPE_CHECKING
 
@@ -263,13 +264,26 @@ class WorkerProcess:
                         duration=summary.duration_seconds,
                     )
             except Exception as exc:
-                await session.rollback()
+                # BP-XXX: when the session is poisoned (e.g. "Can't reconnect until
+                # invalid transaction is rolled back"), rollback may also fail —
+                # swallow that error and still attempt the rescue below so the task
+                # doesn't stay stuck in CLAIMED state until lease expiry.
+                # SIM105: contextlib.suppress is the idiomatic form for intentional swallow.
+                # WHY suppress rollback errors: if the session is poisoned (e.g. "Can't
+                # reconnect until invalid transaction is rolled back") the rollback call
+                # itself raises. We still need to attempt the rescue path below so the
+                # task doesn't stay stuck in CLAIMED state until lease expiry.
+                with contextlib.suppress(Exception):
+                    await session.rollback()
                 logger.error(
                     "worker_task_error",
                     task_id=str(task.id),
                     error=str(exc),
                     worker_id=self._worker_id,
                 )
+                # Best-effort: update task status via a fresh connection so the task
+                # doesn't stay stuck in CLAIMED for the full lease period (5-10 min).
+                await self._rescue_stuck_task(task, str(exc))
 
     def _build_adapter(
         self,
@@ -354,6 +368,45 @@ class WorkerProcess:
             rate_limiter=rate_limiter,
             exists_fn=exists_fn,
         )
+
+    async def _rescue_stuck_task(self, task: ContentIngestionTask, error: str) -> None:
+        """Mark a stuck-CLAIMED task RETRY/FAILED via a fresh DB connection.
+
+        Called when the main session is poisoned and the normal execute() error
+        handler couldn't write the final status. Without this, the task waits
+        for lease expiry (typically 5-10 min) before recover_expired_leases
+        reclaims it. This is a best-effort path — lease expiry remains the
+        ultimate safety net if this also fails.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        # execute() already called task.fail() which sets task.status to RETRY
+        # or FAILED. Use that if set; otherwise default to RETRY.
+        terminal_statuses = {IngestionTaskStatus.RETRY, IngestionTaskStatus.FAILED}
+        target_status = task.status if task.status in terminal_statuses else IngestionTaskStatus.RETRY
+
+        try:
+            async with self._write_factory() as rescue_session:
+                task_repo = TaskRepository(rescue_session)
+                await task_repo.update_status(
+                    task.id,
+                    target_status,
+                    error_detail=f"[rescued] {error[:200]}",
+                )
+                await rescue_session.commit()
+                logger.info(
+                    "worker_task_rescued",
+                    task_id=str(task.id),
+                    new_status=target_status.value,
+                    worker_id=self._worker_id,
+                )
+        except Exception as rescue_exc:
+            logger.error(
+                "worker_task_rescue_failed",
+                task_id=str(task.id),
+                error=str(rescue_exc),
+                worker_id=self._worker_id,
+            )
 
     async def _execute_polymarket_task(self, task: ContentIngestionTask) -> None:
         """Execute a Polymarket prediction-market task through the dedicated pipeline.

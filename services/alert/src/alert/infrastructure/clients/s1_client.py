@@ -38,7 +38,8 @@ class S1Client:
 
     def __init__(self, settings: Settings, client: AsyncClient | None = None) -> None:
         self._base_url = settings.s1_portfolio_base_url.rstrip("/")
-        self._token = settings.s1_internal_token
+        # PRD-0025: S1 Portfolio requires RS256 X-Internal-JWT. Set ALERT_S1_INTERNAL_JWT.
+        self._jwt = settings.s1_internal_jwt
         self._client = client or AsyncClient(timeout=5.0)
 
     async def close(self) -> None:
@@ -110,8 +111,9 @@ class S1Client:
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
-        if self._token:
-            headers["X-Internal-Token"] = self._token
+        if self._jwt:
+            headers["X-Internal-JWT"] = self._jwt
+        # X-Internal-Token fallback removed — PRD-0025 mandates RS256 JWT on all services.
         return headers
 
     async def _get_json(self, url: str) -> dict | None:  # type: ignore[type-arg]

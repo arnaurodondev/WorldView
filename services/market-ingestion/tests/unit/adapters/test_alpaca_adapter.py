@@ -23,6 +23,9 @@ from market_ingestion.domain.errors import ProviderRateLimited, ProviderUnavaila
 from market_ingestion.infrastructure.adapters.providers.alpaca import (
     _TIMEFRAME_MAP,
     AlpacaProviderAdapter,
+    _is_crypto_symbol,
+    _to_alpaca_crypto_symbol,
+    _to_alpaca_equity_symbol,
 )
 from pydantic import SecretStr
 
@@ -317,3 +320,76 @@ async def test_fetch_fundamentals_raises_provider_unavailable() -> None:
     adapter = _make_adapter()
     with pytest.raises(ProviderUnavailable, match="fundamentals"):
         await adapter.fetch_fundamentals("AAPL")
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — Crypto symbol routing: BTC-USD → crypto endpoint + BTC/USD symbol
+# ---------------------------------------------------------------------------
+
+
+def test_crypto_symbol_detection() -> None:
+    """_is_crypto_symbol detects -USD suffix; normal tickers return False."""
+    assert _is_crypto_symbol("BTC-USD") is True
+    assert _is_crypto_symbol("ETH-USD") is True
+    assert _is_crypto_symbol("MATIC-USD") is True
+    assert _is_crypto_symbol("AAPL") is False
+    assert _is_crypto_symbol("BRK-B") is False
+    assert _is_crypto_symbol("USD") is False
+
+
+def test_crypto_symbol_conversion() -> None:
+    """_to_alpaca_crypto_symbol converts BTC-USD → BTC/USD."""
+    assert _to_alpaca_crypto_symbol("BTC-USD") == "BTC/USD"
+    assert _to_alpaca_crypto_symbol("btc-usd") == "BTC/USD"
+    assert _to_alpaca_crypto_symbol("MATIC-USD") == "MATIC/USD"
+
+
+def test_equity_symbol_normalization() -> None:
+    """_to_alpaca_equity_symbol converts class-share dashes to dots (BRK-B → BRK.B)."""
+    assert _to_alpaca_equity_symbol("BRK-B") == "BRK.B"
+    assert _to_alpaca_equity_symbol("AAPL") == "AAPL"
+    # Crypto symbols pass through unchanged (handled by crypto path separately)
+    assert _to_alpaca_equity_symbol("BTC-USD") == "BTC-USD"
+
+
+@pytest.mark.asyncio
+async def test_fetch_ohlcv_crypto_uses_crypto_endpoint() -> None:
+    """Crypto symbols (BTC-USD) are fetched from /v1beta3/crypto/us/bars, not /v2/stocks/bars."""
+    from datetime import UTC, datetime
+
+    crypto_response = json.dumps(
+        {
+            "bars": {
+                "BTC/USD": [
+                    {"t": "2024-01-02T14:30:00Z", "o": 42000.0, "h": 43000.0, "l": 41000.0, "c": 42500.0, "v": 100}
+                ]
+            },
+            "next_page_token": None,
+        }
+    ).encode()
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=crypto_response))
+    adapter = _make_adapter(client=client)
+
+    result = await adapter.fetch_ohlcv(
+        "BTC-USD",
+        "1h",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 3, 1, tzinfo=UTC),
+    )
+
+    # Verify the correct crypto URL was used
+    call_args = client.get.call_args
+    url_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
+    params_arg = call_args.kwargs.get("params", {})
+
+    assert "/v1beta3/crypto/us/bars" in url_arg, f"Expected crypto endpoint; got {url_arg}"
+    assert "/v2/stocks/bars" not in url_arg
+    # Symbol must be in BTC/USD format
+    assert params_arg.get("symbols") == "BTC/USD"
+    # feed param must NOT be sent for crypto
+    assert "feed" not in params_arg
+
+    assert result.bars_returned == 1
+    assert result.symbol == "BTC-USD"

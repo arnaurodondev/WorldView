@@ -231,6 +231,7 @@ function SparklinePanel({
         <select
           value={metric}
           onChange={(e) => onMetricChange(e.target.value)}
+          aria-label="Select trend metric"
           className="bg-transparent text-[10px] text-muted-foreground border-none outline-none cursor-pointer hover:text-foreground transition-colors"
         >
           {/* Always include the current metric so it stays selected after sibling changes */}

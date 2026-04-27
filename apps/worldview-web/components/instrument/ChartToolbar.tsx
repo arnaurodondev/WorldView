@@ -110,7 +110,7 @@ export function ChartToolbar({
         onClick={onToggleMA50}
         title="Toggle 50-day moving average"
       >
-        <span className="text-[10px]">MA<span className="text-[#FFD60A]">50</span></span>
+        <span className="text-[10px]">MA<span className="text-primary">50</span></span>
       </ToolbarButton>
 
       {/* MA200 line overlay toggle */}
@@ -119,7 +119,8 @@ export function ChartToolbar({
         onClick={onToggleMA200}
         title="Toggle 200-day moving average"
       >
-        <span className="text-[10px]">MA<span className="text-[#0EA5E9]">200</span></span>
+        {/* WHY text-sky-500: MA200 line color — matches lightweight-charts config */}
+        <span className="text-[10px]">MA<span className="text-sky-500">200</span></span>
       </ToolbarButton>
 
       {/* Fullscreen toggle — rightmost, separated by larger gap */}

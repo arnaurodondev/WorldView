@@ -22,12 +22,13 @@ class OllamaEmbeddingAdapter:
     EXPECTED_DIMENSION = 1024
     MODEL_ID = "bge-large-en-v1.5"
 
-    # BGE-large BERT context window = 512 tokens.  Word-count approximation:
-    # financial text tokenises at ~1.3 tokens/word (wordpiece, dense on digits).
-    # 384 words * 1.3 ~= 499 tokens — safely under 512 and avoids the
-    # GGML_ASSERT crash (i01 >= ne01) in llama.cpp when the position-embedding
-    # matrix index goes out of bounds.
-    _MAX_WORDS = 384
+    # BGE-large BERT context window = 512 tokens.  Character-based truncation:
+    # financial text tokenises at 2.0-2.2 tokens/word (tickers, numbers, percentages
+    # are multi-token). The prior _MAX_WORDS=384 assumed 1.3 tok/word, which was
+    # too permissive - 280-word chunks reliably exceeded 512 tokens (626 observed).
+    # At 1500 chars / 3 chars/token = ~500 tokens -- safely under 512 with CLS/SEP.
+    # This matches the BP-121 original spec and fixes 238 silent truncations per day.
+    _MAX_CHARS = 1500
 
     def __init__(self, base_url: str, model_id: str, semaphore: asyncio.Semaphore) -> None:
         self._base_url = base_url.rstrip("/")
@@ -41,11 +42,11 @@ class OllamaEmbeddingAdapter:
                 try:
                     async with httpx.AsyncClient(timeout=30.0) as client:
                         text = f"{inp.instruction_prefix} {inp.text}" if inp.instruction_prefix else inp.text
-                        # Truncate to stay within the model's 512-token context window
-                        # using word count as an approximation (1.3 tokens/word).
-                        words = text.split()
-                        if len(words) > self._MAX_WORDS:
-                            text = " ".join(words[: self._MAX_WORDS])
+                        # Truncate to stay within the model's 512-token context window.
+                        # Character-based (not word-based): financial text tokenises at
+                        # 2.0-2.2 tok/word; 1500 chars ~= 500 tokens (safe under 512).
+                        if len(text) > self._MAX_CHARS:
+                            text = text[: self._MAX_CHARS]
                         resp = await client.post(
                             f"{self._base_url}/api/embeddings",
                             json={

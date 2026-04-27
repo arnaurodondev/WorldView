@@ -159,65 +159,102 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     if settings.deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
 
-        providers.append(DeepInfraCompletionAdapter(api_key=settings.deepinfra_api_key))
+        providers.append(
+            DeepInfraCompletionAdapter(
+                api_key=settings.deepinfra_api_key,
+                model=settings.completion_model,  # RAG_CHAT_COMPLETION_MODEL
+            )
+        )
     if settings.openrouter_api_key:
         from rag_chat.infrastructure.llm.openrouter_adapter import OpenRouterCompletionAdapter
 
-        providers.append(OpenRouterCompletionAdapter(api_key=settings.openrouter_api_key))
+        providers.append(
+            OpenRouterCompletionAdapter(
+                api_key=settings.openrouter_api_key,
+                model=settings.openrouter_completion_model,  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
+            )
+        )
     # Ollama is always the emergency fallback
     providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
     llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client)
 
-    # Embedding: use S6 embedding endpoint via a simple adapter.
-    # WHY separate timeout: Ollama bge-large / nomic-embed-text require 10-15s on CPU;
-    # the shared upstream_timeout_seconds (10s) is too short and causes the embed call
-    # to time out, returning an empty list.  An empty embedding silently falls back to
-    # the query_text path in nlp-pipeline which raises RuntimeError (no embedding client
-    # in the API process), resulting in 0 chunks retrieved for every chat request.
-    # Fix: use a dedicated httpx client with a 60s timeout for the embed endpoint.
-    class _S6EmbeddingAdapter:
-        """Minimal embedding adapter that calls S6 POST /api/v1/embed.
+    # Embedding: provider selection via RAG_CHAT_JINA_API_KEY.
+    #   - jina_api_key set  → use JinaEmbeddingAdapter directly (1024-dim, ~100-300ms REST)
+    #   - jina_api_key None → use S6 HTTP endpoint (proxies to whatever S6 embedding_provider is set to)
+    #
+    # WHY Jina direct path: it bypasses the S6 → Ollama hop entirely, giving ~100-300ms
+    # query embedding instead of 7-13s on CPU Ollama.  When NLP_PIPELINE_EMBEDDING_PROVIDER
+    # is also set to "jina" (same key), ingestion and query embeddings both use the same
+    # Jina model and remain in the same vector space.
+    #
+    # WHY separate timeout on S6 path: Ollama bge-large on CPU takes 10-15s; the shared
+    # upstream_timeout_seconds (10s) is insufficient (BP-225 class: embed timeout →
+    # empty vector → 0 chunks retrieved).  Fix: 60s dedicated timeout for S6 embed.
+    if settings.jina_api_key:
+        # Direct Jina embedding — no S6 hop needed.
+        # task="retrieval.query" tells Jina to optimise the embedding for ANN search.
+        from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-        Uses a dedicated httpx.AsyncClient with a 60-second timeout because
-        Ollama bge-large / nomic-embed-text on CPU take 10-15 seconds per call.
-        The shared BaseUpstreamClient timeout (10s) is insufficient and causes
-        the embed to time out, which cascades into 0 chunks retrieved for every
-        chat request (BP-225 class: embed timeout → empty vector → RuntimeError
-        in nlp-pipeline chunk search → 500 → retrieval_task_failed).
-        """
+        _jina = JinaEmbeddingAdapter(api_key=settings.jina_api_key, task="retrieval.query")
 
-        def __init__(self, base_url: str, internal_jwt_getter: Any) -> None:
-            import httpx
+        class _JinaEmbeddingAdapter:
+            """Thin wrapper around JinaEmbeddingAdapter matching the embed(text) -> list[float] protocol."""
 
-            self._client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
-            self._get_jwt = internal_jwt_getter
+            async def embed(self, text: str) -> list[float]:
+                try:
+                    outputs = await _jina.embed([EmbeddingInput(text=text, model_id="jina-embeddings-v3")])
+                    return outputs[0].embedding if outputs else []
+                except Exception as exc:
+                    get_logger("rag_chat.embed").warning("jina_embed_error", error=str(exc))  # type: ignore[no-any-return]
+                    return []
 
-        async def embed(self, text: str) -> list[float]:
-            import httpx
+        embedding_client: Any = _JinaEmbeddingAdapter()
+        get_logger("rag_chat.app").info("query_embedding_jina_selected")  # type: ignore[no-any-return]
+    else:
+        # S6 endpoint — forwards to whatever provider S6 is configured with (Ollama / DeepInfra / Jina).
+        class _S6EmbeddingAdapter:
+            """Minimal embedding adapter that calls S6 POST /api/v1/embed.
 
-            from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+            Uses a dedicated httpx.AsyncClient with a 60-second timeout because
+            Ollama bge-large / nomic-embed-text on CPU take 10-15 seconds per call.
+            The shared BaseUpstreamClient timeout (10s) is insufficient and causes
+            the embed to time out, which cascades into 0 chunks retrieved for every
+            chat request (BP-225 class: embed timeout → empty vector → RuntimeError
+            in nlp-pipeline chunk search → 500 → retrieval_task_failed).
+            """
 
-            headers: dict[str, str] = {}
-            jwt = get_current_jwt()
-            if jwt:
-                headers["X-Internal-JWT"] = jwt
-            try:
-                resp = await self._client.post(
-                    "/api/v1/embed",
-                    json={"text": text},
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                result: list[float] = resp.json().get("embedding", [])
-                return result
-            except httpx.TimeoutException:
-                get_logger("rag_chat.embed").warning("s6_embed_timeout", timeout=60.0)  # type: ignore[no-any-return]
-                return []
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-                get_logger("rag_chat.embed").warning("s6_embed_error", error=str(exc))  # type: ignore[no-any-return]
-                return []
+            def __init__(self, base_url: str) -> None:
+                import httpx
 
-    embedding_client = _S6EmbeddingAdapter(settings.s6_base_url, None)
+                self._client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
+
+            async def embed(self, text: str) -> list[float]:
+                import httpx
+
+                from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+                headers: dict[str, str] = {}
+                jwt = get_current_jwt()
+                if jwt:
+                    headers["X-Internal-JWT"] = jwt
+                try:
+                    resp = await self._client.post(
+                        "/api/v1/embed",
+                        json={"text": text},
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+                    result: list[float] = resp.json().get("embedding", [])
+                    return result
+                except httpx.TimeoutException:
+                    get_logger("rag_chat.embed").warning("s6_embed_timeout", timeout=60.0)  # type: ignore[no-any-return]
+                    return []
+                except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                    get_logger("rag_chat.embed").warning("s6_embed_error", error=str(exc))  # type: ignore[no-any-return]
+                    return []
+
+        embedding_client = _S6EmbeddingAdapter(settings.s6_base_url)
 
     # ── Intent classifier: DeepInfra GPU (primary) → Ollama (fallback) ─────────
     # DeepInfraIntentClassifier is used when a deepinfra_api_key is configured.
@@ -257,7 +294,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         classifier=classifier,
         plan_builder=RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled),
         hyde=HydeExpander(
-            llm_provider=providers[-1],  # use Ollama for HyDE (lightweight)
+            llm_provider=providers[0],  # use primary provider (DeepInfra when key set)
             embedding_client=embedding_client,
             valkey=valkey_client,
         ),

@@ -19,6 +19,8 @@ COPY libs/ml-clients/pyproject.toml /build/libs/ml-clients/pyproject.toml
 COPY libs/ml-clients/src /build/libs/ml-clients/src
 COPY libs/storage/pyproject.toml /build/libs/storage/pyproject.toml
 COPY libs/storage/src /build/libs/storage/src
+COPY libs/prompts/pyproject.toml /build/libs/prompts/pyproject.toml
+COPY libs/prompts/src /build/libs/prompts/src
 
 COPY services/nlp-pipeline/pyproject.toml /build/services/nlp-pipeline/pyproject.toml
 COPY services/nlp-pipeline/src /build/services/nlp-pipeline/src
@@ -31,8 +33,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         /build/libs/contracts \
         /build/libs/messaging \
         /build/libs/observability \
-        /build/libs/ml-clients \
+        "/build/libs/ml-clients[openai]" \
         /build/libs/storage \
+        /build/libs/prompts \
         /build/services/nlp-pipeline
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────

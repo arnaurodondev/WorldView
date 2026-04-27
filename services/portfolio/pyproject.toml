@@ -21,7 +21,7 @@ dependencies = [
     "messaging",
     "observability",
     "storage",
-    "snaptrade-python-sdk>=1.0,<2",  # pinned: update only after reviewing migration guide
+    "snaptrade-python-sdk>=11.0,<12",  # v11 API: register_snap_trade_user, login_snap_trade_user, remove_brokerage_authorization
     "PyJWT[cryptography]>=2.8,<3",  # RS256 JWT verification (PRD-0025 InternalJWTMiddleware)
 ]
 

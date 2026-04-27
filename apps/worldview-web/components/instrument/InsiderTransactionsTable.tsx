@@ -67,8 +67,8 @@ interface InsiderTxRaw {
 
 // ── Color constants ────────────────────────────────────────────────────────────
 
-const COLOR_ACQUIRE = "text-[#26A69A]"; // Teal green — insider buying = positive
-const COLOR_DISPOSE = "text-[#EF5350]"; // Red — insider selling = negative
+const COLOR_ACQUIRE = "text-positive"; // Teal green — insider buying = positive
+const COLOR_DISPOSE = "text-negative"; // Red — insider selling = negative
 const COLOR_NEUTRAL = "text-muted-foreground";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -222,7 +222,7 @@ export function InsiderTransactionsTable({ instrumentId }: InsiderTransactionsTa
         return (
           <div
             key={i}
-            className="grid grid-cols-[1fr_28px_56px_52px] gap-x-2 px-2 items-center h-[20px] border-b border-border/20 last:border-0 hover:bg-muted/10 transition-colors"
+            className="grid grid-cols-[1fr_28px_56px_52px] gap-x-2 px-2 items-center h-[22px] border-b border-border/20 last:border-0 hover:bg-muted/50 transition-colors"
           >
             {/* Owner name — truncated to avoid overflow in narrow column */}
             <span

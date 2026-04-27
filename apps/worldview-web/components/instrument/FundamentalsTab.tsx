@@ -224,7 +224,7 @@ function Section({
           {title}
         </span>
       </div>
-      <div className="px-2 divide-y divide-border/20">{children}</div>
+      <div className="px-2 divide-y divide-border/40">{children}</div>
     </div>
   );
 }
@@ -241,7 +241,7 @@ export function FundamentalsTab({
 }: FundamentalsTabProps) {
   const { accessToken } = useAuth();
 
-  const { data: fund, isLoading, isError } = useQuery({
+  const { data: fund, isLoading, isError, refetch } = useQuery({
     queryKey: ["fundamentals", instrumentId],
     queryFn: () => createGateway(accessToken).getFundamentals(instrumentId),
     enabled: !!accessToken && !!instrumentId,
@@ -276,6 +276,7 @@ export function FundamentalsTab({
     return (
       <div className="px-2 py-3 text-[11px] text-destructive/80">
         Failed to load fundamentals — check connection or retry.
+        <button onClick={() => refetch()} className="text-[10px] text-primary hover:underline ml-2">Retry</button>
       </div>
     );
   }
@@ -601,7 +602,7 @@ export function FundamentalsTab({
             refreshed to assess if a stale fundamental is distorting the picture
             (e.g., during earnings season). The muted/50 opacity keeps it clearly
             subordinate to the data above — it's reference info, not a headline. */}
-        <p className="mx-4 mt-4 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/50">
+        <p className="mx-4 mt-4 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/70">
           Data sourced from S3 fundamentals pipeline · Updated {formatRelativeTime(fund.updated_at)}
         </p>
       </div>

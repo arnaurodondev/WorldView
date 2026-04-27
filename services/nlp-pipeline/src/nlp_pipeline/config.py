@@ -71,6 +71,25 @@ class Settings(BaseSettings):
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
+    # Embedding provider selection — controls BOTH ingestion (article consumer) and
+    # query-time (POST /api/v1/embed endpoint).  Both paths MUST use the same model
+    # so that chunk embeddings and query embeddings are in the same vector space.
+    #
+    # "ollama"    → local bge-large via OllamaEmbeddingAdapter (default; no key needed, slow on CPU)
+    # "deepinfra" → BAAI/bge-large-en-v1.5 on DeepInfra GPU (~50-150ms, same 1024-dim output)
+    # "jina"      → jina-embeddings-v3 on Jina AI REST API (~100-300ms, 1024-dim)
+    #
+    # WARNING: switching provider requires re-embedding all stored chunks (different semantic
+    # spaces even for same-dim models from different providers). Run the EmbeddingRetryWorker
+    # after switching, or use the admin /api/v1/admin/expire-embeddings endpoint to queue them.
+    embedding_provider: str = "ollama"  # NLP_PIPELINE_EMBEDDING_PROVIDER
+    # DeepInfra embedding API config (used when embedding_provider="deepinfra")
+    embedding_api_key: str = ""  # NLP_PIPELINE_EMBEDDING_API_KEY (same DeepInfra key as extraction_api_key is fine)
+    embedding_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EMBEDDING_API_BASE_URL
+    embedding_api_model_id: str = "BAAI/bge-large-en-v1.5"  # NLP_PIPELINE_EMBEDDING_API_MODEL_ID
+    # Jina AI config (used when embedding_provider="jina")
+    jina_api_key: str = ""  # NLP_PIPELINE_JINA_API_KEY
+
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
     # qwen2.5:7b-instruct is not available locally (too large for CPU); DeepInfra hosts it at $0.03/M tokens.

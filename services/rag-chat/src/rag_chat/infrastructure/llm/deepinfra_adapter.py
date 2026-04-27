@@ -17,7 +17,7 @@ import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+_DEFAULT_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 _BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 
@@ -26,21 +26,25 @@ class DeepInfraCompletionAdapter:
 
     Args:
         api_key:     DeepInfra API key.
+        model:       Model ID override (default: deepseek-ai/DeepSeek-R1-Distill-Llama-70B).
+                     Configurable via RAG_CHAT_COMPLETION_MODEL env var.
         http_client: Optional pre-built httpx.AsyncClient for testing.
         timeout:     Request timeout in seconds (default 30).
     """
 
     name = "deepinfra"
-    model_id: str = _MODEL  # expose for orchestrator model tracking
 
     def __init__(
         self,
         api_key: str,
+        model: str = _DEFAULT_MODEL,
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
+        self._model = model
+        self.model_id: str = model  # expose for orchestrator model tracking
         self._timeout = timeout
         self._client = http_client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
@@ -56,7 +60,7 @@ class DeepInfraCompletionAdapter:
     ) -> AsyncIterator[str]:
         """Yield text chunks from DeepInfra streaming endpoint."""
         payload = {
-            "model": _MODEL,
+            "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "max_tokens": max_tokens,
