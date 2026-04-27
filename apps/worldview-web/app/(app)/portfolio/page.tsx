@@ -31,12 +31,12 @@
  */
 
 "use client";
-// WHY "use client": TanStack Query, useState (portfolio selector, tab state),
-// next/navigation router (row-click navigation).
+// WHY "use client": TanStack Query, useState (portfolio selector, tab state,
+// dialog open/close), next/navigation router (row-click navigation).
 
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDown } from "lucide-react";
+import { useState, useMemo, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, Plus } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -68,9 +68,453 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // ── Terminal primitives ───────────────────────────────────────────────────────
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+
+// ── Create Portfolio Dialog ───────────────────────────────────────────────────
+
+/**
+ * CreatePortfolioDialog — modal for creating a new manually-managed portfolio.
+ *
+ * WHY a separate component (not inline JSX in the page): isolating dialog state
+ * (name input, loading, error) keeps the parent page component clean. The dialog
+ * has its own mini state machine: idle → submitting → success/error.
+ *
+ * DATA FLOW:
+ *   1. User types a portfolio name
+ *   2. On submit → calls gateway.createPortfolio(name)
+ *   3. On success → calls onSuccess(newPortfolio) so the page can select it
+ *   4. Parent invalidates ["portfolios"] query → TanStack Query refetches the list
+ *
+ * WHY onOpenChange instead of onClose: shadcn Dialog uses onOpenChange(false) to
+ * signal close — from both the X button and the overlay click. This pattern is
+ * idiomatic for shadcn dialogs throughout this app.
+ */
+interface CreatePortfolioDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSuccess: (portfolio: Portfolio) => void;
+  accessToken: string | null | undefined;
+}
+
+function CreatePortfolioDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+  accessToken,
+}: CreatePortfolioDialogProps) {
+  // Local form state — only lives while the dialog is mounted
+  const [name, setName] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // handleSubmit — async handler that calls S9 POST /v1/portfolios
+  const handleSubmit = useCallback(async () => {
+    // WHY trim + guard: whitespace-only names would pass server validation but look
+    // wrong in the UI. Catch it client-side for instant feedback (no network round-trip).
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError("Portfolio name is required.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      // createPortfolio sends POST /v1/portfolios to S9, which injects owner_user_id
+      // from the JWT claim before forwarding to S1. We only send name + currency.
+      const newPortfolio = await createGateway(accessToken).createPortfolio(
+        trimmedName,
+        currency,
+      );
+
+      // Reset form state before closing so the dialog is clean on next open
+      setName("");
+      setCurrency("USD");
+      setError(null);
+
+      // Notify parent: it will invalidate ["portfolios"] and select the new portfolio
+      onSuccess(newPortfolio);
+    } catch (err) {
+      // WHY string cast: GatewayError.message is a string, but unknown errors may not be.
+      // We extract the message or fall back to a generic string rather than crashing.
+      const message = err instanceof Error ? err.message : "Failed to create portfolio.";
+      setError(message);
+    } finally {
+      // Always clear loading state, even if the request failed
+      setIsSubmitting(false);
+    }
+  }, [name, currency, accessToken, onSuccess]);
+
+  // handleOpenChange — reset form when dialog is closed externally (X or overlay)
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        // Don't reset if a submission is in progress — user may have hit overlay by accident
+        if (!isSubmitting) {
+          setName("");
+          setCurrency("USD");
+          setError(null);
+        }
+      }
+      onOpenChange(nextOpen);
+    },
+    [isSubmitting, onOpenChange],
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        // WHY max-w-sm: a portfolio creation form only has 2 fields — it doesn't
+        // need a wide modal. Narrow dialogs feel more intentional than wide ones.
+        className="max-w-sm bg-card border-border"
+      >
+        <DialogHeader>
+          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
+            New Portfolio
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* ── Form fields ───────────────────────────────────────────── */}
+        <div className="space-y-4 py-2">
+          {/* Portfolio name */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="portfolio-name"
+              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Name
+            </Label>
+            <Input
+              id="portfolio-name"
+              placeholder="e.g. Main Portfolio"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              // WHY onKeyDown: allow pressing Enter to submit (standard form UX).
+              // Avoid wrapping in a <form> element since we're inside a Dialog with
+              // its own focus management — nested form elements cause accessibility issues.
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isSubmitting) void handleSubmit();
+              }}
+              disabled={isSubmitting}
+              // WHY autoFocus: the modal just opened and the name field is the only
+              // required input. Focus it immediately so the user can start typing.
+              autoFocus
+              className="h-8 text-[12px] font-mono bg-background border-border"
+            />
+          </div>
+
+          {/* Currency — defaults to USD; most users won't change this */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="portfolio-currency"
+              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Currency
+            </Label>
+            <Input
+              id="portfolio-currency"
+              placeholder="USD"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+              disabled={isSubmitting}
+              maxLength={3}
+              // WHY toUpperCase(): S1 validates that currency is a 3-letter uppercase
+              // code. Convert on change so the user can type lowercase without errors.
+              className="h-8 text-[12px] font-mono bg-background border-border w-24"
+            />
+          </div>
+
+          {/* Inline error — only shown when submission fails */}
+          {error && (
+            <p className="text-[11px] text-destructive font-mono">{error}</p>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleOpenChange(false)}
+            disabled={isSubmitting}
+            className="text-[11px] font-mono"
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void handleSubmit()}
+            disabled={isSubmitting || !name.trim()}
+            // WHY font-mono: all action text in terminal UI uses monospace for consistency
+            className="text-[11px] font-mono"
+          >
+            {isSubmitting ? "Creating…" : "Create Portfolio"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Add Position Dialog ───────────────────────────────────────────────────────
+
+/**
+ * AddPositionDialog — modal for manually adding a new position to a portfolio.
+ *
+ * WHY a BUY transaction (not a direct "add holding" call): S1 has no dedicated
+ * endpoint for creating holdings. Holdings are derived from transaction history —
+ * a BUY transaction increases (or creates) a holding. This mirrors how a real
+ * broker records a purchase. See gateway.addPosition() for the S1 mapping.
+ *
+ * TICKER RESOLUTION FLOW:
+ *   1. User types a ticker (e.g. "AAPL")
+ *   2. On submit → searchInstruments("AAPL") → gets instrument_id
+ *   3. addPosition(portfolioId, instrument_id, qty, price) → POST /v1/transactions
+ *   4. On success → invalidate ["holdings", portfolioId] so the table refreshes
+ *
+ * WHY resolve ticker server-side (not via user-supplied instrument_id):
+ * Instrument IDs are internal UUIDs — they're not meaningful to a user.
+ * Letting users type tickers and resolving them to instrument_ids at submit time
+ * is the standard UX for all finance terminals (Bloomberg, Schwab, etc.).
+ *
+ * WHY no autocomplete on the ticker field: adding a dependency on a live search
+ * query inside a modal is complex. The simpler approach is to resolve on submit and
+ * show an error if the ticker doesn't exist (same flow as Bloomberg CMD line entry).
+ * Autocomplete can be added later as a UX enhancement.
+ */
+interface AddPositionDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSuccess: () => void;
+  portfolioId: string;
+  accessToken: string | null | undefined;
+}
+
+function AddPositionDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+  portfolioId,
+  accessToken,
+}: AddPositionDialogProps) {
+  // Form field state
+  const [ticker, setTicker] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [avgPrice, setAvgPrice] = useState("");
+
+  // Submission state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = useCallback(async () => {
+    // ── Validate inputs before hitting the network ──────────────────────
+    const trimmedTicker = ticker.trim().toUpperCase();
+    const parsedQty = parseFloat(quantity);
+    const parsedPrice = parseFloat(avgPrice);
+
+    if (!trimmedTicker) {
+      setError("Ticker symbol is required.");
+      return;
+    }
+    if (isNaN(parsedQty) || parsedQty <= 0) {
+      setError("Quantity must be a positive number.");
+      return;
+    }
+    // WHY avgPrice optional: some traders enter positions at cost=0 (e.g., gifted shares,
+    // or when exact cost basis is unknown). We allow empty/zero but not negative.
+    const costBasis = isNaN(parsedPrice) ? 0 : parsedPrice;
+    if (costBasis < 0) {
+      setError("Average price cannot be negative.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    const gw = createGateway(accessToken);
+
+    try {
+      // ── Step 1: resolve ticker → instrument_id ─────────────────────────
+      // WHY search with limit=1: we only need the best match (exact ticker match
+      // is ranked first by S3's instrument search).
+      const searchResult = await gw.searchInstruments(trimmedTicker, 1);
+      const instrument = searchResult.results[0];
+
+      if (!instrument) {
+        // WHY user-facing error (not throw): the user may have mistyped the ticker.
+        // Show an inline error with guidance rather than crashing the dialog.
+        setError(`Ticker "${trimmedTicker}" not found. Check the symbol and try again.`);
+        setIsSubmitting(false);
+        return;
+      }
+
+      // ── Step 2: add the position via a BUY transaction ─────────────────
+      // gateway.addPosition() maps to POST /v1/transactions with direction=BUY.
+      // The response is the created transaction (we don't need to use it here
+      // — we just care that the request succeeded so we can refetch holdings).
+      await gw.addPosition(
+        portfolioId,
+        instrument.instrument_id,
+        parsedQty,
+        costBasis,
+      );
+
+      // Reset form on success
+      setTicker("");
+      setQuantity("");
+      setAvgPrice("");
+      setError(null);
+
+      // Notify parent to invalidate ["holdings", portfolioId] so the table updates
+      onSuccess();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to add position.";
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [ticker, quantity, avgPrice, portfolioId, accessToken, onSuccess]);
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen && !isSubmitting) {
+        // Clear form on close so the dialog is fresh on next open
+        setTicker("");
+        setQuantity("");
+        setAvgPrice("");
+        setError(null);
+      }
+      onOpenChange(nextOpen);
+    },
+    [isSubmitting, onOpenChange],
+  );
+
+  // WHY disable submit when ticker is empty: quantity and price have sensible
+  // defaults (empty = 0), but a ticker-less submission would always fail at
+  // the search step. Disable early to prevent a wasted network round-trip.
+  const canSubmit = ticker.trim().length > 0 && !isSubmitting;
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-sm bg-card border-border">
+        <DialogHeader>
+          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
+            Add Position
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Ticker symbol — the primary identifier traders use */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="position-ticker"
+              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Ticker
+            </Label>
+            <Input
+              id="position-ticker"
+              placeholder="e.g. AAPL"
+              value={ticker}
+              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canSubmit) void handleSubmit();
+              }}
+              disabled={isSubmitting}
+              autoFocus
+              // WHY toUpperCase(): tickers are always uppercase in financial systems.
+              // Converting as-you-type prevents "aapl" from failing the S3 search lookup.
+              className="h-8 text-[12px] font-mono bg-background border-border"
+            />
+          </div>
+
+          {/* Quantity — number of shares */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="position-quantity"
+              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Quantity
+            </Label>
+            <Input
+              id="position-quantity"
+              type="number"
+              placeholder="e.g. 10"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              disabled={isSubmitting}
+              min="0.00000001"
+              step="any"
+              // WHY step="any": S1 stores quantity as Decimal(18,8). Users may have
+              // fractional shares (e.g., crypto or fractional equity programs like Robinhood).
+              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
+            />
+          </div>
+
+          {/* Average price — cost basis per share */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="position-avg-price"
+              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+            >
+              Avg Price <span className="text-muted-foreground/60">(optional)</span>
+            </Label>
+            <Input
+              id="position-avg-price"
+              type="number"
+              placeholder="e.g. 185.42"
+              value={avgPrice}
+              onChange={(e) => setAvgPrice(e.target.value)}
+              disabled={isSubmitting}
+              min="0"
+              step="any"
+              // WHY optional: some users add positions without knowing exact cost basis
+              // (gifted shares, inherited positions). Defaults to 0.
+              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
+            />
+          </div>
+
+          {/* Inline error message */}
+          {error && (
+            <p className="text-[11px] text-destructive font-mono">{error}</p>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleOpenChange(false)}
+            disabled={isSubmitting}
+            className="text-[11px] font-mono"
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void handleSubmit()}
+            disabled={!canSubmit}
+            className="text-[11px] font-mono"
+          >
+            {isSubmitting ? "Adding…" : "Add Position"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +542,12 @@ void formatStalenessAwarePrice;
 export default function PortfolioPage() {
   const { accessToken } = useAuth();
 
+  // WHY useQueryClient: after creating a portfolio or adding a position we need to
+  // invalidate the relevant TanStack Query cache keys so the UI reflects the change
+  // without a full page reload. queryClient.invalidateQueries() triggers a background
+  // refetch of any active queries matching the key.
+  const queryClient = useQueryClient();
+
   // WHY selectedPortfolioId in state (not URL): switching portfolios is ephemeral.
   // The URL always shows /portfolio regardless of which portfolio is active.
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
@@ -106,6 +556,18 @@ export default function PortfolioPage() {
   // but the modal must persist through tab switches (e.g., user accidentally switches
   // tabs mid-connection flow). Lifting to page level prevents premature unmount.
   const [connectModalOpen, setConnectModalOpen] = useState(false);
+
+  // ── Create Portfolio dialog state ──────────────────────────────────────────
+  // WHY at page level (not inside the header): the dialog must be rendered in the
+  // same React tree as useQueryClient() so onSuccess() can call queryClient.invalidateQueries().
+  // If the dialog were a self-contained component with its own query client instance,
+  // it would invalidate a different cache and the list wouldn't update.
+  const [createPortfolioOpen, setCreatePortfolioOpen] = useState(false);
+
+  // ── Add Position dialog state ───────────────────────────────────────────────
+  // Same reasoning as createPortfolioOpen — lives here so it can invalidate
+  // ["holdings", activePortfolioId] when a position is successfully added.
+  const [addPositionOpen, setAddPositionOpen] = useState(false);
 
   // ── Query 1: portfolio list ──────────────────────────────────────────────
   const {
@@ -127,6 +589,65 @@ export default function PortfolioPage() {
   const activePortfolio = portfolios?.find(
     (p) => p.portfolio_id === activePortfolioId,
   );
+
+  // ── Mutation callbacks ────────────────────────────────────────────────────
+  // WHY placed AFTER activePortfolioId derivation: handlePositionAdded captures
+  // activePortfolioId in its closure. React's exhaustive-deps lint rule requires
+  // that all variables used inside a useCallback are listed in the deps array.
+  // If activePortfolioId were declared later, TypeScript would throw TS2448
+  // ("block-scoped variable used before its declaration").
+
+  /**
+   * handlePortfolioCreated — runs after CreatePortfolioDialog succeeds.
+   *
+   * WHY invalidate + setSelected: invalidateQueries causes TanStack Query to
+   * refetch the ["portfolios"] list in the background. When the new list arrives,
+   * the activePortfolioId derivation would still pick portfolios[0] unless we
+   * explicitly select the new portfolio. Setting selectedPortfolioId immediately
+   * makes the UI switch to the new portfolio as soon as the list refetch completes.
+   *
+   * WHY close the dialog here (not inside the dialog): the dialog's onSuccess prop
+   * is responsible for signalling completion — closing is the page's responsibility.
+   * This keeps the dialog decoupled from page-level state.
+   */
+  const handlePortfolioCreated = useCallback(
+    (newPortfolio: Portfolio) => {
+      // Close the create dialog first to give instant feedback that something happened
+      setCreatePortfolioOpen(false);
+
+      // Invalidate the portfolio list so TanStack Query refetches from S9.
+      // WHY void: invalidateQueries returns a Promise but we don't need to await it —
+      // it kicks off a background refetch and the UI updates reactively.
+      void queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+
+      // Pre-select the new portfolio so the user immediately sees it active,
+      // even before the refetch returns the updated list.
+      setSelectedPortfolioId(newPortfolio.portfolio_id);
+    },
+    [queryClient],
+  );
+
+  /**
+   * handlePositionAdded — runs after AddPositionDialog succeeds.
+   *
+   * WHY invalidate both holdings and quotes: the new position creates a holding.
+   * We invalidate ["holdings", activePortfolioId] to refetch the position list and
+   * ["holdings-quotes", ...] will naturally re-run because holdingInstrumentIds will
+   * change when the holdings query returns the new entry.
+   *
+   * WHY also invalidate transactions: the "Add Position" flow creates a BUY transaction.
+   * Without invalidating the transactions cache, the Transactions tab would still show
+   * the old list until stale time expires (30s).
+   */
+  const handlePositionAdded = useCallback(() => {
+    setAddPositionOpen(false);
+
+    // Refetch holdings for the active portfolio (shows the new position row)
+    void queryClient.invalidateQueries({ queryKey: ["holdings", activePortfolioId] });
+
+    // Refetch transactions (the BUY transaction we just created should appear)
+    void queryClient.invalidateQueries({ queryKey: ["transactions", activePortfolioId] });
+  }, [queryClient, activePortfolioId]);
 
   // ── Query 2: holdings ────────────────────────────────────────────────────
   const {
@@ -441,7 +962,9 @@ export default function PortfolioPage() {
           Portfolio
         </h1>
 
-        {/* Portfolio selector — only shown when user has multiple portfolios */}
+        {/* Portfolio selector — only shown when user has multiple portfolios.
+            WHY hidden for single portfolio: a dropdown with one item is just clutter.
+            The active portfolio name is shown in the "0 positions" badge instead. */}
         {portfolios && portfolios.length > 1 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -477,6 +1000,36 @@ export default function PortfolioPage() {
             {enrichedHoldings.length} positions
           </span>
         )}
+
+        {/* WHY ml-auto: push the action buttons to the right side of the header,
+            matching the Bloomberg/terminal convention of left=labels, right=actions. */}
+        <div className="ml-auto flex items-center gap-2">
+          {/* "Add Position" button — only useful when there's an active portfolio.
+              WHY disabled when no portfolio: without a portfolio there's nowhere to add
+              the position. The button is hidden entirely (not just disabled) to avoid
+              confusion — it only appears when there's something to add to. */}
+          {activePortfolioId && (
+            <button
+              aria-label="Add a new position to this portfolio"
+              onClick={() => setAddPositionOpen(true)}
+              className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-border text-muted-foreground rounded-[2px] hover:border-primary/60 hover:text-primary transition-colors flex items-center gap-1"
+            >
+              <Plus className="h-3 w-3" />
+              Add Position
+            </button>
+          )}
+
+          {/* "New Portfolio" button — always visible so users can create their first
+              portfolio even when they have no portfolios yet (empty state). */}
+          <button
+            aria-label="Create a new portfolio"
+            onClick={() => setCreatePortfolioOpen(true)}
+            className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors flex items-center gap-1"
+          >
+            <Plus className="h-3 w-3" />
+            New Portfolio
+          </button>
+        </div>
       </div>
 
       {/* ── KPI Strip ─────────────────────────────────────────────────────── */}
@@ -643,6 +1196,33 @@ export default function PortfolioPage() {
           portfolioName={activePortfolio?.name}
           open={connectModalOpen}
           onOpenChange={setConnectModalOpen}
+        />
+      )}
+
+      {/* ── Create Portfolio Dialog ─────────────────────────────────────── */}
+      {/* WHY outside Tabs: this dialog is triggered from the page header, not from
+          within a tab. Keeping it at the page root prevents accidental unmount if
+          the user somehow navigates away while the dialog is open (defensive pattern
+          — dialogs should survive as long as the page is mounted). */}
+      <CreatePortfolioDialog
+        open={createPortfolioOpen}
+        onOpenChange={setCreatePortfolioOpen}
+        onSuccess={handlePortfolioCreated}
+        accessToken={accessToken}
+      />
+
+      {/* ── Add Position Dialog ──────────────────────────────────────────── */}
+      {/* WHY conditional on activePortfolioId: without a portfolio, the Add Position
+          dialog has nowhere to add a position to. We gate the entire component rather
+          than just disabling the button — a mounted dialog with a null portfolioId
+          would crash on submission. */}
+      {activePortfolioId && (
+        <AddPositionDialog
+          open={addPositionOpen}
+          onOpenChange={setAddPositionOpen}
+          onSuccess={handlePositionAdded}
+          portfolioId={activePortfolioId}
+          accessToken={accessToken}
         />
       )}
     </div>

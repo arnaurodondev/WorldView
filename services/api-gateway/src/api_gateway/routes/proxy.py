@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -1177,6 +1178,44 @@ async def list_portfolios(request: Request) -> Any:
     resp = await clients.portfolio.get(
         "/api/v1/portfolios",
         headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/portfolios", status_code=201)
+async def create_portfolio(request: Request) -> Any:
+    """Proxy POST /api/v1/portfolios → S1 Portfolio service.
+
+    Requires authentication. Creates a new portfolio for the authenticated user.
+    S1's PortfolioCreateRequest requires owner_user_id which we inject from the
+    JWT claim so the frontend never needs to pass it explicitly — the server
+    always uses the verified identity from the JWT (not client-supplied data).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Read the frontend's request body (just {name, currency})
+    raw_body = await request.body()
+    try:
+        frontend_body: dict[str, Any] = json.loads(raw_body) if raw_body else {}
+    except Exception:
+        frontend_body = {}
+
+    # Inject owner_user_id from the verified JWT claim — never trust the client to
+    # supply their own user_id (that would allow account takeover via forged ID).
+    user = request.state.user
+    user_id = getattr(user, "user_id", None) or getattr(user, "sub", None) or ""
+    enriched_body: dict[str, Any] = {
+        **frontend_body,
+        "owner_user_id": str(user_id),
+    }
+
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/portfolios",
+        content=json.dumps(enriched_body).encode(),
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

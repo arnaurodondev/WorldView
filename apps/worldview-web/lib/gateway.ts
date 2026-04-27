@@ -657,6 +657,122 @@ export function createGateway(token?: string | null) {
     },
 
     /**
+     * createPortfolio — create a new manually-managed portfolio
+     *
+     * WHY this exists: Users without a brokerage connection need a way to create a portfolio
+     * manually before they can add positions. S9's POST /v1/portfolios proxy injects
+     * owner_user_id from the JWT so the frontend only sends name + currency.
+     *
+     * WHY transform: S1 returns `PortfolioResponse` with `id` (not `portfolio_id`) and no
+     * `updated_at` field — same mapping as getPortfolios(). We reuse the same shape.
+     *
+     * @param name     - Portfolio display name (e.g., "My Main Portfolio")
+     * @param currency - 3-letter ISO currency code (default: "USD")
+     */
+    async createPortfolio(name: string, currency = "USD"): Promise<Portfolio> {
+      // POST to S9, which injects owner_user_id from JWT before forwarding to S1
+      const raw = await apiFetch<{
+        id: string;
+        tenant_id: string;
+        owner_id: string;
+        name: string;
+        currency: string;
+        status: string;
+        created_at: string;
+      }>("/v1/portfolios", {
+        method: "POST",
+        // WHY omit owner_user_id: S9's create_portfolio proxy reads it from the
+        // verified JWT and injects it server-side. Sending it from the client would
+        // be a security risk (client could supply any user_id).
+        body: { name, currency },
+        token: t,
+      });
+
+      // Map S1's PortfolioResponse (id) → frontend Portfolio type (portfolio_id)
+      return {
+        portfolio_id: raw.id,
+        name: raw.name,
+        currency: raw.currency,
+        owner_id: raw.owner_id,
+        created_at: raw.created_at,
+        updated_at: raw.created_at, // S1 has no updated_at; use created_at as fallback
+      };
+    },
+
+    /**
+     * addPosition — open a new long position by recording a BUY transaction
+     *
+     * WHY use addTransaction under the hood: S1 has no dedicated "add holding" endpoint.
+     * Holdings are derived from transaction history — a BUY transaction creates/increases
+     * a holding, a SELL reduces it. To manually open a position, we record a BUY.
+     *
+     * WHY instrument_id (not ticker): S1's RecordTransactionRequest requires instrument_id
+     * (the UUID stored in S3). The caller must resolve ticker → instrument_id first using
+     * searchInstruments(). This function expects the resolved UUID.
+     *
+     * @param portfolioId  - UUID of the portfolio to add the position to
+     * @param instrumentId - UUID of the instrument (resolved from ticker via searchInstruments)
+     * @param quantity     - Number of shares to add (must be > 0)
+     * @param averageCost  - Average cost per share (price at which you bought)
+     */
+    async addPosition(
+      portfolioId: string,
+      instrumentId: string,
+      quantity: number,
+      averageCost: number,
+    ): Promise<Transaction> {
+      // Holdings in S1 are derived from transactions — a BUY creates/grows a holding.
+      // We map the S1 RecordTransactionRequest shape directly (same as addTransaction).
+      const s1Body = {
+        portfolio_id: portfolioId,
+        instrument_id: instrumentId,
+        // WHY TRADE + BUY: S1 uses two separate fields for what the frontend combines as "type".
+        // transaction_type=TRADE covers manual equity purchases (vs DIVIDEND, FEE, TRANSFER).
+        // direction=BUY increases the holding; direction=SELL decreases it.
+        transaction_type: "TRADE",
+        direction: "BUY",
+        quantity,
+        price: averageCost,
+        fees: 0,                               // manual entry has no brokerage fee
+        currency: "USD",                       // default; S1 stores per-transaction currency
+        executed_at: new Date().toISOString(), // "now" is the correct timestamp for manual add
+        external_ref: null,
+      };
+
+      const raw = await apiFetch<{
+        id: string;
+        portfolio_id: string;
+        instrument_id: string;
+        transaction_type: string;
+        direction: string;
+        quantity: string;
+        price: string;
+        fees: string;
+        currency: string;
+        executed_at: string;
+        created_at: string;
+      }>("/v1/transactions", {
+        method: "POST",
+        body: s1Body,
+        token: t,
+      });
+
+      return {
+        transaction_id: raw.id,
+        portfolio_id: raw.portfolio_id,
+        instrument_id: raw.instrument_id,
+        ticker: "",
+        type: "BUY",
+        quantity: parseFloat(raw.quantity) || 0,
+        price: parseFloat(raw.price) || 0,
+        fee: parseFloat(raw.fees) || 0,
+        currency: raw.currency,
+        executed_at: raw.executed_at,
+        notes: null,
+      };
+    },
+
+    /**
      * addTransaction — record a buy or sell
      *
      * WHY transform: S1's RecordTransactionRequest expects `transaction_type`, `direction`,
