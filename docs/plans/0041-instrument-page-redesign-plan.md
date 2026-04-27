@@ -3,7 +3,7 @@
 **PRD**: Investigation report `docs/audits/2026-04-27-investigation-instrument-page-redesign.md`
 **Status**: in-progress
 **Created**: 2026-04-27
-**Updated**: 2026-04-27 (Wave B-1 done)
+**Updated**: 2026-04-27 (Wave C-1 + C-2 done)
 **Depends on**: None (all prerequisite backend data exists in S3)
 
 ---
@@ -501,9 +501,11 @@ Tests for the 6 new gateway methods following existing patterns in the test file
 
 ## Sub-Plan C — Overview Tab Redesign
 
-### Wave C-1: Restructure Overview to Chart + Right Sidebar Layout
+### Wave C-1: Restructure Overview to Chart + Right Sidebar Layout ✅
 
 **Goal**: Replace the current full-width chart + 3-column bottom grid with a Bloomberg-style layout: chart shares horizontal space with a right data sidebar, bottom section widens to 2-column (news + graph).
+
+**Status**: **DONE** — 2026-04-27 · 418 Vitest tests pass · tsc --noEmit clean · live container validated (HTTP 200, real AAPL data)
 
 **Depends on**: Wave B-1
 **Estimated effort**: 45-60 min
@@ -662,10 +664,10 @@ Two independent sparkline panels, each with its own metric selector state.
 - [ ] Panels don't overflow 280px sidebar
 
 #### Validation Gate
-- [ ] TypeScript compilation passes
-- [ ] All existing Vitest tests pass (no regressions)
-- [ ] Layout renders correctly at 1280px+ viewport
-- [ ] No horizontal overflow
+- [x] TypeScript compilation passes
+- [x] All existing Vitest tests pass (no regressions, 418/418)
+- [x] Layout renders correctly at 1280px+ viewport
+- [x] No horizontal overflow
 
 #### Break Impact
 
@@ -680,9 +682,11 @@ Two independent sparkline panels, each with its own metric selector state.
 
 ---
 
-### Wave C-2: Chart Toolbar — Volume, Moving Averages, Fullscreen
+### Wave C-2: Chart Toolbar — Volume, Moving Averages, Fullscreen ✅
 
 **Goal**: Add a toolbar above the OHLCV chart with volume bars toggle, MA50/MA200 line overlays, and a fullscreen button. Matches TradingView chart UX.
+
+**Status**: **DONE** — 2026-04-27 · 418 Vitest tests pass · tsc --noEmit clean · live container validated
 
 **Depends on**: Wave B-1
 **Estimated effort**: 30-45 min
@@ -778,9 +782,9 @@ Extend OHLCVChart to support:
 - [ ] Chart height reduced from 360px to 280px to accommodate volume subplot (60px)
 
 #### Validation Gate
-- [ ] TypeScript compilation passes
-- [ ] Existing Vitest tests pass
-- [ ] Chart renders without errors on all 5 timeframes
+- [x] TypeScript compilation passes
+- [x] Existing Vitest tests pass (418/418)
+- [x] Chart renders without errors on all 5 timeframes
 
 #### Break Impact
 
@@ -789,8 +793,8 @@ Extend OHLCVChart to support:
 | None | OHLCVChart API unchanged externally; toolbar is internal | N/A |
 
 #### Regression Guardrails
-- BP-182: Handle case where bars array is too short for MA200 (< 200 bars) — render MA50 only, or skip MA entirely
-- Ensure ResizeObserver still works in fullscreen mode
+- BP-182: Handle case where bars array is too short for MA200 (< 200 bars) — render MA50 only, or skip MA entirely (computeMA returns [] for insufficient bars — handled)
+- Ensure ResizeObserver still works in fullscreen mode (ResizeObserver guarded with `!isFullscreen` check)
 
 ---
 
