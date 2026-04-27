@@ -169,3 +169,73 @@ async def get_insider_transactions_snapshot(
     """Return insider transactions snapshot for the given instrument."""
     records = await uc.execute(instrument_id, FundamentalsSection.INSIDER_TRANSACTIONS_SNAPSHOT)
     return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
+
+
+@router.get("/fundamentals/{instrument_id}/technicals-snapshot", response_model=FundamentalsResponse)
+async def get_technicals_snapshot(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsResponse:
+    """Return technical indicators snapshot for the given instrument.
+
+    WHY: Beta, 52W range, moving averages, short interest — all derived from
+    EODHD technicals.  S9 proxies this as /v1/fundamentals/{id}/technicals.
+    """
+    records = await uc.execute(instrument_id, FundamentalsSection.TECHNICALS_SNAPSHOT)
+    return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
+
+
+@router.get("/fundamentals/{instrument_id}/share-statistics", response_model=FundamentalsResponse)
+async def get_share_statistics(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsResponse:
+    """Return share statistics for the given instrument.
+
+    WHY: Shares outstanding, float, short interest, % held by insiders/institutions.
+    Used by the Ownership sidebar panel on the instrument detail page.
+    """
+    records = await uc.execute(instrument_id, FundamentalsSection.SHARE_STATISTICS)
+    return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
+
+
+@router.get("/fundamentals/{instrument_id}/splits-dividends", response_model=FundamentalsResponse)
+async def get_splits_dividends(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsResponse:
+    """Return stock splits and dividend history for the given instrument.
+
+    WHY: Dividend dates, amounts, and split history — used by the Dividends
+    section in FundamentalsTab and the SplitsDividends sidebar component.
+    """
+    records = await uc.execute(instrument_id, FundamentalsSection.SPLITS_DIVIDENDS)
+    return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
+
+
+@router.get("/fundamentals/{instrument_id}/earnings-trend", response_model=FundamentalsResponse)
+async def get_earnings_trend(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsResponse:
+    """Return forward earnings trend estimates for the given instrument.
+
+    WHY: Analyst EPS and revenue estimates by quarter/year — used by the
+    EarningsHistoryChart component in FundamentalsTab.
+    """
+    records = await uc.execute(instrument_id, FundamentalsSection.EARNINGS_TREND)
+    return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])
+
+
+@router.get("/fundamentals/{instrument_id}/earnings-annual-trend", response_model=FundamentalsResponse)
+async def get_earnings_annual_trend(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[GetFundamentalsSectionUseCase, Depends(get_fundamentals_section_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsResponse:
+    """Return annual earnings trend estimates for the given instrument.
+
+    WHY: Annual EPS/revenue projections — supplementary data for the
+    EarningsHistoryChart when quarterly data is insufficient.
+    """
+    records = await uc.execute(instrument_id, FundamentalsSection.EARNINGS_ANNUAL_TREND)
+    return FundamentalsResponse(security_id=instrument_id, records=[_to_record_response(r) for r in records])

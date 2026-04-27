@@ -327,6 +327,138 @@ async def test_get_fundamentals_timeseries_proxies_to_market_data(client, mock_c
     assert "params" in call_kwargs
 
 
+# ── Fundamentals section proxy routes (PLAN-0041 Wave A-1) ───────────────────
+# These 6 routes proxy authenticated requests to S3 section endpoints that were
+# previously not accessible through S9.  Each test verifies:
+#   1. The correct S3 path is forwarded.
+#   2. The X-Internal-JWT header reaches S3 (auth forwarding).
+# Tests use authed_client + authed_mock_clients because these routes require
+# request.state.user (JWT-authenticated), unlike the public screener endpoints.
+
+_INSTR_ID = "00000000-0000-0000-0000-000000000042"
+# Dummy HS256 JWT header — not a real credential; the authed_client fixture decodes
+# it without signature verification to inject request.state.user.
+_DUMMY_JWT = (
+    "eyJhbGciOiJIUzI1NiJ9" ".eyJzdWIiOiJ1c2VyLTEiLCJ1c2VyX2lkIjoidXNlci0xIiwidGVuYW50X2lkIjoidGVuYW50LTEifQ" ".sig"
+)
+
+
+def _downstream_200(content: bytes = b'{"records": []}') -> MagicMock:
+    """Build a mock 200 downstream response."""
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = 200
+    resp.content = content
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_get_technicals_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/technicals",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/technicals-snapshot" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_share_statistics_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/share-statistics → S3 /share-statistics."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/share-statistics",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/share-statistics" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_insider_transactions_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/insider-transactions → S3 /insider-transactions-snapshot."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/insider-transactions",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/insider-transactions-snapshot" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_earnings_trend_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/earnings-trend → S3 /earnings-trend."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/earnings-trend",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/earnings-trend" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_earnings_annual_trend_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/earnings-annual-trend → S3 /earnings-annual-trend."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/earnings-annual-trend",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/earnings-annual-trend" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_splits_dividends_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/splits-dividends → S3 /splits-dividends."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/splits-dividends",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/splits-dividends" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_section_routes_require_auth(client, mock_clients) -> None:
+    """Fundamentals section routes return 401 when user is not authenticated."""
+    # Uses the unauthenticated `client` fixture (no bearer token injected)
+    mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    for path_suffix in [
+        "technicals",
+        "share-statistics",
+        "insider-transactions",
+        "earnings-trend",
+        "earnings-annual-trend",
+        "splits-dividends",
+    ]:
+        response = await client.get(f"/v1/fundamentals/{_INSTR_ID}/{path_suffix}")
+        assert response.status_code == 401, f"Expected 401 for /{path_suffix}, got {response.status_code}"
+
+
 # ── Similar entities proxy (PRD-0017 Wave C-1) ────────────────────────────────
 
 

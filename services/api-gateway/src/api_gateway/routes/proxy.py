@@ -931,6 +931,121 @@ async def economic_calendar(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# NOTE: Section routes MUST be registered before /fundamentals/{instrument_id}
+# to prevent FastAPI matching sub-paths (e.g. "technicals") as an instrument_id.
+# FastAPI matches in registration order; more-specific paths registered first win.
+# PLAN-0041 Wave A-1 — proxy 6 S3 section endpoints that were missing from S9.
+
+
+@router.get("/fundamentals/{instrument_id}/technicals")
+async def get_technicals(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot.
+
+    WHY: S3 stores beta, SMA 50/200, 52W range, short interest under the
+    "technicals_snapshot" section.  S9 exposes this as /technicals for the
+    instrument page's TechnicalSnapshot component.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/share-statistics")
+async def get_share_statistics(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/share-statistics → S3 /share-statistics.
+
+    WHY: Shares outstanding, float, short interest, insider/institutional
+    ownership percentages — used by the Ownership sidebar panel.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/share-statistics",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/insider-transactions")
+async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/insider-transactions → S3 /insider-transactions-snapshot.
+
+    WHY: Recent insider buys/sells — used by InsiderTransactionsTable.
+    S3 stores this as "insider_transactions_snapshot"; S9 shortens the path.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/earnings-trend")
+async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/earnings-trend → S3 /earnings-trend.
+
+    WHY: Forward EPS/revenue analyst estimates by quarter — used by
+    EarningsHistoryChart's estimate bars.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/earnings-trend",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/earnings-annual-trend")
+async def get_earnings_annual_trend(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/earnings-annual-trend → S3 /earnings-annual-trend.
+
+    WHY: Annual earnings projections — supplementary to quarterly earnings-trend
+    when quarterly data is insufficient (e.g. small-cap stocks).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/earnings-annual-trend",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/splits-dividends")
+async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/splits-dividends → S3 /splits-dividends.
+
+    WHY: Dividend history (dates, amounts, frequency) and stock split history —
+    used by the Dividends section of FundamentalsTab.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/splits-dividends",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/fundamentals/{instrument_id}")
 async def get_fundamentals(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.

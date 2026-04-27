@@ -310,10 +310,14 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
         )
 
     assert resp.status_code == 200
-    # Verify downstream was called with depth forwarded
+    # `depth` is intentionally stripped by S9 — S7 has no depth parameter and
+    # silently ignores unknown params. S9 strips it explicitly to keep the
+    # forwarded param set clean (see proxy.py get_entity_graph WHY comment).
+    # The `limit` param IS forwarded (defaulting to 40 when not provided).
     authed_mock_clients.knowledge_graph.get.assert_called_once()
     call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
-    assert call_kwargs["params"].get("depth") == "2"
+    assert "depth" not in call_kwargs["params"], "depth must be stripped — S7 has no depth param"
+    assert "limit" in call_kwargs["params"], "limit is always forwarded to S7"
     call_args = authed_mock_clients.knowledge_graph.get.call_args[0]
     assert f"/api/v1/entities/{entity_id}/graph" in call_args[0]
     # Verify response is transformed to EntityGraph format (not raw S7 shape)
