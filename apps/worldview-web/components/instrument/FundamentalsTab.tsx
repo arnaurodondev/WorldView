@@ -19,10 +19,16 @@
  * create visual hierarchy and let analysts scan 9 sections without the flat-
  * spreadsheet effect. Bloomberg DES uses section boxes for the same reason.
  *
+ * WHY TWO-COLUMN LAYOUT (Wave D-2): Left column = scrollable content (metrics,
+ * charts, tables). Right 280px sidebar = contextual intelligence (market position,
+ * competitors, ownership, top news). Bloomberg DES page uses exactly this split —
+ * left for depth, right for context. The 280px fixed width matches the Overview tab's
+ * right sidebar so visual hierarchy is consistent across tabs.
+ *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Fundamentals tab)
- * DATA SOURCE: S9 GET /v1/fundamentals/{instrumentId}
+ * DATA SOURCE: S9 GET /v1/fundamentals/{instrumentId} + sidebar-specific endpoints
  * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail Fundamentals tab, State C-3;
- *                   PRD-0031 §9 Wave 5 FundamentalsTab 9 sections; PLAN-0041 Wave D-1
+ *                   PRD-0031 §9 Wave 5 FundamentalsTab 9 sections; PLAN-0041 Wave D-1/D-2
  */
 
 "use client";
@@ -41,10 +47,14 @@ import {
   formatRelativeTime,
   priceChangeClass,
 } from "@/lib/utils";
-import type { Fundamentals } from "@/types/api";
+import type { Fundamentals, Instrument } from "@/types/api";
 import { AnalystConsensusStrip } from "@/components/instrument/AnalystConsensusStrip";
 import { RevenueTrendSparklines } from "@/components/instrument/RevenueTrendSparklines";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
+import { MarketPositionPanel } from "@/components/instrument/MarketPositionPanel";
+import { PeerComparisonPanel } from "@/components/instrument/PeerComparisonPanel";
+import { OwnershipSnapshotPanel } from "@/components/instrument/OwnershipSnapshotPanel";
+import { FundamentalsTopNews } from "@/components/instrument/FundamentalsTopNews";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -57,6 +67,22 @@ interface FundamentalsTabProps {
    * Optional: if null, the range bar renders without a marker (track only).
    */
   currentPrice?: number | null;
+  /**
+   * Entity ID (not instrument_id) — used by the right sidebar panels for graph,
+   * news, and entity-based queries. ADR-F-12: entity_id is the stable cross-system
+   * identifier; instrument_id can change on exchange migration.
+   */
+  entityId?: string | null;
+  /**
+   * Instrument metadata — passed to the right sidebar for market position (sector,
+   * industry, exchange) and peer comparison (sector fallback, current ticker row).
+   */
+  instrument?: Instrument | null;
+  /**
+   * Callback to switch the parent tab to the News tab.
+   * Passed down to FundamentalsTopNews in the sidebar "→ More news" link.
+   */
+  onViewAllNews?: () => void;
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
@@ -202,7 +228,14 @@ function Section({
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FundamentalsTab({ instrumentId, initialData, currentPrice }: FundamentalsTabProps) {
+export function FundamentalsTab({
+  instrumentId,
+  initialData,
+  currentPrice,
+  entityId,
+  instrument,
+  onViewAllNews,
+}: FundamentalsTabProps) {
   const { accessToken } = useAuth();
 
   const { data: fund, isLoading, isError } = useQuery({
@@ -254,31 +287,33 @@ export function FundamentalsTab({ instrumentId, initialData, currentPrice }: Fun
   }
 
   // ── Render metrics grid ────────────────────────────────────────────────────
-  // WHY grid-cols-2 lg:grid-cols-3: 2-column layout fills the panel at tablet
-  // widths (no wasted whitespace), 3-column at large screens matches Bloomberg
-  // DES page density. The old sm:grid-cols-2 left a single-column layout on
-  // mobile which felt too sparse for dense financial data.
+  // WHY grid-cols-[1fr_280px] (Wave D-2): Two-column layout — left content column
+  // (scrollable metrics + charts + tables) + right 280px sidebar (market position,
+  // competitors, ownership, news). Matches the Overview tab's right sidebar width
+  // for visual consistency across tabs.
   return (
-    <div className="flex flex-col">
-      {/* ── Full-width sections ABOVE the grid ────────────────────────────
-          WHY above the grid (not in it): Analyst Consensus and Revenue Trend
-          are macro-level summaries that should appear before the detail metrics.
-          Bloomberg DES page shows consensus ratings at the top. */}
-      <div className="border-b border-border">
-        <AnalystConsensusStrip fundamentals={fund} />
-      </div>
-      <div className="border-b border-border">
-        {/* WHY instrumentId (not fundamentals): RevenueTrendSparklines now fetches its own
-            timeseries data from the S9 /v1/fundamentals/timeseries endpoint (Wave D-1). */}
-        <RevenueTrendSparklines instrumentId={instrumentId} />
-      </div>
+    <div className="grid grid-cols-[1fr_280px] min-h-0">
+      {/* ── LEFT COLUMN: scrollable fundamentals content ──────────────────── */}
+      <div className="overflow-y-auto border-r border-border">
+        {/* ── Full-width sections ABOVE the grid ──────────────────────────────
+            WHY above the grid (not in it): Analyst Consensus and Revenue Trend
+            are macro-level summaries that should appear before the detail metrics.
+            Bloomberg DES page shows consensus ratings at the top. */}
+        <div className="border-b border-border">
+          <AnalystConsensusStrip fundamentals={fund} />
+        </div>
+        <div className="border-b border-border">
+          {/* WHY instrumentId (not fundamentals): RevenueTrendSparklines now fetches its own
+              timeseries data from the S9 /v1/fundamentals/timeseries endpoint (Wave D-1). */}
+          <RevenueTrendSparklines instrumentId={instrumentId} />
+        </div>
 
-      {/* ── Metric grid ─────────────────────────────────────────────────────
-          WHY gap-2 p-3 (was gap-6 p-4): tighter spacing increases data density.
-          gap-6 (24px) between sections is too wide for a terminal grid; gap-2 (8px)
-          keeps sections close while the section border/header provides visual separation.
-          p-3 (12px) is the standard terminal panel padding per design system. */}
-      <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-3">
+        {/* ── Metric grid ─────────────────────────────────────────────────────
+            WHY gap-2 p-3 (was gap-6 p-4): tighter spacing increases data density.
+            gap-6 (24px) between sections is too wide for a terminal grid; gap-2 (8px)
+            keeps sections close while the section border/header provides visual separation.
+            p-3 (12px) is the standard terminal panel padding per design system. */}
+        <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-3">
         {/* ── Valuation ──────────────────────────────────────────────────── */}
         <Section title="Valuation">
           {/* Market cap: no color threshold — it's a scale metric, not good/bad */}
@@ -529,15 +564,61 @@ export function FundamentalsTab({ instrumentId, initialData, currentPrice }: Fun
         </Section>
       </div>
 
-      {/* ── Data quality footer ─────────────────────────────────────────────
-          WHY this footer: Bloomberg terminals display data source + timestamp
-          on every data panel. Analysts need to know when the data was last
-          refreshed to assess if a stale fundamental is distorting the picture
-          (e.g., during earnings season). The muted/50 opacity keeps it clearly
-          subordinate to the data above — it's reference info, not a headline. */}
-      <p className="mx-4 mt-4 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/50">
-        Data sourced from S3 fundamentals pipeline · Updated {formatRelativeTime(fund.updated_at)}
-      </p>
+        {/* ── Data quality footer ───────────────────────────────────────────
+            WHY this footer: Bloomberg terminals display data source + timestamp
+            on every data panel. Analysts need to know when the data was last
+            refreshed to assess if a stale fundamental is distorting the picture
+            (e.g., during earnings season). The muted/50 opacity keeps it clearly
+            subordinate to the data above — it's reference info, not a headline. */}
+        <p className="mx-4 mt-4 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/50">
+          Data sourced from S3 fundamentals pipeline · Updated {formatRelativeTime(fund.updated_at)}
+        </p>
+      </div>
+
+      {/* ── RIGHT SIDEBAR: contextual intelligence ──────────────────────────
+          WHY 280px fixed width (not percentage): matches the Overview tab's right
+          sidebar width. The two tabs feel visually consistent — same proportions.
+          WHY overflow-y-auto: sidebar panels can overflow the viewport height on
+          small screens; independent scroll prevents layout collapse.
+
+          Panel order rationale (Bloomberg DES convention):
+          1. Market Position — classification context (sector/cap tier)
+          2. Peer Comparison — relative valuation benchmarks
+          3. Ownership Snapshot — governance and float context
+          4. Top News — current catalyst narrative */}
+      <div className="overflow-y-auto divide-y divide-border/30">
+        {/* ── Market Position ──────────────────────────────────────────── */}
+        <MarketPositionPanel
+          instrument={instrument ?? null}
+          fundamentals={fund}
+        />
+
+        {/* ── Peer Comparison ──────────────────────────────────────────── */}
+        {/* WHY only render when entityId available: PeerComparisonPanel needs
+            entity_id for the knowledge graph query. Without it, only the sector
+            fallback would run but sector comes from instrument which may also be
+            null — skip entirely to avoid a broken empty panel. */}
+        {entityId && (
+          <PeerComparisonPanel
+            entityId={entityId}
+            instrument={instrument ?? null}
+            currentMarketCap={fund.market_cap ?? null}
+            currentPeRatio={fund.pe_ratio ?? null}
+            currentDailyReturn={fund.daily_return ?? null}
+          />
+        )}
+
+        {/* ── Ownership Snapshot ───────────────────────────────────────── */}
+        <OwnershipSnapshotPanel instrumentId={instrumentId} />
+
+        {/* ── Top News ─────────────────────────────────────────────────── */}
+        {entityId && (
+          <FundamentalsTopNews
+            entityId={entityId}
+            onViewAllNews={onViewAllNews}
+          />
+        )}
+      </div>
     </div>
   );
 }

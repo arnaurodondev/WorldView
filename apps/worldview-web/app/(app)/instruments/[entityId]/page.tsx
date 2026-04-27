@@ -230,6 +230,9 @@ export default function InstrumentDetailPage() {
             instrumentId={instrument.instrument_id}
             initialData={overview?.fundamentals}
             currentPrice={overview?.quote?.price ?? null}
+            entityId={entityId}
+            instrument={instrument}
+            onViewAllNews={() => setActiveTab("news")}
           />
         </TabsContent>
 
