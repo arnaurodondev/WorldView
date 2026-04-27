@@ -6894,3 +6894,116 @@ When adding a new `FundamentalsSection` enum value:
 - Any callback registered inside an empty-dep `useEffect` (event listeners, observers, timers) will hold a **stale closure** over all state and props from the mount render.
 - If the callback needs to read current state, use a `useRef` + sync `useEffect` to track it: `const fooRef = useRef(foo); useEffect(() => { fooRef.current = foo; }, [foo]);`
 - Lint rule `react-hooks/exhaustive-deps` will warn about missing dependencies — prefer fixing the deps if possible; use the ref pattern only when the effect must run only once (e.g., chart init).
+
+## BP-248 — WebSocket Path Mismatch: /v1/ vs /api/v1/ in Direct S10 Connection
+
+| Field | Value |
+|-------|-------|
+| **Service** | worldview-web — `contexts/AlertStreamContext.tsx` |
+| **Severity** | HIGH (alert stream never connects — WebSocket 403 on every page load) |
+| **Discovered** | 2026-04-27 dev-login investigation |
+| **Root cause** | `AlertStreamContext.tsx` connected directly to S10 at `ws://localhost:8010/v1/alerts/stream`. S10's `APIRouter` uses `prefix="/api/v1"`, so the real route is `/api/v1/alerts/stream`. Starlette returns HTTP 403 (not 404) for WebSocket upgrade requests that don't match any registered route, making the error appear to be an auth problem. |
+| **Symptom** | Alert WebSocket always returns 403 Forbidden. No alerts appear in the UI. Alert badge count stays at 0. The 403 looks identical to BP-201 (wrong JWT sub), making the root cause easy to misdiagnose. |
+| **Fix** | Change path from `/v1/alerts/stream` to `/api/v1/alerts/stream` in `AlertStreamContext.tsx` connect step. |
+
+### Prevention
+
+- When a service registers its router with `APIRouter(prefix="/api/v1")` and the main app does `app.include_router(router)` (no additional prefix), the full path includes `/api`. Direct (non-proxied) connections must use the full path.
+- S9-proxied calls strip `/api` via Next.js rewrites (`/api/:path*` → `/:path*`), so they land at S9's `/v1/...` correctly. Direct connections (WebSocket, SSE) do NOT go through Next.js rewrites and must use the exact path registered on the target service.
+- Contrast: S9 routes use `router = APIRouter(prefix="/v1")` (no `/api` prefix) because they are called via the Next.js rewrite layer that strips `/api`. S10 uses `prefix="/api/v1"` because it's called directly without a rewrite.
+
+---
+
+## BP-249 — BaseHTTPMiddleware Bypasses WebSocket ASGI Scopes
+
+| Field | Value |
+|-------|-------|
+| **Service** | S10 alert — `api/routes.py`, `infrastructure/middleware/internal_jwt.py` |
+| **Severity** | CRITICAL (all WebSocket auth bypassed — always 403 close even with valid token) |
+| **Discovered** | 2026-04-27 follow-up to BP-248 |
+| **Root cause** | Starlette `BaseHTTPMiddleware.__call__` has an early return: `if scope["type"] != "http": await self.app(scope, receive, send); return`. For WebSocket ASGI scopes (`scope["type"] == "websocket"`), `dispatch()` is never called. Any middleware extending `BaseHTTPMiddleware` is completely bypassed for WebSocket connections, regardless of the `Upgrade: websocket` header. `InternalJWTMiddleware` therefore never sets `websocket.state.user_id`, so the handler always hits the `not user_id_raw` guard and closes with code 4001 → HTTP 403. |
+| **Symptom** | WebSocket always returns HTTP 403 (close code 4001) even with a valid `?token=` query param. The path is correct (BP-248 fixed). The token is valid. `Content-Type: text/plain, Content-Length: 0` in the response is the signature of a WS close-before-accept. |
+| **Fix** | Add inline JWT validation directly in the WebSocket handler. Read `token = websocket.query_params.get("token")`, get `public_key = websocket.app.state._internal_jwt_public_key`, decode with `jwt.decode()` with `issuer="worldview-gateway"`. Store `skip_verification` flag on `app.state` so test/dev mode also works. |
+
+### Prevention
+
+- Any authentication that must apply to WebSocket connections MUST be done inline in the WebSocket route handler, NOT in `BaseHTTPMiddleware` subclasses.
+- Starlette's `BaseHTTPMiddleware` is HTTP-only. Use a raw ASGI middleware (implementing `__call__` directly checking `scope["type"]`) if you need to intercept both HTTP and WebSocket scopes.
+- The middleware code that reads `Upgrade: websocket` headers is testing the HTTP upgrade request (before connection, type="http") — this works in tests using ASGITransport but NOT for real WebSocket ASGI connections (type="websocket").
+- Pattern: store the RSA public key and `skip_verification` flag on `app.state` during startup so WebSocket handlers can access them without importing the middleware class.
+
+**Regression test**: `services/alert/tests/unit/api/test_alerts_api.py::TestWebSocketRoute::test_ws_inline_validation_no_token_rejects`
+
+---
+
+## BP-250 — Python StrEnum Lowercase vs TypeScript Uppercase AlertSeverity Mismatch
+
+| Field | Value |
+|-------|-------|
+| **Service** | S10 alert → worldview-web `components/dashboard/RecentAlerts.tsx`, `lib/utils.ts` |
+| **Severity** | HIGH (TypeError crash in React render → root error boundary fires → "Something went wrong" page) |
+| **Discovered** | 2026-04-27 |
+| **Root cause** | Python `AlertSeverity` is a `StrEnum` with lowercase values (`"low"`, `"critical"`). The TypeScript `AlertSeverity` union is `"LOW" | "MEDIUM" | "HIGH" | "CRITICAL"` (uppercase). `severityColor()` in `lib/utils.ts` had a `switch` with only uppercase cases and NO `default` branch. When REST alerts with lowercase severity arrive, `severityColor("low")` hits no case and returns `undefined`. Destructuring `const { text, bg } = undefined` throws `TypeError: Cannot destructure property 'text' of undefined` — a synchronous render-time crash caught by the root error boundary. |
+| **Symptom** | `app/error.tsx` "Something went wrong" appears after login when seeded alerts exist. `console.error("[ErrorBoundary caught] TypeError: Cannot destructure property 'text' of undefined"`. |
+| **Fix** | (1) `severityColor()`: change `severity` param type to `string`, add `.toUpperCase()` before switch, add `default` fallback. (2) `RecentAlerts.tsx`: normalise severity to uppercase when mapping REST response to `AlertPayload`. (3) `AlertStreamContext.tsx`: normalise WS-stream severity to uppercase in `dispatch()`. |
+
+### Prevention
+
+- Never use TypeScript string union types to match Python `StrEnum` values without explicit case normalization. Python `StrEnum` values are the raw string (lowercase by convention). TypeScript enums are often uppercase by convention.
+- `switch` statements over string values MUST have a `default` branch, especially when the input may come from external API responses at runtime (not enforced by TypeScript's type system).
+- Use `.toUpperCase()` normalization at the boundary (API response → React state) rather than defending everywhere in the render tree.
+
+## BP-251 — S9 Passthrough Returns Upstream Contract Instead of Frontend Contract
+
+| Field | Value |
+|-------|-------|
+| **Service** | api-gateway (S9) → any frontend |
+| **Severity** | CRITICAL (frontend receives incompatible schema; widget silently empty or crashes) |
+| **Discovered** | 2026-04-28 |
+| **Root cause** | A proxy route in `proxy.py` used `return Response(content=resp.content, ...)` to forward the raw upstream response. The upstream service (S6 NLP Pipeline) has its own domain contract (`{items:[...]}` with `signal_type`/`confidence`/`detected_at`) that does not match the frontend API contract (`{signals:[...]}` with `label`/`score`/`created_at`). The response passes mypy and the route has a non-None return, so this isn't caught statically. |
+| **Symptom** | Frontend widget shows empty (0 items) or fails to render. No error in S9 logs — only the frontend console shows "Cannot read property 'label' of undefined". |
+| **Fix** | Add a transform layer in S9 that maps upstream fields to frontend fields. Never pass raw upstream responses through when the contracts differ. |
+
+### Prevention
+
+- Every S9 proxy route that transforms data MUST have a unit test that asserts the **output shape** (field names, envelope key), not just `resp.status_code == 200`.
+- When writing a new proxy route: check if S9's `types/api.ts` and the upstream service's API schemas match. If they differ, add a transform and test it.
+- Pattern: upstream `items` array → frontend named key (e.g., `signals`, `markets`, `articles`) almost always requires a transform.
+
+---
+
+## BP-252 — LLM Wraps Output in Markdown Code Fence Despite Prompt Saying "Return Markdown"
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) / any service using an LLM for text generation |
+| **Severity** | MAJOR (user sees raw ` ```markdown ``` ` backticks instead of formatted content) |
+| **Discovered** | 2026-04-28 |
+| **Root cause** | Meta-Llama-3.1-8B-Instruct (and similar instruction-tuned models) interpret "respond in markdown" as meaning they should wrap the entire response in a ` ```markdown ``` ` code fence. This is the model's interpretation of "show markdown" vs "use markdown formatting". The `_strip_reasoning()` function stripped `<think>` blocks but had no code-fence stripping. |
+| **Symptom** | Frontend ReactMarkdown renders ` ```markdown ``` ` as a code block, displaying raw backticks and the word "markdown" at the top of the brief. |
+| **Fix** | In `_strip_reasoning()` (or equivalent post-processing function), apply `_CODE_FENCE_RE = re.compile(r"^\s*\`\`\`(?:markdown)?\s*\n?(.*?)\n?\s*\`\`\`\s*$", re.DOTALL)` after reasoning-block stripping. |
+
+### Prevention
+
+- Any LLM output used as-is in a frontend component MUST be post-processed to strip: (1) `<think>…</think>` blocks, (2) outer markdown code fences, (3) orphaned citation markers.
+- Add a unit test that feeds a code-fenced response through the stripping function and asserts the fences are removed.
+- When the Valkey briefing cache is populated, clear `briefing:*` keys after deploying a fix to `_strip_reasoning()` — otherwise the old (broken) cached content is served for up to the cache TTL.
+
+---
+
+## BP-253 — Price Change Always Zero: Resolver _build() Missing prev_close Parameter
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-data (S3) |
+| **Severity** | MAJOR (all market quotes show `change=0.0, change_pct=0.0` regardless of actual price movement) |
+| **Discovered** | 2026-04-28 |
+| **Root cause** | `PriceSnapshotResolver._build()` always set `price_change=None` with the comment "computed in W1-9". W1-9 of PLAN-0036 was never implemented. `_build()` is called from all resolver steps (1–4) with no access to `ohlcv_bars`. S9 `_map_price_snapshot_to_quote()` converts `None→0.0`. |
+| **Symptom** | Every instrument shows `change: 0.0, change_pct: 0.0` in the TopBar, portfolio, and watchlist despite real price movements. |
+| **Fix** | Add `_prev_daily_close(bars, latest)` helper that finds the second-most-recent 1d bar. Add `prev_close: Decimal | None = None` to `_build()`. At Step 5 (DAILY_CLOSE), pass `prev_close=_prev_daily_close(ohlcv_bars, bar_1d)`. After deploying, flush `price_snapshot:*` Valkey keys (2h TTL) to bypass stale cached snapshots. |
+
+### Prevention
+
+- Resolver fallback chains that progressively lose data context (e.g., Step 1 has quote + OHLCV; Step 5 has only OHLCV) MUST explicitly propagate fields like `prev_close` to downstream builders.
+- "TODO: computed in W1-X" comments in domain code are tech debt trackers — they MUST have a corresponding task in the plan. Never deploy code that permanently returns `None` for a field the frontend depends on.
+- After deploying price-calculation fixes, always flush Valkey price snapshot cache to avoid serving stale zero-change values.

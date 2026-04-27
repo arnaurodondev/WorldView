@@ -113,7 +113,9 @@ async def test_heatmap_returns_11_sectors(authed_app, authed_mock_clients) -> No
                         "name": "Exxon",
                         "exchange": "US",
                         "sector": "Energy",
-                        "metrics": {"daily_return": 1.5},
+                        # WHY 0.015 (not 1.5): daily_return is a decimal fraction
+                        # (0.015 = 1.5%). Using 1.5 would mean 150% which is unrealistic.
+                        "metrics": {"daily_return": 0.015},
                     },
                 ],
                 "count": 1,
@@ -134,6 +136,10 @@ async def test_heatmap_returns_11_sectors(authed_app, authed_mock_clients) -> No
     body = resp.json()
     assert len(body["sectors"]) == 11
     assert body["sectors"][0]["name"] == "Energy"
+    # Regression guard: daily_return=0.015 (1.5% fraction) → change_pct=1.5 (percentage).
+    # BP-243: S3 daily_return is a decimal fraction; frontend expects percentage values.
+    energy_sector = next(s for s in body["sectors"] if s["name"] == "Energy")
+    assert energy_sector["change_pct"] == 1.5
 
 
 @pytest.mark.asyncio
@@ -265,9 +271,27 @@ async def test_economic_calendar_proxies_to_s7(authed_app, authed_mock_clients) 
 
 @pytest.mark.asyncio
 async def test_ai_signals_proxy_to_s6(authed_app, authed_mock_clients) -> None:
-    """GET /v1/signals/ai proxies to S6 NLP Pipeline (no longer a stub)."""
+    """GET /v1/signals/ai proxies to S6 and transforms to frontend AiSignal shape."""
+    s6_payload = {
+        "items": [
+            {
+                "signal_id": "aaa-bbb",
+                "entity_id": "ccc-ddd",
+                "signal_type": "M_AND_A",
+                "confidence": 0.9,
+                "evidence_text": "some-claim-uuid",
+                "detected_at": "2026-04-27T22:00:00Z",
+                "market_impact_score": 0.0,
+            }
+        ],
+        "total": 1,
+        "limit": 50,
+        "offset": 0,
+    }
+    import json as _json
+
     authed_mock_clients.nlp_pipeline.get = AsyncMock(
-        return_value=_mock_response(200, b'{"signals": [{"id": "s1"}], "total": 1}'),
+        return_value=_mock_response(200, _json.dumps(s6_payload).encode()),
     )
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -278,8 +302,15 @@ async def test_ai_signals_proxy_to_s6(authed_app, authed_mock_clients) -> None:
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["signals"] == [{"id": "s1"}]
-    assert body["total"] == 1
+    assert "signals" in body
+    assert len(body["signals"]) == 1
+    sig = body["signals"][0]
+    assert sig["signal_id"] == "aaa-bbb"
+    assert sig["entity_id"] == "ccc-ddd"
+    assert sig["label"] == "POSITIVE"  # M_AND_A maps to POSITIVE
+    assert sig["score"] == 0.9
+    assert sig["article_title"] is None
+    assert sig["created_at"] == "2026-04-27T22:00:00Z"
     authed_mock_clients.nlp_pipeline.get.assert_called_once()
 
 
@@ -347,7 +378,8 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
                         "name": "Exxon",
                         "exchange": "US",
                         "sector": "Energy",
-                        "metrics": {"daily_return": 1.5},
+                        # WHY 0.015: decimal fraction (0.015 = 1.5%). BP-243.
+                        "metrics": {"daily_return": 0.015},
                     },
                 ],
                 "count": 1,
@@ -370,7 +402,7 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["sectors"]) == 11
-    # First 5 sectors should have a non-null change_pct (1.5 average)
+    # First 5 sectors should have a non-null change_pct (1.5 percentage after * 100)
     for sector in body["sectors"][:5]:
         assert sector["change_pct"] is not None
         assert sector["change_pct"] == 1.5
@@ -457,3 +489,93 @@ async def test_search_instruments_sends_system_jwt(app, mock_clients) -> None:
     assert resp.status_code == 200
     call_kwargs = mock_clients.market_data.get.call_args[1]
     assert "X-Internal-JWT" in call_kwargs.get("headers", {})
+
+
+# ── PLAN-0043 B-4: Period param on heatmap + movers ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_heatmap_period_1w_routes_to_s3_ohlcv(authed_app, authed_mock_clients) -> None:
+    """GET /v1/market/heatmap?period=1W calls S3 OHLCV aggregate (GET), not screener (POST)."""
+    # S3 sector-returns endpoint returns the pre-aggregated structure
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"sectors": [{"name": "Technology", "change_pct": 2.5, "instrument_count": 5}]}).encode(),
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/heatmap",
+            params={"period": "1W"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # Response from S3 passed through; should include the sectors array
+    assert "sectors" in body
+    # Verify it called GET (sector-returns), not POST (screener)
+    authed_mock_clients.market_data.get.assert_called_once()
+    # Should NOT have called the screener POST endpoint
+    authed_mock_clients.market_data.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_heatmap_period_invalid_returns_400(authed_app, authed_mock_clients) -> None:
+    """GET /v1/market/heatmap?period=2W → 400 bad request."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/heatmap",
+            params={"period": "2W"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_top_movers_period_1m_routes_to_s3_ohlcv(authed_app, authed_mock_clients) -> None:
+    """GET /v1/market/top-movers?period=1M calls S3 period-movers (GET), not screener (POST)."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps(
+                {
+                    "results": [{"instrument_id": "i1", "ticker": "AAPL", "name": "Apple", "period_return_pct": 5.2}],
+                    "type": "gainers",
+                    "period": "1M",
+                }
+            ).encode(),
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/top-movers",
+            params={"type": "gainers", "period": "1M"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Verify it called GET (period-movers), not POST (screener)
+    authed_mock_clients.market_data.get.assert_called_once()
+    authed_mock_clients.market_data.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_top_movers_period_invalid_returns_400(authed_app, authed_mock_clients) -> None:
+    """GET /v1/market/top-movers?period=3M → 400 bad request."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/top-movers",
+            params={"type": "gainers", "period": "3M"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 400

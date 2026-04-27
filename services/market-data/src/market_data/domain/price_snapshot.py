@@ -132,6 +132,20 @@ def _latest_bar(bars: list[OHLCVBar], timeframe: Timeframe) -> OHLCVBar | None:
     return max(matching, key=lambda b: b.bar_date)
 
 
+def _prev_daily_close(bars: list[OHLCVBar], latest: OHLCVBar) -> Decimal | None:
+    """Return the close of the second-most-recent 1d bar (i.e., previous session's close).
+
+    Used to compute price_change and price_change_pct vs prior close.
+    Returns None when fewer than two 1d bars are available.
+    """
+    candidates = sorted(
+        [b for b in bars if b.timeframe == Timeframe.ONE_DAY and b.bar_date < latest.bar_date],
+        key=lambda b: b.bar_date,
+        reverse=True,
+    )
+    return candidates[0].close if candidates else None
+
+
 class PriceSnapshotResolver:
     """Pure domain service — resolves the best available PriceSnapshot.
 
@@ -278,6 +292,7 @@ class PriceSnapshotResolver:
                 source=source,
                 freshness=freshness,
                 stale_reason=stale_reason,
+                prev_close=_prev_daily_close(ohlcv_bars, bar_1d),
             )
 
         # ── Step 6: Fall back to prior Valkey snapshot ────────────────────────
@@ -326,15 +341,21 @@ class PriceSnapshotResolver:
         source: PriceSource,
         freshness: FreshnessStatus,
         stale_reason: str | None,
+        prev_close: Decimal | None = None,
     ) -> PriceSnapshot:
         """Construct a PriceSnapshot from resolved components."""
+        price_change: Decimal | None = None
+        price_change_pct: Decimal | None = None
+        if prev_close is not None and prev_close != Decimal("0"):
+            price_change = price - prev_close
+            price_change_pct = (price_change / prev_close) * Decimal("100")
         return PriceSnapshot(
             instrument_id=instrument_id,
             symbol=symbol,
             exchange=exchange,
             price=price,
-            price_change=None,  # change vs prev close requires two data points; computed in W1-9
-            price_change_pct=None,
+            price_change=price_change,
+            price_change_pct=price_change_pct,
             timestamp=price_timestamp,
             fetched_at=resolved_at,
             source=source,
