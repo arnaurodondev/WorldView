@@ -3,7 +3,7 @@
 **PRD**: Investigation report `docs/audits/2026-04-27-investigation-instrument-page-redesign.md`
 **Status**: in-progress
 **Created**: 2026-04-27
-**Updated**: 2026-04-27
+**Updated**: 2026-04-27 (Wave B-1 done)
 **Depends on**: None (all prerequisite backend data exists in S3)
 
 ---
@@ -185,9 +185,11 @@ Add 6 new rows to the "Market Data Endpoints" table in `docs/services/api-gatewa
 
 ## Sub-Plan B — Frontend Foundation: Types + Gateway Methods + Shared Components
 
-### Wave B-1: Expand Frontend Types, Gateway Methods, and Build Shared Components
+### Wave B-1: Expand Frontend Types, Gateway Methods, and Build Shared Components ✅
 
 **Goal**: Add TypeScript types for S3 section responses, add gateway methods for timeseries + section endpoints, and build reusable components (`52WeekRangeBar`, `FundamentalSparkline`) that later waves depend on.
+
+**Status**: **DONE** — 2026-04-27 · 418 Vitest tests pass · tsc --noEmit clean · 7 new gateway tests pass
 
 **Depends on**: Wave A-1 (new S9 proxy routes)
 **Estimated effort**: 45-60 min
@@ -480,10 +482,10 @@ Tests for the 6 new gateway methods following existing patterns in the test file
 - [ ] Tests mock fetch correctly (no real API calls)
 
 #### Validation Gate
-- [ ] TypeScript compilation passes (`pnpm tsc --noEmit`)
-- [ ] All existing Vitest tests still pass
-- [ ] 6 new gateway tests pass
-- [ ] No lint errors
+- [x] TypeScript compilation passes (`pnpm tsc --noEmit`)
+- [x] All existing Vitest tests still pass (418/418)
+- [x] 7 new gateway tests pass (6 section methods + 1 timeseries with optional-params test)
+- [x] No lint errors
 
 #### Break Impact
 

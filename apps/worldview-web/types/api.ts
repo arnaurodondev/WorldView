@@ -144,6 +144,105 @@ export interface Fundamentals {
   updated_at: string; // ISO 8601 UTC
 }
 
+// ── Fundamentals Section Records (S3 raw format) ────────────────────────────
+//
+// WHY separate from Fundamentals: The main Fundamentals type represents the
+// flattened aggregate snapshot (market cap, P/E, margins). These Section types
+// represent the raw time-series records from S3's fundamentals_data table —
+// each record has a `section` tag and a `data` dict of arbitrary key-value pairs
+// specific to that section. The frontend casts `data` to a typed interface below.
+
+export interface FundamentalsRecord {
+  id: string;
+  security_id: string;
+  section: string;          // e.g., "technicals_snapshot", "earnings_history"
+  period_end: string;       // ISO 8601 date — record's reporting date
+  period_type: "ANNUAL" | "QUARTERLY" | "SNAPSHOT";
+  data: Record<string, unknown>; // section-specific fields; cast with typed interfaces below
+  source: string;
+  ingested_at: string;      // ISO 8601 UTC
+}
+
+export interface FundamentalsSectionResponse {
+  security_id: string;
+  records: FundamentalsRecord[];
+}
+
+// ── Fundamentals Timeseries ─────────────────────────────────────────────────
+//
+// WHY separate from FundamentalsRecord: Timeseries returns a flat array of
+// (date, value) pairs for a single metric — used by FundamentalSparkline.
+// Different S3 endpoint (GET /v1/fundamentals/timeseries) returning a single-metric
+// time series rather than a multi-field snapshot record.
+
+export interface TimeseriesDataPoint {
+  as_of_date: string;       // ISO 8601 date
+  value_numeric: number | null;
+  value_text: string | null;
+  period_type: string;      // "ANNUAL" | "QUARTERLY" | "SNAPSHOT"
+}
+
+export interface FundamentalsTimeseriesResponse {
+  instrument_id: string;
+  metric: string;           // e.g., "pe_ratio", "revenue", "gross_margin"
+  data: TimeseriesDataPoint[];
+}
+
+// ── Typed section data shapes (extracted from FundamentalsRecord.data) ──────
+//
+// WHY typed (not Record<string, unknown>): S3 section data fields are well-known
+// from the EODHD API schema. Typing prevents runtime crashes from misspelled fields.
+// All fields are nullable — newly-listed stocks or missing EODHD data can yield
+// null for any field.
+
+export interface TechnicalsData {
+  beta: number | null;
+  "52_week_high": number | null;
+  "52_week_low": number | null;
+  "50_day_ma": number | null;
+  "200_day_ma": number | null;
+  shares_short: number | null;
+  short_ratio: number | null;
+  short_percent: number | null;
+}
+
+export interface ShareStatisticsData {
+  shares_outstanding: number | null;
+  shares_float: number | null;
+  percent_insiders: number | null;
+  percent_institutions: number | null;
+}
+
+export interface InsiderTransaction {
+  date: string;
+  owner_name: string;
+  transaction_type: string; // "Buy", "Sale", "Option Exercise", etc.
+  shares: number | null;
+  value: number | null;     // USD
+}
+
+export interface EarningsRecord {
+  date: string;
+  eps_actual: number | null;
+  eps_estimate: number | null;
+  revenue_actual: number | null;
+  revenue_estimate: number | null;
+  surprise_percent: number | null; // positive = beat, negative = miss
+}
+
+export interface AnalystConsensusData {
+  buy: number | null;
+  hold: number | null;
+  sell: number | null;
+  strong_buy: number | null;
+  strong_sell: number | null;
+  target_price: number | null;
+  target_price_high: number | null;
+  target_price_low: number | null;
+  target_price_median: number | null;
+  number_of_analysts: number | null;
+}
+
 // ── Company Overview (composed endpoint) ──────────────────────────────────
 
 export interface CompanyOverview {

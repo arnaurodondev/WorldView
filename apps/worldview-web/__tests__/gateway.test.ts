@@ -594,3 +594,126 @@ describe("createGateway() — ranked news (PRD-0026)", () => {
     expect(result.articles[0].impact_windows?.day_t0).toBe(0.03);
   });
 });
+
+// ── Fundamentals section + timeseries methods (PLAN-0041 Wave B-1) ────────────
+//
+// WHY THESE TESTS EXIST: Six new gateway methods wrap the S9 section proxy
+// routes added in Wave A-1. Tests verify:
+// 1. Correct S9 URL paths (wrong paths → silent data failure — instruments show "—")
+// 2. Auth header forwarding (section endpoints require Bearer token)
+// 3. Timeseries public endpoint sends NO auth header (different access pattern)
+// 4. URL-encoding of instrument IDs preserves special characters
+
+describe("createGateway() — fundamentals sections (PLAN-0041 Wave B-1)", () => {
+  it("getTechnicals() calls /v1/fundamentals/{id}/technicals with auth", async () => {
+    const spy = mockFetch(200, { security_id: "id-1", records: [] });
+    const gw = createGateway("test-token");
+    await gw.getTechnicals("inst-001");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-001/technicals");
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("getShareStatistics() calls /v1/fundamentals/{id}/share-statistics with auth", async () => {
+    const spy = mockFetch(200, { security_id: "id-1", records: [] });
+    const gw = createGateway("test-token");
+    await gw.getShareStatistics("inst-002");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-002/share-statistics");
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("getInsiderTransactions() calls /v1/fundamentals/{id}/insider-transactions with auth", async () => {
+    const spy = mockFetch(200, { security_id: "id-1", records: [] });
+    const gw = createGateway("test-token");
+    await gw.getInsiderTransactions("inst-003");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-003/insider-transactions");
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("getEarningsHistory() calls /v1/fundamentals/{id}/earnings-trend with auth", async () => {
+    // WHY /earnings-trend (not /earnings-history): the S9 route path matches the
+    // EODHD naming convention; the gateway method name is more descriptive for
+    // the frontend consumer.
+    const spy = mockFetch(200, { security_id: "id-1", records: [] });
+    const gw = createGateway("test-token");
+    await gw.getEarningsHistory("inst-004");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-004/earnings-trend");
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("getSplitsDividends() calls /v1/fundamentals/{id}/splits-dividends with auth", async () => {
+    const spy = mockFetch(200, { security_id: "id-1", records: [] });
+    const gw = createGateway("test-token");
+    await gw.getSplitsDividends("inst-005");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-005/splits-dividends");
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBe("Bearer test-token");
+  });
+
+  it("getFundamentalsTimeseries() builds correct query string with all params", async () => {
+    const spy = mockFetch(200, { instrument_id: "inst-006", metric: "pe_ratio", data: [] });
+    // WHY createGateway() with no token: timeseries is a public endpoint —
+    // no Authorization header should be sent even when a token exists.
+    const gw = createGateway("test-token");
+    await gw.getFundamentalsTimeseries("inst-006", "pe_ratio", {
+      start_date: "2024-01-01",
+      end_date: "2025-01-01",
+      period_type: "QUARTERLY",
+      limit: 20,
+    });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toContain("/api/v1/fundamentals/timeseries");
+    expect(calledUrl).toContain("instrument_id=inst-006");
+    expect(calledUrl).toContain("metric=pe_ratio");
+    expect(calledUrl).toContain("start_date=2024-01-01");
+    expect(calledUrl).toContain("period_type=QUARTERLY");
+    expect(calledUrl).toContain("limit=20");
+
+    // WHY no Authorization: timeseries is a public endpoint served by S9 with
+    // a system JWT (not user JWT). Sending a user Bearer token would be incorrect.
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    const headers = calledInit?.headers as Record<string, string>;
+    expect(headers?.["Authorization"]).toBeUndefined();
+  });
+
+  it("getFundamentalsTimeseries() omits optional params when not provided", async () => {
+    const spy = mockFetch(200, { instrument_id: "inst-007", metric: "revenue", data: [] });
+    const gw = createGateway();
+    await gw.getFundamentalsTimeseries("inst-007", "revenue");
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toContain("instrument_id=inst-007");
+    expect(calledUrl).toContain("metric=revenue");
+    // WHY not contain these: optional params with undefined values must be omitted
+    // entirely — URLSearchParams(undefined) produces "undefined" strings which
+    // corrupt the S3 query.
+    expect(calledUrl).not.toContain("start_date");
+    expect(calledUrl).not.toContain("end_date");
+    expect(calledUrl).not.toContain("period_type");
+    expect(calledUrl).not.toContain("limit");
+  });
+});
