@@ -23,6 +23,7 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-239](#bp-239) | Market-data / fundamentals router | S3 router missing section endpoints for sections that exist in FundamentalsSection enum + use case — 404 on section-specific paths | `services/market-data/src/market_data/api/routers/fundamentals.py`; any service with enum-backed section dispatch |
 | [BP-235](#bp-235) | Market-data / prediction markets | `ON CONFLICT ON CONSTRAINT uq_pms_market_snapshot` raises `UndefinedObjectError` — migration 005 created a UNIQUE INDEX, not a named CONSTRAINT; `ON CONFLICT ON CONSTRAINT` only works with named constraints | `services/market-data/src/market_data/infrastructure/db/repositories/prediction_market_repo.py:insert_if_not_exists()` |
 | [BP-234](#bp-234) | Market ingestion / scheduler | `ECONOMIC_EVENTS`, `MACRO_INDICATOR`, `INSIDER_TRANSACTIONS` dataset types fall through to `scheduler_unsupported_dataset_type` debug log → never enqueued; missing `_build_incremental_task` branches and factory methods | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py:_build_incremental_task()`; `domain/entities/ingestion_task.py` |
 | [BP-233](#bp-233) | Content ingestion / Polymarket | Gamma API changed format (April 2026) — `tokens` field dropped; outcomes now in JSON-string fields `outcomes`, `outcomePrices`, `clobTokenIds`; adapter pre-check `len(tokens) < 2` → all markets skipped (new=0 forever) | `services/content-ingestion/src/content_ingestion/infrastructure/adapters/polymarket/adapter.py:_process_market()`; `domain/entities.py:PredictionMarketFetchResult.from_gamma_response()` |
@@ -6691,3 +6692,24 @@ Whenever writing to a `vector(N)` column via asyncpg (raw SQL or SQLAlchemy `tex
 1. At startup, validate each `ollama_*_model` config field by calling `GET /api/tags` on the Ollama container and checking the model is listed. Log `ERROR` if missing.
 2. Any component with a `try: ... except Exception: fallback()` pattern should emit a counter metric (`fallback_count`) so alerting can trigger when fallback rate exceeds threshold.
 3. Before referencing a new Ollama model in config, run `ollama pull <model>` in the dev environment and verify it succeeds. Add this to the PR checklist for any `ollama_*_model` config change.
+
+---
+
+## BP-239 — S3 Fundamentals Router Missing Section Endpoints Despite Enum + Use Case Support
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-data (S3) — `api/routers/fundamentals.py` |
+| **Severity** | MEDIUM (data exists in DB, reachable via all-sections endpoint, but section-specific paths return 404) |
+| **Discovered** | 2026-04-27 PLAN-0041 Wave A-1 investigation |
+| **Root cause** | `FundamentalsSection` enum had 18 values; `GetFundamentalsSectionUseCase.execute()` supports all of them generically; DB had tables and data. But the FastAPI router only had handlers for 13 of 18 sections. Five sections (`TECHNICALS_SNAPSHOT`, `SHARE_STATISTICS`, `SPLITS_DIVIDENDS`, `EARNINGS_TREND`, `EARNINGS_ANNUAL_TREND`) were missing router handlers. S9 investigation revealed these gaps when trying to proxy section-specific paths. |
+| **Symptom** | `GET /api/v1/fundamentals/{id}/technicals-snapshot` → 404. Data exists in `technicals_snapshots` table. No error in logs — FastAPI simply finds no matching route. |
+| **Fix** | Add the missing 5 router handlers. Each follows the same 3-line pattern: call `uc.execute(instrument_id, FundamentalsSection.X)`, wrap in `FundamentalsResponse`. The use case and DB repository already support all sections. |
+
+### Prevention
+
+When adding a new `FundamentalsSection` enum value:
+1. Immediately add the corresponding router handler — do not defer it. The router is the only layer that needs updating; enum + use case are generic.
+2. Add a test in `test_fundamentals_api.py` that calls the new endpoint path and asserts `section == "new_value"` in the response.
+3. Verify with `GET /api/v1/fundamentals/screen/fields` that the new section's metrics appear in the screener metadata.
+4. Update `docs/services/api-gateway.md` to document the S9 proxy for the new section (if applicable).
