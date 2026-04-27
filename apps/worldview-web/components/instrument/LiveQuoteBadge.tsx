@@ -37,6 +37,16 @@ interface LiveQuoteBadgeProps {
   instrumentId: string;
   /** Initial price from CompanyOverview (shows while quote is fetching) */
   initialPrice?: number | null;
+  /**
+   * When true, renders only a StaleBadge (freshness indicator) without the full
+   * price block. Use in CompactInstrumentHeader where price is already displayed
+   * inline — the badge then provides freshness context without duplicating price.
+   *
+   * WHY compact prop (not a separate component): both modes share the same polling
+   * logic (useQuery with 15s refetchInterval) — extracting to two components would
+   * duplicate the query and hit the API twice for the same instrument.
+   */
+  compact?: boolean;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -48,7 +58,7 @@ const REFETCH_INTERVAL_MS = 15_000;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function LiveQuoteBadge({ instrumentId, initialPrice }: LiveQuoteBadgeProps) {
+export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: LiveQuoteBadgeProps) {
   const { accessToken } = useAuth();
 
   const { data: quote } = useQuery({
@@ -73,8 +83,24 @@ export function LiveQuoteBadge({ instrumentId, initialPrice }: LiveQuoteBadgePro
   });
 
   if (!quote) {
+    // ── Loading: compact mode shows nothing (price displayed by parent); full mode shows skeleton
+    if (compact) return null;
     return (
       <div className="h-10 w-32 animate-pulse rounded-[2px] bg-muted" />
+    );
+  }
+
+  // ── Compact mode: just the freshness badge (no price block) ───────────────
+  // WHY: in CompactInstrumentHeader, price+change are already rendered inline from
+  // props. The compact badge just signals data freshness alongside that static display.
+  // StaleBadge renders nothing for "live"/"recent" — stays invisible on fresh data.
+  if (compact) {
+    return (
+      <StaleBadge
+        status={quote.freshness_status}
+        staleReason={quote.stale_reason}
+        dataAsOf={quote.data_as_of}
+      />
     );
   }
 

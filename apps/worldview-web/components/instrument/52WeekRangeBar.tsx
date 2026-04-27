@@ -38,11 +38,17 @@ interface WeekRangeBarProps {
   current: number | null;
   /** Optional extra className applied to the root wrapper */
   className?: string;
+  /**
+   * When false, omit the low/high label row below the track.
+   * Default true. Set to false in compact contexts (e.g., header row) where
+   * the labels would overflow the row height.
+   */
+  showLabels?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function WeekRangeBar({ low, high, current, className = "" }: WeekRangeBarProps) {
+export function WeekRangeBar({ low, high, current, className = "", showLabels = true }: WeekRangeBarProps) {
   // ── Guard: if any required value is missing, render a flat unavailable bar ──
   // WHY render the shell (not null): keeps layout stable — the section always
   // takes up the same vertical space regardless of data availability.
@@ -51,11 +57,13 @@ export function WeekRangeBar({ low, high, current, className = "" }: WeekRangeBa
       <div className={`flex flex-col gap-0.5 ${className}`}>
         {/* Flat muted bar — signals "no data" without showing numbers */}
         <div className="relative h-1 bg-muted rounded-full w-full" />
-        {/* Empty labels maintain height */}
-        <div className="flex justify-between">
-          <span className="font-mono text-[10px] text-muted-foreground">—</span>
-          <span className="font-mono text-[10px] text-muted-foreground">—</span>
-        </div>
+        {/* Empty labels maintain height — only if showLabels enabled */}
+        {showLabels && (
+          <div className="flex justify-between">
+            <span className="font-mono text-[10px] text-muted-foreground">—</span>
+            <span className="font-mono text-[10px] text-muted-foreground">—</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -86,15 +94,19 @@ export function WeekRangeBar({ low, high, current, className = "" }: WeekRangeBa
       </div>
 
       {/* ── Low / High labels ──────────────────────────────────────────────── */}
-      {/* WHY font-mono text-[10px]: terminal data label typography (§0.1) */}
-      <div className="flex justify-between">
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {formatPrice(low)}
-        </span>
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {formatPrice(high)}
-        </span>
-      </div>
+      {/* WHY font-mono text-[10px]: terminal data label typography (§0.1)
+          WHY conditional: showLabels=false used in compact header row where
+          the 14px label row would overflow the 28px row height. */}
+      {showLabels && (
+        <div className="flex justify-between">
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {formatPrice(low)}
+          </span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {formatPrice(high)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

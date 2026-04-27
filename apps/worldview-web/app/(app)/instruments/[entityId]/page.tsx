@@ -109,8 +109,8 @@ export default function InstrumentDetailPage() {
       <div className="space-y-3 p-3">
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-10 w-72" />
-        {/* WHY h-[360px] (was h-[280px]): matches updated OHLCVChart height */}
-        <Skeleton className="h-[360px] w-full" />
+        {/* WHY h-[280px]: matches OHLCVChart CHART_HEIGHT constant (Wave C-2) */}
+        <Skeleton className="h-[280px] w-full" />
       </div>
     );
   }
@@ -171,6 +171,7 @@ export default function InstrumentDetailPage() {
         description={instrument.description}
         marketCap={fund?.market_cap ?? null}
         peRatio={fund?.pe_ratio ?? null}
+        dividendYield={fund?.dividend_yield ?? null}
         week52High={fund?.week_52_high ?? null}
         week52Low={fund?.week_52_low ?? null}
         price={overview?.quote?.price ?? null}
@@ -217,6 +218,8 @@ export default function InstrumentDetailPage() {
             centerLabel={instrument.ticker}
             initialBars={overview?.ohlcv?.bars}
             fundamentals={fund ?? null}
+            instrument={instrument}
+            currentPrice={overview?.quote?.price ?? null}
             onViewAllNews={() => setActiveTab("news")}
           />
         </TabsContent>

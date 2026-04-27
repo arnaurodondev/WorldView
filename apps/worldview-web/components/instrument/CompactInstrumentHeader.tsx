@@ -25,7 +25,8 @@
 import { useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
-import { formatMarketCap, formatRatio } from "@/lib/utils";
+import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
+import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -38,13 +39,15 @@ interface CompactInstrumentHeaderProps {
   // Fundamentals for row 2 stats strip
   marketCap: number | null;
   peRatio: number | null;
+  /** Dividend yield as decimal (0.006 = 0.6%). Replaces the old VOL N/A field. */
+  dividendYield: number | null;
   week52High: number | null;
   week52Low: number | null;
   // Live price (from quote via initialPrice from CompanyOverview)
   price: number | null;
   change: number | null;
   changePct: number | null;
-  instrumentId: string;    // for LiveQuoteBadge
+  instrumentId: string;    // for LiveQuoteBadge compact mode
   onBack: () => void;
 }
 
@@ -58,6 +61,7 @@ export function CompactInstrumentHeader({
   description,
   marketCap,
   peRatio,
+  dividendYield,
   week52High,
   week52Low,
   price,
@@ -138,20 +142,22 @@ export function CompactInstrumentHeader({
             </span>
           )}
 
-          {/* LiveQuoteBadge — shows freshness status (DELAYED/STALE badges) + polls for updates.
-              WHY compact mode: in this dense header we only need the freshness badge,
-              not the full price/timestamp block (price is already shown above). */}
-          <LiveQuoteBadge instrumentId={instrumentId} initialPrice={price} />
+          {/* LiveQuoteBadge compact — polls every 15s for fresh quote data and shows
+              ONLY a StaleBadge (DELAYED/STALE). Price is already shown inline above.
+              WHY compact=true: the header row is h-7 (28px); the full LiveQuoteBadge
+              renders price in text-2xl which would overflow the row. Compact mode
+              renders just the freshness indicator — zero height unless data is stale. */}
+          <LiveQuoteBadge compact instrumentId={instrumentId} initialPrice={price} />
         </div>
       </div>
 
       {/* ── Row 2: stats strip + description (h-7 = 28px) ──────────────── */}
-      <div className="flex items-center h-7 px-2">
+      <div className="flex items-center h-7 px-2 overflow-hidden">
 
-        {/* Left ~60%: key stats strip */}
-        {/* WHY gap-0 (no gap between items): separators (│) provide visual space;
-            Tailwind gap would add redundant spacing around the pipe chars. */}
-        <div className="flex items-center gap-0 text-[10px] font-mono tabular-nums text-muted-foreground shrink-0 mr-auto">
+        {/* Left: key stats strip
+            WHY shrink-0 on stats (not min-w-0): stats must never be truncated —
+            they are the primary data. Description (right side) gets truncated instead. */}
+        <div className="flex items-center gap-0 text-[10px] font-mono tabular-nums text-muted-foreground shrink-0 mr-2">
 
           {/* Market Cap */}
           <span className="text-muted-foreground">MKT CAP</span>
@@ -159,30 +165,51 @@ export function CompactInstrumentHeader({
 
           <span className="px-1.5 text-border" aria-hidden>│</span>
 
-          {/* P/E Ratio — formatRatio adds "x" suffix */}
+          {/* P/E Ratio — color-coded: green <20, amber 20-35, red >35
+              WHY color here too: analysts scan row 2 before key metrics panel;
+              color signals value/expensive at a glance. */}
           <span className="text-muted-foreground">P/E</span>
-          <span className="text-foreground ml-1">{formatRatio(peRatio)}</span>
-
-          <span className="px-1.5 text-border" aria-hidden>│</span>
-
-          {/* 52-Week Range */}
-          <span className="text-muted-foreground">52W</span>
-          <span className="text-foreground ml-1">
-            {week52Low != null && week52High != null
-              ? `${week52Low.toFixed(2)}–${week52High.toFixed(2)}`
-              : "—"}
+          <span className={`ml-1 ${
+            peRatio == null ? "text-foreground" :
+            peRatio > 35 ? "text-negative" :
+            peRatio < 20 ? "text-positive" :
+            "text-warning"
+          }`}>
+            {formatRatio(peRatio)}
           </span>
 
           <span className="px-1.5 text-border" aria-hidden>│</span>
 
-          {/* Volume — not available in props; show N/A */}
-          <span className="text-muted-foreground">VOL</span>
-          <span className="text-foreground ml-1">N/A</span>
+          {/* Dividend Yield — replaces the old "VOL N/A" field.
+              WHY DIV YIELD instead of VOL: Volume is not in CompanyOverview props;
+              showing N/A wastes space. Dividend yield IS available and relevant
+              (income investors scan this alongside P/E). */}
+          <span className="text-muted-foreground">DIV</span>
+          <span className={`ml-1 ${(dividendYield ?? 0) > 0.03 ? "text-positive" : "text-foreground"}`}>
+            {formatPercent(dividendYield)}
+          </span>
+
+          <span className="px-1.5 text-border" aria-hidden>│</span>
+
+          {/* 52-Week Range — WeekRangeBar visual (no labels to fit in h-7)
+              WHY visual bar instead of "low–high" text: position-within-range
+              is more useful than two isolated numbers. showLabels=false keeps
+              it within the 28px row height. w-20 gives readable track width. */}
+          <span className="text-muted-foreground mr-1">52W</span>
+          <WeekRangeBar
+            low={week52Low}
+            high={week52High}
+            current={price}
+            showLabels={false}
+            className="w-20"
+          />
         </div>
 
-        {/* Right ~40%: truncated description + "Read more" button */}
+        {/* Right: truncated description + "Read more" button
+            WHY min-w-0 flex-1: allows the description to take remaining space
+            without pushing the stats strip off screen. */}
         {description && (
-          <div className="flex items-center gap-1 min-w-0 max-w-[40%]">
+          <div className="flex items-center gap-1 min-w-0 flex-1">
             <span className="text-[11px] text-muted-foreground truncate">
               {description}
             </span>
