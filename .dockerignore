@@ -2,8 +2,8 @@
 # Whitelist-style: exclude everything, then allow only paths needed by Dockerfiles.
 # Applies when build context is the repo root (services use context: ../.. ).
 #
-# worldview-web and intelligence-migrations use their own build contexts and are
-# unaffected by this file.
+# worldview-web also builds from repo root (context: ../..); its files are
+# whitelisted below. intelligence-migrations uses its own build context.
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Exclude everything by default
@@ -34,6 +34,12 @@
 
 # ── Kafka Avro schemas (needed by consumers at runtime) ──────────────────────
 !infra/kafka/schemas/
+
+# ── Frontend (worldview-web Dockerfile also uses repo root context) ──────────
+!package.json
+!pnpm-workspace.yaml
+!pnpm-lock.yaml
+!apps/worldview-web/
 
 # ── Re-exclude dev artifacts that snuck through the above globs ──────────────
 **/.mypy_cache
