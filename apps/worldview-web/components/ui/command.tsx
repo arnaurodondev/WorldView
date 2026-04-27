@@ -82,8 +82,15 @@ CommandList.displayName = CommandPrimitive.List.displayName;
 const CommandEmpty = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive.Empty>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>
->((props, ref) => (
-  <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-sm text-muted-foreground" {...props} />
+// WHY destructure className: spreading `props` after a static className causes the
+// caller's className to *replace* (not merge) the base classes. Destructuring lets
+// cn() merge both, so callers can override padding/font-size without losing text-center.
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Empty
+    ref={ref}
+    className={cn("py-6 text-center text-sm text-muted-foreground", className)}
+    {...props}
+  />
 ));
 CommandEmpty.displayName = CommandPrimitive.Empty.displayName;
 
