@@ -266,8 +266,11 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
               on the wrapper div give the same rendered structure (headers, bold,
               lists) without the forced whitespace. Pattern mirrors MorningBriefCard. */}
           <div className="text-[13px] leading-relaxed text-foreground [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_li]:ml-3 [&_p]:mb-1.5 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-3">
+            {/* WHY brief.narrative (not brief.content): BriefingResponse.narrative
+                is the canonical field name from S8's PublicBriefingResponse schema.
+                See types/api.ts for the full interface definition. */}
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {brief.content}
+              {brief.narrative}
             </ReactMarkdown>
           </div>
 

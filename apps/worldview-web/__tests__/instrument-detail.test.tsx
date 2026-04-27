@@ -194,7 +194,9 @@ vi.mock("@/lib/gateway", () => ({
     // (Wave 5) now fetch live AI briefs via S8. All IntelligenceTab tests and
     // InstrumentAISubheader tests need this mock to avoid TypeError.
     getInstrumentBrief: vi.fn().mockResolvedValue({
-      content: "**Apple** reported strong Q4 results above expectations.",
+      // WHY narrative (not content): BriefingResponse.narrative mirrors S8's
+      // PublicBriefingResponse schema field. See types/api.ts for definition.
+      narrative: "**Apple** reported strong Q4 results above expectations.",
       risk_summary: null,
       entity_mentions: [{ entity_id: "ent-001", name: "Apple", ticker: "AAPL" }],
       citations: [],
@@ -477,7 +479,8 @@ describe("IntelligenceTab", () => {
       // WHY getInstrumentBrief: InstrumentBriefSection (added PLAN-0034) makes this call.
       // Without it the gateway factory throws TypeError on the missing method.
       getInstrumentBrief: vi.fn().mockResolvedValue({
-        content: "", entity_mentions: [], citations: [], generated_at: new Date().toISOString(),
+        // WHY narrative (not content): BriefingResponse.narrative is the field name
+        narrative: "", entity_mentions: [], citations: [], generated_at: new Date().toISOString(),
         risk_summary: null, cached: false, entity_id: "ent-001",
       }),
       refreshToken: vi.fn().mockResolvedValue({ access_token: "tok", user: {}, expires_in: 900 }),

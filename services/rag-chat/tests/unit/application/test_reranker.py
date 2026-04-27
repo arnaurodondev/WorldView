@@ -1,11 +1,11 @@
-"""Unit tests for BGEReranker (T-F-2-01)."""
+"""Unit tests for BGEReranker and CohereReranker (T-F-2-01)."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from rag_chat.application.pipeline.reranker import BGEReranker
+from rag_chat.application.pipeline.reranker import BGEReranker, CohereReranker
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
@@ -70,3 +70,76 @@ async def test_reranker_empty_input() -> None:
     reranker = _make_reranker(AsyncMock())
     result = await reranker.rerank("query", [])
     assert result == []
+
+
+# ── CohereReranker tests ───────────────────────────────────────────────────────
+
+
+def _make_cohere_reranker(http_client: MagicMock | None = None) -> CohereReranker:
+    return CohereReranker(api_key="test-cohere-key", http_client=http_client)
+
+
+@pytest.mark.unit
+async def test_cohere_reranker_returns_top_k() -> None:
+    """Cohere returns ranked results → items reordered correctly."""
+    items = [_item(f"item-{i}") for i in range(5)]
+
+    # Cohere returns items in reverse order (item-4 is best)
+    results = [{"index": 4 - i, "relevance_score": (i + 1) * 0.2} for i in range(5)]
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"results": results}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = _make_cohere_reranker(mock_client)
+    result = await reranker.rerank("Apple revenue?", items)
+
+    # Top item should be item-4 (highest relevance_score 1.0 in mock)
+    assert result[0].item_id == "item-0"  # index=4 mapped to item at sorted position
+    mock_client.post.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_cohere_reranker_posts_to_cohere_url() -> None:
+    """Verify request is sent to Cohere v2 endpoint with auth header."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"results": [{"index": 0, "relevance_score": 0.9}]}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = CohereReranker(api_key="test-key-123", http_client=mock_client)
+    await reranker.rerank("What is NVDA?", [_item("x")])
+
+    call_kwargs = mock_client.post.call_args.kwargs
+    assert "cohere.com" in mock_client.post.call_args[0][0]
+    assert "Bearer test-key-123" in call_kwargs["headers"]["Authorization"]
+
+
+@pytest.mark.unit
+async def test_cohere_reranker_falls_back_on_error() -> None:
+    """Cohere API error → top-12 by fusion_score returned."""
+    items = [_item(f"item-{i}", score=float(i) / 10) for i in range(20)]
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = Exception("connection refused")
+
+    reranker = _make_cohere_reranker(mock_client)
+    result = await reranker.rerank("query", items)
+
+    assert len(result) == 12
+    scores = [r.fusion_score for r in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+@pytest.mark.unit
+async def test_cohere_reranker_empty_input() -> None:
+    """0 items → empty list without calling the API."""
+    mock_client = AsyncMock()
+    reranker = _make_cohere_reranker(mock_client)
+    result = await reranker.rerank("query", [])
+    assert result == []
+    mock_client.post.assert_not_awaited()

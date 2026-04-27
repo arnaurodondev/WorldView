@@ -177,11 +177,15 @@ export function CollapsibleSidebar({
         // CSS border (or drag handle line) is visible. This matches Bloomberg Terminal
         // convention: one hairline separator, not two.
         // WHY overflow-hidden: prevents labels from bleeding out during width animation
-        // WHY border-r always: a single consistent right border regardless of expanded
-        // state avoids the "no separator" flash when transitioning. The drag handle is
-        // still visible on hover (absolute inset-0 group-hover indicator) but the border
-        // provides the baseline separator at all times.
-        "relative flex flex-col h-full bg-background overflow-hidden shrink-0 border-r border-border",
+        // WHY border-r always for collapsed, NOT for expanded: in collapsed (48px) state
+        // there is no drag handle so we need the CSS border-r as the separator.
+        // In expanded state the drag handle provides its own w-px visual line at the
+        // exact right edge — keeping border-r PLUS the drag handle line creates a
+        // double-border artefact (the CSS border is inside the element's bounding box
+        // while the drag handle's w-px line is inside the 4px hit zone, making them
+        // appear as two adjacent 1px lines ~3px apart). Solution: use border-r only
+        // when collapsed; let the drag handle supply the single border when expanded.
+        expanded ? "relative flex flex-col h-full bg-background overflow-hidden shrink-0" : "relative flex flex-col h-full bg-background overflow-hidden shrink-0 border-r border-border",
         // WHY transition-[width]: only the width animates — color/padding changes remain instant
         // WHY ease-out: snappy opening (fast start, smooth finish) not linear
         // WHY only animate on toggle (not drag): we skip the transition during mouse-drag
@@ -340,10 +344,12 @@ export function CollapsibleSidebar({
           aria-orientation="vertical"
           aria-label="Resize sidebar"
         >
-          {/* Visual indicator line — 1px wide, only colored on hover
-           * WHY bg-border default: subtle so it doesn't compete with content;
+          {/* Visual indicator line — always visible 1px separator, tints on hover.
+           * WHY bg-border always (not transparent): this line IS the panel separator
+           * when expanded — border-r was removed from the aside to avoid a double
+           * border artefact. The line must be visible by default, not just on hover.
            * WHY group-hover:bg-primary/50: hover tints to primary color giving
-           * clear feedback that the element is interactive before the user clicks. */}
+           * clear feedback that the element is drag-resizable before the user clicks. */}
           <div className="h-full w-px bg-border group-hover:bg-primary/50 transition-colors" />
         </div>
       )}

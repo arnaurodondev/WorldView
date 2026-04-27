@@ -133,10 +133,14 @@ export function MorningBriefCard() {
 
   // ── Empty content guard ────────────────────────────────────────────────────
   // WHY check safeContent length: the API may return a brief object with an empty
-  // string for `content` if the LLM generated zero tokens (e.g., context was empty
+  // string for `narrative` if the LLM generated zero tokens (e.g., context was empty
   // or the generation timed out). In this case the UI would render a blank panel
   // (ReactMarkdown on "" produces nothing). Show the fallback message instead.
-  const safeContentEarly = brief.content ?? "";
+  //
+  // WHY "narrative" (not "content"): S8's PublicBriefingResponse schema field is
+  // "narrative". The types/api.ts BriefingResponse interface mirrors this exactly.
+  // Using brief.content would always be undefined → always show the fallback.
+  const safeContentEarly = brief.narrative ?? "";
   if (!safeContentEarly.trim()) {
     return (
       <p className="py-1 text-sm text-muted-foreground">

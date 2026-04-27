@@ -96,7 +96,12 @@ export function MarketSnapshotWidget() {
   });
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background (not bg-card): all other dashboard widgets use bg-background
+    // so their surface level is uniform. bg-card (#18181b) while neighbours use
+    // bg-background (#09090b) creates a visible "raised card" inconsistency that
+    // breaks the flat Bloomberg terminal aesthetic. bg-background here makes the
+    // widget visually flush with its neighbours in the gap-px grid.
+    <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">

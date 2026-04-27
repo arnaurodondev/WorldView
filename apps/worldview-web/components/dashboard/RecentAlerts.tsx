@@ -104,8 +104,19 @@ export function RecentAlerts() {
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
+      {/* WHY descriptive message (not "No recent alerts"): the empty state may confuse
+          new traders into thinking alerts are disabled. Telling them where to create
+          alert rules guides them to the action that will populate this widget.
+          The second line is a softer hint about where to go — not an error state. */}
       {!isLoading && merged.length === 0 && (
-        <p className="flex-1 px-2 pt-1 text-sm text-muted-foreground">No recent alerts</p>
+        <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2">
+          <p className="text-xs text-muted-foreground">No recent alerts.</p>
+          <p className="text-[10px] text-muted-foreground/60">
+            Create alert rules on the{" "}
+            <a href="/alerts" className="text-primary hover:underline">Alerts page</a>
+            {" "}to receive notifications here.
+          </p>
+        </div>
       )}
 
       {/* ── Alert rows ──────────────────────────────────────────────────── */}

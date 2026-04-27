@@ -6638,3 +6638,37 @@ When adding a new `DatasetType` enum value, always add the corresponding `_build
 ### Prevention
 
 PostgreSQL `ON CONFLICT ON CONSTRAINT name` ONLY works when the name refers to a constraint created via `ADD CONSTRAINT`, NOT a bare `CREATE UNIQUE INDEX`. Use `.on_conflict_do_nothing(index_elements=[...])` when the unique restriction is a plain index. Always verify with `\d tablename` that the index appears in both `\di` (indexes) and `\d` (constraints) sections before using the constraint form.
+
+---
+
+## BP-236 — entity_embedding_state.ensure_rows_exist() Inserts NULL next_refresh_at — Rows Never Scheduled
+
+| Field | Value |
+|-------|-------|
+| **Service** | knowledge-graph (S7) — `entity_embedding_state.py:ensure_rows_exist()` |
+| **Severity** | HIGH (all entities with no prior embeddings silently never get embedded) |
+| **Discovered** | 2026-04-27 KG pipeline investigation |
+| **Root cause** | `ensure_rows_exist()` provisions placeholder rows with `next_refresh_at = NULL`. The periodic refresh workers (`DefinitionRefreshWorker`, `NarrativeRefreshWorker`, `FundamentalsRefreshWorker`) all query `WHERE next_refresh_at IS NOT NULL AND next_refresh_at < now()`. Rows with `NULL` next_refresh_at are NEVER returned by this query. The result: every entity gets its embedding row provisioned, but those rows are immediately dead-scheduled and never processed. Embeddings remain NULL forever. |
+| **Symptom** | `entity_embedding_state` table has rows for every entity but `embedding IS NULL` on all of them. `DefinitionRefreshWorker` logs `refreshed=0` on every cycle despite rows existing. ANN search returns no results. |
+| **Fix** | Change `ensure_rows_exist()` SQL to include `next_refresh_at = now()` in the INSERT: `INSERT INTO entity_embedding_state (entity_id, view_type, last_refreshed_at, next_refresh_at, refresh_count) VALUES (:entity_id, :view_type, now(), now(), 0) ON CONFLICT (entity_id, view_type) DO NOTHING`. |
+
+### Prevention
+
+Any table that uses a `next_refresh_at IS NOT NULL AND next_refresh_at < now()` query pattern for batch scheduling MUST have all rows provisioned with a concrete `next_refresh_at` (even `now()`). A `NULL` `next_refresh_at` is a **scheduling black hole** — the row can never be selected for processing. When adding new provisioning code, always verify: "Will the refresh query pick up these rows?"
+
+---
+
+## BP-237 — pgvector CAST in UPSERT Requires String Format, Not Python list[float]
+
+| Field | Value |
+|-------|-------|
+| **Service** | knowledge-graph (S7) — `entity_embedding_state.py:upsert()` |
+| **Severity** | HIGH (all embedding writes silently fail — UPSERT executes but embedding stays NULL) |
+| **Discovered** | 2026-04-27 KG pipeline investigation |
+| **Root cause** | asyncpg cannot serialize a Python `list[float]` to a PostgreSQL `vector(1024)` column even when the SQL uses `CAST(:embedding AS vector)`. asyncpg rejects the Python list with `DataError: invalid input for query argument`. This causes the entire `session.execute()` call to fail silently inside a `try/except` block. The embedding column is never written. Related to BP-233 (ANN SELECT case) but the UPSERT INSERT case has additional subtlety: `EXCLUDED.embedding` in the ON CONFLICT clause also needs the CAST applied. |
+| **Symptom** | `entity_embedding_state.upsert()` executes without raising, but the `embedding` column stays `NULL`. No error logged because the exception is swallowed. Phase 3 of `DefinitionRefreshWorker` appears to succeed (commit happens) but embeddings don't appear in the DB. |
+| **Fix** | Convert `list[float]` to pgvector text format before binding: `embedding_str = "[" + ",".join(str(x) for x in embedding) + "]" if embedding is not None else None`. Use `CAST(:embedding AS vector)` and `CAST(EXCLUDED.embedding AS vector)` in SQL. Use `COALESCE(CAST(EXCLUDED.embedding AS vector), entity_embedding_state.embedding)` for the update clause to preserve existing embeddings when `embedding_str=None`. |
+
+### Prevention
+
+Whenever writing to a `vector(N)` column via asyncpg (raw SQL or SQLAlchemy `text()`), always convert the embedding list to string format. Do NOT rely on SQLAlchemy ORM type coercion — it does not apply to `text()` queries. The pattern `"[" + ",".join(str(x) for x in v) + "]"` is the canonical fix. See also BP-233 for the ANN SELECT case.

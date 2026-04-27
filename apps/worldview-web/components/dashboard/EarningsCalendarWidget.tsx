@@ -17,8 +17,9 @@
  */
 
 // WHY no "use client": pure presentational, no hooks or browser APIs.
-
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// WHY no InlineEmptyState import: we use plain <p> elements for the empty state
+// here — the two-line message layout doesn't match InlineEmptyState's single-line
+// API, and avoids pulling in an unnecessary dependency for a static component.
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -41,8 +42,14 @@ export function EarningsCalendarWidget() {
       </div>
 
       {/* ── Empty state ────────────────────────────────────────────────────── */}
-      <div className="flex-1 px-2 py-2">
-        <InlineEmptyState message="Earnings data coming soon" />
+      {/* WHY two-line message: first line tells what is missing; second line tells
+          WHY it is missing (data not ingested). This avoids confusion where traders
+          might think the widget is broken rather than awaiting data ingest. */}
+      <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2">
+        <p className="text-xs text-muted-foreground">No upcoming earnings events scheduled.</p>
+        <p className="text-[10px] text-muted-foreground/60">
+          Earnings calendar data populates as company reporting schedules are ingested.
+        </p>
       </div>
 
     </div>

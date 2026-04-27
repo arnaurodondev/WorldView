@@ -569,7 +569,11 @@ export interface BriefingCitation {
 
 /** Response from GET /api/v1/briefings/* — matches S8 PublicBriefingResponse */
 export interface BriefingResponse {
-  content: string;
+  // WHY narrative (not content): S8's PublicBriefingResponse schema uses the field
+  // name "narrative" — the internal BriefingResponse model uses "narrative" as well.
+  // The route handler maps execute_public_morning()'s "content" key → "narrative"
+  // before serialising. See: services/rag-chat/src/rag_chat/api/schemas.py line 117.
+  narrative: string;
   risk_summary: {
     concentration_score: number;
     top_risk_signals: Array<{ signal_id: string; description: string }>;

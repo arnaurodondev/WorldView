@@ -1,10 +1,13 @@
 """Intent classifier for the RAG-Chat pipeline (T-E-2-01).
 
-Two-tier classification strategy:
-  1. ``OllamaIntentClassifier`` — primary, calls local qwen3:0.6b via Ollama.
-  2. ``KeywordHeuristicClassifier`` — fallback when Ollama is unavailable or times out.
+Three-tier classification strategy:
+  1. ``DeepInfraIntentClassifier`` — primary when ``deepinfra_api_key`` is set;
+     calls meta-llama/Meta-Llama-3.2-3B-Instruct via DeepInfra (~100-200ms GPU).
+  2. ``OllamaIntentClassifier`` — secondary, calls local qwen3:0.6b via Ollama
+     (used as primary when no DeepInfra key; ~2-5s on warm CPU).
+  3. ``KeywordHeuristicClassifier`` — final fallback; pure in-memory, no I/O.
 
-Both return ``(intent, sub_questions, rephrased_query)`` so callers are agnostic to
+All return ``(intent, sub_questions, rephrased_query)`` so callers are agnostic to
 which tier was used.
 """
 
@@ -83,6 +86,10 @@ _CLASSIFICATION_PROMPT = (
 
 _VALID_INTENTS: frozenset[str] = frozenset(q.value for q in QueryIntent)
 
+# ── DeepInfra API constants ────────────────────────────────────────────────────
+
+_DEEPINFRA_API_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
+_DEEPINFRA_DEFAULT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 # ── Keyword heuristic classifier ───────────────────────────────────────────────
 
@@ -169,6 +176,99 @@ class OllamaIntentClassifier:
         except Exception:
             log.warning(  # type: ignore[no-any-return]
                 "ollama_intent_classifier_fallback",
+                model=self._model,
+                msg_len=len(message),
+            )
+            return self._fallback.classify(message)
+
+
+# ── DeepInfra-backed classifier ───────────────────────────────────────────────
+
+
+class DeepInfraIntentClassifier:
+    """Primary intent classifier backed by DeepInfra GPU inference.
+
+    Uses ``meta-llama/Meta-Llama-3.2-3B-Instruct`` via DeepInfra's
+    OpenAI-compatible ``/v1/openai/chat/completions`` endpoint.
+    Expected latency: ~100-200ms (GPU, always warm).
+
+    This replaces the local ``qwen3:0.6b`` which runs on CPU and takes 2-20s
+    depending on Ollama model-swap contention, causing the system to always
+    fall back to the keyword heuristic and lose sub_questions/rephrased_query.
+
+    Falls back to ``KeywordHeuristicClassifier`` on any API error so the
+    pipeline is never blocked by classification.
+
+    Args:
+        api_key:     DeepInfra API key.
+        model:       DeepInfra model ID (default: meta-llama/Meta-Llama-3.2-3B-Instruct).
+        http_client: Optional pre-configured httpx.AsyncClient (injected in tests).
+        timeout:     Request timeout in seconds (default: 10.0).
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = _DEEPINFRA_DEFAULT_MODEL,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+        timeout: float = 10.0,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._client = http_client or httpx.AsyncClient()
+        self._timeout = timeout
+        self._fallback = KeywordHeuristicClassifier()
+
+    async def classify(
+        self,
+        message: str,
+        conversation_history: list[dict[str, Any]],
+        resolved_entities: list[ResolvedEntity],
+    ) -> tuple[QueryIntent, list[str], str]:
+        """Classify *message* into a ``QueryIntent`` via DeepInfra API.
+
+        Returns ``(intent, sub_questions, rephrased_query)``.
+        Falls back to keyword heuristic if DeepInfra is unavailable.
+        """
+        prompt = _CLASSIFICATION_PROMPT.format(
+            message=message,
+            history=json.dumps(conversation_history[-6:]),
+            entities=json.dumps(
+                [{"canonical_name": e.canonical_name, "type": e.entity_type} for e in resolved_entities]
+            ),
+        )
+        try:
+            response = await self._client.post(
+                _DEEPINFRA_API_URL,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self._model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a financial query intent classifier. "
+                                "Always respond with valid JSON matching the requested schema."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    # response_format: json_object forces the model to emit valid JSON.
+                    # Not all DeepInfra models support this; _parse_intent_response()
+                    # handles the fallback if parsing fails.
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.0,
+                    "max_tokens": 256,
+                },
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            return _parse_intent_response(content)
+        except Exception:
+            log.warning(  # type: ignore[no-any-return]
+                "deepinfra_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
             )

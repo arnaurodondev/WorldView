@@ -79,8 +79,17 @@ export function EconomicCalendar() {
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
+      {/* WHY descriptive message (not "No upcoming events"): the empty state here
+          is caused by data not yet being ingested — not a calendar with no events.
+          A clear message sets correct expectations: the API is functional but the
+          economic event data stream hasn't populated yet. */}
       {!isLoading && !isError && events.length === 0 && (
-        <p className="flex-1 px-2 pt-1 text-sm text-muted-foreground">No upcoming events</p>
+        <div className="flex-1 flex flex-col gap-0.5 px-2 pt-2">
+          <p className="text-xs text-muted-foreground">No upcoming economic events scheduled.</p>
+          <p className="text-[10px] text-muted-foreground/60">
+            Economic events populate as market calendar data is ingested.
+          </p>
+        </div>
       )}
 
       {/* ── Event rows ──────────────────────────────────────────────────── */}
