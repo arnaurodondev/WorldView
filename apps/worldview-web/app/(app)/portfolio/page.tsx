@@ -36,7 +36,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, Plus, ChevronRight } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -552,10 +552,14 @@ export default function PortfolioPage() {
   // The URL always shows /portfolio regardless of which portfolio is active.
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
 
-  // WHY connectModalOpen state here: the modal trigger lives in the Brokerages tab
-  // but the modal must persist through tab switches (e.g., user accidentally switches
-  // tabs mid-connection flow). Lifting to page level prevents premature unmount.
+  // WHY connectModalOpen state here: the modal trigger lives in the Transactions tab
+  // brokerage section but the modal must persist through tab switches.
   const [connectModalOpen, setConnectModalOpen] = useState(false);
+
+  // WHY brokeragesSectionExpanded default false: the primary use of the Transactions
+  // tab is reviewing transaction history — the brokerage connection panel is secondary.
+  // Collapsed by default keeps the transaction table immediately visible.
+  const [brokeragesSectionExpanded, setBrokeragesSectionExpanded] = useState(false);
 
   // ── Create Portfolio dialog state ──────────────────────────────────────────
   // WHY at page level (not inside the header): the dialog must be rendered in the
@@ -1075,12 +1079,8 @@ export default function PortfolioPage() {
           >
             Watchlist
           </TabsTrigger>
-          <TabsTrigger
-            value="brokerages"
-            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-          >
-            Brokerages
-          </TabsTrigger>
+          {/* WHY no Brokerages tab: merged into Transactions as a collapsible panel
+              so traders can see connection status without leaving the transaction context */}
         </TabsList>
 
         {/* ── Holdings Tab ────────────────────────────────────────────────── */}
@@ -1122,21 +1122,72 @@ export default function PortfolioPage() {
         </TabsContent>
 
         {/* ── Transactions Tab ─────────────────────────────────────────────── */}
+        {/* WHY flex flex-col: the brokerage section sits above the transactions
+            table. Using flex-col makes the section stack vertically and lets the
+            table take the remaining height. */}
         <TabsContent
           value="transactions"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 flex flex-col"
         >
-          {txLoading ? (
-            <div className="space-y-px p-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-[22px] w-full" />
-              ))}
+          {/* ── Brokerage connections collapsible ─────────────────────────── */}
+          {/* WHY merged here: brokerage connection status is context for understanding
+              which transactions came from which source. Moving it here eliminates the
+              separate Brokerages tab and surfaces the information next to the data it
+              explains. The section is collapsed by default so the transaction list
+              remains the primary focus when the tab is first opened. */}
+          <div className="shrink-0 border-b border-border">
+            {/* Header row — always visible, click to expand/collapse */}
+            <div className="flex h-9 items-center gap-1.5 px-3">
+              <button
+                onClick={() => setBrokeragesSectionExpanded((v) => !v)}
+                aria-expanded={brokeragesSectionExpanded}
+                className="flex flex-1 items-center gap-1.5 text-left"
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3 text-muted-foreground transition-transform duration-150",
+                    brokeragesSectionExpanded && "rotate-90",
+                  )}
+                />
+                <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  Connected Brokerages
+                </span>
+              </button>
+
+              {/* Connect CTA — always reachable without expanding the section */}
+              {activePortfolioId && (
+                <button
+                  aria-label="Connect a new brokerage"
+                  onClick={() => setConnectModalOpen(true)}
+                  className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors shrink-0"
+                >
+                  + Connect
+                </button>
+              )}
             </div>
-          ) : (
-            <TransactionsTable
-              transactions={transactionsResp?.transactions ?? []}
-            />
-          )}
+
+            {/* Expanded brokerage list */}
+            {brokeragesSectionExpanded && (
+              <div className="px-2 pb-2">
+                <ConnectedBrokeragesList portfolioId={activePortfolioId ?? ""} />
+              </div>
+            )}
+          </div>
+
+          {/* ── Transaction list (always visible below brokerage section) ─── */}
+          <div className="flex-1 min-h-0">
+            {txLoading ? (
+              <div className="space-y-px p-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-[22px] w-full" />
+                ))}
+              </div>
+            ) : (
+              <TransactionsTable
+                transactions={transactionsResp?.transactions ?? []}
+              />
+            )}
+          </div>
         </TabsContent>
 
         {/* ── Watchlist Tab ─────────────────────────────────────────────────── */}
@@ -1153,36 +1204,6 @@ export default function PortfolioPage() {
             quotes={watchlistQuotes}
             isLoading={watchlistsLoading}
           />
-        </TabsContent>
-
-        {/* ── Brokerages Tab ─────────────────────────────────────────────────── */}
-        {/* WHY tab is always visible regardless of connection count:
-            Traders need to always be able to connect a new brokerage. Hiding
-            the tab until there's a connection creates a "catch-22" UI. */}
-        <TabsContent
-          value="brokerages"
-          className="flex-1 min-h-0 overflow-y-auto p-2 mt-0"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-              Connected Brokerages
-            </span>
-            {/* Connect Brokerage CTA — opens consent modal */}
-            {activePortfolioId && (
-              <button
-                aria-label="Connect a new brokerage"
-                onClick={() => setConnectModalOpen(true)}
-                className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors"
-              >
-                + Connect
-              </button>
-            )}
-          </div>
-
-          {/* WHY use existing ConnectedBrokeragesList: it owns the query for
-              GET /v1/brokerage-connections and the sync action logic. Creating
-              a duplicate query here would cause cache inconsistency. */}
-          <ConnectedBrokeragesList portfolioId={activePortfolioId ?? ""} />
         </TabsContent>
       </Tabs>
 

@@ -336,7 +336,7 @@ export function CollapsibleSidebar({
        */}
       {expanded && (
         <div
-          className="absolute right-0 top-0 h-full w-1 cursor-col-resize group z-10"
+          className="absolute right-0 top-0 h-full w-1 cursor-col-resize group z-10 flex justify-end"
           onMouseDown={handleResizeMouseDown}
           // WHY role="separator" + aria-orientation: communicates to screen readers
           // that this is a resizable panel splitter, matching the ARIA Splitter pattern.
