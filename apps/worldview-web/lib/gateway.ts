@@ -468,16 +468,21 @@ export function createGateway(token?: string | null) {
     },
 
     /**
-     * getEarningsHistory — historical EPS (actual vs estimate) from S3
+     * getEarningsHistory — historical EPS actuals from S3 (ANNUAL records)
      *
-     * WHY named getEarningsHistory (not getEarningsTrend): the S9 path is
-     * /earnings-trend (EODHD naming) but the data is historical earnings records,
-     * not a forward-looking trend. The frontend naming clarifies usage intent.
+     * WHY /earnings-annual-trend (not /earnings-trend): The S9 /earnings-trend
+     * endpoint maps to EODHD's EarningsTrend section which contains FORWARD-LOOKING
+     * analyst consensus estimates (period "+1q", "+1y") — not historical actuals.
+     * The /earnings-annual-trend endpoint contains historical per-fiscal-year EPS
+     * actuals stored as `{date: "YYYY-MM-DD", epsActual: N}` records. This is what
+     * analysts need to see the multi-year EPS growth trajectory (the primary input
+     * for P/E target valuation). Live data confirms: 33 historical annual EPS records
+     * for AAPL from /earnings-annual-trend vs 0 records from the timeseries endpoint.
      * Used by: EarningsHistoryChart (Wave D-3)
      */
     getEarningsHistory(instrumentId: string): Promise<FundamentalsSectionResponse> {
       return apiFetch<FundamentalsSectionResponse>(
-        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/earnings-trend`,
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/earnings-annual-trend`,
         { token: t },
       );
     },

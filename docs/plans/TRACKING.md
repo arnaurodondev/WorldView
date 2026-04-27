@@ -13,7 +13,6 @@
 | PLAN-0024 | Production Deployment Infrastructure — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions | PRD-0024 | in-progress | 3/6 (A-3/A-4/A-5 pending) | — | 2026-04-11 |
 | PLAN-0037 | Frontend Terminal Redesign — enforce 2px radius, compact padding, no max-w-4xl, terminal-grade empty states, dense instrument/screener/portfolio/workspace layouts | PRD-0027/PRD-0028 | **SUPERSEDED by PRD-0031** | 3/5 partial waves committed | 2026-04-25 | 2026-04-25 |
 | PLAN-0039 | Terminal UI v3 Ground-Up Redesign — Bloomberg/CLI terminal quality: 48px icon rail, resizable panels, 12-col screener, 22px rows, §0 Terminal CLI Quality Standard (zero shadows/gradients/rounding, gap-px seams, 10px ALL CAPS headers) | PRD-0031 | **complete** | 8/8 | INSTITUTIONAL_DEMO_READY | 2026-04-25 |
-| PLAN-0041 | Instrument Page Redesign — Bloomberg-grade Overview (chart+right sidebar) + Fundamentals overhaul (section cards, sparklines, right sidebar: competitors/ownership/news, earnings/insider/technical components) + 6 new S9 proxy routes | Investigation 2026-04-27 | in-progress | 6/7 | — | 2026-04-27 |
 <!-- New plans are appended here by the /plan skill -->
 
 ## QA Sessions
@@ -67,6 +66,7 @@ PLAN-0001-B + PLAN-0001-C C+D ──→ PLAN-0001-D (S9 Gateway)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
+| PLAN-0041 | Instrument Page Redesign — Bloomberg-grade Overview (chart+right sidebar) + Fundamentals overhaul (section cards, sparklines, right sidebar: competitors/ownership/news, earnings/insider/technical components) + 6 new S9 proxy routes | Investigation 2026-04-27 | 2026-04-27 | 7 | — |
 | PLAN-0040 | Multi-Provider OHLCV Routing and Intraday Resampling — Alpaca/Polygon adapters, config-backed routing cache, reclaim worker, intraday resampling worker (S2+S3) | PRD-0032 | 2026-04-26 | 10 | 2026-04-26 |
 | PLAN-0038 | Free Provider Integration + Loki API Usage Observability — BaseProviderAdapter, Finnhub, Yahoo Finance, provider routing, zero-bar failover | investigation-2026-04-25 | 2026-04-26 | 5 | 2026-04-26 |
 | PLAN-0036 | EODHD API Usage Reduction — Quota Enforcement, Symbol Tiering, PriceSnapshot Layer | PRD-native | 2026-04-24 | 4 | — |

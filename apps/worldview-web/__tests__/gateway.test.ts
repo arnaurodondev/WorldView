@@ -644,16 +644,19 @@ describe("createGateway() — fundamentals sections (PLAN-0041 Wave B-1)", () =>
     expect(headers?.["Authorization"]).toBe("Bearer test-token");
   });
 
-  it("getEarningsHistory() calls /v1/fundamentals/{id}/earnings-trend with auth", async () => {
-    // WHY /earnings-trend (not /earnings-history): the S9 route path matches the
-    // EODHD naming convention; the gateway method name is more descriptive for
-    // the frontend consumer.
+  it("getEarningsHistory() calls /v1/fundamentals/{id}/earnings-annual-trend with auth", async () => {
+    // WHY /earnings-annual-trend (not /earnings-trend): /earnings-trend maps to
+    // EODHD's EarningsTrend section which contains FORWARD-LOOKING analyst consensus
+    // estimates. /earnings-annual-trend contains historical per-fiscal-year EPS actuals
+    // stored as {date, epsActual} records — what EarningsHistoryChart needs. Updated
+    // from /earnings-trend in Wave D-3 after live data confirmed the wrong endpoint
+    // was being called (0 historical records returned by /earnings-trend for AAPL).
     const spy = mockFetch(200, { security_id: "id-1", records: [] });
     const gw = createGateway("test-token");
     await gw.getEarningsHistory("inst-004");
 
     const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
-    expect(calledUrl).toBe("/api/v1/fundamentals/inst-004/earnings-trend");
+    expect(calledUrl).toBe("/api/v1/fundamentals/inst-004/earnings-annual-trend");
 
     const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
     const headers = calledInit?.headers as Record<string, string>;
