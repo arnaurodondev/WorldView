@@ -40,7 +40,7 @@ class RelationResponse(BaseModel):
         description=(
             "Composite authority score computed at query time from "
             "confidence * log1p(evidence_count). NOT a cached column."
-        )
+        ),
     )
     evidence_count: int
     first_evidence_at: datetime
@@ -56,7 +56,7 @@ class GraphNeighborhoodResponse(BaseModel):
     center: EntitySummary
     relations: list[RelationResponse]
     entities: dict[str, EntitySummary] = Field(
-        description="Map of entity_id (str) → EntitySummary for all referenced entities."
+        description="Map of entity_id (str) → EntitySummary for all referenced entities.",
     )
 
 

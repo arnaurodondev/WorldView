@@ -130,6 +130,7 @@ def compute_confidence(
     -------
     :class:`ConfidenceComponents`
         Intermediate + final values.  Call ``.validate()`` to assert bounds.
+
     """
     if now is None:
         now = datetime.now(tz=UTC)

@@ -23,6 +23,9 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-235](#bp-235) | Market-data / prediction markets | `ON CONFLICT ON CONSTRAINT uq_pms_market_snapshot` raises `UndefinedObjectError` — migration 005 created a UNIQUE INDEX, not a named CONSTRAINT; `ON CONFLICT ON CONSTRAINT` only works with named constraints | `services/market-data/src/market_data/infrastructure/db/repositories/prediction_market_repo.py:insert_if_not_exists()` |
+| [BP-234](#bp-234) | Market ingestion / scheduler | `ECONOMIC_EVENTS`, `MACRO_INDICATOR`, `INSIDER_TRANSACTIONS` dataset types fall through to `scheduler_unsupported_dataset_type` debug log → never enqueued; missing `_build_incremental_task` branches and factory methods | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py:_build_incremental_task()`; `domain/entities/ingestion_task.py` |
+| [BP-233](#bp-233) | Content ingestion / Polymarket | Gamma API changed format (April 2026) — `tokens` field dropped; outcomes now in JSON-string fields `outcomes`, `outcomePrices`, `clobTokenIds`; adapter pre-check `len(tokens) < 2` → all markets skipped (new=0 forever) | `services/content-ingestion/src/content_ingestion/infrastructure/adapters/polymarket/adapter.py:_process_market()`; `domain/entities.py:PredictionMarketFetchResult.from_gamma_response()` |
 | [BP-232](#bp-232) | Content ingestion / metadata | Article titles and URLs null in `documents` table — S4 stores content without metadata; S6 cannot build citations; morning brief shows no news context | `services/content-ingestion/src/content_ingestion/application/use_cases/execute_task.py`; `libs/contracts/src/contracts/canonical/` fetch result models |
 | [BP-231](#bp-231) | RAG-chat / intent classification | `qwen3:0.6b` CPU inference takes ~14s per call but `OllamaIntentClassifier` timeout was 5s — intent classifier always falls back to keyword heuristic | `services/rag-chat/src/rag_chat/application/pipeline/intent_classifier.py:159`; any service calling qwen3 on CPU without a latency-tuned timeout |
 | [BP-230](#bp-230) | Auth / middleware dual-instantiation | `app.add_middleware(InternalJWTMiddleware, ...)` call missing `jti_replay_check_enabled` parameter — the SERVING instance uses default `True`; all forwarded-JWT requests return 401 despite config saying `False` | `services/alert/src/alert/app.py:create_app()`; any service that configures `InternalJWTMiddleware` both in `lifespan` AND `add_middleware()` |
@@ -6584,3 +6587,54 @@ When wrapping httpx calls in `asyncio.wait_for`, ALWAYS set `httpx.AsyncClient(t
 ### Prevention
 
 Document that updating article scores or context sources requires Valkey cache invalidation before the next request. For development/debugging: `redis-cli --scan --pattern "briefing:*" | xargs redis-cli DEL`.
+
+---
+
+## BP-233 — Polymarket Gamma API Format Change Silently Drops All Markets
+
+| Field | Value |
+|-------|-------|
+| **Service** | content-ingestion (S4) — PolymarketAdapter, PredictionMarketFetchResult |
+| **Severity** | HIGH (all Polymarket data ingestion silently stopped) |
+| **Discovered** | 2026-04-27 ingestion pipeline audit |
+| **Root cause** | Polymarket Gamma API changed response format circa April 2026. Old format: `tokens` was a list of `{outcome, token_id, price}` dicts. New format: `tokens` field is absent (or empty list); outcomes are in JSON-encoded string fields `outcomes`, `outcomePrices`, `clobTokenIds`. The adapter pre-check `len(market.get("tokens") or []) < 2` evaluates to True for all markets → all skipped; `polymarket_fetch_complete new=0` every run. |
+| **Symptom** | `polymarket_fetch_complete new=0 pages=1` on every run despite 500+ active markets. All markets logged as `polymarket_market_skip_insufficient_outcomes token_count=0`. Zero rows in `market_data_db.prediction_markets`. |
+| **Fix** | Updated pre-check to use `max(len(tokens), len(clob_token_ids))` where `clob_token_ids` is parsed from the JSON string `clobTokenIds` field. Updated `from_gamma_response()` to fall back to parsing `outcomes`/`outcomePrices`/`clobTokenIds` JSON strings when `tokens` is absent. Old format still supported. |
+
+### Prevention
+
+Any external API adapter that checks response field cardinality MUST be validated against live API responses periodically. When an adapter reports `new=0` for many consecutive runs without network errors, immediately check the raw API response structure against the parser. Add `gamma_api_page_fetched market_count=N` debug log and monitor it.
+
+---
+
+## BP-234 — Market Ingestion Scheduler Silently Drops ECONOMIC_EVENTS / MACRO_INDICATOR / INSIDER_TRANSACTIONS
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) — `schedule_tasks.py:_build_incremental_task()` |
+| **Severity** | HIGH (economic events, macro indicators, insider transactions never ingested) |
+| **Discovered** | 2026-04-27 ingestion pipeline audit |
+| **Root cause** | `_build_incremental_task()` has if-elif chains for OHLCV, QUOTES, FUNDAMENTALS, EARNINGS_CALENDAR, NEWS_SENTIMENT but falls through to `logger.debug("scheduler_unsupported_dataset_type")` and returns `None` for ECONOMIC_EVENTS, MACRO_INDICATOR, and INSIDER_TRANSACTIONS. No factory methods existed for these types on `IngestionTask`. The scheduling priority weights dict (`_EODHD_CREDIT_COST`) included these types, creating a false impression they were handled. |
+| **Symptom** | `scheduler_unsupported_dataset_type dataset_type=economic_events` logged on every scheduler tick. `temporal_events` table empty. `economic_events`, `macro_indicators`, `earnings_calendar` tables in market_data_db all at 0 rows despite polling policies being present. EODHD 403 errors (demo key) obscured the fact that tasks were never even created. |
+| **Fix** | Added `create_economic_events_task()`, `create_macro_indicator_task()`, `create_insider_transactions_task()` factory methods to `IngestionTask`. Added corresponding branches to `_build_incremental_task()`. |
+
+### Prevention
+
+When adding a new `DatasetType` enum value, always add the corresponding `_build_incremental_task` branch AND factory method atomically. Write a unit test for each dataset type in `tests/application/test_schedule_tasks.py`. If the type is in `_EODHD_CREDIT_COST` it MUST have a factory method and scheduler branch.
+
+---
+
+## BP-235 — prediction_market_snapshots ON CONFLICT ON CONSTRAINT Fails — Index vs. Constraint
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-data (S3) — `prediction_market_repo.py:insert_if_not_exists()` |
+| **Severity** | HIGH (all Polymarket snapshots fail to insert — `UndefinedObjectError`) |
+| **Discovered** | 2026-04-27 ingestion pipeline audit |
+| **Root cause** | Migration `005_add_prediction_markets.py` creates `uq_pms_market_snapshot` as `CREATE UNIQUE INDEX` (not `ALTER TABLE … ADD CONSTRAINT`). SQLAlchemy model `UniqueConstraint("market_id", "snapshot_at", name="uq_pms_market_snapshot")` causes Alembic to think it is a named constraint. The repository uses `.on_conflict_do_nothing(constraint="uq_pms_market_snapshot")` which generates `ON CONFLICT ON CONSTRAINT uq_pms_market_snapshot` — PostgreSQL raises `UndefinedObjectError: constraint "uq_pms_market_snapshot" does not exist` because it is an index, not a constraint. |
+| **Symptom** | `kafka_unexpected_error: UndefinedObjectError: constraint "uq_pms_market_snapshot" for table "prediction_market_snapshots" does not exist` on every Polymarket Kafka message. `prediction_markets` and `prediction_market_snapshots` stay at 0 rows. |
+| **Fix** | Changed to `.on_conflict_do_nothing(index_elements=["market_id", "snapshot_at"])` which works with unique indexes (not just named constraints). |
+
+### Prevention
+
+PostgreSQL `ON CONFLICT ON CONSTRAINT name` ONLY works when the name refers to a constraint created via `ADD CONSTRAINT`, NOT a bare `CREATE UNIQUE INDEX`. Use `.on_conflict_do_nothing(index_elements=[...])` when the unique restriction is a plain index. Always verify with `\d tablename` that the index appears in both `\di` (indexes) and `\d` (constraints) sections before using the constraint form.

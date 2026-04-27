@@ -183,7 +183,10 @@ class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
                 liquidity=snapshot.liquidity,
                 source_event_id=snapshot.source_event_id,
             )
-            .on_conflict_do_nothing(constraint="uq_pms_market_snapshot")
+            # WHY index_elements not constraint: migration 005 created uq_pms_market_snapshot
+            # as a UNIQUE INDEX (not a UNIQUE CONSTRAINT), so ON CONFLICT ON CONSTRAINT raises
+            # UndefinedObjectError. index_elements works with unique indexes.
+            .on_conflict_do_nothing(index_elements=["market_id", "snapshot_at"])
             .returning(PredictionMarketSnapshotModel.id)
         )
         result = await self._session.execute(stmt)

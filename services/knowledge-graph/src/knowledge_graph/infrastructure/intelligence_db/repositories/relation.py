@@ -111,6 +111,7 @@ RETURNING relation_id
         accepted for interface symmetry but does not affect DB writes.
 
         Args:
+        ----
             subject_entity_id: Source entity (e.g. company).
             object_entity_id:  Target entity (e.g. person).
             canonical_type:    Relation type key (e.g. ``"has_executive"``).
@@ -119,7 +120,9 @@ RETURNING relation_id
             is_backfill:       Accepted for interface symmetry; unused.
 
         Returns:
+        -------
             The ``relation_id`` of the upserted relation row.
+
         """
         from observability import get_logger  # type: ignore[import-untyped]
 

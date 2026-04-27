@@ -184,6 +184,19 @@ async def test_internal_jwt_middleware_returns_503_when_no_key() -> None:
     assert "jwks not loaded" in resp.json()["detail"].lower()
 
 
+async def test_startup_raises_on_jwks_failure() -> None:
+    """F-003: startup() raises RuntimeError after 3 failed JWKS fetch attempts."""
+    from starlette.applications import Starlette
+
+    mock_app = Starlette()
+    middleware = InternalJWTMiddleware(
+        mock_app,
+        jwks_url="http://unreachable:9999/internal/jwks",
+    )
+    with pytest.raises(RuntimeError, match="JWKS startup failed"):
+        await middleware.startup()
+
+
 async def test_internal_jwt_middleware_rejects_wrong_algorithm() -> None:
     """HS256 token (wrong algorithm) → 401."""
     _private_key, public_key = _generate_rsa_pair()

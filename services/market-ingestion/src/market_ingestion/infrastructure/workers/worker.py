@@ -2,8 +2,10 @@
 
 Claims and executes ingestion tasks.  Each loop iteration:
   1. Claims a batch via ``ClaimTasksUseCase``.
-  2. Executes each claimed task via ``ExecuteTaskUseCase``.
-  3. Sleeps briefly if no tasks were available (back-pressure).
+  2. Attempts batch execution for eligible tasks (same provider+timeframe, OHLCV
+     intraday, adapter supports_batch).  One HTTP call per group instead of N.
+  3. Executes remaining (non-batchable) tasks individually via ``ExecuteTaskUseCase``.
+  4. Sleeps briefly if no tasks were available (back-pressure).
 
 Usage (standalone)::
 
@@ -14,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any, cast
 
 from market_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from market_ingestion.application.use_cases.execute_task import ExecuteTaskUseCase
 from market_ingestion.config import Settings
+from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 from market_ingestion.infrastructure.adapters.circuit_breaker import ValkeyCircuitBreaker
 from market_ingestion.infrastructure.adapters.object_store import S3ObjectStoreAdapter
@@ -37,6 +41,10 @@ logger = get_logger(__name__)
 _DEFAULT_BATCH_SIZE: int = 10
 _DEFAULT_LEASE_SECONDS: int = 300
 _IDLE_SLEEP_SECONDS: float = 5.0
+
+# Intraday timeframes eligible for batch execution via multi-symbol endpoints.
+# Must match the timeframes supported by Alpaca's ``_TIMEFRAME_MAP``.
+_INTRADAY_BATCH_TFS: frozenset[str] = frozenset({"1m", "5m", "15m", "30m", "1h", "4h"})
 
 
 class WorkerProcess:
@@ -102,12 +110,21 @@ class WorkerProcess:
         self._circuit_breaker = self._build_circuit_breaker()
         self._zero_bar_tracker = self._build_zero_bar_tracker()
 
+        # Build and load the provider routing cache from env-var settings (PRD-0032).
+        # Synchronous — no I/O; reloaded via POST /internal/v1/routing/reload.
+        self._routing_cache = self._build_routing_cache()
+
     def stop(self) -> None:
         """Signal the worker loop to stop after the current batch."""
         self._stop_event.set()
 
     async def run(self) -> None:
-        """Run the worker loop until ``stop()`` is called."""
+        """Run the worker loop until ``stop()`` is called.
+
+        After claiming a batch of tasks, eligible tasks are grouped and executed
+        via multi-symbol batch API calls (one HTTP request per provider+timeframe
+        group).  Non-eligible tasks fall back to individual execution.
+        """
         logger.info(
             "worker_starting",
             worker_id=self._worker_id,
@@ -119,7 +136,14 @@ class WorkerProcess:
             if not claimed:
                 await asyncio.sleep(self._idle_sleep)
                 continue
-            await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
+
+            # Try batch execution first for eligible tasks (same provider+timeframe,
+            # OHLCV intraday, adapter supports_batch).
+            batch_executed, remaining = await self._try_batch_execute(claimed)
+
+            # Execute remaining tasks individually (as before).
+            if remaining:
+                await asyncio.gather(*[self._execute_with_semaphore(task) for task in remaining])
 
         logger.info("worker_stopped", worker_id=self._worker_id)
 
@@ -179,6 +203,7 @@ class WorkerProcess:
             canonical_bucket=getattr(self._settings, "canonical_bucket", "market-canonical"),
             circuit_breaker=self._circuit_breaker,
             zero_bar_tracker=self._zero_bar_tracker,
+            routing_cache=self._routing_cache,
         )
         try:
             await use_case.execute(task)
@@ -190,6 +215,171 @@ class WorkerProcess:
                 error=str(exc),
                 worker_id=self._worker_id,
             )
+
+    # ── Batch execution ──────────────────────────────────────────────────────
+
+    async def _try_batch_execute(self, tasks: list[IngestionTask]) -> tuple[list[IngestionTask], list[IngestionTask]]:
+        """Attempt to batch-execute eligible tasks.
+
+        Groups tasks by (resolved_provider, timeframe) where:
+          - dataset_type == OHLCV
+          - timeframe is an intraday timeframe in ``_INTRADAY_BATCH_TFS``
+          - the resolved adapter ``supports_batch``
+
+        For each eligible group, calls ``adapter.fetch_ohlcv_batch(symbols, ...)``
+        once, then feeds each symbol's result through ``execute_with_prefetched_result``
+        (Steps 2-5).
+
+        Returns:
+            (batch_executed, remaining) — tasks that were batch-processed and tasks
+            that must be executed individually.
+        """
+        batch_executed: list[IngestionTask] = []
+        remaining: list[IngestionTask] = []
+
+        # Group eligible tasks by (resolved_provider, timeframe).
+        # Key: (provider_value, timeframe) → list of tasks.
+        groups: dict[tuple[str, str], list[IngestionTask]] = defaultdict(list)
+
+        for task in tasks:
+            # Only OHLCV intraday tasks are eligible for batch execution.
+            if task.dataset_type != DatasetType.OHLCV or task.timeframe not in _INTRADAY_BATCH_TFS:
+                remaining.append(task)
+                continue
+
+            # Resolve provider via the same routing logic as ExecuteTaskUseCase.
+            resolved_provider = self._resolve_provider(task)
+            adapter = self._registry.get(resolved_provider)
+
+            if not adapter.supports_batch:
+                remaining.append(task)
+                continue
+
+            # Task.timeframe is guaranteed non-None here (checked above).
+            group_key = (resolved_provider.value, cast("str", task.timeframe))
+            groups[group_key].append(task)
+
+        # Execute each batch group.
+        for (provider_val, timeframe), group_tasks in groups.items():
+            provider_enum = Provider(provider_val)
+            adapter = self._registry.get(provider_enum)
+
+            symbols = [t.symbol for t in group_tasks]
+            # Build a task-by-symbol index for result distribution.
+            task_by_symbol: dict[str, IngestionTask] = {t.symbol: t for t in group_tasks}
+
+            logger.info(
+                "batch_execute_start",
+                provider=provider_val,
+                timeframe=timeframe,
+                symbol_count=len(symbols),
+                worker_id=self._worker_id,
+            )
+
+            try:
+                # fetch_ohlcv_batch is on the concrete adapter (Alpaca), not the ABC.
+                # Cast to Any to access the batch method — checked at runtime via
+                # supports_batch guard above.
+                batch_adapter = cast("Any", adapter)
+                results_map: dict[str, Any] = await batch_adapter.fetch_ohlcv_batch(
+                    symbols=symbols,
+                    timeframe=timeframe,
+                    start=group_tasks[0].range_start,
+                    end=group_tasks[0].range_end,
+                )
+            except Exception as exc:
+                # Batch call failed entirely — fall back to individual execution
+                # for all tasks in this group so they get proper retry handling.
+                logger.warning(
+                    "batch_execute_failed_fallback",
+                    provider=provider_val,
+                    timeframe=timeframe,
+                    symbol_count=len(symbols),
+                    error=str(exc),
+                    worker_id=self._worker_id,
+                )
+                remaining.extend(group_tasks)
+                continue
+
+            logger.info(
+                "batch_execute_fetched",
+                provider=provider_val,
+                timeframe=timeframe,
+                symbols_fetched=len(results_map),
+                worker_id=self._worker_id,
+            )
+
+            # Distribute results back to individual tasks for Steps 2-5.
+            for symbol, fetch_result in results_map.items():
+                matched_task = task_by_symbol.get(symbol)
+                if matched_task is None:
+                    # Symbol in results but not in our task map — should not happen.
+                    logger.warning("batch_result_orphan_symbol", symbol=symbol)
+                    continue
+
+                uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
+                use_case = ExecuteTaskUseCase(
+                    uow=uow,
+                    provider_registry=self._registry,
+                    object_store=self._object_store,
+                    serializer=self._serializer,
+                    bronze_bucket=getattr(self._settings, "bronze_bucket", "market-bronze"),
+                    canonical_bucket=getattr(self._settings, "canonical_bucket", "market-canonical"),
+                    circuit_breaker=self._circuit_breaker,
+                    zero_bar_tracker=self._zero_bar_tracker,
+                    routing_cache=self._routing_cache,
+                )
+
+                try:
+                    await use_case.execute_with_prefetched_result(matched_task, fetch_result)
+                    batch_executed.append(matched_task)
+                except Exception as exc:
+                    logger.debug(
+                        "batch_task_error",
+                        task_id=matched_task.id,
+                        symbol=symbol,
+                        error=str(exc),
+                        worker_id=self._worker_id,
+                    )
+                    # Task error handling (retry/fail) already persisted by the use case.
+                    batch_executed.append(matched_task)
+
+        return batch_executed, remaining
+
+    def _resolve_provider(self, task: IngestionTask) -> Provider:
+        """Resolve the best provider for *task* using the routing cache or static heuristic.
+
+        Mirrors the provider routing logic at the top of ``ExecuteTaskUseCase.execute()``
+        so that batch grouping uses the same provider the use case would select.
+        """
+        from market_ingestion.application.use_cases.execute_task import _preferred_provider
+        from market_ingestion.domain.errors import ProviderUnavailable
+
+        if self._routing_cache is not None:
+            primary_str = self._routing_cache.primary_for(str(task.dataset_type), task.timeframe)
+            try:
+                preferred = Provider(primary_str)
+                self._registry.get(preferred)  # verify registration
+                return preferred
+            except (ValueError, ProviderUnavailable):
+                pass
+        return _preferred_provider(task.dataset_type, task.timeframe, self._registry)
+
+    def _build_routing_cache(self) -> Any | None:
+        """Build and load the provider routing cache from Settings env vars.
+
+        Returns a ProviderRoutingCache pre-loaded with the current routing rules,
+        or None if the import fails (graceful degradation to static routing).
+        """
+        try:
+            from market_ingestion.application.services.provider_routing_cache import ProviderRoutingCache
+
+            cache = ProviderRoutingCache()
+            cache.load_from_config(self._settings)  # synchronous — no I/O
+            return cache
+        except Exception as exc:
+            logger.warning("routing_cache_build_failed", error=str(exc))
+            return None
 
     def _build_registry(self) -> ProviderRegistry:
         timeout = getattr(self._settings, "provider_http_timeout_seconds", 30.0)

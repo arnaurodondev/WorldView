@@ -27,6 +27,13 @@ _THINK_RE = re.compile(
 # Match [N] citation markers in the output (e.g. [1], [12])
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
+# Match [NX] style markers — DeepSeek R1 sometimes emits [N6] meaning "citation 6".
+# WHY: The model uses the letter N as a prefix for numeric citation references
+# (e.g. [N6], [N7]) instead of plain [6].  We normalise these to [6] before
+# citation extraction so _CITATION_RE can match them.
+# Do NOT strip — convert them to plain [digit] form first.
+_CITATION_N_PREFIX_RE = re.compile(r"\[N(\d+)\]")
+
 # Match [N:X] style markers that DeepSeek R1 sometimes emits instead of plain [N].
 # These are not part of our citation protocol — always strip them.
 _CITATION_N_COLON_RE = re.compile(r"\s*\[N:\d+\]")
@@ -74,7 +81,12 @@ class OutputProcessor:
         # 1. Strip reasoning blocks
         text = _THINK_RE.sub("", raw_output).strip()
 
-        # 1b. Strip [N:X] markers — DeepSeek R1 occasionally emits these instead of
+        # 1b. Normalise [NX] markers → [X] so _CITATION_RE can extract them.
+        # WHY: DeepSeek R1 often emits [N6] meaning "citation 6" rather than [6].
+        # Converting them first lets the standard regex handle all citation styles.
+        text = _CITATION_N_PREFIX_RE.sub(r"[\1]", text)
+
+        # 1c. Strip [N:X] markers — DeepSeek R1 occasionally emits these instead of
         # the standard [N] format. They are never part of our citation protocol and
         # have no corresponding citation entry in retrieved_items (F-CH-009 fix).
         text = _CITATION_N_COLON_RE.sub("", text)

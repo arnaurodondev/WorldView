@@ -181,12 +181,16 @@ class GetEntityArticlesUseCase:
         order_by: str,
         limit: int,
         offset: int,
+        tenant_id: str | None = None,
     ) -> tuple[list[RankedArticleData], int]:
         """Return ranked articles for an entity within the given date range.
 
         Delegates entirely to the port — the SQL CTE computes display_relevance_score
         and all window scores at query time.  Returns an empty list (not 404) when the
         entity has no articles in the date range.
+
+        F-009 Option B: tenant_id is passed through to the port for tenant-scoped
+        entity_mentions filtering.
         """
         return await repo.get_entity_articles(
             entity_id=entity_id,
@@ -195,6 +199,7 @@ class GetEntityArticlesUseCase:
             order_by=order_by,
             limit=limit,
             offset=offset,
+            tenant_id=tenant_id,
         )
 
 

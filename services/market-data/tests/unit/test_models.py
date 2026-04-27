@@ -114,6 +114,43 @@ class TestOHLCVBarModel:
         for price_col in ("open", "high", "low", "close", "adjusted_close", "volume"):
             assert price_col in cols, f"missing column: {price_col}"
 
+    def test_ohlcv_has_is_partial(self):
+        """PLAN-0040 B-1: ohlcv_bars must have an is_partial boolean column."""
+        cols = _columns(OHLCVBarModel)
+        assert "is_partial" in cols
+
+    def test_ohlcv_has_is_derived(self):
+        """PLAN-0036: ohlcv_bars must have an is_derived boolean column."""
+        cols = _columns(OHLCVBarModel)
+        assert "is_derived" in cols
+
+    def test_ohlcv_complete_column_set(self):
+        """DDL alignment: all expected ohlcv_bars columns must exist.
+
+        If a migration adds or removes a column, update this set to keep
+        the test in sync with the ORM model.
+        """
+        expected = {
+            "instrument_id",
+            "timeframe",
+            "bar_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "adjusted_close",
+            "source",
+            "provider_priority",
+            "is_derived",
+            "is_partial",
+        }
+        actual = _columns(OHLCVBarModel)
+        missing = expected - actual
+        extra = actual - expected
+        assert not missing, f"Missing columns: {missing}"
+        assert not extra, f"Unexpected columns: {extra}"
+
 
 class TestQuoteModel:
     def test_quote_model_pk(self):

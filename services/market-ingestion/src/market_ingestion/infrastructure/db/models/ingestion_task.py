@@ -62,6 +62,11 @@ class IngestionTaskModel(Base):
     result_ref_mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Provider tracking (PRD-0032 / PLAN-0040 A-1 migration 0010)
+    # Records which provider actually fetched the data.  NULL for tasks that
+    # have not yet SUCCEEDED.  Forward-compatible: historical rows remain NULL.
+    fetched_by_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
     # Audit
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

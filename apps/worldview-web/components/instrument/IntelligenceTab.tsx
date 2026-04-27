@@ -351,7 +351,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Entity Knowledge Graph</h3>
           <span className="text-[10px] text-muted-foreground">
-            depth 2 · {graphData?.nodes.length ?? 0} entities
+            depth 2 · {graphData?.nodes?.length ?? 0} entities
           </span>
         </div>
 

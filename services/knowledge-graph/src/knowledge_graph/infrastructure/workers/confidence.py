@@ -39,8 +39,10 @@ class ConfidenceWorker:
     """Recomputes confidence for all stale relations (Worker 13A).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
         settings:        Service settings (formula constants).
+
     """
 
     def __init__(

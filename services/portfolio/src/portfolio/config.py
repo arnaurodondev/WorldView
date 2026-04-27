@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -106,6 +108,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:
         """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
                 "default_db_credentials_detected",

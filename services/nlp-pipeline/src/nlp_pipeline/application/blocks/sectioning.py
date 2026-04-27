@@ -11,8 +11,8 @@ import re
 from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
+from nlp_pipeline.application.ports.metrics import NOOP_METRICS, NlpMetricsPort
 from nlp_pipeline.domain.models import Section
-from nlp_pipeline.infrastructure.metrics.prometheus import nlp_sectioning_fallback_total
 
 # ── Sectioner implementations ─────────────────────────────────────────────────
 
@@ -154,11 +154,21 @@ _transcript_sectioner = FinnhubTranscriptSectioner()
 _synthetic_sectioner = SyntheticSectioner()
 
 
-def section_document(doc_id: UUID, text: str, source_type: str) -> list[Section]:
+def section_document(
+    doc_id: UUID,
+    text: str,
+    source_type: str,
+    *,
+    metrics: NlpMetricsPort = NOOP_METRICS,
+) -> list[Section]:
     """Factory: dispatch to the correct sectioner by source_type.
 
     Always returns ≥1 section — falls back to SyntheticSectioner if the
     source-specific sectioner produces no results (PRD §6.7 Block 3 step 5).
+
+    Args:
+        metrics: Optional metrics port for recording fallback events.
+                 Defaults to a no-op so pure callers (tests) need not inject.
     """
     # UTF-8 normalisation already done upstream (Block 3 step 1-2)
     if source_type in _SEC_TYPES:
@@ -169,14 +179,14 @@ def section_document(doc_id: UUID, text: str, source_type: str) -> list[Section]
         sectioner = _transcript_sectioner
     else:
         # Unknown source — go straight to synthetic
-        nlp_sectioning_fallback_total.inc()
+        metrics.record_sectioning_fallback()
         return _synthetic_sectioner.section(doc_id, text)
 
     sections = sectioner.section(doc_id, text)
 
     if not sections:
         # Fallback: zero sections → one synthetic section covering full text
-        nlp_sectioning_fallback_total.inc()
+        metrics.record_sectioning_fallback()
         sections = _synthetic_sectioner.section(doc_id, text)
 
     return sections

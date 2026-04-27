@@ -9,14 +9,20 @@ from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 
 if TYPE_CHECKING:
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork
     from portfolio.domain.entities import Holding, Transaction
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class GetHoldingsUseCase:
-    async def execute(self, portfolio_id: UUID, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> list[Holding]:
+    async def execute(
+        self,
+        portfolio_id: UUID,
+        owner_id: UUID,
+        tenant_id: UUID,
+        uow: ReadOnlyUnitOfWork,
+    ) -> list[Holding]:
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
@@ -31,7 +37,7 @@ class ListTransactionsUseCase:
         portfolio_id: UUID,
         owner_id: UUID,
         tenant_id: UUID,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[Transaction], int]:

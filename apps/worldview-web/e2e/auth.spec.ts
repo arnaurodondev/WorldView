@@ -61,8 +61,10 @@ test.describe("Landing page", () => {
   test("renders the hero section", async ({ page }) => {
     await page.goto("/");
 
-    // Landing page should display the primary hero heading
-    await expect(page.getByRole("heading", { name: /market intelligence terminal/i })).toBeVisible();
+    // Landing page: h1 is "Worldview", the "Market Intelligence Terminal" kicker is a <p>
+    // (Bloomberg convention: category descriptor as kicker, brand name as headline)
+    await expect(page.getByRole("heading", { name: /worldview/i })).toBeVisible();
+    await expect(page.getByText(/market intelligence terminal/i)).toBeVisible();
   });
 
   test("Sign In link navigates to /login", async ({ page }) => {

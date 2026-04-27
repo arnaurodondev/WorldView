@@ -382,8 +382,8 @@ function AppearanceTab() {
                 to scan as a list than as a run-on paragraph. */}
             <ul className="space-y-1 text-xs text-muted-foreground list-disc list-inside">
               <li>
-                Bloomberg Dark palette (#0A0E14) is calibrated for low-light
-                conditions — ideal for pre/post market sessions
+                Terminal-grade near-black (#09090B) background is calibrated for
+                low-light conditions — ideal for extended pre/post market sessions
               </li>
               <li>
                 Dark backgrounds reduce eye strain during extended monitoring
@@ -405,18 +405,25 @@ function AppearanceTab() {
             Color Palette
           </CardTitle>
           <CardDescription className="text-xs">
-            Bloomberg Dark — the terminal-grade dark palette used throughout
+            Terminal-grade dark palette — copy hex values for use in external tools
           </CardDescription>
         </CardHeader>
         <CardContent>
           {/* WHY inline color swatches: gives users context for the brand colors
-              they see throughout the app; also useful for accessibility awareness. */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              they see throughout the app; also useful for accessibility awareness.
+              These hex values must stay in sync with --variable values in globals.css.
+              WHY show usage: traders working on custom charts or exports need the
+              exact hex values to match colors in external tools (Excel, Python charts). */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4">
             {[
-              { name: "Background", hex: "#0A0E14", cssVar: "--background" },
-              { name: "Primary", hex: "#E8A317", cssVar: "--primary" },
-              { name: "Positive", hex: "#26A69A", cssVar: "--positive" },
-              { name: "Negative", hex: "#EF5350", cssVar: "--negative" },
+              { name: "Background", hex: "#09090B", cssVar: "--background", usage: "Page bg" },
+              { name: "Primary", hex: "#FFD60A", cssVar: "--primary", usage: "CTAs, links" },
+              { name: "Positive", hex: "#26A69A", cssVar: "--positive", usage: "Price up / gain" },
+              { name: "Negative", hex: "#EF5350", cssVar: "--negative", usage: "Price down / loss" },
+              { name: "Card", hex: "#111113", cssVar: "--card", usage: "Panel bg" },
+              { name: "Muted", hex: "#18181B", cssVar: "--muted", usage: "Elevated surface" },
+              { name: "Warning", hex: "#F59E0B", cssVar: "--warning", usage: "Alerts / beta" },
+              { name: "Text", hex: "#E4E4E7", cssVar: "--foreground", usage: "Primary text" },
             ].map((swatch) => (
               <div key={swatch.cssVar} className="space-y-1.5">
                 {/* Color swatch — uses inline style so the exact hex is applied
@@ -429,8 +436,11 @@ function AppearanceTab() {
                 <p className="text-xs font-medium text-foreground">
                   {swatch.name}
                 </p>
-                <p className="font-mono text-xs text-muted-foreground">
+                <p className="font-mono text-[10px] text-muted-foreground">
                   {swatch.hex}
+                </p>
+                <p className="text-[10px] text-muted-foreground/60">
+                  {swatch.usage}
                 </p>
               </div>
             ))}

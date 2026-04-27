@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from market_ingestion.application.ports.circuit_breaker import CircuitBreakerPort
     from market_ingestion.application.ports.unit_of_work import UnitOfWork
     from market_ingestion.application.ports.zero_bar_tracker import ZeroBarTrackerPort
+    from market_ingestion.application.services.provider_routing_cache import ProviderRoutingCache
     from market_ingestion.domain.entities.ingestion_task import IngestionTask
     from market_ingestion.infrastructure.adapters.providers import ProviderRegistry
     from messaging.eodhd_quota.quota_service import EodhdQuotaService
@@ -79,6 +80,7 @@ class ExecuteTaskUseCase:
         service_name: str = "market-ingestion",
         circuit_breaker: CircuitBreakerPort | None = None,
         zero_bar_tracker: ZeroBarTrackerPort | None = None,
+        routing_cache: ProviderRoutingCache | None = None,
     ) -> None:
         self._uow = uow
         self._registry = provider_registry
@@ -97,6 +99,136 @@ class ExecuteTaskUseCase:
         # When provided, tracks consecutive zero-bar responses per provider/symbol
         # and triggers failover to the next provider after FAILOVER_THRESHOLD misses.
         self._zero_bar_tracker = zero_bar_tracker
+        # Optional config-backed routing cache (PRD-0032).
+        # When provided, provider selection uses cache.primary_for() instead of the
+        # static _preferred_provider() heuristic.  When None, falls back to static logic.
+        self._routing_cache = routing_cache
+
+    async def execute_with_prefetched_result(self, task: IngestionTask, fetch_result: ProviderFetchResult) -> None:
+        """Run Steps 2-5 of the pipeline using an already-fetched result.
+
+        Called by the worker batch execution path when the provider adapter
+        supports multi-symbol batching (e.g. Alpaca ``fetch_ohlcv_batch``).
+        The batch call is performed once for N symbols and each symbol's
+        ``ProviderFetchResult`` is then fed into this method for storage,
+        canonicalization, and the DB transaction.
+
+        Skips: Step 0 (quota), Step 0.5 (circuit breaker), Step 1 (fetch),
+        and zero-bar failover — these are either inapplicable (batch providers
+        are free-tier) or handled by the caller.
+        """
+        log = logger.bind(
+            task_id=task.id,
+            provider=str(task.provider),
+            symbol=task.symbol,
+            dataset_type=str(task.dataset_type),
+        )
+
+        # Record which provider actually fetched the data (T-A-4-03).
+        task.fetched_by_provider = fetch_result.provider.value
+
+        # ── Step 2: Store bronze ─────────────────────────────────────────────
+        try:
+            bronze_ref = await self._store_bronze(task, fetch_result)
+        except StorageUnavailable as exc:
+            log.warning("bronze_store_retryable", error=str(exc))
+            await self._persist_retry(task, exc)
+            raise
+
+        # ── Step 3: Canonicalize ─────────────────────────────────────────────
+        try:
+            canonical_bytes, row_count = self._canonicalize(task, fetch_result)
+        except (ProviderDataError, ValueError, KeyError, TypeError) as exc:
+            log.error("canonicalize_fatal", error=str(exc))
+            await self._persist_fail(task, ProviderDataError(str(exc)))
+            raise ProviderDataError(str(exc)) from exc
+
+        # ── Step 4: Store canonical ──────────────────────────────────────────
+        try:
+            canonical_ref = await self._store_canonical(task, canonical_bytes)
+        except StorageUnavailable as exc:
+            log.warning("canonical_store_retryable", error=str(exc))
+            await self._persist_retry(task, exc)
+            raise
+
+        # ── Step 5: Short transaction ────────────────────────────────────────
+        new_sha256 = canonical_ref.sha256
+
+        try:
+            async with self._uow:
+                watermark = await self._uow.watermarks.get_or_create(
+                    provider=str(task.provider),
+                    dataset_type=str(task.dataset_type),
+                    symbol=task.symbol,
+                    exchange=task.exchange,
+                    timeframe=task.timeframe,
+                    variant=task.variant,
+                )
+                locked = await self._uow.watermarks.get_for_update(
+                    provider=str(task.provider),
+                    dataset_type=str(task.dataset_type),
+                    symbol=task.symbol,
+                    exchange=task.exchange,
+                    timeframe=task.timeframe,
+                    variant=task.variant,
+                )
+                if locked is not None:
+                    watermark = locked
+
+                data_changed = watermark.has_changed(new_sha256)
+
+                new_ts = task.range_end if task.range_end is not None else task.created_at
+                if watermark.current_bar_ts is None or new_ts > watermark.current_bar_ts:
+                    watermark.advance_bar_ts(new_ts)
+                else:
+                    log.debug(
+                        "skip_stale_watermark_update",
+                        current_bar_ts=watermark.current_bar_ts.isoformat(),
+                        task_bar_ts=new_ts.isoformat(),
+                    )
+                    data_changed = False
+                watermark.content_hash = new_sha256
+
+                if data_changed:
+                    event = MarketDatasetFetched(
+                        provider=str(task.provider),
+                        dataset_type=str(task.dataset_type),
+                        symbol=task.symbol,
+                        exchange=task.exchange,
+                        timeframe=task.timeframe,
+                        variant=task.variant,
+                        range_start=task.range_start.isoformat() if task.range_start else "",
+                        range_end=task.range_end.isoformat() if task.range_end else "",
+                        bronze_ref=bronze_ref,
+                        canonical_ref=canonical_ref,
+                        canonical_schema_version=1,
+                        row_count=row_count,
+                        task_id=task.id,
+                    )
+                    await self._uow.outbox.add(events=[event])
+                else:
+                    log.debug(
+                        "skip_outbox_unchanged_sha256",
+                        sha256_prefix=new_sha256[:8] if new_sha256 else "",
+                    )
+
+                await self._uow.watermarks.save(watermark)
+                # Capture lease owner before succeed() clears it (BP-NEW-task-save-lease).
+                original_lease_owner = task.lease_owner
+                task.succeed(canonical_ref)
+                await self._uow.tasks.save(task, original_lease_owner=original_lease_owner)
+                await self._uow.commit()
+
+        except WatermarkViolation as exc:
+            log.warning("watermark_violation_retry", error=str(exc), task_id=task.id)
+            await self._persist_retry(task, exc)
+            raise
+        except InvalidStateTransition as exc:
+            log.error("invalid_state_transition", error=str(exc))
+            await self._persist_fail(task, exc)
+            raise
+
+        log.info("task_succeeded", row_count=row_count)
 
     async def execute(self, task: IngestionTask) -> None:
         """Run the pipeline for *task*.
@@ -120,15 +252,33 @@ class ExecuteTaskUseCase:
         )
 
         # ── Provider routing ──────────────────────────────────────────────────
-        # Select the cheapest registered provider for this dataset/timeframe.
+        # Select the best registered provider for this dataset/timeframe.
+        # When a ProviderRoutingCache is wired in (PRD-0032), use it as the
+        # primary path.  When absent or when the cache returns an unknown/
+        # unregistered provider, fall back to the static _preferred_provider()
+        # heuristic for backward compatibility.
+        #
         # The task.provider stored in DB reflects what was *requested*; the
-        # actual adapter used for this execution may differ (e.g. Yahoo for
-        # OHLCV daily, Finnhub for news).
-        preferred = _preferred_provider(task.dataset_type, task.timeframe, self._registry)
-        adapter = self._registry.get(preferred)
+        # actual adapter used for this execution may differ (e.g. Alpaca for
+        # intraday OHLCV, Yahoo for EOD).
+        if self._routing_cache is not None:
+            # Dynamic config-backed routing (PRD-0032 primary path).
+            primary_provider_str = self._routing_cache.primary_for(str(task.dataset_type), task.timeframe)
+            try:
+                preferred = Provider(primary_provider_str)
+                adapter = self._registry.get(preferred)
+            except (ValueError, ProviderUnavailable):
+                # Unknown or unregistered provider from cache — fall back to static routing.
+                preferred = _preferred_provider(task.dataset_type, task.timeframe, self._registry)
+                adapter = self._registry.get(preferred)
+        else:
+            # Static routing fallback (PLAN-0038 A-4 path — backward compatible).
+            preferred = _preferred_provider(task.dataset_type, task.timeframe, self._registry)
+            adapter = self._registry.get(preferred)
+
         if preferred != task.provider:
             log.info(
-                "provider_routing_override",
+                "provider_routing_cache_selected",
                 requested=str(task.provider),
                 selected=preferred.value,
                 dataset_type=str(task.dataset_type),
@@ -244,7 +394,9 @@ class ExecuteTaskUseCase:
                     streak = 0  # cannot determine streak — skip failover
                 log.debug("zero_bar_streak_recorded", streak=streak, provider=preferred.value)
                 if self._zero_bar_tracker.should_failover(streak):
-                    fallback = _fallback_provider(task.dataset_type, task.timeframe, preferred, self._registry)
+                    fallback = _fallback_provider(
+                        task.dataset_type, task.timeframe, preferred, self._registry, self._routing_cache
+                    )
                     if fallback is not None:
                         fallback_adapter = self._registry.get(fallback)
                         log.warning(
@@ -282,6 +434,12 @@ class ExecuteTaskUseCase:
                     )
                 except Exception as zbt_exc:
                     log.warning("zero_bar_tracker_unavailable", error=str(zbt_exc))
+
+        # Record which provider actually fetched the data (T-A-4-03).
+        # This is set before the DB transaction so it is included in the SUCCEEDED
+        # row written in Step 5.  fetch_result.provider reflects the actual adapter
+        # used — may differ from task.provider when routing cache overrides.
+        task.fetched_by_provider = fetch_result.provider.value
 
         # ── Step 2: Store bronze ─────────────────────────────────────────────
         try:
@@ -377,8 +535,10 @@ class ExecuteTaskUseCase:
                     log.debug("skip_outbox_unchanged_sha256", sha256_prefix=new_sha256[:8] if new_sha256 else "")
 
                 await self._uow.watermarks.save(watermark)
+                # Capture lease owner before succeed() clears it (BP-NEW-task-save-lease).
+                original_lease_owner = task.lease_owner
                 task.succeed(canonical_ref)
-                await self._uow.tasks.save(task)
+                await self._uow.tasks.save(task, original_lease_owner=original_lease_owner)
                 await self._uow.commit()
 
         except WatermarkViolation as exc:
@@ -408,8 +568,10 @@ class ExecuteTaskUseCase:
 
     async def _fetch(self, adapter: ProviderAdapter, task: IngestionTask) -> ProviderFetchResult:
         if task.dataset_type == DatasetType.OHLCV:
-            # EXT-01: intraday vs EOD dispatch based on timeframe
-            if task.timeframe in {"1m", "5m", "1h"}:
+            # EXT-01: intraday vs EOD dispatch based on timeframe.
+            # Intraday timeframes include 15m, 30m, 4h in addition to 1m, 5m, 1h —
+            # extended to match PLAN-0040 A-2 / PRD-0032 intraday set.
+            if task.timeframe in {"1m", "5m", "15m", "30m", "1h", "4h"}:
                 ext_adapter = cast("Any", adapter)
                 return cast(
                     "ProviderFetchResult",
@@ -612,15 +774,21 @@ class ExecuteTaskUseCase:
         )
 
     async def _persist_retry(self, task: IngestionTask, exc: Exception) -> None:
+        # Capture the lease owner BEFORE retry() clears it so the repository
+        # WHERE clause can still match the DB row (BP-NEW-task-save-lease).
+        original_lease_owner = task.lease_owner
         task.retry(exc)
         async with self._uow:
-            await self._uow.tasks.save(task)
+            await self._uow.tasks.save(task, original_lease_owner=original_lease_owner)
             await self._uow.commit()
 
     async def _persist_fail(self, task: IngestionTask, exc: Exception) -> None:
+        # Capture the lease owner BEFORE fail() clears it so the repository
+        # WHERE clause can still match the DB row (BP-NEW-task-save-lease).
+        original_lease_owner = task.lease_owner
         task.fail(exc)
         async with self._uow:
-            await self._uow.tasks.save(task)
+            await self._uow.tasks.save(task, original_lease_owner=original_lease_owner)
             await self._uow.commit()
 
 
@@ -773,16 +941,48 @@ def _fallback_provider(
     timeframe: str | None,
     current_provider: Provider,
     registry: ProviderRegistry,
+    routing_cache: ProviderRoutingCache | None = None,
 ) -> Provider | None:
     """Return the next provider in the priority chain after zero-bar failover.
 
-    Chain (matches _preferred_provider() inverse):
+    When a ``routing_cache`` is provided, walks the cache's ordered provider
+    list to find the next registered provider after ``current_provider``.
+    This handles Alpaca → Polygon → EODHD chains for intraday OHLCV.
+
+    Falls back to static chain when cache is None:
       OHLCV daily/weekly/monthly: Yahoo Finance → EODHD → None
       NEWS_SENTIMENT / EARNINGS_CALENDAR / INSIDER_TRANSACTIONS: Finnhub → EODHD → None
-      OHLCV intraday / all others: EODHD → None  (no free intraday alternative)
+      OHLCV intraday / all others: EODHD → None
 
     Returns None when no fallback is registered or dataset has no alternative.
     """
+    if routing_cache is not None:
+        # Dynamic routing chain: find the next provider after current_provider.
+        providers = routing_cache.get_providers_for(str(dataset_type), timeframe)
+        current_val = current_provider.value
+        # Walk the list looking for the position after current_provider.
+        found_current = False
+        for prov_val in providers:
+            if found_current:
+                # Try to resolve this provider and verify it's registered.
+                try:
+                    prov = Provider(prov_val)
+                    registry.get(prov)  # raises ProviderUnavailable if not registered
+                    return prov
+                except (ValueError, ProviderUnavailable):
+                    continue  # skip unknown/unregistered providers
+            if prov_val == current_val:
+                found_current = True
+        # Always allow EODHD as final fallback if it's registered and not current.
+        if current_provider != Provider.EODHD:
+            try:
+                registry.get(Provider.EODHD)
+                return Provider.EODHD
+            except ProviderUnavailable:
+                pass
+        return None
+
+    # Static routing fallback (backward-compatible with PLAN-0038 A-4).
     if (
         dataset_type == DatasetType.OHLCV
         and timeframe in _YAHOO_TIMEFRAMES

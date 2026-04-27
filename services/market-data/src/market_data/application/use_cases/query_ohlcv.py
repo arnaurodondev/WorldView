@@ -23,8 +23,19 @@ class GetOHLCVBarsUseCase:
         timeframe: Timeframe,
         start: date,
         end: date,
+        *,
+        limit: int = 200,
     ) -> list[OHLCVBar]:
-        return await self._uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, timeframe, start, end)
+        """Fetch bars in [start, end] then return the last ``limit`` bars.
+
+        The repository query fetches all matching bars ordered ASC by bar_date.
+        ``limit`` is applied as a tail-slice so callers always get the most
+        recent N bars rather than the oldest N — matching financial chart
+        conventions (e.g. "show the last 30 trading days").
+        """
+        bars = await self._uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, timeframe, start, end)
+        # Slice from the tail: bars are ASC-ordered so [-limit:] gives the newest ones.
+        return bars[-limit:] if len(bars) > limit else bars
 
 
 class GetOHLCVBulkUseCase:

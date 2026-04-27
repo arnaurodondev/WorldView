@@ -45,6 +45,8 @@ def _mock_ollama_response(embedding: list[float]) -> Any:
 
 
 _DUMMY_EMBEDDING = [0.1] * 1024
+# nomic-embed-text produces 768-dim vectors — must match expected_dims validation in embed.py
+_DUMMY_EMBEDDING_768 = [0.1] * 768
 
 
 @pytest.mark.unit
@@ -76,14 +78,22 @@ class TestEmbedEndpoint:
 
     @pytest.mark.asyncio
     async def test_model_override_is_used(self) -> None:
-        """Optional model field is forwarded to Ollama when provided."""
+        """Optional model field is forwarded to Ollama when provided.
+
+        Uses a 768-dim mock embedding because nomic-embed-text produces 768-dim
+        vectors — the dimension validation added to embed.py rejects embeddings
+        whose dimension does not match the model's expected size (1024 for bge-large,
+        768 for nomic-embed-text).  Using _DUMMY_EMBEDDING (1024-dim) here would
+        cause the endpoint to return 503 with 'embedding_unavailable'.
+        """
         app = _make_app()
 
         call_args: dict = {}
 
         async def _fake_post(url: str, *, json: dict, **_: Any) -> Any:
             call_args["model"] = json.get("model")
-            return _mock_ollama_response(_DUMMY_EMBEDDING)
+            # Return 768-dim vector so dimension validation passes for nomic-embed-text.
+            return _mock_ollama_response(_DUMMY_EMBEDDING_768)
 
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -97,6 +107,8 @@ class TestEmbedEndpoint:
         assert resp.status_code == 200
         assert call_args["model"] == "nomic-embed-text"
         assert resp.json()["model"] == "nomic-embed-text"
+        # Dimension must match nomic-embed-text's 768-dim output.
+        assert resp.json()["dimensions"] == 768
 
     @pytest.mark.asyncio
     async def test_empty_text_field_returns_422(self) -> None:

@@ -40,7 +40,7 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_CONTRADICTION,
         TOPIC_RELATION_PROPOSED,
         TOPIC_ENTITY_CANONICAL_CREATED,
-    }
+    },
 )
 _ENTITY_DIRTIED_TOPIC = "entity.dirtied.v1"
 
@@ -63,10 +63,12 @@ class OutboxDispatcher:
     """Polls outbox_events and publishes to Kafka (at-least-once).
 
     Args:
+    ----
         session_factory:    Read/write sessionmaker for intelligence_db.
         producer:           Kafka producer (confluent_kafka-compatible).
         poll_interval_s:    Seconds between polls when idle.
         batch_size:         Max events per poll cycle.
+
     """
 
     def __init__(

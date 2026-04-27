@@ -17,12 +17,22 @@ _EMB_REPO = (
 
 
 def _make_session_factory(due_rows: list) -> tuple:
+    """Return (session_factory, emb_repo).
+
+    The factory returns a fresh context-manager each call (ARCH-004: run()
+    opens separate sessions for Phase 1 read and Phase 3 write).  All context
+    managers share the same underlying session mock so assertions work.
+    """
     session = AsyncMock()
-    session.__aenter__ = AsyncMock(return_value=session)
-    session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
-    sf = MagicMock()
-    sf.return_value = session
+
+    def _make_cm():
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    sf = MagicMock(side_effect=lambda: _make_cm())
 
     emb_repo = AsyncMock()
     emb_repo.get_due_for_refresh = AsyncMock(return_value=due_rows)
@@ -207,7 +217,13 @@ def _make_worker_bare() -> object:
 
 
 class TestEarningsEventInsertion:
-    """Tests for FundamentalsRefreshWorker._insert_earnings_events (T-C-4-01)."""
+    """Tests for FundamentalsRefreshWorker earnings pipeline (T-C-4-01).
+
+    ARCH-004 refactor: the old _insert_earnings_events was split into:
+    - _fetch_earnings_data (HTTP only, Phase 2)
+    - _write_earnings_events (DB only, Phase 3)
+    Tests call both methods in sequence to verify the same invariants.
+    """
 
     def test_earnings_event_inserted(self) -> None:
         """New earnings record (dedup SELECT returns nothing) → INSERT executed."""
@@ -215,7 +231,12 @@ class TestEarningsEventInsertion:
         session = _make_session_for_earnings(dedup_found=False)
         worker = _make_worker_bare()
 
-        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
+        # Phase 2: fetch data (HTTP)
+        records = asyncio.run(worker._fetch_earnings_data(http, _ENTITY_ID, "AAPL"))
+        assert records is not None
+
+        # Phase 3: write events (DB)
+        count = asyncio.run(worker._write_earnings_events(session, _ENTITY_ID, _ENTITY_ID, "Apple Inc.", records))
 
         assert count == 1
         # First call = dedup SELECT, second call = INSERT
@@ -227,22 +248,25 @@ class TestEarningsEventInsertion:
         session = _make_session_for_earnings(dedup_found=True)
         worker = _make_worker_bare()
 
-        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
+        # Phase 2: fetch data (HTTP)
+        records = asyncio.run(worker._fetch_earnings_data(http, _ENTITY_ID, "AAPL"))
+        assert records is not None
+
+        # Phase 3: write events (DB)
+        count = asyncio.run(worker._write_earnings_events(session, _ENTITY_ID, _ENTITY_ID, "Apple Inc.", records))
 
         assert count == 0
         # Only the dedup SELECT; no INSERT
         assert session.execute.call_count == 1
 
     def test_earnings_s3_404_skipped(self) -> None:
-        """S3 returns 404 → no DB execute, count=0, no error raised."""
+        """S3 returns 404 → _fetch_earnings_data returns None, no DB interaction."""
         http = _make_earnings_http(status=404)
-        session = AsyncMock()
         worker = _make_worker_bare()
 
-        count = asyncio.run(worker._insert_earnings_events(http, session, _ENTITY_ID, _ENTITY_ID, "AAPL", "Apple Inc."))
+        records = asyncio.run(worker._fetch_earnings_data(http, _ENTITY_ID, "AAPL"))
 
-        assert count == 0
-        session.execute.assert_not_awaited()
+        assert records is None
 
 
 # ── T-C-4-02: Sector/industry relation upsert ────────────────────────────────
@@ -294,7 +318,13 @@ def _make_sector_repos(sector_found: bool = True, industry_found: bool = True) -
 
 
 class TestSectorRelationUpsert:
-    """Tests for FundamentalsRefreshWorker._upsert_sector_relations (T-C-4-02)."""
+    """Tests for FundamentalsRefreshWorker sector/industry pipeline (T-C-4-02).
+
+    ARCH-004 refactor: the old _upsert_sector_relations was split into:
+    - _fetch_company_profile_data (HTTP only, Phase 2)
+    - _write_sector_relations (DB only, Phase 3)
+    Tests call both methods in sequence to verify the same invariants.
+    """
 
     def test_sector_relation_upserted(self) -> None:
         """Valid sector + industry → relation_repo.upsert and evidence_repo.insert_raw called."""
@@ -302,8 +332,15 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos()
         worker = _make_worker_bare()
 
+        # Phase 2: fetch profile (HTTP)
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
+        assert profile_data is not None
+
+        # Phase 3: write relations (DB)
         count = asyncio.run(
-            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+            worker._write_sector_relations(
+                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
+            )
         )
 
         assert count == 2  # is_in_sector + is_in_industry
@@ -321,8 +358,15 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos(sector_found=False, industry_found=False)
         worker = _make_worker_bare()
 
+        # Phase 2: fetch profile (HTTP) — returns profile even with unknown sector
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
+        assert profile_data is not None
+
+        # Phase 3: write relations (DB) — entity lookup returns None for both
         count = asyncio.run(
-            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+            worker._write_sector_relations(
+                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
+            )
         )
 
         assert count == 0
@@ -335,11 +379,18 @@ class TestSectorRelationUpsert:
         relation_repo, evidence_repo, entity_repo = _make_sector_repos()
         worker = _make_worker_bare()
 
+        # Run Phase 2 + Phase 3 twice
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
-            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+            worker._write_sector_relations(
+                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
+            )
         )
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
-            worker._upsert_sector_relations(http, _ENTITY_ID, _ENTITY_ID, relation_repo, evidence_repo, entity_repo)
+            worker._write_sector_relations(
+                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
+            )
         )
 
         # Advisory-lock upsert is called on every run (idempotency handled at DB level)

@@ -132,7 +132,11 @@ export function MorningBriefCard() {
   // ── Content rendering ──────────────────────────────────────────────────────
   // WHY replace entity names with links: lets traders click directly to the
   // instrument detail page — faster than searching. Regex scans entity_mentions.
-  const contentWithLinks = brief.entity_mentions.reduce((text, mention) => {
+  // WHY ?? "": brief.content may be null/undefined if the API returns an incomplete
+  // brief object (e.g., generation failed mid-stream). Avoid TypeError on .length/.slice.
+  const safeContent = brief.content ?? "";
+
+  const contentWithLinks = (brief.entity_mentions ?? []).reduce((text, mention) => {
     // WHY empty-name guard: if mention.name is "" then escapeRegex("") returns ""
     // and new RegExp("\\b\\b", "g") matches EVERY word boundary in the string.
     // With 9+ empty-name mentions, each reduce iteration inserts "/instruments/UUID"
@@ -145,10 +149,10 @@ export function MorningBriefCard() {
       regex,
       `[${mention.name}](/instruments/${mention.entity_id})`,
     );
-  }, brief.content);
+  }, safeContent);
 
-  const isLong = brief.content.length > PREVIEW_CHARS;
-  const preview = brief.content.slice(0, PREVIEW_CHARS);
+  const isLong = safeContent.length > PREVIEW_CHARS;
+  const preview = safeContent.slice(0, PREVIEW_CHARS);
 
   return (
     <div>

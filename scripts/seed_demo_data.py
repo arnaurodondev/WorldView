@@ -906,29 +906,77 @@ _POLYMARKET_SOURCE_CONFIG: dict = {
     "max_pages_per_cycle": 20,
 }
 
+# WHY deterministic UUIDs for Finnhub sources: one source per ticker symbol so the
+# scheduler creates independent tasks per symbol. Prefix "33333333" distinguishes
+# these from Polymarket ("22222222") and real UUIDv7 runtime IDs.
+# Each ticker gets a sequential last-segment counter (0001 = AAPL, 0002 = MSFT …).
+_FINNHUB_SOURCES: list[dict] = [
+    {"id": f"33333333-0001-7000-8000-{str(i + 1).zfill(12)}", "ticker": inst["ticker"]}
+    for i, inst in enumerate(
+        # Import-time: INSTRUMENTS list is defined earlier in this file.
+        # We reference it by name so this list is computed at module load time.
+        [
+            {"ticker": "AAPL"},
+            {"ticker": "MSFT"},
+            {"ticker": "NVDA"},
+            {"ticker": "AMZN"},
+            {"ticker": "TSLA"},
+            {"ticker": "GOOGL"},
+            {"ticker": "META"},
+            {"ticker": "JPM"},
+        ]
+    )
+]
+
+# WHY NewsAPI sources: query-based rather than symbol-based (NewsAPI /v2/everything
+# accepts free-text queries). We seed two queries: broad tech earnings and general
+# market news, to maximise article variety for the portfolio news widget.
+_NEWSAPI_SOURCES: list[dict] = [
+    {
+        "id": "44444444-0001-7000-8000-000000000001",
+        "name": "NewsAPI-TechEarnings",
+        "config": {"query": "earnings technology stocks forecast", "from_date": "2026-01-01"},
+    },
+    {
+        "id": "44444444-0002-7000-8000-000000000001",
+        "name": "NewsAPI-MarketNews",
+        "config": {"query": "stock market Wall Street equities", "from_date": "2026-01-01"},
+    },
+]
+
 
 def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
-    """Seed the Polymarket polling source in content_ingestion_db.
+    """Seed Polymarket, Finnhub, and NewsAPI polling sources in content_ingestion_db.
 
     WHY: The S4 ingestion pipeline polls only sources that exist in the
-    ``sources`` table. Without a Polymarket row, the scheduler never creates
-    tasks for it and the Prediction Markets widget stays permanently empty.
+    ``sources`` table.  Without source rows the scheduler never creates tasks.
 
-    The source row is idempotent (ON CONFLICT DO NOTHING on the unique ``name``
-    column).  Running the script multiple times is safe.
+    - Polymarket: required for Prediction Markets widget
+    - Finnhub: one source per instrument symbol (AAPL…JPM) for company news &
+      earnings transcripts; uses CONTENT_INGESTION_FINNHUB_API_KEY from docker.env
+    - NewsAPI: query-based articles for the portfolio news widget;
+      uses CONTENT_INGESTION_NEWSAPI_KEY from docker.env
+
+    WHY disable EODHD sources: CONTENT_INGESTION_EODHD_API_KEY=demo returns HTTP
+    403 on news/sentiment endpoints.  Disabling prevents the worker from filling
+    the task queue with unresolvable retries and consuming lease budget.
+
+    All inserts are idempotent (ON CONFLICT (name) DO NOTHING).
+    Running the script multiple times is safe.
     """
     cur = conn.cursor()
 
+    all_seeded_ids = [_POLYMARKET_SOURCE_ID] + [s["id"] for s in _FINNHUB_SOURCES] + [s["id"] for s in _NEWSAPI_SOURCES]
+
     if reset:
         print("  [reset] Removing seeded sources from content_ingestion_db...")
-        cur.execute(
-            "DELETE FROM sources WHERE id = %s::uuid",
-            (_POLYMARKET_SOURCE_ID,),
-        )
+        for src_id in all_seeded_ids:
+            cur.execute("DELETE FROM sources WHERE id = %s::uuid", (src_id,))
         conn.commit()
 
     now_ts = datetime.now(tz=UTC).isoformat()
 
+    # ── Polymarket ────────────────────────────────────────────────────────────
     cur.execute(
         """
         INSERT INTO sources (id, name, source_type, enabled, config, created_at)
@@ -946,6 +994,63 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
     )
     status = "inserted" if cur.rowcount else "already exists"
     print(f"  Polymarket source: {status} (id={_POLYMARKET_SOURCE_ID})")
+
+    # ── Finnhub (one row per ticker) ──────────────────────────────────────────
+    # WHY one-row-per-ticker: the FinnhubAdapter fetches news for a single symbol
+    # per task.  Separate source rows let the scheduler create independent tasks
+    # so per-symbol news can be fetched concurrently without blocking each other.
+    for src in _FINNHUB_SOURCES:
+        ticker = src["ticker"]
+        cur.execute(
+            """
+            INSERT INTO sources (id, name, source_type, enabled, config, created_at)
+            VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (
+                src["id"],
+                f"Finnhub-{ticker}",
+                "finnhub",
+                True,
+                json.dumps({"symbol": ticker}),
+                now_ts,
+            ),
+        )
+        status = "inserted" if cur.rowcount else "already exists"
+        print(f"  Finnhub-{ticker} source: {status}")
+
+    # ── NewsAPI (query-based) ─────────────────────────────────────────────────
+    for src in _NEWSAPI_SOURCES:
+        cur.execute(
+            """
+            INSERT INTO sources (id, name, source_type, enabled, config, created_at)
+            VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (
+                src["id"],
+                src["name"],
+                "newsapi",
+                True,
+                json.dumps(src["config"]),
+                now_ts,
+            ),
+        )
+        status = "inserted" if cur.rowcount else "already exists"
+        print(f"  {src['name']} source: {status}")
+
+    # ── Disable EODHD news sources (demo key returns HTTP 403) ───────────────
+    # WHY: CONTENT_INGESTION_EODHD_API_KEY=demo does not have access to the
+    # /news and /market-sentiment endpoints.  Disabling these sources prevents
+    # the worker from continuously creating failing tasks and consuming retries.
+    cur.execute(
+        "UPDATE sources SET enabled = false WHERE source_type = 'eodhd' AND enabled = true",
+    )
+    n_disabled = cur.rowcount
+    if n_disabled:
+        print(f"  EODHD sources disabled: {n_disabled} (demo key lacks news access)")
+    else:
+        print("  EODHD sources: already disabled or not present")
 
     conn.commit()
     cur.close()
@@ -1019,6 +1124,30 @@ def validate_seeding(conn_mkt, conn_intel, conn_ci, instrument_map: dict[str, st
     status = "✓" if pm_ok else "✗"
     print(f"  {status} Polymarket source: enabled={pm_ok} (count={n_polymarket})")
     if not pm_ok:
+        all_ok = False
+
+    # Finnhub sources check
+    cur_ci.execute(
+        "SELECT COUNT(*) FROM sources WHERE source_type = 'finnhub' AND enabled = true",
+        (),
+    )
+    n_finnhub = cur_ci.fetchone()[0]
+    fh_ok = n_finnhub >= len(_FINNHUB_SOURCES)
+    status = "✓" if fh_ok else "✗"
+    print(f"  {status} Finnhub sources: enabled={n_finnhub} (expected ≥ {len(_FINNHUB_SOURCES)})")
+    if not fh_ok:
+        all_ok = False
+
+    # NewsAPI sources check
+    cur_ci.execute(
+        "SELECT COUNT(*) FROM sources WHERE source_type = 'newsapi' AND enabled = true",
+        (),
+    )
+    n_newsapi = cur_ci.fetchone()[0]
+    na_ok = n_newsapi >= len(_NEWSAPI_SOURCES)
+    status = "✓" if na_ok else "✗"
+    print(f"  {status} NewsAPI sources: enabled={n_newsapi} (expected ≥ {len(_NEWSAPI_SOURCES)})")
+    if not na_ok:
         all_ok = False
 
     cur_mkt.close()

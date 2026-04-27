@@ -1,9 +1,18 @@
-"""Abstract Unit of Work for the Portfolio application layer."""
+"""Unit of Work ports for the Portfolio bounded context.
+
+Two variants are provided:
+
+- ``ReadOnlyUnitOfWork`` — read replica session, no mutations (R27).
+  Read-only use cases MUST depend on this type to leverage the read
+  replica and prevent accidental writes.
+- ``UnitOfWork`` — extends ``ReadOnlyUnitOfWork`` with commit/rollback/flush.
+  Use cases that mutate data depend on this type.
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from portfolio.application.ports.repositories import (
@@ -25,8 +34,17 @@ if TYPE_CHECKING:
     )
 
 
-class UnitOfWork(ABC):
-    """Abstract unit of work providing access to all repositories."""
+class ReadOnlyUnitOfWork(ABC):
+    """Read-only Unit of Work — uses the read replica session (R27).
+
+    Read-only use cases MUST depend on this type (not ``UnitOfWork``)
+    to leverage the read replica and avoid accidental writes.
+
+    Usage::
+
+        async with read_uow:
+            holdings = await read_uow.holdings.list_by_portfolio(pid)
+    """
 
     @property
     @abstractmethod
@@ -88,6 +106,42 @@ class UnitOfWork(ABC):
     @abstractmethod
     def auth_audit_log(self) -> AuthAuditLogRepository: ...
 
+    async def __aenter__(self) -> ReadOnlyUnitOfWork:
+        return self
+
+    async def __aexit__(  # noqa: B027
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        """Close the read session — no rollback needed (read-only)."""
+
+
+class UnitOfWork(ReadOnlyUnitOfWork):
+    """Read-write Unit of Work — uses the primary write session.
+
+    Use cases that mutate data depend on this abstraction; infrastructure
+    supplies the concrete implementation backed by SQLAlchemy async sessions.
+
+    Usage::
+
+        async with uow:
+            portfolio = await uow.portfolios.get(pid, tid)
+            ...
+            await uow.commit()
+    """
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        """Roll back automatically on exception (Option B — QA-006)."""
+        if exc_type is not None:
+            await self.rollback()
+
     @abstractmethod
     async def commit(self) -> None: ...
 
@@ -96,13 +150,3 @@ class UnitOfWork(ABC):
 
     @abstractmethod
     async def flush(self) -> None: ...
-
-    async def __aenter__(self) -> UnitOfWork:
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        # Option B (QA-006): __aexit__ never auto-commits.
-        # Every mutating use case must call await uow.commit() explicitly.
-        # This prevents double-commit side effects and makes the write boundary visible.
-        if exc_type is not None:
-            await self.rollback()

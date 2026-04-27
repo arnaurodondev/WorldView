@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 import common.ids
 import common.time
 from content_ingestion.domain.entities import ContentIngestionTask
-from content_ingestion.infrastructure.db.models import ContentIngestionTaskModel
+from content_ingestion.infrastructure.db.models import ContentIngestionTaskModel, SourceModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -160,7 +160,20 @@ class TaskRepository:
             .returning(ContentIngestionTaskModel)
         )
         rows = (await self._session.execute(stmt)).scalars().all()
-        return [_to_domain(row) for row in rows]
+        tasks = [_to_domain(row) for row in rows]
+
+        # Load source configs for all claimed tasks so adapters can read symbol,
+        # from_date, to_date, etc. without a second DB round-trip in the use case.
+        if tasks:
+            source_ids = [t.source_id for t in tasks]
+            cfg_result = await self._session.execute(
+                select(SourceModel.id, SourceModel.config).where(SourceModel.id.in_(source_ids))
+            )
+            source_configs = {row.id: (row.config or {}) for row in cfg_result}
+            for task in tasks:
+                task.source_config = source_configs.get(task.source_id, {})
+
+        return tasks
 
     async def update_status(
         self,

@@ -175,9 +175,9 @@ def _download_ohlcv(
         # auto_adjust=True applies corporate action adjustments (splits, dividends)
         # to OHLCV prices so the series is consistent over long histories.
         "auto_adjust": True,
-        # progress=False suppresses the tqdm progress bar that yfinance prints to
-        # stdout when downloading multi-symbol batches.
-        "progress": False,
+        # NOTE: progress=False was removed — newer yfinance versions moved the progress
+        # kwarg out of PriceHistory.history() and it raises TypeError if included.
+        # (BP-NEW-yfinance-progress-kwarg)
     }
     if start:
         kwargs["start"] = start.strftime("%Y-%m-%d")

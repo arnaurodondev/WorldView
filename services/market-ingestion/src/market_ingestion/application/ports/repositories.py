@@ -67,8 +67,14 @@ class TaskRepository(ABC):
         """Add multiple tasks idempotently. Returns count actually inserted."""
 
     @abstractmethod
-    async def save(self, task: IngestionTask) -> None:
-        """Persist changes to an existing task."""
+    async def save(self, task: IngestionTask, *, original_lease_owner: str | None = None) -> None:
+        """Persist changes to an existing task.
+
+        ``original_lease_owner`` should be set to the worker-id that held the
+        lease *before* the domain transition (retry/fail/succeed) cleared it.
+        The WHERE clause uses this value so that the update succeeds even after
+        ``task.lease_owner`` has been cleared by the state-machine method.
+        """
 
     @abstractmethod
     async def claim_batch(

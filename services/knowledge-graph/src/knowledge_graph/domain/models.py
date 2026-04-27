@@ -259,9 +259,9 @@ class ConfidenceComponents:
             raise ConfidenceBoundsViolation(f"final confidence {self.final:.4f} is outside [0, 1]")
         if self.corroboration > self.CORROBORATION_CAP + 1e-9:
             raise ConfidenceBoundsViolation(
-                f"corroboration {self.corroboration:.4f} exceeds cap {self.CORROBORATION_CAP}"
+                f"corroboration {self.corroboration:.4f} exceeds cap {self.CORROBORATION_CAP}",
             )
         if self.contradiction > self.CONTRADICTION_CAP + 1e-9:
             raise ConfidenceBoundsViolation(
-                f"contradiction {self.contradiction:.4f} exceeds cap {self.CONTRADICTION_CAP}"
+                f"contradiction {self.contradiction:.4f} exceeds cap {self.CONTRADICTION_CAP}",
             )

@@ -45,6 +45,7 @@ export interface SortState {
 export type SortableKey = keyof Pick<
   ScreenerResult,
   "ticker" | "name" | "gics_sector" | "daily_return" | "market_cap" | "pe_ratio" | "market_impact_score"
+  | "current_price" | "revenue" | "beta"
 >;
 
 // ── Column definitions ─────────────────────────────────────────────────────────
@@ -122,11 +123,14 @@ const COLS: ColDef[] = [
     header: "PRICE",
     width: "80px",
     align: "right",
-    // WHY no sortKey: price not in ScreenerResult — would require live quote lookup
-    render: () => (
-      // WHY title "Backend pending": clearly communicates the data gap without
-      // showing an error state. Users familiar with in-progress products expect this.
-      <span className="font-mono text-[11px] tabular-nums text-muted-foreground" title="Backend pending">—</span>
+    sortKey: "current_price",
+    render: (r) => (
+      // WHY $-prefix: institutional convention — prices always show currency symbol.
+      // WHY 2dp: standard equity price precision (fractions below $1 may need more, but
+      // large-caps always 2dp). Truncation to "—" only when truly unavailable.
+      <span className="font-mono text-[11px] tabular-nums text-foreground">
+        {r.current_price != null ? `$${r.current_price.toFixed(2)}` : "—"}
+      </span>
     ),
   },
   {
@@ -179,17 +183,35 @@ const COLS: ColDef[] = [
     header: "REVENUE",
     width: "80px",
     align: "right",
-    render: () => (
-      <span className="font-mono text-[11px] tabular-nums text-muted-foreground" title="Backend pending">—</span>
+    sortKey: "revenue",
+    render: (r) => (
+      // WHY abbreviated format: revenue in T/B/M matching market-cap abbreviation for
+      // visual consistency. A stock screener user reads "394B" faster than "$394,000,000,000".
+      <span className="font-mono text-[11px] tabular-nums text-foreground">
+        {r.revenue != null ? formatCap(r.revenue) : "—"}
+      </span>
     ),
   },
   {
     header: "BETA",
     width: "55px",
     align: "right",
-    render: () => (
-      <span className="font-mono text-[11px] tabular-nums text-muted-foreground" title="Backend pending">—</span>
-    ),
+    sortKey: "beta",
+    render: (r) => {
+      if (r.beta == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+      // WHY color-coded beta: beta > 1.5 = high risk (amber), < 0.5 = defensive (muted-foreground),
+      // otherwise normal (foreground). Instant risk signal without reading the number.
+      const isHigh = r.beta > 1.5;
+      const isLow = r.beta < 0.5;
+      return (
+        <span className={cn(
+          "font-mono text-[11px] tabular-nums",
+          isHigh ? "text-warning" : isLow ? "text-muted-foreground" : "text-foreground",
+        )}>
+          {r.beta.toFixed(2)}
+        </span>
+      );
+    },
   },
   {
     header: "SCORE",

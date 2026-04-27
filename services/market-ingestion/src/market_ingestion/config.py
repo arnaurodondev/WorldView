@@ -51,8 +51,21 @@ class Settings(BaseSettings):
     # a real key in production. Startup validator below emits a WARNING if unset.
     eodhd_api_key: SecretStr = SecretStr("demo")
     finnhub_api_key: SecretStr = SecretStr("")
-    polygon_api_key: SecretStr = SecretStr("")
+    polygon_api_key: SecretStr = SecretStr("")  # — empty = Polygon disabled
+    polygon_base_url: str = "https://api.polygon.io"
     alpha_vantage_api_key: SecretStr = SecretStr("")
+    alpaca_api_key: SecretStr = SecretStr("")  # — empty = Alpaca disabled
+    alpaca_secret_key: SecretStr = SecretStr("")
+    alpaca_base_url: str = "https://data.alpaca.markets"
+    alpaca_feed: str = "iex"  # "iex" (free, ~15min delayed) | "sip" (paid, real-time)
+
+    # Routing weights (PRD-0032, ADR-032-02): comma-separated provider:weight pairs.
+    # These env vars define priority ordering for each dataset+timeframe slot.
+    # No DB table — config-backed only. Force-reload via POST /internal/v1/routing/reload.
+    routing_ohlcv_intraday: str = "alpaca:100,polygon:80"  # timeframes: 1m,5m,15m,30m,1h,4h
+    routing_ohlcv_eod: str = "yahoo_finance:100,eodhd:80"  # timeframes: 1d,1w,1M
+    routing_quotes: str = "eodhd:100"
+    routing_fundamentals: str = "eodhd:100"
 
     # Valkey / Redis
     valkey_url: str = "redis://localhost:6379/0"

@@ -148,8 +148,8 @@ WHERE entity_id = :entity_id AND view_type = :view_type
         for vt in get_view_types_for_entity_type(entity_type):
             await self._session.execute(
                 text("""
-INSERT INTO entity_embedding_state (entity_id, view_type, last_refreshed_at, refresh_count)
-VALUES (:entity_id, :view_type, now(), 0)
+INSERT INTO entity_embedding_state (entity_id, view_type, last_refreshed_at, next_refresh_at, refresh_count)
+VALUES (:entity_id, :view_type, now(), now(), 0)
 ON CONFLICT (entity_id, view_type) DO NOTHING
 """),
                 {"entity_id": str(entity_id), "view_type": vt},

@@ -33,11 +33,12 @@ import { useRouter } from "next/navigation";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 
 // ── Node type → color map ─────────────────────────────────────────────────────
-// WHY these exact values: match the Bloomberg Dark design system palette.
+// WHY these exact values: match the Midnight Pro palette (global.css --primary: #FFD60A).
 // Using hex directly (not Tailwind classes) because sigma reads node attributes — not CSS.
-// WHY #E8A317 for company: amber primary — publicly traded entities are the flagship node type.
+// WHY #FFD60A for company: Bloomberg trading yellow — updated from old amber (#E8A317)
+// which clashed with the Midnight Pro dark terminal palette.
 const NODE_TYPE_COLORS: Record<string, string> = {
-  company: "#E8A317", // amber primary (#E8A317) — publicly traded entities
+  company: "#FFD60A", // Bloomberg yellow (#FFD60A) — publicly traded entities
   person:  "#26A69A", // teal-500 — executives, board members
   event:   "#F59E0B", // amber-500 — macro events, earnings releases
   topic:   "#818CF8", // indigo-400 — themes, sectors, concepts

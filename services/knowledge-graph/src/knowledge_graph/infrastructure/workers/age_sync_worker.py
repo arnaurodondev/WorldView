@@ -142,7 +142,7 @@ _VALID_EDGE_LABELS: frozenset[str] = frozenset(
         "OPERATES_IN_COUNTRY",
         # temporal event exposure
         "EVENT_EXPOSES",
-    }
+    },
 )
 
 
@@ -156,10 +156,12 @@ class AgeSyncWorker:
     ``KNOWLEDGE_GRAPH_CYPHER_ENABLED=false`` (default).
 
     Args:
+    ----
         session_factory: async_sessionmaker for intelligence_db (read/write).
         valkey_client:   Connected :class:`~messaging.valkey.client.ValkeyClient`
                          instance used to store the sync watermark.
         settings:        Service settings (reads ``cypher_enabled``).
+
     """
 
     def __init__(
@@ -264,7 +266,7 @@ class AgeSyncWorker:
                     " FROM canonical_entities"
                     " WHERE updated_at > :since"
                     " ORDER BY updated_at ASC"
-                    " LIMIT :lim OFFSET :off"
+                    " LIMIT :lim OFFSET :off",
                 ),
                 {"since": since, "lim": _ENTITY_BATCH, "off": offset},
             )
@@ -314,7 +316,7 @@ class AgeSyncWorker:
                     " WHERE updated_at > :since"
                     "   AND confidence > :min_conf"
                     " ORDER BY updated_at ASC, relation_id ASC"
-                    " LIMIT :lim OFFSET :off"
+                    " LIMIT :lim OFFSET :off",
                 ),
                 {
                     "since": since,
@@ -376,7 +378,7 @@ class AgeSyncWorker:
                     " FROM temporal_events"
                     " WHERE updated_at > :since"
                     " ORDER BY updated_at ASC, event_id ASC"
-                    " LIMIT :lim OFFSET :off"
+                    " LIMIT :lim OFFSET :off",
                 ),
                 {"since": since, "lim": event_batch, "off": offset},
             )
@@ -409,7 +411,7 @@ class AgeSyncWorker:
                     " FROM entity_event_exposures"
                     " WHERE created_at > :since"
                     " ORDER BY created_at ASC, exposure_id ASC"
-                    " LIMIT :lim OFFSET :off"
+                    " LIMIT :lim OFFSET :off",
                 ),
                 {"since": since, "lim": exposure_batch, "off": offset},
             )
@@ -478,10 +480,12 @@ def _derive_edge_label(canonical_type: str) -> str | None:
     Converts to uppercase and replaces spaces with underscores, then validates
     against the known whitelist. Returns ``None`` for unknown types.
 
-    Examples:
+    Examples
+    --------
         ``"competes_with"`` → ``"COMPETES_WITH"``
         ``"has executive"`` → ``"HAS_EXECUTIVE"``
         ``"unknown_type"``  → ``None``
+
     """
     label = canonical_type.upper().replace(" ", "_")
     return label if label in _VALID_EDGE_LABELS else None

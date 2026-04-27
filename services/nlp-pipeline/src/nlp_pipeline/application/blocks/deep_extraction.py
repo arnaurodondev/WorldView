@@ -284,7 +284,7 @@ async def run_deep_extraction_block(
             )
             window_results.append(result)
         except Exception:
-            logger.warning("deep_extraction.window_failed", doc_id=str(doc_id))
+            logger.warning("deep_extraction.window_failed", doc_id=str(doc_id), exc_info=True)
             window_results.append({"events": [], "claims": [], "relations": []})
 
     # Merge deduplicated results

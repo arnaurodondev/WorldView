@@ -26,10 +26,12 @@ class EmbeddingRefreshWorker:
     """Embeds relation summaries that are missing embeddings (Worker 13F).
 
     Args:
+    ----
         session_factory:   Read/write sessionmaker for intelligence_db.
         llm_client:        FallbackChainClient (embedding path).
         embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
+
     """
 
     def __init__(

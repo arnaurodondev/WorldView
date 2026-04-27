@@ -167,7 +167,16 @@ class ArticleRelevanceScoringWorker:
             f"{self._ollama_url}/api/generate",
             # BP-231: qwen3 is a thinking model — "think": False disables reasoning mode,
             # dropping inference from 90-146s to ~2-5s on CPU. Required for non-chat use cases.
-            json={"model": self._model, "prompt": prompt, "format": "json", "stream": False, "think": False},
+            json={
+                "model": self._model,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "think": False,
+                # BP-121 variant: qwen3:0.6b defaults to n_ctx=32768 → GGML_ASSERT abort on CPU.
+                # Relevance prompts are title+source_type, always < 100 tokens; 512 is ample.
+                "options": {"num_ctx": 512},
+            },
         )
         raw = resp.text
         try:

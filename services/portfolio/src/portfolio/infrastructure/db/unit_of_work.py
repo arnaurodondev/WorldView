@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from observability import get_logger  # type: ignore[import-untyped]
-from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyAlertPreferenceRepository,
     SqlAlchemyEntitySuppressionRepository,
@@ -51,6 +51,151 @@ if TYPE_CHECKING:
         WatchlistMemberRepository,
         WatchlistRepository,
     )
+
+
+class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
+    """Read-only Unit of Work backed by the read-replica session.
+
+    Exposes all repository properties for queries but provides no
+    ``commit()``, ``rollback()``, or ``flush()`` — enforcing read-only
+    semantics (R27).
+    """
+
+    def __init__(
+        self,
+        read_factory: async_sessionmaker[AsyncSession],
+        snaptrade_cipher: Fernet | None = None,
+    ) -> None:
+        self._read_factory = read_factory
+        self._snaptrade_cipher = snaptrade_cipher
+        self._session: AsyncSession | None = None
+        self._tenants: SqlAlchemyTenantRepository | None = None
+        self._users: SqlAlchemyUserRepository | None = None
+        self._portfolios: SqlAlchemyPortfolioRepository | None = None
+        self._instruments: SqlAlchemyInstrumentRepository | None = None
+        self._transactions: SqlAlchemyTransactionRepository | None = None
+        self._holdings: SqlAlchemyHoldingRepository | None = None
+        self._outbox: SqlAlchemyOutboxRepository | None = None
+        self._idempotency: SqlAlchemyIdempotencyRepository | None = None
+        self._watchlists: SqlAlchemyWatchlistRepository | None = None
+        self._watchlist_members: SqlAlchemyWatchlistMemberRepository | None = None
+        self._alert_preferences: SqlAlchemyAlertPreferenceRepository | None = None
+        self._entity_suppressions: SqlAlchemyEntitySuppressionRepository | None = None
+        self._brokerage_connections: SqlAlchemyBrokerageConnectionRepository | None = None
+        self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
+        self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
+
+    # ── Repository properties ─────────────────────────────────────────────────
+
+    @property
+    def tenants(self) -> TenantRepository:
+        assert self._tenants is not None, "ReadOnlyUnitOfWork not entered"
+        return self._tenants
+
+    @property
+    def users(self) -> UserRepository:
+        assert self._users is not None, "ReadOnlyUnitOfWork not entered"
+        return self._users
+
+    @property
+    def portfolios(self) -> PortfolioRepository:
+        assert self._portfolios is not None, "ReadOnlyUnitOfWork not entered"
+        return self._portfolios
+
+    @property
+    def instruments(self) -> InstrumentRepository:
+        assert self._instruments is not None, "ReadOnlyUnitOfWork not entered"
+        return self._instruments
+
+    @property
+    def transactions(self) -> TransactionRepository:
+        assert self._transactions is not None, "ReadOnlyUnitOfWork not entered"
+        return self._transactions
+
+    @property
+    def holdings(self) -> HoldingRepository:
+        assert self._holdings is not None, "ReadOnlyUnitOfWork not entered"
+        return self._holdings
+
+    @property
+    def outbox(self) -> OutboxRepository:
+        assert self._outbox is not None, "ReadOnlyUnitOfWork not entered"
+        return self._outbox
+
+    @property
+    def idempotency(self) -> IdempotencyRepository:
+        assert self._idempotency is not None, "ReadOnlyUnitOfWork not entered"
+        return self._idempotency
+
+    @property
+    def watchlists(self) -> WatchlistRepository:
+        assert self._watchlists is not None, "ReadOnlyUnitOfWork not entered"
+        return self._watchlists
+
+    @property
+    def watchlist_members(self) -> WatchlistMemberRepository:
+        assert self._watchlist_members is not None, "ReadOnlyUnitOfWork not entered"
+        return self._watchlist_members
+
+    @property
+    def alert_preferences(self) -> AlertPreferenceRepository:
+        assert self._alert_preferences is not None, "ReadOnlyUnitOfWork not entered"
+        return self._alert_preferences
+
+    @property
+    def entity_suppressions(self) -> EntitySuppressionRepository:
+        assert self._entity_suppressions is not None, "ReadOnlyUnitOfWork not entered"
+        return self._entity_suppressions
+
+    @property
+    def brokerage_connections(self) -> BrokerageConnectionRepository:
+        assert self._brokerage_connections is not None, "ReadOnlyUnitOfWork not entered"
+        return self._brokerage_connections
+
+    @property
+    def brokerage_sync_errors(self) -> BrokerageTransactionSyncErrorRepository:
+        assert self._brokerage_sync_errors is not None, "ReadOnlyUnitOfWork not entered"
+        return self._brokerage_sync_errors
+
+    @property
+    def auth_audit_log(self) -> AuthAuditLogRepository:
+        assert self._auth_audit_log is not None, "ReadOnlyUnitOfWork not entered"
+        return self._auth_audit_log
+
+    # ── Context manager ───────────────────────────────────────────────────────
+
+    async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
+        self._session = self._read_factory()
+        await self._session.__aenter__()
+        self._tenants = SqlAlchemyTenantRepository(self._session)
+        self._users = SqlAlchemyUserRepository(self._session)
+        self._portfolios = SqlAlchemyPortfolioRepository(self._session)
+        self._instruments = SqlAlchemyInstrumentRepository(self._session)
+        self._transactions = SqlAlchemyTransactionRepository(self._session)
+        self._holdings = SqlAlchemyHoldingRepository(self._session)
+        self._outbox = SqlAlchemyOutboxRepository(self._session)
+        self._idempotency = SqlAlchemyIdempotencyRepository(self._session)
+        self._watchlists = SqlAlchemyWatchlistRepository(self._session)
+        self._watchlist_members = SqlAlchemyWatchlistMemberRepository(self._session)
+        self._alert_preferences = SqlAlchemyAlertPreferenceRepository(self._session)
+        self._entity_suppressions = SqlAlchemyEntitySuppressionRepository(self._session)
+        self._brokerage_connections = SqlAlchemyBrokerageConnectionRepository(
+            self._session,
+            cipher=self._snaptrade_cipher,
+        )
+        self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
+        self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        if self._session is not None:
+            await self._session.__aexit__(None, None, None)
+            self._session = None
 
 
 class SqlAlchemyUnitOfWork(UnitOfWork):

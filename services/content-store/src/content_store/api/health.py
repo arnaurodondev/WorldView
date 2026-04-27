@@ -27,6 +27,13 @@ async def readyz(request: Request) -> Response:
     checks: dict[str, str] = {}
     ok = True
 
+    # F-003B: JWKS public key must be loaded before accepting traffic.
+    if getattr(request.app.state, "_internal_jwt_public_key", None) is None:
+        checks["jwks"] = "not_loaded"
+        ok = False
+    else:
+        checks["jwks"] = "ok"
+
     # Database check
     try:
         async with request.app.state.session_factory() as session:

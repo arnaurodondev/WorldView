@@ -162,7 +162,7 @@ RETURNING event_id
         if active_only:
             # Exclude EXPIRED: active_until IS NULL (still active) OR within residual window
             conditions.append(
-                "(te.active_until IS NULL OR now() - te.active_until <= te.residual_impact_days * INTERVAL '1 day')"
+                "(te.active_until IS NULL OR now() - te.active_until <= te.residual_impact_days * INTERVAL '1 day')",
             )
 
         if entity_id is not None:
@@ -171,7 +171,7 @@ RETURNING event_id
                 "SELECT 1 FROM entity_event_exposures eee"
                 " WHERE eee.event_id = te.event_id"
                 "   AND eee.entity_id = :entity_id"
-                ")"
+                ")",
             )
             params["entity_id"] = str(entity_id)
 

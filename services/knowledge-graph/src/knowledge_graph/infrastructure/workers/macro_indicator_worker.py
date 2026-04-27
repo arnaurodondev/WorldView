@@ -5,5 +5,5 @@
 raise ImportError(
     "knowledge_graph.infrastructure.workers.macro_indicator_worker has been removed. "
     "Use MacroIndicatorDatasetConsumer from "
-    "knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer instead."
+    "knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer instead.",
 )

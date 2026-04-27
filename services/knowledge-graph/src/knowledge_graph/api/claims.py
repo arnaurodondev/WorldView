@@ -54,5 +54,5 @@ async def search_claims(
                 created_at=r.created_at,
             )
             for r in results
-        ]
+        ],
     )

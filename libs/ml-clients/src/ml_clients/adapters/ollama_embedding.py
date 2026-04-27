@@ -48,7 +48,17 @@ class OllamaEmbeddingAdapter:
                             text = " ".join(words[: self._MAX_WORDS])
                         resp = await client.post(
                             f"{self._base_url}/api/embeddings",
-                            json={"model": self._model_id, "prompt": text},
+                            json={
+                                "model": self._model_id,
+                                "prompt": text,
+                                # BP-121 fix: force Ollama to honour the model's
+                                # actual training context (512 for bge-large,
+                                # harmless for nomic-embed-text which supports 2048).
+                                # Without this, Ollama initialises bge-large with
+                                # n_ctx=4096 → GGML_ASSERT abort ("signal: aborted")
+                                # even when the input is short.
+                                "options": {"num_ctx": 512},
+                            },
                         )
                         resp.raise_for_status()
                         embedding: list[float] = resp.json()["embedding"]

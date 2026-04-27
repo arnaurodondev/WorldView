@@ -165,19 +165,56 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
     llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client)
 
-    # Embedding: use S6 embedding endpoint via a simple adapter
+    # Embedding: use S6 embedding endpoint via a simple adapter.
+    # WHY separate timeout: Ollama bge-large / nomic-embed-text require 10-15s on CPU;
+    # the shared upstream_timeout_seconds (10s) is too short and causes the embed call
+    # to time out, returning an empty list.  An empty embedding silently falls back to
+    # the query_text path in nlp-pipeline which raises RuntimeError (no embedding client
+    # in the API process), resulting in 0 chunks retrieved for every chat request.
+    # Fix: use a dedicated httpx client with a 60s timeout for the embed endpoint.
     class _S6EmbeddingAdapter:
-        """Minimal embedding adapter that calls S6 POST /api/v1/embed."""
+        """Minimal embedding adapter that calls S6 POST /api/v1/embed.
 
-        def __init__(self, client: Any) -> None:
-            self._client = client
+        Uses a dedicated httpx.AsyncClient with a 60-second timeout because
+        Ollama bge-large / nomic-embed-text on CPU take 10-15 seconds per call.
+        The shared BaseUpstreamClient timeout (10s) is insufficient and causes
+        the embed to time out, which cascades into 0 chunks retrieved for every
+        chat request (BP-225 class: embed timeout → empty vector → RuntimeError
+        in nlp-pipeline chunk search → 500 → retrieval_task_failed).
+        """
+
+        def __init__(self, base_url: str, internal_jwt_getter: Any) -> None:
+            import httpx
+
+            self._client = httpx.AsyncClient(base_url=base_url, timeout=60.0)
+            self._get_jwt = internal_jwt_getter
 
         async def embed(self, text: str) -> list[float]:
-            raw = await self._client._post("/api/v1/embed", {"text": text})
-            result: list[float] = raw.get("embedding", [])
-            return result
+            import httpx
 
-    embedding_client = _S6EmbeddingAdapter(s6)
+            from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+            headers: dict[str, str] = {}
+            jwt = get_current_jwt()
+            if jwt:
+                headers["X-Internal-JWT"] = jwt
+            try:
+                resp = await self._client.post(
+                    "/api/v1/embed",
+                    json={"text": text},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                result: list[float] = resp.json().get("embedding", [])
+                return result
+            except httpx.TimeoutException:
+                get_logger("rag_chat.embed").warning("s6_embed_timeout", timeout=60.0)  # type: ignore[no-any-return]
+                return []
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                get_logger("rag_chat.embed").warning("s6_embed_error", error=str(exc))  # type: ignore[no-any-return]
+                return []
+
+    embedding_client = _S6EmbeddingAdapter(settings.s6_base_url, None)
 
     orchestrator = ChatOrchestrator(
         validator=InputValidator(),

@@ -41,9 +41,21 @@ if TYPE_CHECKING:
 
     from market_data.config import Settings
 
+
 # Canonical Avro schemas live in infra/kafka/schemas/ at the repo root.
-# Resolve: outbox/ → messaging/ → infrastructure/ → market_data/ → src/ → market-data/ → services/ → repo root
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent.parent.parent / "infra" / "kafka" / "schemas"
+# Walk up the directory tree to find the schemas directory — works in both the
+# development source tree (src/ layout) and the Docker container (installed package).
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    msg = f"Could not locate infra/kafka/schemas/ from {__file__}"
+    raise FileNotFoundError(msg)
+
+
+_SCHEMA_DIR = _find_schema_dir()
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Static event-type → topic routing ────────────────────────────────────────

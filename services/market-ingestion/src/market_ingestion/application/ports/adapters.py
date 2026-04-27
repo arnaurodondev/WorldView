@@ -92,6 +92,17 @@ class ProviderAdapter(ABC):
     ) -> ProviderFetchResult:
         """Fetch fundamental data for a symbol."""
 
+    @property
+    def supports_batch(self) -> bool:
+        """True if this adapter supports multi-symbol batch fetching.
+
+        When True, the worker layer may call ``fetch_ohlcv_batch(symbols, ...)``
+        to batch multiple tasks into a single HTTP request instead of making one
+        call per symbol.  Defaults to False — only adapters with a native
+        multi-symbol endpoint (e.g. Alpaca) should override this.
+        """
+        return False
+
     async def health_check(self) -> bool:
         """Check if the provider is reachable. Returns True if healthy."""
         return True

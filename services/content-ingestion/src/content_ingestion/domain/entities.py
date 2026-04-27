@@ -306,15 +306,45 @@ class PredictionMarketFetchResult:
         Maps Gamma API field names to domain attributes.  All optional fields
         use defensive ``.get()`` with None defaults to tolerate absent keys.
         """
+        # WHY dual-format parsing: The Polymarket Gamma API changed its response schema
+        # circa April 2026.  Old format: `tokens` list of {outcome, token_id, price}.
+        # New format: `outcomes` (JSON string of names), `outcomePrices` (JSON string of
+        # decimal strings), `clobTokenIds` (JSON string of token ID strings).
+        # We parse both and prefer the old format when `tokens` is present.
         tokens: list[dict] = raw.get("tokens") or []
-        outcomes = [
-            OutcomeSnapshot(
-                name=t.get("outcome", ""),
-                token_id=t.get("token_id", ""),
-                price=float(t.get("price", 0.0)),
-            )
-            for t in tokens
-        ]
+        if tokens:
+            # Old Gamma API format: tokens is a list of {outcome, token_id, price} dicts
+            outcomes = [
+                OutcomeSnapshot(
+                    name=t.get("outcome", ""),
+                    token_id=t.get("token_id", ""),
+                    price=float(t.get("price", 0.0)),
+                )
+                for t in tokens
+            ]
+        else:
+            # New Gamma API format: outcomes/outcomePrices/clobTokenIds are JSON strings
+            try:
+                outcome_names: list[str] = json.loads(raw.get("outcomes") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                outcome_names = []
+            try:
+                outcome_prices_raw: list[str] = json.loads(raw.get("outcomePrices") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                outcome_prices_raw = []
+            try:
+                clob_ids: list[str] = json.loads(raw.get("clobTokenIds") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                clob_ids = []
+            # Zip to shortest to avoid IndexError on mismatched lengths
+            outcomes = [
+                OutcomeSnapshot(
+                    name=name,
+                    token_id=clob_ids[i] if i < len(clob_ids) else "",
+                    price=float(outcome_prices_raw[i]) if i < len(outcome_prices_raw) else 0.0,
+                )
+                for i, name in enumerate(outcome_names)
+            ]
 
         # Map Gamma "closed" status → domain "cancelled" (R15: stable values)
         raw_status = raw.get("status", "active")

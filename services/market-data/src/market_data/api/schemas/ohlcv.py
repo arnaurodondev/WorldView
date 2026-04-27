@@ -17,7 +17,7 @@ class OHLCVBarResponse(BaseModel):
     high: str
     low: str
     close: str
-    volume: int
+    volume: int | None
     adjusted_close: str | None = None
     source: str
 

@@ -179,7 +179,11 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
             {alert.entity_id && (
               <span className="font-mono">{alert.entity_id}</span>
             )}
-            <span className="ml-auto font-mono">{new Date(alert.created_at).toISOString().slice(11, 19)} UTC</span>
+            {/* WHY optional guard: a malformed WebSocket payload could arrive with
+                created_at=undefined — this guard prevents RangeError from crashing the overlay */}
+            <span className="ml-auto font-mono">
+              {alert.created_at ? new Date(alert.created_at).toISOString().slice(11, 19) + " UTC" : "—"}
+            </span>
           </div>
 
           {/* Dismiss hint */}

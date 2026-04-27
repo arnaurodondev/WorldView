@@ -30,7 +30,9 @@ class MonthlyPartitionWorker:
     """Creates and prunes monthly range partitions (Worker 13G).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
+
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -38,7 +40,6 @@ class MonthlyPartitionWorker:
 
     async def run(self) -> None:
         """Ensure current and next month partitions exist; prune old ones."""
-
         now = utc_now()  # type: ignore[no-any-return]
         year: int = now.year  # type: ignore[union-attr]
         month: int = now.month  # type: ignore[union-attr]
@@ -68,7 +69,9 @@ class YearlyPartitionWorker:
     """Creates yearly partitions at startup and on 1 Jan (Worker 13H).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
+
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -115,7 +118,7 @@ async def _create_monthly_partition(
     result = await session.execute(
         text(
             "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE c.relname = :name AND n.nspname = 'public'"
+            "WHERE c.relname = :name AND n.nspname = 'public'",
         ),
         {"name": partition_name},
     )
@@ -126,8 +129,8 @@ async def _create_monthly_partition(
         text(
             f"CREATE TABLE IF NOT EXISTS {partition_name} "
             f"PARTITION OF {table} "
-            f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_y}-{next_m:02d}-01')"
-        )
+            f"FOR VALUES FROM ('{year}-{month:02d}-01') TO ('{next_y}-{next_m:02d}-01')",
+        ),
     )
     logger.info("partition_created", partition=partition_name)  # type: ignore[no-any-return]
     return True
@@ -146,7 +149,7 @@ async def _create_yearly_partition(
     result = await session.execute(
         text(
             "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE c.relname = :name AND n.nspname = 'public'"
+            "WHERE c.relname = :name AND n.nspname = 'public'",
         ),
         {"name": partition_name},
     )
@@ -157,8 +160,8 @@ async def _create_yearly_partition(
         text(
             f"CREATE TABLE IF NOT EXISTS {partition_name} "
             f"PARTITION OF {table} "
-            f"FOR VALUES FROM ('{year}-01-01') TO ('{year + 1}-01-01')"
-        )
+            f"FOR VALUES FROM ('{year}-01-01') TO ('{year + 1}-01-01')",
+        ),
     )
     logger.info("yearly_partition_created", partition=partition_name)  # type: ignore[no-any-return]
     return True

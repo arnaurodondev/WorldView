@@ -71,6 +71,12 @@ def app():
     test_app.state.read_factory = lambda: cm
     test_app.state.valkey = None
     test_app.state.consumer_alive = True
+    # NOTE: Do NOT set _internal_jwt_public_key here.  InternalJWTMiddleware
+    # is configured with skip_verification=True for unit tests.  When the
+    # public key is set, dispatch() bypasses the skip_verification path and
+    # attempts RS256 signature verification — which fails for HS256 test
+    # tokens (InvalidAlgorithmError → 401 on every request).
+    # Readyz tests that need the key set should do so in their own fixture.
 
     return test_app
 

@@ -252,6 +252,7 @@ class EntityEmbeddingANNRepositoryPort(ABC):
         """Return nearest neighbours by cosine distance, ascending.
 
         Args:
+        ----
             query_embedding: The query vector (must match stored embedding dimension).
             view_type:        Which embedding view to search (e.g. ``'fundamentals_ohlcv'``).
             limit:            Maximum number of results to return.
@@ -260,7 +261,9 @@ class EntityEmbeddingANNRepositoryPort(ABC):
                               Applied via JOIN on ``canonical_entities``.
 
         Returns:
+        -------
             Sorted ascending by ``distance`` (nearest first).
+
         """
 
     @abstractmethod

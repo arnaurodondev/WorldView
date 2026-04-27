@@ -99,19 +99,33 @@ export function PredictionMarketsWidget() {
                 key={market.market_id}
                 className="flex h-[22px] items-center gap-1.5 px-2"
               >
-                {/* Market title — truncated to fit single row */}
+                {/* Market title — truncated to fit */}
                 <span
-                  className="flex-1 truncate text-[11px] text-foreground"
+                  className="min-w-0 flex-1 truncate text-[11px] text-foreground"
                   title={market.title}
                 >
                   {market.title}
                 </span>
 
+                {/* Mini probability bar — visual encoding of yes/no odds */}
+                {/* WHY separate bar (not just color text): the bar encodes magnitude
+                    visually before the trader reads the number. At 80%, the bar is
+                    clearly longer than at 30% — faster cognitive processing. */}
+                <div className="relative h-1 w-[28px] shrink-0 bg-muted/30 rounded-none">
+                  <div
+                    className={cn(
+                      "absolute left-0 top-0 h-full rounded-none",
+                      prob > 0.6 ? "bg-positive/50" : prob < 0.4 ? "bg-negative/40" : "bg-muted-foreground/40",
+                    )}
+                    style={{ width: `${(prob * 100).toFixed(0)}%` }}
+                  />
+                </div>
+
                 {/* Yes probability — right-aligned, colored by magnitude */}
                 {/* WHY font-mono tabular-nums: probability is a financial number */}
                 <span
                   className={cn(
-                    "shrink-0 font-mono text-[11px] tabular-nums",
+                    "w-[28px] shrink-0 text-right font-mono text-[11px] tabular-nums",
                     probColor,
                   )}
                 >

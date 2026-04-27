@@ -49,7 +49,9 @@ class ClaimRepository(ClaimRepositoryPort):
         # BP-180: asyncpg raises AmbiguousParameterError when a Python None is
         # bound to a parameter used in "IS NULL" — it cannot infer the PostgreSQL
         # type from None alone.  Fix: CAST(:param AS TYPE) IS NULL so the type
-        # is always explicit.
+        # is always explicit.  Applied to entity_ids, claim_types, AND the date
+        # params (date_from/date_to were previously unfixed, causing the error
+        # seen on every claim search that includes optional date filters).
         result = await self._session.execute(
             text("""
 SELECT claim_id, subject_entity_id, claim_type, polarity, claim_text,
@@ -57,8 +59,8 @@ SELECT claim_id, subject_entity_id, claim_type, polarity, claim_text,
 FROM claims
 WHERE subject_entity_id = ANY(CAST(:entity_ids AS UUID[]))
   AND (CAST(:claim_types AS TEXT[]) IS NULL OR claim_type = ANY(CAST(:claim_types AS TEXT[])))
-  AND (:date_from IS NULL OR created_at >= :date_from)
-  AND (:date_to   IS NULL OR created_at <= :date_to)
+  AND (CAST(:date_from AS DATE) IS NULL OR created_at >= CAST(:date_from AS DATE))
+  AND (CAST(:date_to   AS DATE) IS NULL OR created_at <= CAST(:date_to   AS DATE))
   AND extraction_confidence >= :min_confidence
 ORDER BY extraction_confidence DESC
 LIMIT :top_k

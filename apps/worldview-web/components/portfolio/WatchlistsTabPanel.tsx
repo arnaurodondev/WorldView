@@ -19,10 +19,16 @@
  */
 
 "use client";
-// WHY "use client": uses useState for active tab, useRouter for row navigation.
+// WHY "use client": uses useState for active tab, search state, and async mutations.
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+// WHY lucide-react icons: search magnifier + X clear + Loader2 spinner match the
+// terminal icon set used everywhere else in the app (consistent visual language).
+import { Search, X, Loader2 } from "lucide-react";
+import { createGateway } from "@/lib/gateway";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
@@ -156,6 +162,193 @@ function WatchlistTable({
   );
 }
 
+// ── AddSymbolBar ───────────────────────────────────────────────────────────────
+// WHY separate sub-component: keeps WatchlistsTabPanel from growing too large and
+// makes the search/add logic self-contained (easier to test independently).
+
+function AddSymbolBar({
+  watchlistId,
+  onAdded,
+}: {
+  watchlistId: string;
+  onAdded: () => void;
+}) {
+  const { accessToken } = useAuth();
+  const queryClient = useQueryClient();
+
+  // ── Search input state ────────────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  // WHY debounced query: avoid hammering S9 on every keystroke; 300ms delay is
+  // enough for fast typists to finish a 3-letter ticker (e.g., "AAP" → "AAPL").
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // ── Click-outside detection for dropdown ─────────────────────────────────
+  // WHY useRef + document listener: clicking outside the search bar + dropdown
+  // should close the dropdown without requiring the user to press Escape.
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, []);
+
+  // ── Instrument search query ───────────────────────────────────────────────
+  // WHY enabled when debouncedQuery.length >= 1: single-char queries (e.g., "A")
+  // still return useful results (AAPL, AMZN) and the latency is acceptable.
+  const { data: searchResults, isFetching: searchFetching } = useQuery({
+    queryKey: ["watchlist-instrument-search", debouncedQuery],
+    queryFn: () => createGateway(accessToken).searchInstruments(debouncedQuery, 8),
+    enabled: !!accessToken && debouncedQuery.length >= 1,
+    staleTime: 30_000,
+  });
+
+  // ── Add-member mutation ───────────────────────────────────────────────────
+  // WHY useMutation: addWatchlistMember is a write operation (POST) — it should
+  // not be a query. useMutation gives us isPending, onSuccess, onError states.
+  const addMutation = useMutation({
+    mutationFn: (entityId: string) =>
+      createGateway(accessToken).addWatchlistMember(watchlistId, entityId),
+    onSuccess: () => {
+      // Invalidate watchlists so the table re-renders with the new member
+      // WHY invalidateQueries (not setQueryData): the gateway re-fetches the full
+      // watchlist after adding a member, so the cache would still be stale. Invalidating
+      // forces a re-fetch from S1 and guarantees the UI shows the latest member_count.
+      queryClient.invalidateQueries({ queryKey: ["watchlists"] });
+      setSearchQuery("");
+      setDebouncedQuery("");
+      setShowDropdown(false);
+      onAdded();
+    },
+  });
+
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setSearchQuery(e.target.value);
+    setShowDropdown(e.target.value.length > 0);
+  }
+
+  function handleClear() {
+    setSearchQuery("");
+    setDebouncedQuery("");
+    setShowDropdown(false);
+  }
+
+  const results = searchResults?.results ?? [];
+  const hasResults = results.length > 0;
+
+  return (
+    // WHY relative: dropdown is absolutely positioned below the search bar.
+    // WHY border-b: consistent separation from the watchlist table above/below.
+    <div ref={containerRef} className="relative border-b border-border px-2 py-1.5">
+
+      {/* ── Search input ────────────────────────────────────────────────── */}
+      <div className="flex h-7 items-center gap-1.5 rounded-[2px] border border-border bg-background px-2">
+        {/* WHY Search icon: Bloomberg convention — search field always has a magnifier */}
+        <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+
+        <input
+          value={searchQuery}
+          onChange={handleInputChange}
+          onFocus={() => {
+            // Re-show dropdown if there's an active query
+            if (searchQuery.length > 0) setShowDropdown(true);
+          }}
+          placeholder="Add ticker or company…"
+          // WHY font-mono: ticker input should render in a monospace font so the
+          // user's typed ticker aligns with the ticker column below.
+          className="flex-1 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
+          // WHY aria-label: screen readers should announce this as "instrument search"
+          aria-label="Search to add instrument"
+          aria-autocomplete="list"
+          aria-expanded={showDropdown && hasResults}
+        />
+
+        {/* Spinner while fetching */}
+        {searchFetching && (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
+        )}
+
+        {/* Clear button — only shown when there's a query and not loading */}
+        {searchQuery && !searchFetching && (
+          <button
+            onClick={handleClear}
+            aria-label="Clear search"
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {/* ── Results dropdown ─────────────────────────────────────────────── */}
+      {/* WHY z-50: dropdown must overlay the watchlist table rows below.
+          WHY shadow-md: subtle depth cue distinguishes the floating dropdown
+          from the underlying table content. */}
+      {showDropdown && (hasResults || (debouncedQuery.length > 0 && !searchFetching)) && (
+        <div
+          role="listbox"
+          aria-label="Search results"
+          className="absolute left-2 right-2 top-full z-50 mt-0.5 overflow-hidden rounded-[2px] border border-border bg-card shadow-md"
+        >
+          {!hasResults && debouncedQuery.length > 0 ? (
+            // Empty results state — shown after debounce + fetch completes
+            <div className="px-3 py-2 text-[11px] text-muted-foreground">
+              No instruments found for &quot;{debouncedQuery}&quot;
+            </div>
+          ) : (
+            results.map((result) => (
+              <button
+                key={result.instrument_id}
+                role="option"
+                aria-selected={false}
+                disabled={addMutation.isPending}
+                onClick={() => addMutation.mutate(result.entity_id)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors",
+                  "hover:bg-muted/50 focus:bg-muted/50 focus:outline-none",
+                  addMutation.isPending && "opacity-50 cursor-not-allowed",
+                )}
+              >
+                {/* Ticker — monospace, primary color (amber) for visual weight */}
+                <span className="w-[48px] shrink-0 font-mono text-[11px] font-medium text-primary">
+                  {result.ticker}
+                </span>
+
+                {/* Company name — may be synthesised as "TICKER (EXCHANGE)" since S3
+                    does not return full names. We show what we have. */}
+                <span className="min-w-0 flex-1 truncate text-[11px] text-foreground">
+                  {result.name}
+                </span>
+
+                {/* Exchange badge */}
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {result.exchange}
+                </span>
+              </button>
+            ))
+          )}
+
+          {/* ── Add-member error state ────────────────────────────────── */}
+          {addMutation.isError && (
+            <div className="border-t border-border px-2 py-1 text-[10px] text-negative">
+              Failed to add — check if already in watchlist.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── WatchlistsTabPanel ─────────────────────────────────────────────────────────
 
 export function WatchlistsTabPanel({
@@ -223,6 +416,18 @@ export function WatchlistsTabPanel({
           {activeWatchlist.member_count} symbols
         </span>
       </div>
+
+      {/* ── Search bar to add instruments ─────────────────────────────── */}
+      {/* WHY AddSymbolBar above the table: Bloomberg convention — search/add
+          actions appear above the data list they affect. The empty state message
+          "Search above to add your first symbol" also points upward. */}
+      <AddSymbolBar
+        watchlistId={activeWatchlist.watchlist_id}
+        onAdded={() => {
+          // No-op callback — query invalidation handles the re-render.
+          // Kept as a prop so parent can react if needed in future.
+        }}
+      />
 
       {/* ── Active watchlist table ─────────────────────────────────────── */}
       <WatchlistTable

@@ -261,7 +261,9 @@ class ExecuteContentTaskUseCase:
             name=task.source_name,
             source_type=task.source_type,
             enabled=True,
-            config={},
+            # Use the source config loaded by claim_batch (symbol, from_date, etc.)
+            # so adapters like Finnhub can read their required parameters.
+            config=task.source_config,
         )
 
         # Build adapter with dedup check via a short-lived session

@@ -39,7 +39,7 @@ from portfolio.domain.events import (
 
 if TYPE_CHECKING:
     from portfolio.application.ports.cache import WatchlistCachePort
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -64,7 +64,7 @@ async def _fetch_watchlist_for_owner(
     watchlist_id: UUID,
     owner_id: UUID,
     tenant_id: UUID,
-    uow: UnitOfWork,
+    uow: ReadOnlyUnitOfWork,
 ) -> Watchlist:
     watchlist = await uow.watchlists.get(watchlist_id, tenant_id)
     if watchlist is None:
@@ -127,12 +127,12 @@ class CreateWatchlistUseCase:
 
 
 class GetWatchlistUseCase:
-    async def execute(self, watchlist_id: UUID, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> Watchlist:
+    async def execute(self, watchlist_id: UUID, owner_id: UUID, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> Watchlist:
         return await _fetch_watchlist_for_owner(watchlist_id, owner_id, tenant_id, uow)
 
 
 class ListWatchlistsUseCase:
-    async def execute(self, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> list[Watchlist]:
+    async def execute(self, owner_id: UUID, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> list[Watchlist]:
         return await uow.watchlists.list_by_user(owner_id, tenant_id)
 
 

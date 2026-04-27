@@ -149,6 +149,22 @@ class TestOHLCVBarEntity:
         bar = OHLCVBar(instrument_id="id")
         assert bar.timeframe == Timeframe.ONE_DAY
 
+    def test_ohlcv_bar_is_partial_default_false(self) -> None:
+        """New OHLCVBar must default is_partial to False."""
+        bar = OHLCVBar(instrument_id="id")
+        assert bar.is_partial is False
+
+    def test_ohlcv_bar_partial_implies_derived(self) -> None:
+        """is_partial=True with is_derived=False must raise ValueError."""
+        with pytest.raises(ValueError, match="is_partial=True implies is_derived=True"):
+            OHLCVBar(instrument_id="id", is_partial=True, is_derived=False)
+
+    def test_ohlcv_bar_partial_with_derived_ok(self) -> None:
+        """is_partial=True with is_derived=True is a valid combination."""
+        bar = OHLCVBar(instrument_id="id", is_partial=True, is_derived=True)
+        assert bar.is_partial is True
+        assert bar.is_derived is True
+
 
 class TestQuoteEntity:
     def test_quote_entity(self) -> None:

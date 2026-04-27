@@ -27,7 +27,7 @@ class DLQRepository(DLQRepositoryPort):
     async def list_open(self, limit: int = 100, offset: int = 0) -> tuple[list[DLQEntryData], int]:
         """Return open (failed) DLQ entries with total count."""
         count_result = await self._session.execute(
-            text("SELECT COUNT(*) FROM dead_letter_queue WHERE status = 'failed'")
+            text("SELECT COUNT(*) FROM dead_letter_queue WHERE status = 'failed'"),
         )
         total = int(count_result.scalar() or 0)
 
@@ -40,7 +40,7 @@ FROM dead_letter_queue
 WHERE status = 'failed'
 ORDER BY created_at DESC
 LIMIT :limit OFFSET :offset
-"""
+""",
             ),
             {"limit": limit, "offset": offset},
         )
@@ -55,7 +55,7 @@ SELECT dlq_id, original_event_id, topic, error_detail, status,
        created_at, resolved_at, resolution_note
 FROM dead_letter_queue
 WHERE dlq_id = :dlq_id
-"""
+""",
             ),
             {"dlq_id": str(dlq_id)},
         )
@@ -71,7 +71,7 @@ UPDATE dead_letter_queue
 SET status = 'resolved', resolved_at = :now, resolution_note = :note
 WHERE dlq_id = :dlq_id AND status = 'failed'
 RETURNING dlq_id
-"""
+""",
             ),
             {"dlq_id": str(dlq_id), "now": utc_now(), "note": note},  # type: ignore[no-any-return]
         )

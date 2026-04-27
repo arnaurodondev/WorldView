@@ -263,7 +263,7 @@ function MessageBubble({ message }: { message: Message }) {
       </div>
 
       {/* Citations appear below assistant bubbles only */}
-      {!isUser && message.citations.length > 0 && (
+      {!isUser && (message.citations?.length ?? 0) > 0 && (
         <div className={`max-w-[70%] ${!isUser ? "ml-9" : ""}`}>
           <CitationList citations={message.citations} />
         </div>

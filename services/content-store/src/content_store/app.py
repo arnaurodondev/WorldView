@@ -148,12 +148,14 @@ def create_app() -> FastAPI:
         app,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
     app.state._jwt_middleware = jwt_middleware
     app.add_middleware(
         InternalJWTMiddleware,
         jwks_url=jwks_url,
         skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
     )
 
     # Middleware — must be registered before app starts (Starlette requirement)

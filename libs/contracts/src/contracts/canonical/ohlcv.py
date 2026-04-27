@@ -39,9 +39,13 @@ class CanonicalOHLCVBar:
         )
         # FIX-O1: normalise separator before parsing (compatible with Python 3.10+).
         # EODHD EOD uses key "date"; intraday uses key "datetime".
-        raw_date = d.get("date") or d.get("datetime", "")
+        # Alpaca uses "datetime" (normalised by _normalize_bars in the adapter).
+        # Defense-in-depth: also fall back to "timestamp" key for legacy/raw records.
+        raw_date = d.get("date") or d.get("datetime") or d.get("timestamp", "")
         if isinstance(raw_date, datetime):
             bar_date = raw_date
+        elif not raw_date:
+            raise ValueError(f"OHLCV bar dict has no date/datetime/timestamp key: {list(d.keys())}")
         else:
             bar_date = datetime.fromisoformat(str(raw_date).replace(" ", "T"))
 

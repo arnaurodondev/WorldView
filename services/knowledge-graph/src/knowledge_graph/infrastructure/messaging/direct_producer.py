@@ -14,7 +14,8 @@ Usage::
     raw_producer = Producer({"bootstrap.servers": bootstrap_servers})
     direct_producer = ConfluentDirectProducer(raw_producer)
 
-Notes:
+Notes
+-----
   - ``produce_bytes`` calls ``Producer.produce(topic, value=value, key=key)``
     WITHOUT ``flush()``.  librdkafka enqueues the message to its internal
     buffer and delivers it in the background.  Calling ``flush()`` here would
@@ -23,6 +24,7 @@ Notes:
     compacted topic where the last message per key wins; a missed delivery
     means the entity is not re-embedded until the next state change triggers
     another produce — an acceptable trade-off (see PRD-0018 §6 Worker 13D-7).
+
 """
 
 from __future__ import annotations
@@ -39,7 +41,9 @@ class ConfluentDirectProducer(DirectKafkaProducerProtocol):
     """Adapter: wraps ``confluent_kafka.Producer`` to satisfy ``DirectKafkaProducerProtocol``.
 
     Args:
+    ----
         producer: An initialised ``confluent_kafka.Producer`` instance.
+
     """
 
     def __init__(self, producer: Producer) -> None:
@@ -52,8 +56,10 @@ class ConfluentDirectProducer(DirectKafkaProducerProtocol):
         via librdkafka's background producer thread.
 
         Args:
+        ----
             topic: Kafka topic name.
             key:   Message key bytes (used for compacted-topic dedup).
             value: Message value bytes (raw Avro or JSON).
+
         """
         self._producer.produce(topic, value=value, key=key)

@@ -73,7 +73,7 @@ class RawRelation:
     extraction_confidence: float = 0.5
     source_trust_weight: float = 1.0
     evidence_date: datetime = dataclasses.field(
-        default_factory=lambda: __import__("common.time", fromlist=["utc_now"]).utc_now()
+        default_factory=lambda: __import__("common.time", fromlist=["utc_now"]).utc_now(),
     )
     is_backfill: bool = False
     entity_provisional: bool = False
@@ -281,6 +281,7 @@ async def materialize_graph(
        to prevent orphaned Kafka events for rolled-back writes.
 
     Args:
+    ----
         doc_id: Source document ID.
         source_type: Source type string (e.g. ``"news"``).
         is_backfill: Whether this is a backfill message.
@@ -302,7 +303,9 @@ async def materialize_graph(
             consumers know which model version produced the claim.
 
     Returns:
+    -------
         :class:`MaterializationSummary` with counts and ``entity_ids_to_dirty``.
+
     """
     now = utc_now()
     dirtied_entities: set[UUID] = set()

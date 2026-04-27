@@ -57,7 +57,8 @@ export function SectorHeatmapWidget() {
           SECTOR PERFORMANCE
         </span>
         {/* WHY font-mono on count: numerical data, not prose */}
-        {data && (
+        {/* WHY optional chaining: API may return {} without sectors field */}
+        {data?.sectors && (
           <span className="font-mono text-[10px] text-muted-foreground/60">
             {data.sectors.length} sectors
           </span>
@@ -97,13 +98,13 @@ export function SectorHeatmapWidget() {
       )}
 
       {/* ── Sector bar rows ────────────────────────────────────────────────── */}
-      {!isLoading && data && data.sectors.length === 0 && (
+      {!isLoading && data?.sectors && data.sectors.length === 0 && (
         <div className="flex-1 px-2">
           <InlineEmptyState message="No sector data yet — market data ingestion pending" />
         </div>
       )}
 
-      {!isLoading && data && data.sectors.length > 0 && (
+      {!isLoading && data?.sectors && data.sectors.length > 0 && (
         // WHY divide-y divide-border/30: hairline separators between rows
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
           {data.sectors.map((sector) => (

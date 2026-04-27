@@ -263,11 +263,13 @@ test.describe("Group 2: Authenticated route rendering", () => {
     // widgets, not just the shell. Each widget fetches independently — if a
     // widget's import path is broken, it won't render.
     //
-    // WHY CSS selector for CardTitle: The titles use uppercase tracking CSS
-    // (text-xs font-medium uppercase tracking-wider text-muted-foreground).
+    // WHY CSS selector for CardTitle: Widget section headers use uppercase + letter-spacing.
+    // Most widgets use tracking-[0.08em] (Bloomberg §0 standard: 0.08em),
+    // some (PortfolioSummary) use tracking-wider (Tailwind shorthand: 0.05em).
+    // The selector [class*="tracking-"][class*="uppercase"] matches BOTH variants.
     // Using a scoped selector avoids matching text inside child widget content
     // (e.g., "No portfolio yet" in PortfolioSummary).
-    const cardTitle = page.locator('[class*="tracking-wider"][class*="uppercase"]');
+    const cardTitle = page.locator('[class*="tracking-"][class*="uppercase"]');
     // Wait for at least the first card title to render
     await expect(cardTitle.first()).toBeVisible({ timeout: 5000 });
     // Verify we have at least 4 widget titles visible (confirms multi-widget render)
@@ -539,10 +541,13 @@ test.describe("Group 5: Empty states", () => {
     await page.goto("/alerts");
     await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
-    // The AlertsList component shows "No pending alerts — you're all caught up"
+    // The AlertsList component shows "No pending alerts — you're all caught up."
     // when filteredAlerts.length === 0 and severityFilter === "ALL"
+    // WHY full text match: the sidebar AlarmsPanel ALSO shows "No pending alerts"
+    // (shorter text). Using the full sentence avoids a Playwright strict-mode
+    // violation (2 elements matching the shorter substring).
     await expect(
-      page.locator("text=No pending alerts"),
+      page.locator("text=No pending alerts — you're all caught up."),
     ).toBeVisible({ timeout: 5000 });
 
     await page.screenshot({ path: "test-results/qa-alerts-empty.png", fullPage: true });
@@ -553,10 +558,12 @@ test.describe("Group 5: Empty states", () => {
     await page.goto("/screener");
     await expect(page.getByRole("main").first()).toBeVisible({ timeout: 10000 });
 
-    // The ScreenerPage shows "No instruments match the current filters"
-    // when results array is empty after the query resolves
+    // The ScreenerTable shows "No results. Adjust filters and apply."
+    // when rows.length === 0 after the query resolves.
+    // WHY this exact text: see ScreenerTable.tsx line 369 — the empty state
+    // uses a compact inline message (§0.5: no large centered empty states).
     await expect(
-      page.locator("text=No instruments match"),
+      page.locator("text=No results. Adjust filters and apply."),
     ).toBeVisible({ timeout: 5000 });
 
     await page.screenshot({ path: "test-results/qa-screener-empty.png", fullPage: true });

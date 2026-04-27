@@ -38,6 +38,7 @@ class ListTemporalEventsUseCase:
         """Return matching temporal events and total count.
 
         Args:
+        ----
             temporal_event_repo: Port implementation for temporal_events queries.
             scope:       Filter by EventScope (LOCAL/REGIONAL/NATIONAL/GLOBAL).
             entity_id:   If set, only events where entity is in entity_event_exposures.
@@ -50,7 +51,9 @@ class ListTemporalEventsUseCase:
             offset:      Pagination offset (≥ 0).
 
         Returns:
+        -------
             Tuple of (event_dicts, total_count).
+
         """
         return await temporal_event_repo.list_active(
             scope=scope,

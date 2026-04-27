@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -38,6 +38,8 @@ async def test_readyz_ok_when_all_checks_pass(app, client):
 
     app.state.valkey = None  # skip valkey check
     app.state.consumer_alive = True
+    # F-003B: Readyz checks _internal_jwt_public_key — inject a mock so jwks=ok.
+    app.state._internal_jwt_public_key = MagicMock()
 
     resp = await client.get("/readyz")
     assert resp.status_code == 200
@@ -58,6 +60,8 @@ async def test_readyz_503_when_consumer_dead(app, client):
 
     app.state.valkey = None
     app.state.consumer_alive = False
+    # F-003B: Set JWKS key so the 503 is caused by consumer_alive=False, not missing jwks.
+    app.state._internal_jwt_public_key = MagicMock()
 
     resp = await client.get("/readyz")
     assert resp.status_code == 503

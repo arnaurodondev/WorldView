@@ -18,6 +18,12 @@ logger = structlog.get_logger()
 _DEFAULT_MODEL_ID = "DeepSeek R1 Distill 32B"
 _DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 
+# Extraction prompts for 8B-class models on DeepInfra typically return in 30-90s.
+# The openai SDK default of 600s means a stalled request hangs the article consumer
+# for up to 10 minutes before the docker restart policy triggers (BP-235 variant).
+# 120s gives a 2x margin over the p99 observed latency while preventing infinite hangs.
+_EXTRACTION_TIMEOUT_S = 120.0
+
 
 class DeepSeekExtractionAdapter:
     """Implements ExtractionClient via DeepSeek API (OpenAI-compatible). Default model: DeepSeek R1 Distill 32B."""
@@ -29,11 +35,13 @@ class DeepSeekExtractionAdapter:
         base_url: str = _DEFAULT_BASE_URL,
         *,
         semaphore: asyncio.Semaphore,
+        timeout_s: float = _EXTRACTION_TIMEOUT_S,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
         self._base_url = base_url
         self._semaphore = semaphore
+        self._timeout_s = timeout_s
 
     async def extract(self, inp: ExtractionInput) -> ExtractionOutput:
         try:
@@ -43,7 +51,15 @@ class DeepSeekExtractionAdapter:
 
         async with self._semaphore:
             try:
-                client = openai.AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
+                # Explicit timeout prevents the default 600s openai SDK hang.
+                # Connect: 5s, read/write: timeout_s.  The outer asyncio.wait_for
+                # in callers is NOT sufficient — openai uses httpx internally and
+                # httpx timeouts take precedence (BP-235 pattern).
+                client = openai.AsyncOpenAI(
+                    api_key=self._api_key,
+                    base_url=self._base_url,
+                    timeout=openai.Timeout(connect=5.0, read=self._timeout_s, write=30.0, pool=5.0),
+                )
                 response = await client.chat.completions.create(
                     model=self._model_id,
                     messages=[

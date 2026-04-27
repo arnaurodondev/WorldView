@@ -88,10 +88,12 @@ class CypherNeighborhoodUseCase:
     - ``neighbor_rows``: dict of entity_id_str → entity dict for discovered neighbors.
     - ``temporal_event_rows``: events exposed to the center entity (if requested).
 
-    Raises:
+    Raises
+    ------
         CypherDisabledError:       KNOWLEDGE_GRAPH_CYPHER_ENABLED=false.
         CypherEntityNotFoundError: entity not in canonical_entities.
         CypherTimeoutError:        AGE query exceeded 5 s statement_timeout.
+
     """
 
     async def execute(
@@ -128,7 +130,7 @@ class CypherNeighborhoodUseCase:
             {
                 "center_id": str(entity_id),
                 "min_conf": min_confidence,
-            }
+            },
         )
 
         try:

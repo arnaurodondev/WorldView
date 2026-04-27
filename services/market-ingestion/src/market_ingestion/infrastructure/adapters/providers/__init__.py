@@ -62,6 +62,48 @@ def build_provider_registry(
         finnhub_client = httpx.AsyncClient(timeout=finnhub_timeout)
         registry.register(FinnhubProviderAdapter(api_key=finnhub_api_key, client=finnhub_client))
 
+    # Alpaca — registered when both API key and secret key are configured.
+    # Alpaca provides free intraday OHLCV bars (IEX feed, 15-min delayed).
+    alpaca_api_key_raw = getattr(settings, "alpaca_api_key", None)
+    alpaca_secret_key_raw = getattr(settings, "alpaca_secret_key", None)
+    alpaca_api_key_val = _secret_value(alpaca_api_key_raw)
+    alpaca_secret_key_val = _secret_value(alpaca_secret_key_raw)
+    if alpaca_api_key_val and alpaca_secret_key_val:
+        from pydantic import SecretStr
+
+        from market_ingestion.infrastructure.adapters.providers.alpaca import AlpacaProviderAdapter
+
+        alpaca_timeout = http_timeout if http_timeout else 30.0
+        alpaca_client = httpx.AsyncClient(timeout=alpaca_timeout)
+        registry.register(
+            AlpacaProviderAdapter(
+                api_key=SecretStr(alpaca_api_key_val),
+                secret_key=SecretStr(alpaca_secret_key_val),
+                client=alpaca_client,
+                base_url=getattr(settings, "alpaca_base_url", "https://data.alpaca.markets"),
+                feed=getattr(settings, "alpaca_feed", "iex"),
+            )
+        )
+
+    # Polygon — registered when API key is configured.
+    # Polygon provides single-ticker OHLCV bars; free tier is 5 req/min.
+    polygon_api_key_raw = getattr(settings, "polygon_api_key", None)
+    polygon_api_key_val = _secret_value(polygon_api_key_raw)
+    if polygon_api_key_val:
+        from pydantic import SecretStr as _SecretStr
+
+        from market_ingestion.infrastructure.adapters.providers.polygon import PolygonProviderAdapter
+
+        polygon_timeout = http_timeout if http_timeout else 30.0
+        polygon_client = httpx.AsyncClient(timeout=polygon_timeout)
+        registry.register(
+            PolygonProviderAdapter(
+                api_key=_SecretStr(polygon_api_key_val),
+                client=polygon_client,
+                base_url=getattr(settings, "polygon_base_url", "https://api.polygon.io"),
+            )
+        )
+
     return registry
 
 
