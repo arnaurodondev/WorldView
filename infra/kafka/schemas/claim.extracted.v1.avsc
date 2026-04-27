@@ -1,0 +1,21 @@
+{
+  "type": "record",
+  "name": "ClaimExtracted",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S6 NLP Pipeline (Block 10 deep extraction) for each claim extracted from a document. Written to nlp_db outbox and dispatched to Kafka for downstream intelligence_db ingestion.",
+  "fields": [
+    {"name": "event_id",             "type": "string",              "doc": "UUIDv7 event identifier"},
+    {"name": "event_type",           "type": "string",              "default": "claim.extracted"},
+    {"name": "schema_version",       "type": "int",                 "default": 1},
+    {"name": "occurred_at",          "type": "string",              "doc": "ISO 8601 UTC timestamp"},
+    {"name": "doc_id",               "type": "string",              "doc": "Source document UUID"},
+    {"name": "entity_id",            "type": "string",              "doc": "Subject entity UUID — the entity this claim is about"},
+    {"name": "claimer_entity_id",    "type": ["null", "string"],    "default": null, "doc": "Entity UUID making the claim (null if claim origin is the document itself)"},
+    {"name": "claim_type",           "type": "string",              "doc": "Claim category: forward_guidance | market_share_claim | factual | projection | denial | opinion"},
+    {"name": "polarity",             "type": "string",              "doc": "Sentiment direction: positive | negative | neutral"},
+    {"name": "confidence",           "type": "float",               "doc": "Extraction confidence score in [0, 1]"},
+    {"name": "evidence_text",        "type": "string",              "doc": "Verbatim source text supporting the claim"},
+    {"name": "evidence_date",        "type": "string",              "doc": "ISO 8601 datetime of the evidence within the document"},
+    {"name": "correlation_id",       "type": ["null", "string"],    "default": null}
+  ]
+}
