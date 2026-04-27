@@ -315,6 +315,21 @@ GICS_SECTORS = [
     "Real Estate",
 ]
 
+# F-016: DB sector names come from EODHD/Yahoo Finance fundamentals and do NOT match
+# GICS 2.0 display names. This map translates from GICS_SECTORS display names → DB values
+# so the screener filter finds records. Without this map every query returns 0 results.
+# Source of truth: SELECT DISTINCT sector FROM securities in market_data_db.
+_GICS_TO_DB_SECTOR: dict[str, str] = {
+    "Information Technology": "Technology",
+    "Health Care": "Healthcare",
+    "Consumer Discretionary": "Consumer Cyclical",
+    "Consumer Staples": "Consumer Defensive",
+    "Financials": "Financial Services",
+    # These match exactly between GICS and DB:
+    # "Energy", "Materials", "Industrials", "Communication Services",
+    # "Utilities", "Real Estate"
+}
+
 
 async def _screener_for_sector(
     client: httpx.AsyncClient,
@@ -327,12 +342,19 @@ async def _screener_for_sector(
     ``headers`` are forwarded so ``X-Internal-JWT`` reaches S3's
     InternalJWTMiddleware.
     Returns the raw S3 response or an error dict on failure.
+
+    WHY _GICS_TO_DB_SECTOR: the DB stores Yahoo Finance-style sector names
+    (e.g. "Technology"), but GICS_SECTORS uses official S&P GICS 2.0 names
+    (e.g. "Information Technology"). Without this translation, 5 of 11 sectors
+    return 0 results because the screener WHERE sector = 'Information Technology'
+    matches nothing.
     """
     import json as _json
 
+    db_sector = _GICS_TO_DB_SECTOR.get(sector, sector)
     body = _json.dumps(
         {
-            "filters": [{"metric": "daily_return", "min_value": -100, "max_value": 100, "sector": sector}],
+            "filters": [{"metric": "daily_return", "min_value": -100, "max_value": 100, "sector": db_sector}],
             "sort_by": "daily_return",
             "sort_order": "desc",
             "limit": 20,
@@ -370,7 +392,7 @@ async def get_market_heatmap(
     """
     import asyncio
 
-    _h = make_headers if make_headers is not None else (lambda: (headers or {}))
+    _h = make_headers if make_headers is not None else (lambda: headers or {})
     # _h() called 11x in the comprehension (before gather), each producing a
     # fresh JWT — coroutine objects capture the headers value at creation time.
     calls = [_screener_for_sector(clients.market_data, sector, headers=_h()) for sector in GICS_SECTORS]

@@ -267,6 +267,59 @@ class ScheduleDueTasksUseCase:
                 date_range=date_range,
                 exchange=policy.exchange,
             )
+        if policy.dataset_type == DatasetType.EARNINGS_CALENDAR:
+            # WHY no symbol/exchange args: earnings calendar is a global fetch —
+            # symbol and exchange are encoded as fixed "CALENDAR"/"EARNINGS" inside
+            # create_earnings_calendar_task so the dedupe_key stays stable per day.
+            return IngestionTask.create_earnings_calendar_task(
+                provider=policy.provider,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.NEWS_SENTIMENT:
+            return IngestionTask.create_news_sentiment_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
+        if policy.dataset_type == DatasetType.ECONOMIC_EVENTS:
+            # WHY no exchange: economic events are global/country-level, not per-exchange.
+            # symbol encodes the country code as "EVENTS.<ISO3>" (e.g. "EVENTS.USA").
+            return IngestionTask.create_economic_events_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.MACRO_INDICATOR:
+            # WHY no exchange: macro indicators are country-level World Bank / EODHD data.
+            # symbol encodes "COUNTRY.indicator_name" (e.g. "USA.gdp_current_usd").
+            return IngestionTask.create_macro_indicator_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.INSIDER_TRANSACTIONS:
+            return IngestionTask.create_insider_transactions_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
+        if policy.dataset_type == DatasetType.YIELD_CURVE:
+            # WHY no exchange: yield curve series are global identifiers (e.g. "US10Y"),
+            # not per-exchange. execute_task.py passes symbol directly to fetch_yield_curve().
+            return IngestionTask.create_yield_curve_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.MARKET_CAP:
+            return IngestionTask.create_market_cap_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
         logger.debug(
             "scheduler_unsupported_dataset_type",
             dataset_type=str(policy.dataset_type),
