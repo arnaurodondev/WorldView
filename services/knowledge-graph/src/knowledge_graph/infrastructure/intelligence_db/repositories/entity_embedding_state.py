@@ -75,17 +75,22 @@ class EntityEmbeddingStateRepository:
 
         Increments ``refresh_count`` on each update.
         """
+        # asyncpg cannot serialize list[float] → pgvector vector(1024) automatically.
+        # Convert to pgvector text format ("[x,y,z]") and use CAST in SQL.
+        # COALESCE(CAST(NULL AS vector), existing) preserves existing embedding when
+        # embedding=None is passed (unchanged-hash branch).
+        embedding_str: str | None = "[" + ",".join(str(x) for x in embedding) + "]" if embedding is not None else None
         await self._session.execute(
             text("""
 INSERT INTO entity_embedding_state (
     entity_id, view_type, embedding, model_id, source_text, source_hash,
     last_refreshed_at, next_refresh_at, refresh_count
 ) VALUES (
-    :entity_id, :view_type, :embedding, :model_id, :source_text, :source_hash,
+    :entity_id, :view_type, CAST(:embedding AS vector), :model_id, :source_text, :source_hash,
     now(), :next_refresh_at, 0
 )
 ON CONFLICT (entity_id, view_type) DO UPDATE SET
-    embedding         = COALESCE(EXCLUDED.embedding, entity_embedding_state.embedding),
+    embedding         = COALESCE(CAST(EXCLUDED.embedding AS vector), entity_embedding_state.embedding),
     model_id          = COALESCE(EXCLUDED.model_id, entity_embedding_state.model_id),
     source_text       = EXCLUDED.source_text,
     source_hash       = EXCLUDED.source_hash,
@@ -96,7 +101,7 @@ ON CONFLICT (entity_id, view_type) DO UPDATE SET
             {
                 "entity_id": str(entity_id),
                 "view_type": view_type,
-                "embedding": embedding,
+                "embedding": embedding_str,
                 "model_id": model_id,
                 "source_text": source_text,
                 "source_hash": source_hash,

@@ -80,39 +80,46 @@ export function PredictionMarketsWidget() {
       )}
 
       {/* ── Market rows ───────────────────────────────────────────────────── */}
+      {/* WHY 2-row layout per market: one row for the market title (full width),
+          one row for Yes/No probability pills + volume. This lets the trader read
+          the full question title without truncation pressure, then scan the
+          probability distribution on the second line. At 44px total height per
+          market (2×22px rows), 3 markets = 132px which fits the col-span-3 cell.
+          Bloomberg convention: title first, data below — same as news item rows. */}
       {!isLoading && topMarkets.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
           {topMarkets.map((market) => {
-            const prob = market.yes_probability;
+            const yesPct = Math.round(market.yes_probability * 100);
+            const noPct = 100 - yesPct;
 
-            // WHY color threshold: >0.6 positive signal (likely YES), <0.4 negative
-            // (unlikely YES), otherwise neutral — matches trader convention on
-            // Polymarket where >60% is considered a strong signal.
-            const probColor =
-              prob > 0.6
-                ? "text-positive"
-                : prob < 0.4
-                  ? "text-negative"
-                  : "text-muted-foreground";
+            // WHY color threshold: >60% YES → positive (strong signal),
+            // <40% YES → negative (unlikely), else neutral.
+            // Matches Polymarket convention where >60% is a "strong" signal.
+            const yesProbColor = yesPct > 60 ? "text-positive" : yesPct < 40 ? "text-muted-foreground" : "text-muted-foreground";
+            const noProbColor = noPct > 60 ? "text-negative" : "text-muted-foreground";
 
-            // WHY prefer market.url: the API returns the Polymarket/Kalshi URL
-            // directly on the market object. If for any reason it's absent (e.g.
-            // future source that doesn't provide URLs), we fall back to the
-            // canonical Polymarket search page so the link is never dead.
-            const marketUrl = market.url ?? `https://polymarket.com/`;
+            // WHY prefer market.url: API returns the Polymarket/Kalshi URL directly.
+            // Fallback to Polymarket homepage if URL is absent.
+            const marketUrl = market.url ?? "https://polymarket.com/";
 
             function handleMarketClick() {
-              // Open prediction market in new tab — same reasoning as PortfolioNewsWidget:
-              // traders read market context alongside the terminal, not instead of it.
+              // Open in new tab — trader reads market context alongside the terminal.
               window.open(marketUrl, "_blank", "noopener,noreferrer");
             }
 
+            // WHY formatVolume: $1.2M is clearer than $1200000 at 10px text.
+            const formattedVolume = market.volume_usd >= 1_000_000
+              ? `$${(market.volume_usd / 1_000_000).toFixed(1)}M vol`
+              : market.volume_usd >= 1_000
+              ? `$${(market.volume_usd / 1_000).toFixed(0)}K vol`
+              : `$${market.volume_usd.toFixed(0)} vol`;
+
             return (
-              // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-              // WHY cursor-pointer + hover:bg-muted/30: standard terminal row interactivity
+              // WHY h-auto (not h-[22px]): this market block is 2 rows × 22px each.
+              // WHY cursor-pointer + hover:bg-muted/30: standard terminal row interactivity.
               <div
                 key={market.market_id}
-                className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+                className="cursor-pointer px-2 transition-colors hover:bg-muted/30"
                 onClick={handleMarketClick}
                 role="button"
                 tabIndex={0}
@@ -124,38 +131,48 @@ export function PredictionMarketsWidget() {
                 }}
                 aria-label={`Open prediction market: ${market.title}`}
               >
-                {/* Market title — truncated to fit */}
-                <span
-                  className="min-w-0 flex-1 truncate text-[11px] text-foreground"
-                  title={market.title}
-                >
-                  {market.title}
-                </span>
-
-                {/* Mini probability bar — visual encoding of yes/no odds */}
-                {/* WHY separate bar (not just color text): the bar encodes magnitude
-                    visually before the trader reads the number. At 80%, the bar is
-                    clearly longer than at 30% — faster cognitive processing. */}
-                <div className="relative h-1 w-[28px] shrink-0 bg-muted/30 rounded-none">
-                  <div
-                    className={cn(
-                      "absolute left-0 top-0 h-full rounded-none",
-                      prob > 0.6 ? "bg-positive/50" : prob < 0.4 ? "bg-negative/40" : "bg-muted-foreground/40",
-                    )}
-                    style={{ width: `${(prob * 100).toFixed(0)}%` }}
-                  />
+                {/* Line 1: Market title — full width, truncated if very long */}
+                {/* WHY h-[22px]: maintains the §0 Terminal Quality row height rhythm
+                    even when content fits on one line. */}
+                <div className="flex h-[22px] items-center">
+                  <span
+                    className="min-w-0 truncate text-[11px] text-foreground"
+                    title={market.title}
+                  >
+                    {market.title}
+                  </span>
                 </div>
 
-                {/* Yes probability — right-aligned, colored by magnitude */}
-                {/* WHY font-mono tabular-nums: probability is a financial number */}
-                <span
-                  className={cn(
-                    "w-[28px] shrink-0 text-right font-mono text-[11px] tabular-nums",
-                    probColor,
-                  )}
-                >
-                  {(prob * 100).toFixed(0)}%
-                </span>
+                {/* Line 2: Yes/No pills + volume — data line below the title */}
+                <div className="flex h-[22px] items-center gap-1.5">
+                  {/* YES probability pill */}
+                  <span className={cn(
+                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "bg-positive/10",
+                    yesProbColor,
+                  )}>
+                    Y {yesPct}%
+                  </span>
+
+                  {/* NO probability pill */}
+                  <span className={cn(
+                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "bg-negative/10",
+                    noProbColor,
+                  )}>
+                    N {noPct}%
+                  </span>
+
+                  {/* Spacer — pushes volume to the right */}
+                  <span className="flex-1" />
+
+                  {/* Volume — right-aligned, muted (secondary info) */}
+                  {/* WHY text-[10px] tabular-nums: consistent with other financial
+                      secondary values across the dashboard row pattern. */}
+                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                    {formattedVolume}
+                  </span>
+                </div>
               </div>
             );
           })}

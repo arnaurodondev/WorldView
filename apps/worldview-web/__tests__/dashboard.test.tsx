@@ -434,8 +434,10 @@ describe("PredictionMarketsWidget", () => {
   it("renders yes probability as integer percent", async () => {
     render(<PredictionMarketsWidget />, { wrapper });
     await waitFor(() => {
-      // 0.72 → "72%"
-      expect(screen.getByText("72%")).toBeInTheDocument();
+      // WHY "Y 72%" (not "72%"): the redesigned 2-line layout shows probability
+      // as Yes/No pills: "Y 72%" (YES pill) and "N 28%" (NO pill).
+      // 0.72 → "Y 72%" in the YES pill; "N 28%" in the NO pill.
+      expect(screen.getByText("Y 72%")).toBeInTheDocument();
     });
   });
 });
@@ -464,9 +466,13 @@ describe("EarningsCalendarWidget", () => {
     expect(screen.getByText("EARNINGS CALENDAR")).toBeInTheDocument();
   });
 
-  it("renders coming soon placeholder", () => {
+  it("renders empty state placeholder", () => {
     render(<EarningsCalendarWidget />);
-    expect(screen.getByText(/earnings data coming soon/i)).toBeInTheDocument();
+    // WHY "No upcoming earnings events scheduled." (not "Earnings data coming soon"):
+    // The empty state message was updated to set correct expectations — the API
+    // is functional but earnings data hasn't been ingested yet. The message now
+    // guides traders rather than implying the feature itself isn't built.
+    expect(screen.getByText(/No upcoming earnings events scheduled/i)).toBeInTheDocument();
   });
 });
 

@@ -126,8 +126,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
-    from rag_chat.application.pipeline.intent_classifier import OllamaIntentClassifier
-    from rag_chat.application.pipeline.reranker import BGEReranker
+    from rag_chat.application.pipeline.intent_classifier import (
+        DeepInfraIntentClassifier,
+        OllamaIntentClassifier,
+    )
+    from rag_chat.application.pipeline.reranker import BGEReranker, CohereReranker
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
@@ -216,16 +219,42 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
     embedding_client = _S6EmbeddingAdapter(settings.s6_base_url, None)
 
+    # ── Intent classifier: DeepInfra GPU (primary) → Ollama (fallback) ─────────
+    # DeepInfraIntentClassifier is used when a deepinfra_api_key is configured.
+    # It uses a 3B model on DeepInfra GPU (~100-200ms) instead of qwen3:0.6b on
+    # CPU Ollama (2-20s, causes 100% fallback to keyword heuristic in practice).
+    # Both classifiers fall back to KeywordHeuristicClassifier on any error.
+    if settings.deepinfra_api_key:
+        classifier: Any = DeepInfraIntentClassifier(
+            api_key=settings.deepinfra_api_key,
+            model=settings.deepinfra_classification_model,
+        )
+    else:
+        classifier = OllamaIntentClassifier(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_classification_model,
+        )
+
+    # ── Reranker: Cohere (primary) → BGE Ollama (fallback) ──────────────────
+    # CohereReranker is used when cohere_api_key is configured.
+    # bge-reranker-v2-m3 does not exist in the Ollama registry (ollama pull fails),
+    # so BGEReranker ALWAYS falls back to fusion_score sort — no reranking happens.
+    # Cohere Rerank v2 provides real cross-encoder reranking at ~300ms latency.
+    if settings.cohere_api_key:
+        reranker: Any = CohereReranker(api_key=settings.cohere_api_key)
+    else:
+        reranker = BGEReranker(
+            ollama_base_url=settings.ollama_base_url,
+            model=settings.ollama_reranker_model,
+        )
+
     orchestrator = ChatOrchestrator(
         validator=InputValidator(),
         rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
         cache=CompletionCache(valkey=valkey_client),
         get_thread_uc=GetThreadUseCase(),
         s6_client=s6,
-        classifier=OllamaIntentClassifier(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_classification_model,
-        ),
+        classifier=classifier,
         plan_builder=RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled),
         hyde=HydeExpander(
             llm_provider=providers[-1],  # use Ollama for HyDE (lightweight)
@@ -243,10 +272,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         ),
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),
-        reranker=BGEReranker(
-            ollama_base_url=settings.ollama_base_url,
-            model=settings.ollama_reranker_model,
-        ),
+        reranker=reranker,
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
     )

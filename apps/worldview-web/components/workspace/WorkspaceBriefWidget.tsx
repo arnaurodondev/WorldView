@@ -63,9 +63,10 @@ export function WorkspaceBriefWidget() {
     );
   }
 
-  // WHY check content field: BriefingResponse.content is the canonical field
-  // per the api.ts type definition. Guard defensively against empty strings.
-  const briefText = data.content ?? "";
+  // WHY check narrative field: BriefingResponse.narrative is the canonical field
+  // per the api.ts type definition — mirrors S8's PublicBriefingResponse.narrative.
+  // Guard defensively against empty strings from failed/timed-out LLM generation.
+  const briefText = data.narrative ?? "";
 
   if (!briefText) {
     return (

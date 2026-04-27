@@ -28,12 +28,13 @@ vi.mock("next/navigation", () => ({
 
 // ── Gateway mock ──────────────────────────────────────────────────────────────
 // WHY: Controls exactly what BriefingResponse the component receives.
-// The mock returns a full BriefingResponse matching the updated type.
-// WHY "Apple" appears in content: the entity mention replacement regex scans the
-// content string for entity names and converts them to markdown links. If the
-// name doesn't appear in the content, no link is rendered — which is the test case.
+// The mock returns a full BriefingResponse matching the updated type definition.
+// WHY "Apple" appears in narrative: the entity mention replacement regex scans the
+// narrative string for entity names and converts them to markdown links.
+// WHY narrative (not content): BriefingResponse.narrative mirrors S8's
+// PublicBriefingResponse field name — see types/api.ts and rag-chat/schemas.py.
 const mockBriefResponse = {
-  content: "**Market Update**: Apple rallied as CPI came in below expectations.",
+  narrative: "**Market Update**: Apple rallied as CPI came in below expectations.",
   risk_summary: null,
   entity_mentions: [
     { entity_id: "ent-1", name: "Apple", ticker: "AAPL" },
@@ -50,7 +51,8 @@ vi.mock("@/lib/gateway", () => ({
     getInstrumentBrief: vi.fn().mockResolvedValue({
       ...mockBriefResponse,
       entity_id: "ent-1",
-      content: "Apple reported strong **Q4 earnings** above expectations.",
+      // WHY narrative (not content): matches updated BriefingResponse type
+      narrative: "Apple reported strong **Q4 earnings** above expectations.",
     }),
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "tok",

@@ -56,6 +56,24 @@ class Settings(BaseSettings):
     deepinfra_api_key: str | None = None  # primary: deepseek-ai/DeepSeek-R1-Distill-Llama-70B
     openrouter_api_key: str | None = None  # fallback: deepseek/deepseek-r1-distill-qwen-32b
 
+    # ── Intent classification (DeepInfra GPU — replaces qwen3:0.6b Ollama CPU) ─
+    # Uses the same deepinfra_api_key above.  Small model (3B) → ~100-200ms GPU.
+    # WHY: qwen3:0.6b on CPU Ollama causes model-swap contention (30s delays),
+    # resulting in 100% fallback to keyword heuristic and loss of sub_questions.
+    deepinfra_classification_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+    # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────
+    # WHY: bge-reranker-v2-m3 is not in the Ollama registry (ollama pull fails),
+    # causing 100% reranker failure (permanent fusion_score sort fallback).
+    # Cohere Rerank v2 provides ~300ms cross-encoder quality via REST API.
+    cohere_api_key: str | None = None  # optional; fusion_score fallback when absent
+
+    # ── External embeddings (Jina AI — replaces bge-large Ollama) ─────────────
+    # WHY: bge-large on CPU Ollama takes 7-13s per embed; contention with qwen3
+    # causes timeout storms.  Jina embeddings-v3 is 1024-dim (same schema) at
+    # ~100-300ms via REST API.
+    jina_api_key: str | None = None  # optional; Ollama bge-large fallback when absent
+
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
     completion_model: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"  # RAG_CHAT_COMPLETION_MODEL

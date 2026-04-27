@@ -99,9 +99,10 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
   // ── No data / error → show nothing ────────────────────────────────────────
   // WHY return null for error: the brief is supplemental context, not critical data.
   // An error bar between header and tabs would be distracting for non-fatal errors.
-  // WHY !brief?.content guard: API may return {} (empty object) when brief is not yet
-  // generated. brief = {} is truthy so !brief alone doesn't catch it — check content too.
-  if (!isLoading && (isError || !brief?.content)) {
+  // WHY !brief?.narrative guard: API may return {} (empty object) when brief is not yet
+  // generated. brief = {} is truthy so !brief alone doesn't catch it — check narrative.
+  // WHY narrative (not content): BriefingResponse.narrative mirrors S8's PublicBriefingResponse.
+  if (!isLoading && (isError || !brief?.narrative)) {
     // Show a minimal "Brief generating..." inline if error
     if (isError) {
       return (
@@ -140,8 +141,10 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
   }
 
   // brief is guaranteed non-null here (isLoading=false, isError=false, brief exists)
-  const previewText = brief!.content.slice(0, PREVIEW_CHARS);
-  const hasMore = brief!.content.length > PREVIEW_CHARS;
+  // WHY .narrative (not .content): BriefingResponse.narrative is the canonical field
+  // per types/api.ts — mirrors S8 PublicBriefingResponse.narrative.
+  const previewText = brief!.narrative.slice(0, PREVIEW_CHARS);
+  const hasMore = brief!.narrative.length > PREVIEW_CHARS;
 
   return (
     // WHY border-l-2 border-l-primary: yellow-left-border is the AI content marker
@@ -183,7 +186,8 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
       >
         <div className="overflow-hidden">
           <p className="px-2 py-2 text-[13px] text-foreground leading-relaxed">
-            {brief!.content}
+            {/* WHY .narrative: BriefingResponse.narrative is the S8 API field name */}
+            {brief!.narrative}
           </p>
         </div>
       </div>

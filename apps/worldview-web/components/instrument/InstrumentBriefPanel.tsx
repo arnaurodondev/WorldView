@@ -133,8 +133,10 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
   // ── Content — resolve entity mention links ─────────────────────────────────
   // WHY replace entity names with links: lets traders click directly to the
   // related instrument page. Empty-name guard prevents RegExp(\b\b) catastrophe.
-  // WHY ?? "": brief.content may be null/undefined if generation failed mid-stream.
-  const safeContent = brief.content ?? "";
+  // WHY brief.narrative (not brief.content): BriefingResponse.narrative mirrors
+  // S8's PublicBriefingResponse schema field name. See types/api.ts for definition.
+  // WHY ?? "": brief.narrative may be an empty string if generation failed mid-stream.
+  const safeContent = brief.narrative ?? "";
   const contentWithLinks = brief.entity_mentions.reduce((text, mention) => {
     if (!mention.name) return text;
     const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
