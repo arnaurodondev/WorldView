@@ -81,6 +81,7 @@ async def detect_and_record_contradictions(
     an ``intelligence.contradiction.v1`` outbox event.
 
     Args:
+    ----
         raw_evidence_id: ID of the ``relation_evidence_raw`` row that
             triggered this detection.
         claim_id: The newly inserted claim's ID.
@@ -98,8 +99,10 @@ async def detect_and_record_contradictions(
         correlation_id: Propagated correlation ID.
 
     Returns:
+    -------
         List of :class:`ContradictionDetected` for all new contradictions
         found.  Empty list when polarity is neutral or no matches found.
+
     """
     # Neutral polarity cannot form a contradiction
     if polarity == "neutral":
@@ -163,7 +166,7 @@ async def detect_and_record_contradictions(
                 contradicting_claim_id=opposing_claim_id,
                 strength=strength,
                 is_backfill=is_backfill,
-            )
+            ),
         )
 
     return results

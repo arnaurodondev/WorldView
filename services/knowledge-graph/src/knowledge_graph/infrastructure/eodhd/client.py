@@ -6,5 +6,5 @@ raise ImportError(
     "knowledge_graph.infrastructure.eodhd.client has been removed. "
     "Use the Kafka consumers in knowledge_graph.infrastructure.messaging.consumers "
     "instead: EconomicEventsDatasetConsumer, MacroIndicatorDatasetConsumer, "
-    "InsiderTransactionsDatasetConsumer."
+    "InsiderTransactionsDatasetConsumer.",
 )

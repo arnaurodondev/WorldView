@@ -78,12 +78,14 @@ def _make_uow(
     ohlcv_read = MagicMock()
     ohlcv_read.get_date_range = AsyncMock(return_value=date_range)
     ohlcv_read.find_by_instrument_timeframe_range = AsyncMock(return_value=daily_bars or [])
+    ohlcv_read.find_by_instrument_timeframe_datetime_range = AsyncMock(return_value=daily_bars or [])
     ohlcv_read.find_derived = AsyncMock(return_value=derived_bars or [])
     uow.ohlcv_read = ohlcv_read
 
     # ohlcv (write)
     ohlcv_write = MagicMock()
     ohlcv_write.bulk_upsert_derived = AsyncMock(return_value=None)
+    ohlcv_write.find_by_instrument_timeframe_datetime_range = AsyncMock(return_value=[])
     uow.ohlcv = ohlcv_write
 
     # commit / rollback

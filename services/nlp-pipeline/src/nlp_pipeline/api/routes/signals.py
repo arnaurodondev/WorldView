@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from nlp_pipeline.api.dependencies import AdminAuthDep, NewsQueryRepoDep, SignalsQueryRepoDep
 from nlp_pipeline.api.routes.news import _to_response as _article_to_response
@@ -175,6 +175,7 @@ async def get_entity(
 @router.get("/entities/{entity_id}/articles", response_model=RankedNewsResponse)
 async def get_entity_articles(
     entity_id: UUID,
+    request: Request,
     repo: NewsQueryRepoDep,
     start_date: datetime | None = Query(
         default=None,
@@ -197,15 +198,26 @@ async def get_entity_articles(
     Returns an empty list (not 404) when the entity has no articles in range.
     Date range defaults to the last 30 days when not specified.
     """
+    # F-010 Option A: Watchlist ownership guard — reject requests for entities
+    # the tenant does not watch.  Fail-open when Valkey is unavailable
+    # (WatchlistCache.is_watched returns False on error, but we only gate
+    # when a real tenant is present, not system JWTs with nil tenant_id).
+    _nil_uuid = "00000000-0000-0000-0000-000000000000"
+    tenant_id: str = getattr(request.state, "tenant_id", "")
+    if tenant_id and tenant_id != _nil_uuid:
+        watchlist_cache = getattr(request.app.state, "watchlist_cache", None)
+        if watchlist_cache is not None and not await watchlist_cache.is_watched(entity_id):
+            raise HTTPException(status_code=404, detail="Entity not found")
+
     now = datetime.now(tz=UTC)
     resolved_end = end_date or now
     resolved_start = start_date or (now - timedelta(days=30))
 
     if resolved_start > resolved_end:
-        from fastapi import HTTPException as _HTTPException
+        raise HTTPException(status_code=422, detail="start_date must be before end_date")
 
-        raise _HTTPException(status_code=422, detail="start_date must be before end_date")
-
+    # F-009 Option B + F-010 Option B: pass tenant_id for tenant-scoped
+    # entity_mentions filtering at the query level.
     articles_data, total = await GetEntityArticlesUseCase().execute(
         repo=repo,
         entity_id=entity_id,
@@ -214,6 +226,7 @@ async def get_entity_articles(
         order_by=order_by,
         limit=limit,
         offset=offset,
+        tenant_id=tenant_id or None,
     )
     return RankedNewsResponse(
         articles=[_article_to_response(a) for a in articles_data],

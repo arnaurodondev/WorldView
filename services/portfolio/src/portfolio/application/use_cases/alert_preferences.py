@@ -20,7 +20,7 @@ from portfolio.domain.enums import AlertType
 from portfolio.domain.errors import AlertPreferenceNotFoundError, ValidationError
 
 if TYPE_CHECKING:
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 # ── GetAlertPreferencesUseCase ─────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ class GetAlertPreferencesUseCase:
         self,
         user_id: UUID,
         tenant_id: UUID,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
     ) -> tuple[list[AlertPreference], list[EntitySuppression]]:
         existing = await uow.alert_preferences.get_by_user(user_id, tenant_id)
         suppressions = await uow.entity_suppressions.list_by_user(user_id, tenant_id)

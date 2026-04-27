@@ -59,5 +59,5 @@ async def search_relations(
                 semantic_mode=r.semantic_mode,
             )
             for r in results
-        ]
+        ],
     )

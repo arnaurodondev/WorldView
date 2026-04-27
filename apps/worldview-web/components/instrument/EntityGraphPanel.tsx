@@ -44,9 +44,10 @@ interface EntityGraphPanelProps {
 
 // ── Node type colors ──────────────────────────────────────────────────────────
 // WHY hex (not Tailwind): SVG fill attributes require hex values, not class names.
-// WHY #E8A317 for company: amber primary from Bloomberg Dark palette.
+// WHY #FFD60A for company: Bloomberg trading yellow — updated from old amber (#E8A317)
+// which clashed with the Midnight Pro dark terminal palette (global.css --primary: #FFD60A).
 const NODE_COLORS: Record<string, { fill: string; stroke: string }> = {
-  company: { fill: "#0A1A20", stroke: "#E8A317" },  // amber primary (#E8A317) — publicly traded entities
+  company: { fill: "#0A1A20", stroke: "#FFD60A" },  // Bloomberg yellow (#FFD60A) — publicly traded entities
   person:  { fill: "#0D2921", stroke: "#26A69A" },
   event:   { fill: "#2A1E06", stroke: "#F59E0B" },
   topic:   { fill: "#1A1A2E", stroke: "#818CF8" },
@@ -138,7 +139,10 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   }
 
   // ── Error / empty state ────────────────────────────────────────────────────
-  if (isError || !graph || graph.nodes.length === 0) {
+  // WHY !graph.nodes guard: S9 may return {} (empty object, not null) for an entity
+  // that has no graph data yet. {} is truthy so !graph passes, but {}.nodes is
+  // undefined → undefined.length throws RangeError → crashes the whole instrument page.
+  if (isError || !graph || !graph.nodes || graph.nodes.length === 0) {
     return (
       <div className="flex h-[280px] items-center justify-center rounded-[2px] border border-border/30 bg-card/50">
         <p className="text-xs text-muted-foreground">No relationship data</p>

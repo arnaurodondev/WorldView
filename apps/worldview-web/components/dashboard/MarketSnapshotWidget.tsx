@@ -1,92 +1,182 @@
 /**
- * components/dashboard/MarketSnapshotWidget.tsx — Market snapshot placeholder
+ * components/dashboard/MarketSnapshotWidget.tsx — Live equity snapshot widget
  *
- * WHY THIS EXISTS: The dashboard morning routine starts with a macro scan of
- * futures and yield curve. ES, NQ, VIX and the 2Y/10Y yield spread tell traders
- * whether risk-on/risk-off positioning is shifting before the open.
+ * WHY THIS EXISTS: The dashboard morning routine starts with a macro scan.
+ * Without futures data (ES/NQ require EODHD macro integration not yet built),
+ * we show live prices for the 6 most-watched equities in the portfolio — AAPL,
+ * MSFT, NVDA, AMZN, GOOGL, JPM — as a representative market snapshot.
  *
- * WHY PLACEHOLDER WITH —: Futures data (ES, NQ) and live yields require EODHD
- * macro/indices integration that is not yet implemented in the ingestion pipeline.
- * Showing — with a footer note keeps the widget structurally present in the
- * dashboard grid while communicating to the trader that data is pending, not broken.
+ * WHY TWO-STEP FETCH (search → batch quotes): We need instrument_ids to call
+ * getBatchQuotes(), but we only know tickers at build time. A single screener
+ * pass returns instrument_ids for each ticker; we then batch-quote them.
+ * WHY enabled guard on batchQuotes: only fetch quotes once instrument_ids
+ * are resolved from the screener — avoids an empty batch-quote POST.
+ *
+ * WHY SHOW CHANGE% + PRICE: price tells the trader the absolute level;
+ * change% tells them today's move. Both are required for a quick morning scan.
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 2, col-span-4)
- * DATA SOURCE: Placeholder — EODHD macro integration pending
+ * DATA SOURCE: S9 /v1/search/instruments (instrument_id lookup) + /v1/quotes/batch
  * DESIGN REFERENCE: PRD-0031 §10 Dashboard Wave 7
  */
 
-// WHY no "use client": pure presentational, no hooks or browser APIs needed.
+"use client";
+// WHY "use client": uses useQuery + useAuth.
 
-// ── Instrument rows ───────────────────────────────────────────────────────────
+import { useQuery } from "@tanstack/react-query";
+import { createGateway } from "@/lib/gateway";
+import { useAuth } from "@/hooks/useAuth";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
-/** Static instruments shown in the market snapshot widget */
-const SNAPSHOT_INSTRUMENTS = [
-  { label: "ES (S&P Fut)", description: "S&P 500 E-mini Futures" },
-  { label: "NQ (NDX Fut)", description: "Nasdaq-100 E-mini Futures" },
-  { label: "VIX", description: "CBOE Volatility Index" },
-  { label: "2Y Yield", description: "US 2-Year Treasury Yield" },
-  { label: "10Y Yield", description: "US 10-Year Treasury Yield" },
-  { label: "2Y/10Y", description: "Yield Curve Spread (10Y – 2Y)" },
-] as const;
+// ── Snapshot instruments ──────────────────────────────────────────────────────
+
+// WHY these 6 tickers: they are the 6 most-commonly watched large-cap US equities
+// and represent a cross-section of sectors (Tech: AAPL/MSFT/NVDA/GOOGL/AMZN,
+// Financials: JPM). All 6 are seeded in market_data_db.
+const SNAPSHOT_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "JPM"] as const;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-/**
- * MarketSnapshotWidget — 6 key macro instruments with placeholder values.
- * All instruments show — until EODHD macro endpoint is wired up.
- */
 export function MarketSnapshotWidget() {
+  const { accessToken } = useAuth();
+
+  // ── Step 1: Resolve ticker → instrument_id via parallel searches ──────────
+  // WHY useQuery with Promise.all: we search for all 6 tickers in a single
+  // concurrent batch rather than 6 serial queries. The query key includes all
+  // tickers so the result is cached as a unit.
+  const { data: instrumentMap, isLoading: idsLoading } = useQuery({
+    queryKey: ["market-snapshot-ids", ...SNAPSHOT_TICKERS],
+    queryFn: async () => {
+      const gw = createGateway(accessToken);
+      // Search for each ticker in parallel, take first result's instrument_id
+      const results = await Promise.all(
+        SNAPSHOT_TICKERS.map((ticker) =>
+          gw.searchInstruments(ticker, 1).then((resp) => ({
+            ticker,
+            instrument_id: resp.results[0]?.instrument_id ?? null,
+          })),
+        ),
+      );
+      // Build ticker → instrument_id map; drop any not found in S3
+      return Object.fromEntries(
+        results
+          .filter((r) => r.instrument_id !== null)
+          .map((r) => [r.ticker, r.instrument_id as string]),
+      ) as Record<string, string>;
+    },
+    enabled: !!accessToken,
+    // WHY 30min staleTime: instrument_ids are stable — no need to refetch often.
+    staleTime: 30 * 60_000,
+  });
+
+  // ── Step 2: Batch-quote all resolved instrument_ids ───────────────────────
+  const instrumentIds = Object.values(instrumentMap ?? {});
+
+  const { data: quotesData, isLoading: quotesLoading } = useQuery({
+    queryKey: ["market-snapshot-quotes", instrumentIds],
+    queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
+    enabled: !!accessToken && instrumentIds.length > 0,
+    // WHY 60s refetch: snapshot is a live market pulse; refresh every minute
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+
+  const isLoading = idsLoading || quotesLoading;
+
+  // Build display rows: ticker → resolved quote (or undefined if not available)
+  const rows = SNAPSHOT_TICKERS.map((ticker) => {
+    const instrumentId = instrumentMap?.[ticker];
+    const quote = instrumentId ? quotesData?.quotes?.[instrumentId] : undefined;
+    return { ticker, quote };
+  });
+
   return (
-    // WHY flex flex-col h-full: fills the grid cell height so the widget
-    // stretches to match adjacent SectorHeatmapWidget.
-    // WHY bg-card: matches panel background token, distinct from bg-background grid gaps.
     <div className="flex h-full flex-col bg-card">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
-      {/* WHY h-6 border-b: universal panel header height from §0 Terminal Quality Rules */}
       <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           MARKET SNAPSHOT
         </span>
-        {/* WHY no live-time badge: data is static placeholder */}
+        {/* WHY LIVE badge: communicates that this widget shows real-time data,
+            not static placeholders like the previous version */}
+        {!isLoading && instrumentIds.length > 0 && (
+          <span className="text-[10px] text-positive/70">LIVE</span>
+        )}
       </div>
 
       {/* ── Instrument rows ───────────────────────────────────────────────── */}
-      {/* WHY divide-y divide-border/30: hairline separators between rows keep
-          the terminal table density without heavy borders */}
       <div className="flex-1 divide-y divide-border/30 overflow-auto">
-        {SNAPSHOT_INSTRUMENTS.map((instrument) => (
-          <div
-            key={instrument.label}
-            // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-            className="flex h-[22px] items-center justify-between px-2"
-            title={instrument.description}
-          >
-            {/* Instrument name — left-aligned, human-readable label */}
-            <span className="text-[11px] text-muted-foreground">
-              {instrument.label}
-            </span>
-
-            {/* Value — em dash placeholder per spec */}
-            {/* WHY font-mono tabular-nums: financial numbers must be monospaced for
-                column alignment and digit width consistency */}
-            <span className="font-mono text-[11px] tabular-nums text-foreground">
-              —
-            </span>
-          </div>
-        ))}
+        {isLoading
+          ? Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex h-[22px] items-center justify-between px-2">
+                <Skeleton className="h-3 w-[48px]" />
+                <Skeleton className="h-3 w-[64px]" />
+              </div>
+            ))
+          : rows.map(({ ticker, quote }) => (
+              <SnapshotRow key={ticker} ticker={ticker} quote={quote} />
+            ))}
       </div>
 
-      {/* ── Footer note ───────────────────────────────────────────────────── */}
-      {/* WHY footer note: communicates clearly that data is pending integration,
-          not that the service is broken. Traders need to distinguish "unavailable"
-          from "not yet built". */}
+      {/* ── Footer ────────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
         <span className="text-[10px] text-muted-foreground/60">
-          futures data — EODHD macro integration pending
+          {isLoading
+            ? "loading…"
+            : instrumentIds.length === 0
+              ? "instruments not yet ingested"
+              : "US large-cap equities · prior session"}
         </span>
       </div>
 
+    </div>
+  );
+}
+
+// ── SnapshotRow ───────────────────────────────────────────────────────────────
+
+interface SnapshotRowProps {
+  ticker: string;
+  quote?: { price: number; change: number; change_pct: number } | null;
+}
+
+function SnapshotRow({ ticker, quote }: SnapshotRowProps) {
+  const changePct = quote?.change_pct;
+  const isPositive = changePct != null && changePct >= 0;
+  const isNegative = changePct != null && changePct < 0;
+
+  return (
+    <div
+      className="flex h-[22px] items-center justify-between px-2"
+      // WHY title: tooltip shows full ticker for future expansion when labels
+      // are abbreviated (e.g., if we add sector labels)
+      title={ticker}
+    >
+      {/* Ticker label — left-aligned, monospace, primary color */}
+      <span className="w-[48px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+        {ticker}
+      </span>
+
+      {/* Price — center, muted (context); change% is the primary signal */}
+      <span className="flex-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {quote?.price != null ? `$${quote.price.toFixed(2)}` : "—"}
+      </span>
+
+      {/* Change % — right-aligned, colored by direction */}
+      <span
+        className={cn(
+          "w-[56px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          isPositive && "text-positive",
+          isNegative && "text-negative",
+          !quote && "text-muted-foreground",
+        )}
+      >
+        {changePct != null
+          ? `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`
+          : "—"}
+      </span>
     </div>
   );
 }

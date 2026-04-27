@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     AlertPreferenceResponse,
     AlertPreferencesListResponse,
@@ -51,7 +51,7 @@ def _extract_owner_id(request: Request) -> UUID:
 
 @router.get("", response_model=AlertPreferencesListResponse)
 async def get_alert_preferences(
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> AlertPreferencesListResponse:
     x_tenant_id = _extract_tenant_id(request)

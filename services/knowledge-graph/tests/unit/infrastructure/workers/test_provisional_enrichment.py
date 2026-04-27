@@ -2,6 +2,12 @@
 
 Key invariant under test: entity.dirtied.v1 is produced AFTER session.commit(),
 not before — so no orphaned Kafka messages if the transaction rolls back.
+
+ARCH-003 fix: run() now uses read→release→I/O→acquire→write pattern.
+Phase 1 reads pending rows + marks 'processing' + commits (releases session).
+Phase 2 does LLM extraction + embedding outside any session.
+Phase 3 opens a new session to persist results + commits.
+Tests patch _extract_entity_profile (Phase 2 LLM) and _persist_enrichment (Phase 3 DB).
 """
 
 from __future__ import annotations
@@ -23,7 +29,12 @@ _QUEUE_ID = UUID("01234567-89ab-7def-8012-000000000001")
 
 
 def _make_session_with_rows(rows: list) -> tuple[AsyncMock, MagicMock]:
-    """Return (session, session_factory) with pre-loaded pending-queue rows."""
+    """Return (session, session_factory) with pre-loaded pending-queue rows.
+
+    The factory now returns a fresh context manager each time it's called
+    (Phase 1 read + Phase 3 write open separate sessions).  Both sessions
+    share the same mock so assertions work across phases.
+    """
     session = AsyncMock()
     session.commit = AsyncMock()
 
@@ -32,13 +43,13 @@ def _make_session_with_rows(rows: list) -> tuple[AsyncMock, MagicMock]:
 
     session.execute = AsyncMock(return_value=result_mock)
 
-    session_cm = AsyncMock()
-    session_cm.__aenter__ = AsyncMock(return_value=session)
-    session_cm.__aexit__ = AsyncMock(return_value=False)
+    def _make_cm():
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
 
-    factory = MagicMock()
-    factory.return_value = session_cm
-
+    factory = MagicMock(side_effect=lambda: _make_cm())
     return session, factory
 
 
@@ -81,7 +92,7 @@ class TestProvisionalEnrichmentWorkerNoPendingRows:
         producer.produce_bytes.assert_not_called()
 
     async def test_no_pending_rows_still_commits(self) -> None:
-        """run() always commits the session, even with no rows to process."""
+        """run() commits in Phase 1 (read) even with no rows to process."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -92,12 +103,13 @@ class TestProvisionalEnrichmentWorkerNoPendingRows:
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
         await worker.run()
 
-        session.commit.assert_called_once()
+        # Phase 1 commits even when there are no rows (releases FOR UPDATE lock)
+        assert session.commit.call_count >= 1
 
 
 class TestProvisionalEnrichmentWorkerPostCommitOrdering:
     async def test_dirtied_produced_after_commit(self) -> None:
-        """entity.dirtied.v1 is produced AFTER session.commit(), never before."""
+        """entity.dirtied.v1 is produced AFTER Phase 3 session.commit(), never before."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -126,28 +138,58 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
 
-        # Patch _enrich_entity to return a UUID (success) without touching DB internals
-        with patch.object(worker, "_enrich_entity", return_value=_ENTITY_ID):
+        # Patch Phase 2 (LLM) and Phase 3 (DB persist) methods
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
             await worker.run()
 
-        assert len(commit_called_at) == 1
+        # Phase 1 commit + Phase 3 commit = 2 commits
+        assert len(commit_called_at) == 2
         assert len(produce_called_at) == 1
-        # Commit must have happened before produce
-        assert commit_called_at[0] < produce_called_at[0], "entity.dirtied.v1 must be produced AFTER commit, not before"
+        # Produce must happen after the LAST commit (Phase 3)
+        assert (
+            commit_called_at[-1] < produce_called_at[0]
+        ), "entity.dirtied.v1 must be produced AFTER Phase 3 commit, not before"
 
     async def test_commit_failure_suppresses_produce(self) -> None:
-        """When commit raises, producer.produce_bytes is never called."""
+        """When Phase 3 commit raises, producer.produce_bytes is never called."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
-        session.commit = AsyncMock(side_effect=RuntimeError("DB write failed"))
+
+        # Make the second commit (Phase 3) fail; first commit (Phase 1) succeeds.
+        commit_count = [0]
+        original_commit = session.commit
+
+        async def _fail_on_phase3():
+            commit_count[0] += 1
+            if commit_count[0] >= 2:  # Phase 3 commit
+                raise RuntimeError("DB write failed")
+            await original_commit()
+
+        session.commit = _fail_on_phase3
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
 
-        with patch.object(worker, "_enrich_entity", return_value=_ENTITY_ID):
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
             with pytest.raises(RuntimeError, match="DB write failed"):
                 await worker.run()
 
@@ -168,7 +210,15 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             factory, AsyncMock(), direct_producer=producer, entity_dirtied_topic="entity.dirtied.v1"
         )
 
-        with patch.object(worker, "_enrich_entity", return_value=_ENTITY_ID):
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
             await worker.run()
 
         producer.produce_bytes.assert_called_once()
@@ -207,21 +257,31 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
 
-        # Return different entity IDs for the two rows
-        side_effects = [entity_id_1, entity_id_2]
-        with patch.object(worker, "_enrich_entity", side_effect=side_effects):
+        # Phase 2: extract returns profiles for both rows
+        extract_profiles = [
+            {"canonical_name": "Apple", "entity_type": "financial_instrument"},
+            {"canonical_name": "Google", "entity_type": "financial_instrument"},
+        ]
+        # Phase 3: persist returns different entity IDs for the two rows
+        persist_ids = [entity_id_1, entity_id_2]
+
+        with (
+            patch.object(worker, "_extract_entity_profile", side_effect=extract_profiles),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", side_effect=persist_ids),
+        ):
             await worker.run()
 
-        # commit appears before both produces
-        commit_idx = call_order.index("commit")
+        # Last commit (Phase 3) appears before both produces
+        last_commit_idx = len(call_order) - 1 - call_order[::-1].index("commit")
         produce_indices = [i for i, v in enumerate(call_order) if v == "produce"]
         assert len(produce_indices) == 2
-        assert all(commit_idx < idx for idx in produce_indices)
+        assert all(last_commit_idx < idx for idx in produce_indices)
 
 
 class TestProvisionalEnrichmentWorkerFailedEnrichment:
     async def test_llm_failure_skips_dirty_produce(self) -> None:
-        """When _enrich_entity returns None (LLM failed), no dirty event is produced."""
+        """When _extract_entity_profile returns None (LLM failed), no dirty event is produced."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -231,13 +291,13 @@ class TestProvisionalEnrichmentWorkerFailedEnrichment:
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
 
-        with patch.object(worker, "_enrich_entity", return_value=None):
+        with patch.object(worker, "_extract_entity_profile", return_value=None):
             await worker.run()
 
         producer.produce_bytes.assert_not_called()
 
     async def test_enrichment_exception_skips_dirty_produce(self) -> None:
-        """When _enrich_entity raises, the row is logged as failed, not dirtied."""
+        """When _extract_entity_profile raises, the row is logged as failed, not dirtied."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -247,7 +307,7 @@ class TestProvisionalEnrichmentWorkerFailedEnrichment:
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
 
-        with patch.object(worker, "_enrich_entity", side_effect=RuntimeError("LLM timeout")):
+        with patch.object(worker, "_extract_entity_profile", side_effect=RuntimeError("LLM timeout")):
             # run() should NOT re-raise — it logs and continues
             await worker.run()
 
@@ -265,6 +325,14 @@ class TestProvisionalEnrichmentWorkerNoProducer:
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=None)
 
-        with patch.object(worker, "_enrich_entity", return_value=_ENTITY_ID):
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
             # Should not raise even though producer is None
             await worker.run()

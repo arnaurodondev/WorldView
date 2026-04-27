@@ -36,8 +36,10 @@ class SummaryWorker:
     """Generates LLM summaries for stale relations (Worker 13C).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
         llm_client:      FallbackChainClient for extraction.
+
     """
 
     def __init__(
@@ -132,13 +134,10 @@ class SummaryWorker:
         relation_id: Any,
     ) -> str | None:
         from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
+        from prompts.knowledge.summary import RELATION_SUMMARY  # type: ignore[import-untyped]
 
-        prompt = (
-            "Summarize the following evidence statements about a relationship "
-            "between two entities into a concise 2-3 sentence summary. "
-            "Focus on key facts and avoid repetition."
-        )
         context = "\n".join(f"- {t}" for t in evidence_texts[:_EVIDENCE_LIMIT])
+        prompt = RELATION_SUMMARY.render(evidence_statements=context)
         inp = ExtractionInput(
             prompt=prompt,
             context=context,

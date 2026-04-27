@@ -5,5 +5,5 @@
 raise ImportError(
     "knowledge_graph.infrastructure.workers.economic_events_worker has been removed. "
     "Use EconomicEventsDatasetConsumer from "
-    "knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer instead."
+    "knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer instead.",
 )

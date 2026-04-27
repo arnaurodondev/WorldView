@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import EnrichedArticleConsumer
+from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
+    EnrichedArticleConsumer,
+    _parse_raw_claims,
+)
 from structlog.testing import capture_logs
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
@@ -270,3 +273,195 @@ class TestPostCommitDirtiedProduce:
 
         # produce_bytes must NOT have been called since commit failed
         mock_producer.produce_bytes.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# KG-002 closure: _parse_raw_claims() deserialization tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestParseRawClaims:
+    """Validate _parse_raw_claims() correctly deserializes claim dicts into
+    typed RawClaim dataclass objects, handling optional fields and bad data."""
+
+    def test_full_claim_parsed_correctly(self) -> None:
+        """All fields present → RawClaim with correct types."""
+        subject_id = str(uuid4())
+        claimer_id = str(uuid4())
+        chunk_id = str(uuid4())
+        data = [
+            {
+                "subject_entity_id": subject_id,
+                "claim_type": "analyst_rating",
+                "polarity": "positive",
+                "claim_text": "Upgraded to Buy",
+                "extraction_confidence": 0.92,
+                "claimer_entity_id": claimer_id,
+                "chunk_id": chunk_id,
+            },
+        ]
+
+        result = _parse_raw_claims(data, is_backfill=False)
+
+        assert len(result) == 1
+        claim = result[0]
+        assert str(claim.subject_entity_id) == subject_id
+        assert claim.claim_type == "analyst_rating"
+        assert claim.polarity == "positive"
+        assert claim.claim_text == "Upgraded to Buy"
+        assert claim.extraction_confidence == pytest.approx(0.92)
+        assert str(claim.claimer_entity_id) == claimer_id
+        assert str(claim.chunk_id) == chunk_id
+        assert claim.is_backfill is False
+
+    def test_optional_fields_default_gracefully(self) -> None:
+        """Missing optional fields (polarity, claim_text, claimer, chunk) use defaults."""
+        subject_id = str(uuid4())
+        data = [
+            {
+                "subject_entity_id": subject_id,
+                "claim_type": "revenue_guidance",
+            },
+        ]
+
+        result = _parse_raw_claims(data, is_backfill=True)
+
+        assert len(result) == 1
+        claim = result[0]
+        assert claim.polarity == "neutral"
+        assert claim.claim_text == ""
+        assert claim.extraction_confidence == pytest.approx(0.5)
+        assert claim.claimer_entity_id is None
+        assert claim.chunk_id is None
+        assert claim.is_backfill is True
+
+    def test_invalid_claim_skipped_with_warning(self) -> None:
+        """A claim dict missing required subject_entity_id is skipped."""
+        good_id = str(uuid4())
+        data = [
+            {"claim_type": "bad_claim"},  # missing subject_entity_id
+            {"subject_entity_id": good_id, "claim_type": "good_claim"},
+        ]
+
+        with capture_logs() as cap:
+            result = _parse_raw_claims(data, is_backfill=False)
+
+        assert len(result) == 1
+        assert result[0].claim_type == "good_claim"
+        assert any(
+            e.get("event") == "enriched_consumer_bad_claim" for e in cap
+        ), f"Expected warning log for bad claim not found in {cap}"
+
+    def test_invalid_uuid_skipped(self) -> None:
+        """A claim with a non-UUID subject_entity_id is skipped."""
+        data = [
+            {"subject_entity_id": "not-a-uuid", "claim_type": "test"},
+        ]
+
+        with capture_logs() as cap:
+            result = _parse_raw_claims(data, is_backfill=False)
+
+        assert len(result) == 0
+        assert any(e.get("event") == "enriched_consumer_bad_claim" for e in cap)
+
+    def test_empty_list_returns_empty(self) -> None:
+        """Empty input produces empty output."""
+        result = _parse_raw_claims([], is_backfill=False)
+        assert result == []
+
+    def test_multiple_claims_parsed(self) -> None:
+        """Multiple valid claims are all parsed."""
+        data = [{"subject_entity_id": str(uuid4()), "claim_type": f"type_{i}"} for i in range(5)]
+
+        result = _parse_raw_claims(data, is_backfill=False)
+
+        assert len(result) == 5
+        for i, claim in enumerate(result):
+            assert claim.claim_type == f"type_{i}"
+
+
+# ---------------------------------------------------------------------------
+# KG-002 closure: enriched consumer processes claims end-to-end
+# ---------------------------------------------------------------------------
+
+
+def _enriched_message_with_claims(
+    *,
+    doc_id: str | None = None,
+) -> dict:
+    """Enriched article message payload that includes raw_claims."""
+    subj = str(uuid4())
+    return {
+        "event_id": str(uuid4()),
+        "doc_id": doc_id or str(uuid4()),
+        "resolved_entity_ids": [subj],
+        "is_backfill": False,
+        "source_type": "news",
+        "raw_relations": [],
+        "raw_events": [],
+        "raw_claims": [
+            {
+                "subject_entity_id": subj,
+                "claim_type": "analyst_rating",
+                "polarity": "positive",
+                "claim_text": "Buy rating issued",
+                "extraction_confidence": 0.88,
+            },
+            {
+                "subject_entity_id": subj,
+                "claim_type": "revenue_guidance",
+                "polarity": "negative",
+                "claim_text": "Revenue below expectations",
+                "extraction_confidence": 0.75,
+            },
+        ],
+    }
+
+
+class TestEnrichedConsumerClaimsE2E:
+    """KG-002 closure: verify that raw_claims in the enriched message
+    are parsed and passed through to materialize_graph, resulting in
+    claims_inserted > 0 in the materialization summary."""
+
+    @pytest.mark.unit
+    async def test_consumer_materializes_claims_from_enriched_message(self) -> None:
+        """Claims in the enriched message flow through to graph_write."""
+        sf, session = _mock_session_factory()
+        config = ConsumerConfig(
+            group_id="kg-enriched-test",
+            topics=["nlp.article.enriched.v1"],
+        )
+        mock_producer = MagicMock()
+
+        consumer = EnrichedArticleConsumer(
+            config=config,
+            session_factory=sf,
+            embedding_client=MagicMock(),
+            direct_producer=mock_producer,
+            entity_dirtied_topic="entity.dirtied.v1",
+        )
+
+        msg = _enriched_message_with_claims()
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.materialize_graph",
+        ) as mock_materialize:
+            # Return a summary that includes claims_inserted
+            mock_summary = MagicMock()
+            mock_summary.entity_ids_to_dirty = frozenset()
+            mock_materialize.return_value = mock_summary
+
+            await consumer.process_message(
+                key="test",
+                value=msg,
+                headers={},
+            )
+
+        # Verify materialize_graph was called with non-empty claims list
+        mock_materialize.assert_called_once()
+        call_kwargs = mock_materialize.call_args.kwargs
+        claims = call_kwargs["claims"]
+        assert len(claims) == 2, f"Expected 2 claims, got {len(claims)}"
+        assert claims[0].claim_type == "analyst_rating"
+        assert claims[1].claim_type == "revenue_guidance"

@@ -5,5 +5,5 @@
 raise ImportError(
     "knowledge_graph.infrastructure.workers.insider_transactions_worker has been removed. "
     "Use InsiderTransactionsDatasetConsumer from "
-    "knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer instead."
+    "knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer instead.",
 )

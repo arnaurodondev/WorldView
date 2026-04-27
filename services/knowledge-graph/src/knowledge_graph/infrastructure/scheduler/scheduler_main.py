@@ -52,12 +52,29 @@ async def main() -> None:
 
     engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
+    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
+
+    from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
 
     valkey_client = create_valkey_client_from_url(settings.valkey_url)
 
-    # LLM workers use stubs when no adapters are configured (matches original app.py behaviour)
-    workers = build_workers(settings, write_factory, llm_client=None, valkey_client=valkey_client)
+    # Wire the Ollama embedding adapter so that the 6 KG embedding workers
+    # (definition, narrative, fundamentals, summary, provisional, embedding_refresh)
+    # are activated. Without llm_client these all become no-op stubs and no entity
+    # embeddings or relation evidence gets materialised.
+    ollama_embed = OllamaEmbeddingAdapter(
+        base_url=settings.ollama_base_url,
+        model_id=settings.embedding_model_id,
+        semaphore=asyncio.Semaphore(1),  # single Ollama slot for KG scheduler
+    )
+    llm_client = FallbackChainClient(
+        ollama_embedding=ollama_embed,
+        # Gemini embedding / extraction adapters are wired only when keys are
+        # present; for now Ollama is sufficient for CPU-based embedding refresh.
+        retry_delays_ollama=(5.0, 30.0),  # shorter delays for scheduler context
+    )
+    workers = build_workers(settings, write_factory, llm_client=llm_client, valkey_client=valkey_client)
     scheduler = KnowledgeGraphScheduler(settings, workers=workers)
 
     # Standalone scheduler: no consumer coroutine — use an async no-op

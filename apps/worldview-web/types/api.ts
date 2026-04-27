@@ -336,11 +336,22 @@ export interface ScreenerResult {
   name: string;
   exchange: string;
   gics_sector: string | null;
-  // Key metrics for screener table — all may be null if data not available
+  // Core screener metrics — always returned by POST /v1/fundamentals/screen
   market_cap: number | null;
   pe_ratio: number | null;
   daily_return: number | null;
   market_impact_score: number | null; // PRD-0020 signal score
+  // Extended fields — returned when available; backend may omit if not computed
+  // WHY optional (not null): older screener payloads pre-dating extended fields won't
+  // include these keys at all. Optional vs null lets us distinguish "not returned" from
+  // "returned as null" — relevant for the "—" vs "0" display decision.
+  current_price?: number | null;       // live quote price (from quote enrichment)
+  revenue?: number | null;             // trailing 12-month revenue (USD)
+  beta?: number | null;                // market beta vs S&P 500
+  forward_pe?: number | null;          // forward P/E ratio (next-twelve-months EPS)
+  dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
+  revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)
+  roe?: number | null;                 // return on equity (decimal)
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 
@@ -382,7 +393,7 @@ export interface Transaction {
   portfolio_id: string;
   instrument_id: string;
   ticker: string;
-  type: "BUY" | "SELL";
+  type: "BUY" | "SELL" | "DIVIDEND";
   quantity: number;
   price: number;
   fee: number;

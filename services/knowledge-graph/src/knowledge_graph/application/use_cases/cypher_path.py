@@ -181,7 +181,7 @@ def _extract_nodes(node_dicts: list[dict[str, Any]]) -> list[_PathNode]:
                     entity_id=str(entity_id),
                     canonical_name=str(canonical_name),
                     entity_type=str(entity_type),
-                )
+                ),
             )
     return nodes
 
@@ -209,7 +209,7 @@ def _extract_edges(edge_dicts: list[dict[str, Any]], nodes: list[_PathNode]) -> 
                 canonical_type=str(canonical_type),
                 confidence=float(confidence_raw),
                 direction="forward",
-            )
+            ),
         )
     return edges
 
@@ -233,10 +233,12 @@ class CypherPathUseCase:
     Validates entities exist (SQL), sets up AGE session, executes Cypher, and
     parses agtype results into :class:`CypherPathResult`.
 
-    Raises:
+    Raises
+    ------
         CypherDisabledError:       KNOWLEDGE_GRAPH_CYPHER_ENABLED=false.
         CypherEntityNotFoundError: source or target entity not in canonical_entities.
         CypherTimeoutError:        AGE query exceeded 5 s statement_timeout.
+
     """
 
     async def execute(
@@ -271,7 +273,7 @@ class CypherPathUseCase:
                 "source": str(source_entity_id),
                 "target": str(target_entity_id),
                 "min_conf": min_confidence,
-            }
+            },
         )
 
         start_ms = time.monotonic() * 1000
@@ -323,6 +325,6 @@ class CypherPathUseCase:
                     nodes=nodes,
                     edges=edges,
                     path_confidence=_path_confidence(edges),
-                )
+                ),
             )
         return paths

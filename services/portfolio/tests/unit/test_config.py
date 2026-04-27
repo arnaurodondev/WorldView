@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -76,3 +77,35 @@ def test_schema_registry_url_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PORTFOLIO_SCHEMA_REGISTRY_URL", "http://registry:8082")
     s = Settings()
     assert s.schema_registry_url == "http://registry:8082"
+
+
+def test_skip_verification_blocked_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-007: internal_jwt_skip_verification=True MUST raise in production."""
+    for key in list(os.environ):
+        if key.startswith("PORTFOLIO_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_SECRET_KEY", "test-secret")
+
+    with pytest.raises(ValidationError, match="MUST NOT be enabled in production"):
+        Settings(
+            internal_jwt_skip_verification=True,
+            _env_file=None,
+        )
+
+
+def test_skip_verification_allowed_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-007: internal_jwt_skip_verification=True is allowed in non-production."""
+    for key in list(os.environ):
+        if key.startswith("PORTFOLIO_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_SECRET_KEY", "test-secret")
+
+    s = Settings(
+        internal_jwt_skip_verification=True,
+        _env_file=None,
+    )
+    assert s.internal_jwt_skip_verification is True

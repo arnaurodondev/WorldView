@@ -30,6 +30,11 @@ def test_lifespan_starts_cleanly() -> None:
         patch("messaging.valkey.client.create_valkey_client_from_url", return_value=mock_valkey),
         # Storage intentionally degraded — lifespan handles this gracefully
         patch("storage.factory.build_object_storage", side_effect=Exception("no storage")),
+        # F-003: InternalJWTMiddleware.startup() now raises on failure — mock it out.
+        patch(
+            "market_data.infrastructure.middleware.internal_jwt.InternalJWTMiddleware.startup",
+            new_callable=AsyncMock,
+        ),
     ):
         from market_data.app import create_app
 

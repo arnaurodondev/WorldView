@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     PaginatedResponse,
     RecordTransactionRequest,
@@ -91,7 +91,7 @@ async def record_transaction(
 
 @router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
 async def list_transactions(
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
     portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
     limit: int = Query(default=100, ge=1, le=500),

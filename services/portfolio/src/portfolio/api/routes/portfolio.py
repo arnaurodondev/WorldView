@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     PaginatedResponse,
     PortfolioCreateRequest,
@@ -81,7 +81,7 @@ async def create_portfolio(
 
 @router.get("/portfolios", response_model=PaginatedResponse[PortfolioResponse])
 async def list_portfolios(
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -96,7 +96,7 @@ async def list_portfolios(
 @router.get("/portfolios/{portfolio_id}", response_model=PortfolioResponse)
 async def get_portfolio(
     portfolio_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> PortfolioResponse:
     owner_id = _extract_owner_id(request)

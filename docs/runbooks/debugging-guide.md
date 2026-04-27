@@ -305,7 +305,7 @@ docker compose logs | grep "<document_id>"
 ```bash
 # Check Ollama is running and has models
 docker exec -it worldview-ollama-1 ollama list
-# Should show: nomic-embed-text, bge-large, qwen2.5:3b
+# Should show: qwen3:0.6b, bge-large (nomic-embed-text optional)
 
 # Pull missing model
 docker exec -it worldview-ollama-1 ollama pull nomic-embed-text

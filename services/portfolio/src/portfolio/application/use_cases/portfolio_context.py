@@ -10,7 +10,7 @@ from uuid import UUID
 from portfolio.domain.errors import UserNotFoundError
 
 if TYPE_CHECKING:
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class PortfolioContextDTO:
 class PortfolioContextUseCase:
     """Read-only use case: fetch holdings + watchlist for a user, for S8 context injection."""
 
-    async def execute(self, user_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> PortfolioContextDTO:
+    async def execute(self, user_id: UUID, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> PortfolioContextDTO:
         user = await uow.users.get(user_id, tenant_id)
         if user is None:
             raise UserNotFoundError(f"User {user_id} not found in tenant {tenant_id}")

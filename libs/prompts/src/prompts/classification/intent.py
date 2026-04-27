@@ -1,7 +1,7 @@
 """Intent classification prompt template migrated from S8 rag-chat (Wave A-2).
 
 Used by ``OllamaIntentClassifier`` to classify user queries into one of
-eight ``QueryIntent`` values via the local qwen2.5:3b model.
+eight ``QueryIntent`` values via the local qwen3:0.6b model.
 """
 
 from __future__ import annotations

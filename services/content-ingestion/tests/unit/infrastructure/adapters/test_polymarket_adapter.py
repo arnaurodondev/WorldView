@@ -113,9 +113,33 @@ class TestPolymarketAdapter:
         with patch(_utc_now_path, return_value=_FETCHED_AT):
             results = await adapter.fetch(_make_source())
 
-        # bad_market has 0 outcomes → parse fails → skipped; good_market succeeds
+        # bad_market has 0 outcomes → pre-check skips it; good_market succeeds
         assert len(results) == 1
         assert results[0].market_id == "cond_good"
+
+    async def test_adapter_skips_single_outcome_market(self) -> None:
+        """Markets with exactly 1 token are also skipped (domain invariant requires ≥2)."""
+        single_token_market = {
+            "conditionId": "cond_single",
+            "question": "Will Harvey be sentenced?",
+            "tokens": [{"outcome": "Yes", "token_id": "tok_yes", "price": 1.0}],
+        }
+        good_market = _market("cond_two")
+        client = MagicMock()
+        client.fetch_markets_page = AsyncMock(
+            return_value=GammaMarketsPage(markets=[single_token_market, good_market], next_cursor=None)
+        )
+        storage = AsyncMock()
+        storage.put_bytes = AsyncMock()
+
+        adapter = _make_adapter(client=client, storage=storage)
+        _utc_now_path = "content_ingestion.infrastructure.adapters.polymarket.adapter.common.time.utc_now"
+        with patch(_utc_now_path, return_value=_FETCHED_AT):
+            results = await adapter.fetch(_make_source())
+
+        # 1-token market → pre-check skips before parse; 2-token market passes
+        assert len(results) == 1
+        assert results[0].market_id == "cond_two"
 
     async def test_adapter_stores_raw_bytes_to_minio(self) -> None:
         """MinIO put_bytes called once per successfully parsed result."""

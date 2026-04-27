@@ -321,6 +321,7 @@ class NewsQueryPort(ABC):
         order_by: str,
         limit: int,
         offset: int,
+        tenant_id: str | None = None,
     ) -> tuple[list[RankedArticleData], int]:
         """Return articles mentioning the given entity, with full scoring fields.
 
@@ -331,6 +332,7 @@ class NewsQueryPort(ABC):
             order_by: ``"display_relevance_score"`` (default) or ``"published_at"`` — always DESC.
             limit: Max articles to return.
             offset: Pagination offset.
+            tenant_id: Filter entity_mentions by tenant (F-009). None = no filter.
 
         Returns:
             ``(articles, total_count)`` — empty list if entity has no articles (not 404).

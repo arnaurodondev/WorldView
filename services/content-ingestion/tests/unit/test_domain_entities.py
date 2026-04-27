@@ -172,3 +172,56 @@ class TestPredictionMarketFetchResult:
         result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
         assert result.resolution_status == "resolved"
         assert result.resolved_answer == "Yes"
+
+    # ── New Gamma API format (clobTokenIds / outcomes / outcomePrices) ─────────
+    # Regression tests for BP-??? — Gamma API dropped the `tokens` list field
+    # circa April 2026.  New format uses JSON-encoded strings for outcomes,
+    # prices, and token IDs.  Both formats must parse to the same domain entity.
+
+    def test_from_gamma_response_new_api_format_clob_token_ids(self) -> None:
+        """New Gamma API format: no tokens list, uses clobTokenIds + outcomes + outcomePrices."""
+        raw = {
+            "conditionId": "0xnewformat1234",
+            "question": "Will it snow this winter?",
+            "tokens": [],  # empty in new API format
+            "outcomes": '["Yes", "No"]',
+            "outcomePrices": '["0.65", "0.35"]',
+            "clobTokenIds": '["token_id_yes_abc", "token_id_no_def"]',
+            "volume24hr": 9999.99,
+            "liquidity": 12345.0,
+            "endDate": "2026-12-31T00:00:00Z",
+        }
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+
+        assert result.market_id == "0xnewformat1234"
+        assert len(result.outcomes) == 2  # Passes domain invariant (≥ 2)
+        assert result.outcomes[0].name == "Yes"
+        assert result.outcomes[0].price == pytest.approx(0.65)
+        assert result.outcomes[0].token_id == "token_id_yes_abc"  # noqa: S105
+        assert result.outcomes[1].name == "No"
+        assert result.outcomes[1].price == pytest.approx(0.35)
+        assert result.outcomes[1].token_id == "token_id_no_def"  # noqa: S105
+        assert result.volume_24h == pytest.approx(9999.99)
+
+    def test_from_gamma_response_new_api_format_no_tokens_field(self) -> None:
+        """New Gamma API format: tokens field absent entirely (not just empty list)."""
+        raw = {
+            "conditionId": "0xnotokensfield",
+            "question": "Will the sun rise tomorrow?",
+            # No "tokens" key at all
+            "outcomes": '["Yes", "No"]',
+            "outcomePrices": '["0.99", "0.01"]',
+            "clobTokenIds": '["tokA", "tokB"]',
+        }
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert len(result.outcomes) == 2
+        assert result.outcomes[0].name == "Yes"
+        assert result.outcomes[0].price == pytest.approx(0.99)
+
+    def test_from_gamma_response_old_format_still_works(self) -> None:
+        """Old Gamma API format with tokens list still parses correctly."""
+        raw = self._gamma_raw()  # has tokens=[{outcome, token_id, price}, ...]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert len(result.outcomes) == 2
+        assert result.outcomes[0].name == "Yes"
+        assert result.outcomes[0].price == pytest.approx(0.62)

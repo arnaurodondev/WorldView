@@ -49,9 +49,11 @@ class FindSimilarEntitiesUseCase:
     ) -> tuple[dict[str, object], list[SimilarEntityResult]]:
         """Return ``(query_entity_dict, ranked_results)``.
 
-        Raises:
+        Raises
+        ------
             EntityNotFoundError: if entity_id does not exist.
             EmbeddingNotAvailableError: if the entity has no fundamentals_ohlcv embedding.
+
         """
         from knowledge_graph.domain.errors import EmbeddingNotAvailableError, EntityNotFoundError
         from knowledge_graph.domain.models import SimilarEntityResult
@@ -117,7 +119,7 @@ class FindSimilarEntitiesUseCase:
                         final_score=final_score,
                         has_competes_with_relation=has_competes,
                     ),
-                )
+                ),
             )
 
         # Step 8 — sort by final_score DESC, take top_k
@@ -146,7 +148,7 @@ class FindSimilarEntitiesUseCase:
                     competes_with_confidence=partial.competes_with_confidence,
                     final_score=partial.final_score,
                     has_competes_with_relation=partial.has_competes_with_relation,
-                )
+                ),
             )
 
         return entity_dict, results

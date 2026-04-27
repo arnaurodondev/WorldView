@@ -99,7 +99,9 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
   // ── No data / error → show nothing ────────────────────────────────────────
   // WHY return null for error: the brief is supplemental context, not critical data.
   // An error bar between header and tabs would be distracting for non-fatal errors.
-  if (!isLoading && (isError || !brief)) {
+  // WHY !brief?.content guard: API may return {} (empty object) when brief is not yet
+  // generated. brief = {} is truthy so !brief alone doesn't catch it — check content too.
+  if (!isLoading && (isError || !brief?.content)) {
     // Show a minimal "Brief generating..." inline if error
     if (isError) {
       return (

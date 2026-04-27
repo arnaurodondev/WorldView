@@ -74,13 +74,10 @@ def test_routes_registered() -> None:
 def test_readyz_returns_503_when_db_down() -> None:
     """GET /readyz returns 503 when the DB is unreachable.
 
-    The lifespan runs on TestClient entry and sets app.state.session_factory to the
-    real engine factory.  We overwrite the state *inside* the `with` block (after
-    startup) so our error-raising mock takes effect for the readyz probe call.
+    Uses the null lifespan to avoid real JWKS fetch (F-003: startup now raises
+    RuntimeError on failure).  Injects error-raising DB mock after startup.
     """
-    from market_data.app import create_app
-
-    app = create_app()
+    app = _make_test_app()
 
     mock_sf = MagicMock()
     mock_session = AsyncMock()

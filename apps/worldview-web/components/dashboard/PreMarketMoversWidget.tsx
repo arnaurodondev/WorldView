@@ -170,24 +170,36 @@ interface MoverRowProps {
 }
 
 /**
- * MoverRow — single mover entry: ticker + change%.
- * WHY change% only (not price): compact 22px rows don't have room for both.
- * Change% is the primary signal for scanning movers.
+ * MoverRow — single mover entry: ticker + price + change%.
+ *
+ * WHY show price alongside change%: institutional traders always want to see
+ * the absolute price alongside the percentage move. "AAPL +3.2%" without the
+ * price is incomplete — a 3.2% move on a $5 stock is very different from $190.
+ * The col-span-5 cell is wide enough to fit both in 22px rows (tested at 1280px).
  */
 function MoverRow({ mover, side }: MoverRowProps) {
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-    <div className="flex h-[22px] items-center gap-2 px-2">
+    <div className="flex h-[22px] items-center gap-1.5 px-2">
 
-      {/* Ticker — fixed width for column alignment */}
-      <span className="w-[40px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+      {/* Ticker — fixed 38px for column alignment */}
+      <span className="w-[38px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">
         {mover.ticker}
       </span>
 
-      {/* Change % — colored by direction */}
+      {/* Price — right-aligned in a fixed slot; muted so % change remains primary */}
+      {/* WHY text-muted-foreground: price is context, change% is the signal */}
+      <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+        {mover.price != null ? `$${mover.price.toFixed(2)}` : "—"}
+      </span>
+
+      {/* Spacer — pushes the change% to the right edge */}
+      <span className="flex-1" />
+
+      {/* Change % — right-aligned, colored by direction */}
       <span
         className={cn(
-          "font-mono text-[11px] tabular-nums",
+          "shrink-0 font-mono text-[11px] tabular-nums",
           // WHY explicit side check rather than mover.change_pct sign:
           // the API already segregated gainers/losers by type; trust that.
           side === "gainer" ? "text-positive" : "text-negative",

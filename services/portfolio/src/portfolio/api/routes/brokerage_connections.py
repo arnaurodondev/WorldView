@@ -213,53 +213,20 @@ async def get_sync_errors(
 async def _run_single_sync(app_state: Any, connection: Any) -> None:
     """Run one sync cycle for a single brokerage connection in a background task.
 
-    This is intentionally fire-and-forget: any exception is logged but NOT
-    re-raised so that the 202 response has already been sent to the caller.
-
+    Delegates to ``TriggerBrokerageSync`` use case (F-013).
     Dependencies are constructed from ``app_state`` rather than from FastAPI
     DI so this function can be scheduled via ``BackgroundTasks.add_task()``
     without a live request context.
     """
-    import httpx
+    from portfolio.application.use_cases.trigger_brokerage_sync import TriggerBrokerageSync
 
-    from observability import get_logger  # type: ignore[import-untyped]
-    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
-    from portfolio.workers.brokerage_sync_worker import BrokerageTransactionSyncWorker
-
-    _log = get_logger(__name__)  # type: ignore[no-any-return]
-
-    try:
-        # Build a worker using the same app-level dependencies as the scheduled
-        # background process.  We deliberately use the write session_factory
-        # (not read_factory) because _sync_connection performs DB writes.
-        worker = BrokerageTransactionSyncWorker(
-            session_factory=app_state.session_factory,
-            brokerage_client=app_state.brokerage_client,
-            settings=app_state.settings,
-            cipher=getattr(app_state, "snaptrade_cipher", None),
-        )
-
-        # Provide an HTTP client so S3 instrument resolution works.
-        # We create it scoped to this single task — no long-lived client to leak.
-        async with httpx.AsyncClient(timeout=10.0) as http_client:
-            worker._http_client = http_client
-
-            # _sync_connection opens its own UoW internally (BP-057 pattern).
-            # We patch SqlAlchemyUnitOfWork so it uses the app session_factory
-            # (already wired correctly inside the worker).
-            await worker._sync_connection(connection)
-
-    except Exception as exc:
-        # Log but do not propagate — the HTTP response was already sent.
-        _log.error(  # type: ignore[no-any-return]
-            "brokerage_force_sync_background_error",
-            connection_id=str(connection.id),
-            error=str(exc),
-        )
-
-    # Unused import guard — SqlAlchemyUnitOfWork is imported inside the try block
-    # to ensure it is only loaded when the background task runs (lazy load).
-    _ = SqlAlchemyUnitOfWork
+    uc = TriggerBrokerageSync(
+        session_factory=app_state.session_factory,
+        brokerage_client=app_state.brokerage_client,
+        settings=app_state.settings,
+        cipher=getattr(app_state, "snaptrade_cipher", None),
+    )
+    await uc.execute(connection)
 
 
 # ── Force re-sync endpoint ────────────────────────────────────────────────────

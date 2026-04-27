@@ -11,6 +11,8 @@ COPY libs/contracts /build/libs/contracts
 COPY libs/messaging /build/libs/messaging
 COPY libs/observability /build/libs/observability
 COPY libs/ml-clients /build/libs/ml-clients
+COPY libs/storage /build/libs/storage
+COPY libs/prompts /build/libs/prompts
 COPY services/knowledge-graph /build/services/knowledge-graph
 
 RUN uv venv /app/.venv && \
@@ -20,6 +22,8 @@ RUN uv venv /app/.venv && \
         -e /build/libs/messaging \
         -e /build/libs/observability \
         -e /build/libs/ml-clients \
+        -e /build/libs/storage \
+        -e /build/libs/prompts \
         -e /build/services/knowledge-graph
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
@@ -37,7 +41,9 @@ COPY --from=builder /build/services/knowledge-graph/alembic.ini /app/alembic.ini
 
 COPY infra/kafka/schemas /app/infra/kafka/schemas
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src"
+# RH-001 fix: added libs/storage/src and libs/prompts/src (fundamentals consumer
+# imports storage.factory, provisional_enrichment imports prompts.description)
+ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/contracts/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src:/app/libs/storage/src:/app/libs/prompts/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 

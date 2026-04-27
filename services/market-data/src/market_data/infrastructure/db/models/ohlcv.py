@@ -45,3 +45,7 @@ class OHLCVBarModel(Base):
     # True for bars derived locally from daily bars (PLAN-0036 W2-4).
     # server_default="false" ensures forward-compat with existing rows.
     is_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # True when this bar represents an incomplete period (e.g. the current week is
+    # still in progress).  Always derived — ingested bars are never partial.
+    # server_default="false" ensures forward-compat with existing rows (BP-019).
+    is_partial: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")

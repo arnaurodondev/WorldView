@@ -148,6 +148,34 @@ class PolymarketAdapter:
             logger.warning("polymarket_dedup_check_failed", market_id=market_id, error=str(exc))
             return None
 
+        # Skip markets with fewer than 2 outcome tokens — they fail the domain invariant
+        # PredictionMarketFetchResult.outcomes >= 2. This is common for binary markets
+        # not yet resolved and for closed single-outcome markets in the Gamma API.
+        # Pre-checking here avoids a noisy WARNING log for a structurally valid API response.
+        #
+        # WHY check both tokens and clobTokenIds: The Polymarket Gamma API changed its
+        # response format (circa April 2026). The old format had a `tokens` list of dicts;
+        # the new format uses `clobTokenIds` (JSON-encoded string) and `outcomes`
+        # (JSON-encoded string). We support both formats for backward compatibility.
+        tokens: list[dict[str, Any]] = market.get("tokens") or []
+        clob_token_ids_raw = market.get("clobTokenIds") or "[]"
+        # Parse clobTokenIds (JSON string in new API format: "[\"id1\",\"id2\"]")
+        try:
+            import json as _json
+
+            raw_ids = clob_token_ids_raw
+            clob_token_ids: list = _json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
+        except Exception:
+            clob_token_ids = []
+        outcome_count = max(len(tokens), len(clob_token_ids))
+        if outcome_count < 2:
+            logger.debug(
+                "polymarket_market_skip_insufficient_outcomes",
+                market_id=market_id,
+                token_count=outcome_count,
+            )
+            return None
+
         # Parse
         try:
             result = PredictionMarketFetchResult.from_gamma_response(market, fetched_at)

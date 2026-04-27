@@ -42,7 +42,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -61,9 +61,11 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
     """Consumes ``entity.canonical.created.v1`` and unblocks held evidence rows.
 
     Args:
+    ----
         config: Consumer configuration.
         session_factory: async_sessionmaker for intelligence_db.
         dedup_client: Optional dedup client (Valkey); if None, dedup is skipped.
+
     """
 
     def __init__(
@@ -140,7 +142,6 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -193,8 +194,10 @@ async def _unblock_provisional_evidence(
     either ``subject_entity_id`` or ``object_entity_id`` matching the
     resolved entity.
 
-    Returns:
+    Returns
+    -------
         Number of rows updated.
+
     """
     if provisional_queue_id is not None:
         result = await session.execute(

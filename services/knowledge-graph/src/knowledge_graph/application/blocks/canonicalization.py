@@ -88,6 +88,7 @@ async def canonicalize_relation_type(
     ``canonical_type=None`` — it does **not** raise.
 
     Args:
+    ----
         raw_type: Raw relation type string from the LLM extraction.
         semantic_mode_hint: Hint from the enriched message (RELATION_STATE or
             TEMPORAL_CLAIM).  Used as fallback when registry lookup fails.
@@ -101,7 +102,9 @@ async def canonicalize_relation_type(
         correlation_id: Propagated correlation ID.
 
     Returns:
+    -------
         :class:`CanonicalizationResult` with ``canonical_type=None`` if proposed.
+
     """
     # ------------------------------------------------------------------
     # Step 1 — Exact match

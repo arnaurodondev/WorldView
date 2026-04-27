@@ -23,9 +23,13 @@ from market_data.domain.value_objects import ProviderPriority
 
 pytestmark = pytest.mark.unit
 
+# Valid UUIDs for test data (instrument_id is UUID in prod)
+_UUID_1 = "00000000-0000-0000-0000-000000000001"
+_UUID_2 = "00000000-0000-0000-0000-000000000002"
+
 
 def _make_bar(
-    instrument_id: str = "instr-001",
+    instrument_id: str = _UUID_1,
     timeframe: Timeframe = Timeframe.ONE_DAY,
     bar_date: datetime | None = None,
 ) -> OHLCVBar:
@@ -98,7 +102,7 @@ def _make_range_uc(result: tuple[date, date, int] | None) -> MagicMock:
 def test_get_ohlcv_bars_returns_list() -> None:
     """GET /api/v1/ohlcv/{id} returns bars with Decimal-as-string."""
     _, client = _make_app(mock_bars_uc=_make_bars_uc([_make_bar(), _make_bar()]))
-    resp = client.get("/api/v1/ohlcv/instr-001")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 2
@@ -109,14 +113,22 @@ def test_get_ohlcv_bars_returns_list() -> None:
 def test_get_ohlcv_invalid_date_range_422() -> None:
     """start > end returns HTTP 422."""
     _, client = _make_app(mock_bars_uc=_make_bars_uc())
-    resp = client.get("/api/v1/ohlcv/instr-001?start=2024-12-31&end=2024-01-01")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}?start=2024-12-31&end=2024-01-01")
     assert resp.status_code == 422
+
+
+def test_get_ohlcv_invalid_instrument_id_422() -> None:
+    """Non-UUID instrument_id returns HTTP 422 (not 500 from DB layer)."""
+    _, client = _make_app(mock_bars_uc=_make_bars_uc())
+    for bad_id in ("ins-aapl", "not-a-uuid", "12345", "AAPL"):
+        resp = client.get(f"/api/v1/ohlcv/{bad_id}")
+        assert resp.status_code == 422, f"Expected 422 for instrument_id='{bad_id}'"
 
 
 def test_get_available_timeframes() -> None:
     """GET /api/v1/ohlcv/{id}/timeframes returns list of timeframe strings."""
     _, client = _make_app(mock_timeframes_uc=_make_timeframes_uc([Timeframe.ONE_DAY, Timeframe.ONE_WEEK]))
-    resp = client.get("/api/v1/ohlcv/instr-001/timeframes")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}/timeframes")
     assert resp.status_code == 200
     assert "1d" in resp.json()
     assert "1w" in resp.json()
@@ -125,7 +137,7 @@ def test_get_available_timeframes() -> None:
 def test_get_ohlcv_range_with_data() -> None:
     """GET /api/v1/ohlcv/{id}/range returns min/max dates."""
     _, client = _make_app(mock_range_uc=_make_range_uc((date(2024, 1, 1), date(2024, 6, 30), 1)))
-    resp = client.get("/api/v1/ohlcv/instr-001/range?timeframe=1d")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}/range?timeframe=1d")
     assert resp.status_code == 200
     data = resp.json()
     assert data["min_date"] == "2024-01-01"
@@ -136,7 +148,7 @@ def test_get_ohlcv_range_with_data() -> None:
 def test_get_ohlcv_range_no_data() -> None:
     """GET /api/v1/ohlcv/{id}/range returns nulls when no data exists."""
     _, client = _make_app(mock_range_uc=_make_range_uc(None))
-    resp = client.get("/api/v1/ohlcv/instr-001/range")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}/range")
     assert resp.status_code == 200
     data = resp.json()
     assert data["min_date"] is None
@@ -146,7 +158,7 @@ def test_get_ohlcv_range_no_data() -> None:
 def test_get_ohlcv_invalid_timeframe_422() -> None:
     """Invalid timeframe string returns HTTP 422."""
     _, client = _make_app(mock_bars_uc=_make_bars_uc())
-    resp = client.get("/api/v1/ohlcv/instr-001?timeframe=INVALID")
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}?timeframe=INVALID")
     assert resp.status_code == 422
 
 
@@ -155,7 +167,26 @@ def test_get_ohlcv_bulk() -> None:
     bars = [_make_bar()]
     # bulk returns one list per instrument_id
     _, client = _make_app(mock_bulk_uc=_make_bulk_uc([bars, bars]))
-    resp = client.get("/api/v1/ohlcv/bulk?instrument_ids=instr-001&instrument_ids=instr-002")
+    resp = client.get(f"/api/v1/ohlcv/bulk?instrument_ids={_UUID_1}&instrument_ids={_UUID_2}")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
+
+
+def test_get_ohlcv_bars_limit_param_accepted() -> None:
+    """GET /api/v1/ohlcv/{id}?limit=30 is accepted and forwarded to use case."""
+    uc = _make_bars_uc([_make_bar(), _make_bar()])
+    _, client = _make_app(mock_bars_uc=uc)
+    resp = client.get(f"/api/v1/ohlcv/{_UUID_1}?limit=30")
+    assert resp.status_code == 200
+    # The use case execute() should have been called with limit=30
+    uc.execute.assert_awaited_once()
+    _, call_kwargs = uc.execute.call_args
+    assert call_kwargs.get("limit") == 30
+
+
+def test_get_ohlcv_bars_limit_out_of_range_422() -> None:
+    """limit=0 and limit=9999 both return HTTP 422 (validation guards)."""
+    _, client = _make_app(mock_bars_uc=_make_bars_uc())
+    assert client.get(f"/api/v1/ohlcv/{_UUID_1}?limit=0").status_code == 422
+    assert client.get(f"/api/v1/ohlcv/{_UUID_1}?limit=9999").status_code == 422

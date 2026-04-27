@@ -43,6 +43,17 @@ import { useAlertStream } from "@/contexts/AlertStreamContext";
 
 const SIDEBAR_STORAGE_KEY = "worldview-sidebar-expanded";
 
+/**
+ * WHY a separate key for width: expanded/collapsed is a boolean toggle (two
+ * states) while the drag width is a continuous number. Separating them means
+ * collapsing does not reset the remembered expanded width, so when the user
+ * re-expands the sidebar it restores to their last manual drag position.
+ */
+const SIDEBAR_WIDTH_KEY = "worldview-sidebar-width";
+
+/** Default expanded width matches the original fixed 220px design */
+const DEFAULT_SIDEBAR_WIDTH = 220;
+
 // ── Layout component ──────────────────────────────────────────────────────────
 
 interface AppLayoutProps {
@@ -64,6 +75,22 @@ export default function AppLayout({ children }: AppLayoutProps) {
     return stored === null ? true : stored === "true";
   });
 
+  /**
+   * WHY persist the drag width separately from the expanded boolean:
+   * If the user drags to 280px, collapses, then re-expands, they expect to return
+   * to 280px — not reset to 220px. Storing width independently achieves this.
+   * The lazy initializer reads localStorage once at mount (SSR-safe with typeof guard).
+   */
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return DEFAULT_SIDEBAR_WIDTH;
+    const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (stored === null) return DEFAULT_SIDEBAR_WIDTH;
+    const parsed = parseInt(stored, 10);
+    // WHY NaN guard: if the stored value is corrupt (e.g. "undefined") parseInt
+    // returns NaN — fall back to the default to avoid a zero-width sidebar.
+    return isNaN(parsed) ? DEFAULT_SIDEBAR_WIDTH : parsed;
+  });
+
   // Persist sidebar state whenever the user toggles it
   function handleSidebarToggle() {
     setSidebarExpanded((prev) => {
@@ -73,6 +100,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
       }
       return next;
     });
+  }
+
+  /**
+   * handleSidebarResize — called by CollapsibleSidebar on every mousemove during drag.
+   *
+   * WHY persist on every move (not just mouseup): if the page refreshes or the tab
+   * is closed mid-drag, the last stored width is still close to the final position.
+   * The performance cost is negligible — localStorage.setItem is synchronous but
+   * O(1) and does not cause a React re-render on its own.
+   */
+  function handleSidebarResize(w: number) {
+    setSidebarWidth(w);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+    }
   }
 
   useEffect(() => {
@@ -128,9 +170,16 @@ export default function AppLayout({ children }: AppLayoutProps) {
         {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the
          * remaining height below the TopBar, each scrolling independently. */}
         <div className="flex flex-1 overflow-hidden">
+          {/*
+           * WHY pass width + onResize: CollapsibleSidebar uses these to implement the
+           * drag-resize handle (introduced in the sidebar resizable enhancement).
+           * When expanded=false the sidebar ignores width and renders at 48px.
+           */}
           <CollapsibleSidebar
             expanded={sidebarExpanded}
             onToggle={handleSidebarToggle}
+            width={sidebarWidth}
+            onResize={handleSidebarResize}
           />
 
           {/* Main content area — fills remaining width, scrolls vertically */}

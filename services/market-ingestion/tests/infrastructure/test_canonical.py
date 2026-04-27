@@ -119,14 +119,14 @@ def test_serialize_ohlcv_invalid_missing_field_raises(serializer):
 
 
 @pytest.mark.unit
-def test_serialize_ohlcv_null_volume_preserved(serializer):
+def test_serialize_ohlcv_null_volume_coerced_to_zero(serializer):
     """Regression for FIX-O3 / BP-182: EODHD returns volume:null for some bars.
 
     int(None) previously raised TypeError, crashing the canonicalize step and
-    leaving the task stuck in RUNNING state (BP-113).  After FIX-O3 rev F-002,
-    null volume is preserved in the canonical model so downstream analytics can
-    distinguish "no trades" from "zero volume".  Coercion to 0 (if needed)
-    happens at the storage boundary (ohlcv_repo.bulk_upsert_with_priority).
+    leaving the task stuck in RUNNING state (BP-113).  After FIX-O3,
+    CanonicalOHLCVBar.from_dict() coerces null volume to 0 so the canonical
+    model (volume: int) remains valid.  Downstream consumers treat 0 as
+    "no trades" — the distinction is lost at the canonical layer by design.
     """
     row = _ohlcv_row(volume=None)  # simulate EODHD null-volume bar
 
@@ -136,7 +136,7 @@ def test_serialize_ohlcv_null_volume_preserved(serializer):
     lines = result.decode("utf-8").strip().splitlines()
     assert len(lines) == 1
     parsed = json.loads(lines[0])
-    assert parsed["volume"] is None  # null preserved per FIX-O3 rev F-002
+    assert parsed["volume"] == 0  # coerced to 0 by CanonicalOHLCVBar.from_dict()
 
 
 @pytest.mark.unit

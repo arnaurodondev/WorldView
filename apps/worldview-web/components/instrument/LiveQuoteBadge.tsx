@@ -119,8 +119,13 @@ export function LiveQuoteBadge({ instrumentId, initialPrice }: LiveQuoteBadgePro
       </div>
 
       {/* Timestamp row */}
+      {/* WHY optional guard on quote.timestamp: S9 may return a quote without a
+          timestamp if the price snapshot was created before the timestamp field was
+          added, or if placeholderData is used without a valid ISO string. Calling
+          new Date(undefined).toISOString() throws RangeError: Invalid time value
+          which bubbles up through React and triggers the error boundary. */}
       <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-        {new Date(quote.timestamp).toISOString().slice(11, 19)} UTC
+        {quote.timestamp ? new Date(quote.timestamp).toISOString().slice(11, 19) + " UTC" : "—"}
       </span>
     </div>
   );

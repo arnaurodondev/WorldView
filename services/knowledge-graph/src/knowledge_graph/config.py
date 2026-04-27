@@ -64,7 +64,9 @@ class Settings(BaseSettings):
 
     # ML model endpoints
     ollama_base_url: str = "http://ollama:11434"
-    embedding_model_id: str = "nomic-embed-text"
+    # entity_embedding_state.embedding is vector(1024) — must use bge-large:latest (1024-dim).
+    # nomic-embed-text produces 768-dim and raises FatalError on every embed call.
+    embedding_model_id: str = "bge-large:latest"
 
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"

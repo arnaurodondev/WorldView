@@ -106,6 +106,8 @@ class EntityMentionModel(Base):
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     resolved_entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # F-009: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     resolution_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolution_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ner_model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

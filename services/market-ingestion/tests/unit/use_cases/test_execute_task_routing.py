@@ -172,9 +172,9 @@ async def test_routing_override_logged() -> None:
         mock_logger.info = MagicMock()
         mock_logger.debug = MagicMock()
         await use_case.execute(task)
-        # Check that provider_routing_override was logged
+        # Check that provider_routing_cache_selected was logged (updated from provider_routing_override)
         override_calls = [
-            c for c in mock_logger.info.call_args_list if c.args and c.args[0] == "provider_routing_override"
+            c for c in mock_logger.info.call_args_list if c.args and c.args[0] == "provider_routing_cache_selected"
         ]
         assert len(override_calls) == 1
         kwargs = override_calls[0].kwargs

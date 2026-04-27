@@ -633,6 +633,67 @@ async def test_save_no_warning_when_rowcount_positive() -> None:
     mock_log.warning.assert_not_called()
 
 
+@pytest.mark.unit
+async def test_save_with_original_lease_owner_succeeds_after_transition() -> None:
+    """save() with original_lease_owner succeeds even after task clears lease_owner.
+
+    Regression test for BP-NEW-task-save-lease: domain transitions (retry/fail/succeed)
+    clear task.lease_owner to None, but the DB row still holds the worker-id in locked_by.
+    Without original_lease_owner, the WHERE clause degenerates to locked_by IS NULL which
+    does NOT match the row — causing silent rowcount=0 and tasks stuck in RUNNING forever.
+    """
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.rowcount = 1  # successful update
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    # Simulate: task was claimed by "worker-X" (DB locked_by = "worker-X")
+    # then domain transition (retry/fail/succeed) cleared lease_owner.
+    task.lease_owner = None  # cleared by retry()/fail()/succeed()
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+
+    with patch("market_ingestion.infrastructure.db.repositories.task_repository.logger") as mock_log:
+        # Pass the pre-transition owner so the WHERE clause can match the DB row.
+        await repo.save(task, original_lease_owner="worker-X")
+
+    # No warning should be logged when rowcount > 0
+    mock_log.warning.assert_not_called()
+
+    # Verify the SQL WHERE clause references the original owner "worker-X", not NULL.
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "worker-X" in sql, f"Expected 'worker-X' in WHERE clause, got: {sql}"
+
+
+@pytest.mark.unit
+async def test_save_without_original_lease_owner_fails_when_lease_cleared() -> None:
+    """save() with cleared lease_owner AND no original_lease_owner logs a mismatch warning.
+
+    This documents the pre-fix behaviour: when original_lease_owner is not provided and
+    task.lease_owner is None (cleared by domain transition), the WHERE clause becomes
+    locked_by IS NULL which does not match a claimed task row.
+    """
+    session = _make_mock_session()
+    mock_result = MagicMock()
+    mock_result.rowcount = 0  # mismatch: WHERE clause did not match the DB row
+    session.execute = AsyncMock(return_value=mock_result)
+
+    task = _make_task()
+    task.lease_owner = None  # cleared by retry()/fail()/succeed(), no original_lease_owner passed
+
+    repo = SqlaTaskRepository(write_session=session, read_session=session)
+
+    with patch("market_ingestion.infrastructure.db.repositories.task_repository.logger") as mock_log:
+        await repo.save(task)  # no original_lease_owner — replicates pre-fix behaviour
+
+    # Warning must be emitted when rowcount == 0
+    mock_log.warning.assert_called_once()
+    event_name = mock_log.warning.call_args[0][0]
+    assert event_name == "task_save_lease_mismatch"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (require PostgreSQL)
 # ---------------------------------------------------------------------------

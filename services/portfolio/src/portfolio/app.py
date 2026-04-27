@@ -190,8 +190,18 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz", response_model=None)
     async def readyz() -> FastAPIResponse:
-        """Check readiness by probing the database with a 2-second timeout."""
+        """Check readiness by probing the database and JWKS with a 2-second timeout."""
+        import json as _json
+
         from sqlalchemy import text
+
+        # F-003B: JWKS public key must be loaded before accepting traffic.
+        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+            return FastAPIResponse(
+                content=_json.dumps({"status": "unavailable", "reason": "jwks_not_loaded"}),
+                status_code=503,
+                media_type="application/json",
+            )
 
         engine = getattr(app.state, "engine", None)
         if engine is None:

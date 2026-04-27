@@ -166,10 +166,15 @@ export function GlobalSearch() {
   return (
     // WHY ref on container div: needed for click-outside detection to distinguish
     // clicks inside the search widget from clicks on the rest of the page.
-    <div ref={containerRef} className="relative w-64">
+    // WHY w-56 (224px, was 256px): narrower search bar balances better against the
+    // TopBar's 36px height — a 256px box was disproportionately wide for a 36px bar.
+    <div ref={containerRef} className="relative w-56">
       {/* WHY Command (not a plain input): gives us keyboard navigation and selection
-          semantics that users expect from a Bloomberg-like interface */}
-      <Command className="rounded-[2px] border border-border bg-background shadow-none" shouldFilter={false}>
+          semantics that users expect from a Bloomberg-like interface.
+          WHY border-border/50 (was border-border): full-opacity border in a 36px
+          nav bar creates a "box-inside-a-bar" effect. 50% opacity integrates the
+          search box into the TopBar chrome without losing affordance. */}
+      <Command className="rounded-[2px] border border-border/50 bg-muted/20 shadow-none" shouldFilter={false}>
         <CommandInput
           placeholder="Search instruments… ⌘K"
           value={query}
@@ -193,7 +198,7 @@ export function GlobalSearch() {
               setQuery("");
             }
           }}
-          className="h-8 text-[11px]"
+          className="h-7 text-[11px]"
         />
 
         {/* Dropdown — shown on focus or when typing */}

@@ -70,7 +70,8 @@ export default function InstrumentDetailPage() {
   // WHY client-side filters (not server-side params): the News tab already fetches
   // all 20 articles. Filtering client-side avoids a new query on each filter change.
   const [newsDateFilter, setNewsDateFilter] = useState<"all" | "today" | "week" | "month">("all");
-  const [newsSentimentFilter, setNewsSentimentFilter] = useState<"all" | "positive" | "negative" | "neutral">("all");
+  // WHY no sentiment filter state: RankedArticle (S6 shape) does not include sentiment field.
+  // Sentiment filter removed from UI until S6 surfaces it. See TODO in filteredArticles.
 
   // ── Fetch CompanyOverview — composite endpoint ─────────────────────────────
   // WHY pass entityId as instrumentId to getCompanyOverview:
@@ -245,18 +246,6 @@ export default function InstrumentDetailPage() {
               <option value="today">Today</option>
               <option value="week">Past week</option>
               <option value="month">Past month</option>
-            </select>
-
-            {/* Sentiment filter */}
-            <select
-              value={newsSentimentFilter}
-              onChange={(e) => setNewsSentimentFilter(e.target.value as typeof newsSentimentFilter)}
-              className="h-7 bg-background border border-border rounded-[2px] text-[11px] font-mono px-2 text-foreground"
-            >
-              <option value="all">All sentiment</option>
-              <option value="positive">Positive</option>
-              <option value="negative">Negative</option>
-              <option value="neutral">Neutral</option>
             </select>
 
             {/* Article count after filtering */}

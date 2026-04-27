@@ -153,6 +153,17 @@ vi.mock("@/lib/gateway", () => ({
       offset: 0,
       limit: 10,
     }),
+    // WHY searchInstruments: MarketSnapshotWidget resolves ticker → instrument_id
+    searchInstruments: vi.fn().mockResolvedValue({
+      results: [{ instrument_id: "ins-aapl", entity_id: "ins-aapl", ticker: "AAPL", name: "Apple Inc", exchange: "US", type: "equity" }],
+      query: "AAPL",
+    }),
+    // WHY getBatchQuotes: MarketSnapshotWidget batch-fetches live quotes
+    getBatchQuotes: vi.fn().mockResolvedValue({
+      quotes: {
+        "ins-aapl": { price: 185.5, change: 2.3, change_pct: 1.25 },
+      },
+    }),
     // WHY getMorningBrief: MorningBriefCard (in DashboardPage) fetches the brief
     getMorningBrief: vi.fn().mockResolvedValue({
       content: "Market conditions are stable.",
@@ -306,36 +317,48 @@ describe("EconomicCalendar", () => {
   });
 });
 
-// ── Tests: MarketSnapshotWidget (Wave 7 new) ──────────────────────────────────
+// ── Tests: MarketSnapshotWidget (Wave 7 new, updated for live equity data) ─────
+// WHY updated: MarketSnapshotWidget was converted from a static placeholder to a
+// live-data component backed by searchInstruments + getBatchQuotes. Old tests for
+// static labels (ES, NQ, VIX etc.) and the EODHD-pending footer are no longer valid.
 
 describe("MarketSnapshotWidget", () => {
   it("renders MARKET SNAPSHOT header", () => {
-    render(<MarketSnapshotWidget />);
+    // WHY wrapper: MarketSnapshotWidget now uses useQuery and must be inside QueryClientProvider
+    render(<MarketSnapshotWidget />, { wrapper });
     expect(screen.getByText("MARKET SNAPSHOT")).toBeInTheDocument();
   });
 
-  it("renders all 6 instrument labels", () => {
-    render(<MarketSnapshotWidget />);
-    expect(screen.getByText("ES (S&P Fut)")).toBeInTheDocument();
-    expect(screen.getByText("NQ (NDX Fut)")).toBeInTheDocument();
-    expect(screen.getByText("VIX")).toBeInTheDocument();
-    expect(screen.getByText("2Y Yield")).toBeInTheDocument();
-    expect(screen.getByText("10Y Yield")).toBeInTheDocument();
-    expect(screen.getByText("2Y/10Y")).toBeInTheDocument();
+  it("renders 6 equity ticker labels after loading", async () => {
+    render(<MarketSnapshotWidget />, { wrapper });
+    // WHY waitFor: ticker labels only render after the idsQuery resolves (replacing skeletons).
+    // The widget shows a Skeleton grid during loading so tickers are absent synchronously.
+    await waitFor(() => {
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+    });
+    // These render in the same pass as AAPL — once loading is done, all 6 appear
+    expect(screen.getByText("MSFT")).toBeInTheDocument();
+    expect(screen.getByText("NVDA")).toBeInTheDocument();
+    expect(screen.getByText("AMZN")).toBeInTheDocument();
+    expect(screen.getByText("GOOGL")).toBeInTheDocument();
+    expect(screen.getByText("JPM")).toBeInTheDocument();
   });
 
-  it("shows placeholder — for all values", () => {
-    render(<MarketSnapshotWidget />);
-    // 6 instruments × — placeholders
-    const dashes = screen.getAllByText("—");
-    expect(dashes.length).toBeGreaterThanOrEqual(6);
+  it("shows LIVE badge after both queries resolve", async () => {
+    render(<MarketSnapshotWidget />, { wrapper });
+    // WHY waitFor: two sequential queries (search → batch-quote) complete asynchronously.
+    // The LIVE badge only renders when !isLoading && instrumentIds.length > 0.
+    await waitFor(() => {
+      expect(screen.getByText("LIVE")).toBeInTheDocument();
+    });
   });
 
-  it("shows pending integration footer note", () => {
-    render(<MarketSnapshotWidget />);
-    expect(
-      screen.getByText(/futures data — EODHD macro integration pending/i),
-    ).toBeInTheDocument();
+  it("renders footer with data context text after loading", async () => {
+    render(<MarketSnapshotWidget />, { wrapper });
+    await waitFor(() => {
+      // Footer shows equity context text once loading is complete
+      expect(screen.getByText(/US large-cap equities/i)).toBeInTheDocument();
+    });
   });
 });
 

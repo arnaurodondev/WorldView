@@ -72,7 +72,7 @@ class SqlalchemyEntityEmbeddingANNRepository(EntityEmbeddingANNRepositoryPort):
 
         stmt = text(f"""
 SELECT ees.entity_id,
-       (ees.embedding::vector <=> :query_embedding::vector) AS distance
+       (ees.embedding::vector <=> CAST(:query_embedding AS vector)) AS distance
 FROM entity_embedding_state ees
 JOIN canonical_entities ce ON ce.entity_id = ees.entity_id
 WHERE ees.view_type = :view_type

@@ -18,7 +18,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from portfolio.api.dependencies import UoWDep, WatchlistCacheDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep, WatchlistCacheDep
 from portfolio.api.schemas import (
     WatchlistCreateRequest,
     WatchlistMemberCreateRequest,
@@ -85,7 +85,7 @@ async def create_watchlist(
 
 @router.get("", response_model=list[WatchlistResponse])
 async def list_watchlists(
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> list[WatchlistResponse]:
     x_tenant_id = _extract_tenant_id(request)
@@ -108,7 +108,7 @@ async def list_watchlists(
 @router.get("/{watchlist_id}", response_model=WatchlistResponse)
 async def get_watchlist(
     watchlist_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> WatchlistResponse:
     x_tenant_id = _extract_tenant_id(request)

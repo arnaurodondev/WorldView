@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep
 from portfolio.api.schemas import HoldingResponse
 from portfolio.application.use_cases.read_models import GetHoldingsUseCase
 
@@ -36,7 +36,7 @@ def _extract_owner_id(request: Request) -> UUID:
 @router.get("/holdings/{portfolio_id}", response_model=list[HoldingResponse])
 async def get_holdings(
     portfolio_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
     request: Request,
 ) -> list[HoldingResponse]:
     owner_id = _extract_owner_id(request)

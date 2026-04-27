@@ -101,25 +101,34 @@ export function PortfolioNewsWidget() {
 // ── ArticleRow sub-component ──────────────────────────────────────────────────
 
 /**
- * ArticleRow — single article entry: tier badge + title + relative time.
+ * ArticleRow — single article entry: impact indicator + title + relative time.
+ *
+ * WHY show market_impact_score as dot indicators instead of a numeric score:
+ * In a 22px row, "0.82" is harder to parse than 4 filled dots (●●●●○). The
+ * dot pattern encodes urgency in peripheral vision — traders don't need to read
+ * the exact value to know "this is high-impact" vs "background noise."
+ *
  * WHY no link in dashboard row: clicking would leave the dashboard; the full
  * Alerts & News page handles article navigation. Dashboard rows are read-only.
  */
 function ArticleRow({ article }: { article: RankedArticle }) {
-  // ── Tier badge label ───────────────────────────────────────────────────────
-  // WHY map tier: S6 returns LIGHT/MEDIUM/DEEP; dashboard shows L/M/H abbreviations
-  // to fit in the compact h-[22px] row without overflow.
-  const tierLabel = (() => {
+  // ── Market impact score → dot count (0–4) ──────────────────────────────────
+  // WHY 4 dots: 5 would be too wide for the 22px row. 4 dots in 7px each = 28px
+  // total (fits). The mapping is: 0–0.25→1, 0.25–0.5→2, 0.5–0.75→3, 0.75+→4.
+  const score = article.market_impact_score ?? article.display_relevance_score ?? 0;
+  const filledDots = Math.max(1, Math.min(4, Math.ceil(score * 4)));
+
+  // WHY color by tier (not score): routing_tier is a pre-computed editorial
+  // judgement from S6 — more reliable than the raw score for visual urgency.
+  const dotColor = (() => {
     switch (article.routing_tier?.toUpperCase()) {
       case "DEEP":
       case "HIGH":
-        return "H";
+        return "text-negative";      // amber/red for high-impact news
       case "MEDIUM":
-        return "M";
-      case "LIGHT":
-        return "L";
+        return "text-warning";       // amber for medium (notable but not urgent)
       default:
-        return "M";
+        return "text-muted-foreground"; // muted for background/low-tier
     }
   })();
 
@@ -131,10 +140,10 @@ function ArticleRow({ article }: { article: RankedArticle }) {
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
     <div className="flex h-[22px] items-center gap-1.5 px-2">
 
-      {/* Tier badge — abbreviated to fit compact row */}
-      {/* WHY rounded-[2px]: design system mandates 2px radius everywhere */}
-      <span className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] text-muted-foreground">
-        {tierLabel}
+      {/* Impact dot indicator — 4 dots, filled/empty based on score */}
+      {/* WHY font-mono for dots: ensures equal width per character */}
+      <span className={`shrink-0 font-mono text-[9px] ${dotColor}`} aria-label={`Impact score ${filledDots}/4`} title={`Market impact: ${(score * 100).toFixed(0)}%`}>
+        {"●".repeat(filledDots)}{"○".repeat(4 - filledDots)}
       </span>
 
       {/* Article title — truncated to single line */}

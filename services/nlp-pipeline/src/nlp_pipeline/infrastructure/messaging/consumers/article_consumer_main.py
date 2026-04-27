@@ -181,6 +181,21 @@ async def main() -> None:
 
     try:
         consumer_task = asyncio.create_task(consumer.run())
+
+        # If the consumer task crashes before stop_event is set, the process would
+        # stay alive (stuck on stop_event.wait()) but do no useful work.  The done
+        # callback propagates the crash into the normal shutdown path so Docker sees
+        # a clean non-zero exit and triggers restart with full error logging.
+        def _on_consumer_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                log.error("article_consumer_task_crashed", error=str(exc), exc_info=exc)
+                stop_event.set()
+
+        consumer_task.add_done_callback(_on_consumer_done)
+
         await stop_event.wait()
         consumer.stop()  # type: ignore[attr-defined]
         try:

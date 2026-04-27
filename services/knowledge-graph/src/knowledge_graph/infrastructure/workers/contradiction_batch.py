@@ -27,7 +27,9 @@ class ContradictionBatchWorker:
     """Batch contradiction detection scan (Worker 13B).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
+
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:

@@ -49,7 +49,7 @@ def _check_alembic_guard() -> None:
         raise IntelligenceDbAlembicError(
             "ALEMBIC_ENABLED=true detected for intelligence_db. "
             "S7 must never run Alembic against intelligence_db — "
-            "DDL is exclusively owned by the intelligence-migrations init container."
+            "DDL is exclusively owned by the intelligence-migrations init container.",
         )
 
 
@@ -58,10 +58,12 @@ def _build_factories(
 ) -> tuple[AsyncEngine, AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
     """Build write + read session factories from *settings* (R23 compliant).
 
-    Returns:
+    Returns
+    -------
         ``(write_engine, read_engine, write_factory, read_factory)`` — caller owns
         both engines for disposal on shutdown.  When no read replica is configured,
         ``read_engine is write_engine``.
+
     """
     _check_alembic_guard()
 
@@ -121,6 +123,7 @@ def create_intelligence_session_factory(
     -------
     tuple[AsyncEngine, async_sessionmaker[AsyncSession]]
         ``(engine, session_factory)``
+
     """
     _check_alembic_guard()
     engine = create_async_engine(
@@ -153,6 +156,7 @@ def create_readonly_session_factory(
     -------
     tuple[AsyncEngine, async_sessionmaker[AsyncSession]]
         ``(engine, session_factory)``
+
     """
     _check_alembic_guard()
     engine = create_async_engine(

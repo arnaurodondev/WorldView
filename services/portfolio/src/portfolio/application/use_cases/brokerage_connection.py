@@ -20,7 +20,7 @@ from portfolio.domain.errors import (
 
 if TYPE_CHECKING:
     from portfolio.application.ports.brokerage_client import IBrokerageClient
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
     from portfolio.domain.errors import BrokerageApiError  # noqa: F401 (referenced in docstring)
 
@@ -200,7 +200,7 @@ class ListBrokerageConnectionsUseCase:
     async def execute(
         self,
         query: ListBrokerageConnectionsQuery,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
     ) -> ListBrokerageConnectionsResult:
         items = await uow.brokerage_connections.list_by_user(
             user_id=query.user_id,
@@ -309,7 +309,7 @@ class GetSyncErrorsUseCase:
     async def execute(
         self,
         query: GetSyncErrorsQuery,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
     ) -> GetSyncErrorsResult:
         connection = await uow.brokerage_connections.get_by_user(query.connection_id, query.user_id, query.tenant_id)
         if connection is None:

@@ -80,7 +80,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -99,6 +99,7 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
     """Consumes ``nlp.article.enriched.v1`` and materializes the knowledge graph.
 
     Args:
+    ----
         config: Consumer configuration.
         session_factory: async_sessionmaker for intelligence_db.
         embedding_client: Client satisfying EmbeddingClientProtocol.
@@ -106,6 +107,7 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         entity_dirtied_topic: Kafka topic name for entity.dirtied.v1.
         canonicalization_threshold: ANN distance threshold (default 0.35).
         dedup_client: Optional dedup client (Valkey); if None, dedup is skipped.
+
     """
 
     def __init__(
@@ -318,7 +320,6 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             error=str(failure.last_error),
             attempt=failure.attempt,
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -383,7 +384,7 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     claim_id=UUID(d["claim_id"]) if d.get("claim_id") else None,
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     evidence_text=d.get("evidence_text"),
-                )
+                ),
             )
         except (KeyError, ValueError):
             logger.warning("enriched_consumer_bad_relation", data=str(d)[:200])  # type: ignore[no-any-return]
@@ -402,7 +403,7 @@ def _parse_raw_events(data: list[dict[str, Any]]) -> list[RawEvent]:
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     event_date=_parse_dt(d.get("event_date")),
                     participant_entity_ids=tuple(UUID(eid) for eid in d.get("participant_entity_ids", [])),
-                )
+                ),
             )
         except (KeyError, ValueError):
             logger.warning("enriched_consumer_bad_event", data=str(d)[:200])  # type: ignore[no-any-return]
@@ -427,7 +428,7 @@ def _parse_raw_claims(
                     claimer_entity_id=(UUID(d["claimer_entity_id"]) if d.get("claimer_entity_id") else None),
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     is_backfill=is_backfill,
-                )
+                ),
             )
         except (KeyError, ValueError):
             logger.warning("enriched_consumer_bad_claim", data=str(d)[:200])  # type: ignore[no-any-return]

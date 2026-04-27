@@ -56,5 +56,5 @@ async def search_events(
                 doc_id=r.doc_id,
             )
             for r in results
-        ]
+        ],
     )

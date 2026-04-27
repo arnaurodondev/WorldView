@@ -51,12 +51,14 @@ class ProvisionalEnrichmentWorker:
     """Enriches provisional entities via LLM (Worker 13E).
 
     Args:
+    ----
         session_factory:   Read/write sessionmaker for intelligence_db.
         llm_client:        FallbackChainClient for extraction + embedding.
         direct_producer:   Direct Kafka producer for entity.dirtied.v1.
         entity_dirtied_topic: Topic name for entity.dirtied.v1.
         embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
+
     """
 
     def __init__(
@@ -74,7 +76,11 @@ class ProvisionalEnrichmentWorker:
         self._dirtied_topic = entity_dirtied_topic
 
     async def run(self) -> None:
-        """Enrich pending provisional entity queue entries."""
+        """Enrich pending provisional entity queue entries.
+
+        ARCH-003 fix: read→release→I/O→acquire→write pattern.
+        Session is NOT held open during external LLM / embedding HTTP calls.
+        """
         from sqlalchemy import text
 
         enriched = 0
@@ -84,6 +90,8 @@ class ProvisionalEnrichmentWorker:
         # to avoid orphaned Kafka messages when the DB transaction fails.
         entity_ids_to_dirty: list[UUID] = []
 
+        # ── Phase 1: Read pending rows, then release the session ──
+        pending_rows: list[tuple[UUID, str, str, str]] = []
         async with self._sf() as session:
             result = await session.execute(
                 text("""
@@ -100,19 +108,68 @@ FOR UPDATE SKIP LOCKED
             rows = result.fetchall()
 
             for row in rows:
-                queue_id = UUID(str(row[0]))
-                mention_text = str(row[1])
-                mention_class = str(row[3])
-                context_snippet = str(row[4]) if row[4] else ""
+                pending_rows.append(
+                    (
+                        UUID(str(row[0])),  # queue_id
+                        str(row[1]),  # mention_text
+                        str(row[3]),  # mention_class
+                        str(row[4]) if row[4] else "",  # context_snippet
+                    ),
+                )
 
+            # Mark rows as 'processing' to prevent other workers from picking them
+            # up after we release the FOR UPDATE lock.  This is safe because the
+            # lock is still held until commit.
+            for queue_id, _, _, _ in pending_rows:
+                await session.execute(
+                    text("""
+UPDATE provisional_entity_queue
+SET status = 'processing'
+WHERE queue_id = :queue_id
+"""),
+                    {"queue_id": str(queue_id)},
+                )
+            await session.commit()
+        # Session released — no DB connection held during LLM calls.
+
+        # ── Phase 2: LLM extraction + embedding (no session held) ──
+        # Each entry produces either an enrichment result or None (failure).
+        # Both the LLM profile extraction AND the embedding HTTP call happen here,
+        # completely outside any DB session (ARCH-003).
+        enrichment_results: list[tuple[UUID, str, str, str, dict[str, Any] | None, list[float] | None]] = []
+        for queue_id, mention_text, mention_class, context_snippet in pending_rows:
+            try:
+                profile = await self._extract_entity_profile(mention_text, mention_class, context_snippet)
+                # Pre-compute embedding while we have no session open
+                embedding: list[float] | None = None
+                if profile is not None:
+                    canonical_name = profile.get("canonical_name") or mention_text
+                    if canonical_name:
+                        embedding = await self._compute_embedding(None, canonical_name)
+                enrichment_results.append((queue_id, mention_text, mention_class, context_snippet, profile, embedding))
+            except Exception as exc:
+                logger.error(  # type: ignore[no-any-return]
+                    "provisional_enrichment_error",
+                    queue_id=str(queue_id),
+                    error=str(exc),
+                )
+                enrichment_results.append((queue_id, mention_text, mention_class, context_snippet, None, None))
+
+        # ── Phase 3: Write results in a new session ──
+        async with self._sf() as session:
+            for queue_id, mention_text, _mention_class, _context_snippet, profile, embedding in enrichment_results:
                 try:
-                    entity_id = await self._enrich_entity(
-                        session=session,
-                        queue_id=queue_id,
-                        mention_text=mention_text,
-                        mention_class=mention_class,
-                        context_snippet=context_snippet,
-                    )
+                    if profile is not None:
+                        entity_id = await self._persist_enrichment(
+                            session=session,
+                            queue_id=queue_id,
+                            mention_text=mention_text,
+                            profile=profile,
+                            embedding=embedding,
+                        )
+                    else:
+                        entity_id = None
+
                     if entity_id:
                         await session.execute(
                             text("""
@@ -125,11 +182,11 @@ WHERE queue_id = :queue_id
                         entity_ids_to_dirty.append(entity_id)
                         enriched += 1
                     else:
-                        # LLM failed; increment retry_count
+                        # LLM failed; increment retry_count and reset status
                         await session.execute(
                             text("""
 UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1
+SET retry_count = retry_count + 1, status = 'pending'
 WHERE queue_id = :queue_id
 """),
                             {"queue_id": str(queue_id)},
@@ -140,6 +197,15 @@ WHERE queue_id = :queue_id
                         "provisional_enrichment_error",
                         queue_id=str(queue_id),
                         error=str(exc),
+                    )
+                    # Reset to pending so the row is retried on the next cycle
+                    await session.execute(
+                        text("""
+UPDATE provisional_entity_queue
+SET retry_count = retry_count + 1, status = 'pending'
+WHERE queue_id = :queue_id
+"""),
+                        {"queue_id": str(queue_id)},
                     )
                     failed += 1
 
@@ -163,15 +229,20 @@ WHERE queue_id = :queue_id
             failed=failed,
         )
 
-    async def _enrich_entity(
+    async def _persist_enrichment(
         self,
         session: AsyncSession,
         queue_id: UUID,
         mention_text: str,
-        mention_class: str,
-        context_snippet: str,
+        profile: dict[str, Any],
+        embedding: list[float] | None = None,
     ) -> UUID | None:
-        """Extract entity profile via LLM and persist to intelligence_db."""
+        """Persist an LLM-extracted entity profile to intelligence_db.
+
+        This method only performs DB writes — no external HTTP/LLM calls.
+        The LLM extraction and embedding HTTP calls are done in Phase 2,
+        completely outside any DB session (ARCH-003 fix).
+        """
         from sqlalchemy import text
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
@@ -184,17 +255,12 @@ WHERE queue_id = :queue_id
             OutboxRepository,
         )
 
-        # ---- Step 1: LLM extraction ----
-        profile = await self._extract_entity_profile(mention_text, mention_class, context_snippet)
-        if profile is None:
-            return None
-
         canonical_name: str = profile.get("canonical_name") or mention_text
-        entity_type: str = profile.get("entity_type") or mention_class
+        entity_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
         ticker: str | None = profile.get("ticker")
         isin: str | None = profile.get("isin")
 
-        # ---- Step 2: Create canonical entity ----
+        # ---- Step 1: Create canonical entity ----
         entity_repo = CanonicalEntityRepository(session)
         entity_id = await entity_repo.create(  # type: ignore[attr-defined]
             canonical_name=canonical_name,
@@ -203,7 +269,7 @@ WHERE queue_id = :queue_id
             isin=isin,
         )
 
-        # ---- Step 3: Insert mechanical aliases ----
+        # ---- Step 2: Insert mechanical aliases ----
         alias_repo = EntityAliasRepository(session)
         normalized_name = canonical_name.lower().strip()
         await alias_repo.insert(entity_id, canonical_name, normalized_name, "EXACT", "provisional_enrichment")
@@ -213,7 +279,7 @@ WHERE queue_id = :queue_id
         if isin:
             await alias_repo.insert(entity_id, isin, isin.upper(), "ISIN", "provisional_enrichment")
 
-        # ---- Step 4: LLM-generated supplementary aliases (with collision check) ----
+        # ---- Step 3: LLM-generated supplementary aliases (with collision check) ----
         llm_aliases: list[str] = profile.get("aliases") or []
         for alias in llm_aliases[:5]:  # Cap at 5 LLM aliases
             normalized = alias.lower().strip()
@@ -228,15 +294,15 @@ WHERE queue_id = :queue_id
                 continue  # Reject — collision with different entity
             await alias_repo.insert(entity_id, alias, normalized, "LLM", "provisional_enrichment")
 
-        # ---- Step 5: Ensure entity_embedding_state rows (2 for non-company, 3 for financial_instrument) ----
+        # ---- Step 4: Ensure entity_embedding_state rows (2 for non-company, 3 for financial_instrument) ----
         emb_repo = EntityEmbeddingStateRepository(session)
         await emb_repo.ensure_rows_exist(entity_id, entity_type)
 
-        # ---- Step 6: Embed definition ----
-        if canonical_name:
-            await self._embed_definition(entity_id, canonical_name, emb_repo)
+        # ---- Step 5: Write pre-computed embedding (computed in Phase 2, outside session) ----
+        if canonical_name and embedding is not None:
+            await self._write_embedding(entity_id, canonical_name, embedding, emb_repo)
 
-        # ---- Step 7: Unblock relation_evidence_raw rows ----
+        # ---- Step 6: Unblock relation_evidence_raw rows ----
         await session.execute(
             text("""
 UPDATE relation_evidence_raw
@@ -248,7 +314,7 @@ WHERE provisional_queue_id = :queue_id
             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
         )
 
-        # ---- Step 8: Emit entity.canonical.created.v1 via outbox ----
+        # ---- Step 7: Emit entity.canonical.created.v1 via outbox ----
         outbox_repo = OutboxRepository(session)
         import json
 
@@ -259,7 +325,7 @@ WHERE provisional_queue_id = :queue_id
                 "canonical_name": canonical_name,
                 "entity_type": entity_type,
                 "provisional_queue_id": str(queue_id),
-            }
+            },
         ).encode()
 
         await outbox_repo.append(
@@ -277,14 +343,10 @@ WHERE provisional_queue_id = :queue_id
         context_snippet: str,
     ) -> dict[str, Any] | None:
         from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
+        from prompts.knowledge.entity_profile import ENTITY_PROFILE  # type: ignore[import-untyped]
 
         inp = ExtractionInput(
-            prompt=(
-                f"Extract a canonical entity profile for '{mention_text}' "
-                f"(type: {mention_class}). "
-                "Return JSON with: canonical_name, entity_type, ticker (if applicable), "
-                "isin (if applicable), aliases (list of common names)."
-            ),
+            prompt=ENTITY_PROFILE.render(name=mention_text, entity_class=mention_class),
             context=context_snippet,
             output_schema={
                 "canonical_name": "string",
@@ -300,24 +362,36 @@ WHERE provisional_queue_id = :queue_id
             return None
         return result.result  # type: ignore[return-value]
 
-    async def _embed_definition(
+    async def _compute_embedding(
+        self,
+        entity_id: UUID | None,
+        source_text: str,
+    ) -> list[float] | None:
+        """Compute definition embedding via LLM HTTP call (no session needed).
+
+        Called in Phase 2 outside any DB session to avoid holding connections
+        during external I/O (ARCH-003).
+        """
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+
+        inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
+        outputs = await self._llm.embed([inp], entity_id=entity_id)
+        return outputs[0].embedding if outputs else None
+
+    async def _write_embedding(
         self,
         entity_id: UUID,
         source_text: str,
+        embedding: list[float] | None,
         emb_repo: EntityEmbeddingStateRepository,
     ) -> None:
+        """Write a pre-computed embedding to the DB (session-only, no HTTP)."""
         from datetime import timedelta
-
-        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
             VIEW_DEFINITION,
             sha256_hex,
         )
-
-        inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
-        outputs = await self._llm.embed([inp], entity_id=entity_id)
-        embedding = outputs[0].embedding if outputs else None
 
         await emb_repo.upsert(
             entity_id,

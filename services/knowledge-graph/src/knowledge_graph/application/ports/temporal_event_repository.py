@@ -45,6 +45,7 @@ class TemporalEventRepositoryPort(ABC):
         The Avro consumer must convert ``""`` → ``None`` before calling this method.
 
         Args:
+        ----
             event_id:             App-generated UUIDv7 identifier.
             event_type:           One of geopolitical/regulatory/macro/sanctions/
                                   natural_disaster/other.
@@ -61,7 +62,9 @@ class TemporalEventRepositoryPort(ABC):
             residual_impact_days: Days of residual impact after end (default 90).
 
         Returns:
+        -------
             The event_id of the inserted or updated row.
+
         """
 
     @abstractmethod
@@ -81,6 +84,7 @@ class TemporalEventRepositoryPort(ABC):
         """List temporal events with flexible filters (PRD-0018 §6.3).
 
         Args:
+        ----
             scope:       Filter by EventScope string (LOCAL/REGIONAL/NATIONAL/GLOBAL).
             entity_id:   If set, only events where this entity is in entity_event_exposures.
             active_only: If True (default), exclude EXPIRED events.
@@ -92,9 +96,11 @@ class TemporalEventRepositoryPort(ABC):
             offset:      Pagination offset (≥ 0).
 
         Returns:
+        -------
             Tuple of (rows, total_count) where:
             - rows: dicts with all temporal_events columns + ``exposed_entity_count``
             - total_count: total matching rows (ignoring limit/offset)
+
         """
 
 
@@ -122,6 +128,7 @@ class EntityEventExposureRepositoryPort(ABC):
         the existing exposure_id is returned.
 
         Args:
+        ----
             exposure_id:   App-generated UUIDv7 identifier.
             event_id:      FK → temporal_events.event_id.
             entity_id:     Logical FK → canonical_entities.entity_id.
@@ -131,5 +138,7 @@ class EntityEventExposureRepositoryPort(ABC):
             evidence_text: Optional extracted evidence snippet.
 
         Returns:
+        -------
             The exposure_id of the existing or newly created row.
+
         """

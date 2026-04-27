@@ -35,8 +35,10 @@ class KnowledgeGraphScheduler:
     All work runs in the same asyncio event loop as FastAPI.
 
     Args:
+    ----
         settings: Service configuration (worker interval settings).
         workers:  Optional dict of worker instances; if None, stubs are used.
+
     """
 
     def __init__(
@@ -58,7 +60,9 @@ class KnowledgeGraphScheduler:
         """Start the scheduler and the consumer coroutine.
 
         Args:
+        ----
             consumer_coro: Coroutine to run as the main Kafka consumer.
+
         """
         self._register_jobs()
         self._scheduler.start()
@@ -168,13 +172,16 @@ def build_workers(
     """Instantiate all workers from service dependencies.
 
     Args:
+    ----
         settings:        Service settings.
         session_factory: intelligence_db async_sessionmaker.
         llm_client:      FallbackChainClient (None → workers use stubs).
         valkey_client:   ValkeyClient for watermark storage (None → age_sync stub).
 
     Returns:
+    -------
         Dict mapping scheduler job names to worker instances.
+
     """
     from knowledge_graph.infrastructure.workers.confidence import ConfidenceWorker
     from knowledge_graph.infrastructure.workers.contradiction_batch import ContradictionBatchWorker
@@ -201,14 +208,19 @@ def build_workers(
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
         def_worker = DefinitionRefreshWorker(
-            session_factory, llm_client, description_client, embedding_model_id=embed_model
+            session_factory,
+            llm_client,
+            description_client,
+            embedding_model_id=embed_model,
         )
         workers.update(
             {
                 "summary_generation": SummaryWorker(session_factory, llm_client),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
-                    session_factory, llm_client, embedding_model_id=embed_model
+                    session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
                 ),
                 "fundamentals_embedding": FundamentalsRefreshWorker(
                     session_factory,
@@ -217,15 +229,21 @@ def build_workers(
                     embedding_model_id=embed_model,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
-                    session_factory, llm_client, embedding_model_id=embed_model
+                    session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
                 ),
                 "worker_13e_provisional": ProvisionalEnrichmentWorker(
-                    session_factory, llm_client, embedding_model_id=embed_model
+                    session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
-                    session_factory, llm_client, embedding_model_id=embed_model
+                    session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
                 ),
-            }
+            },
         )
 
     return workers
@@ -238,9 +256,11 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     - anything else → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
 
     Args:
+    ----
         settings:      Service configuration.
         valkey_client:  ValkeyClient for atomic cost tracking (G-005 fix).
                         Passed as ``cost_tracker`` to ``GeminiDescriptionAdapter``.
+
     """
     import asyncio
 
