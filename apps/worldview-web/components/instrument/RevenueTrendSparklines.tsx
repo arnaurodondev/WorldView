@@ -141,16 +141,16 @@ function ChartTooltip({
   const eps = payload.find((p) => p.name === "eps")?.value;
 
   return (
-    <div className="rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono shadow-md">
+    <div className="rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono">
       <p className="mb-0.5 font-medium text-foreground">{label}</p>
       {revenue != null && (
         <p className="text-muted-foreground">
-          Revenue: <span className="text-[#FFD60A]">${revenue}B</span>
+          Revenue: <span className="text-primary">${revenue}B</span>
         </p>
       )}
       {eps != null && (
         <p className="text-muted-foreground">
-          EPS: <span className="text-[#26A69A]">${eps.toFixed(2)}</span>
+          EPS: <span className="text-positive">${eps.toFixed(2)}</span>
         </p>
       )}
     </div>

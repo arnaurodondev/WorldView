@@ -122,6 +122,11 @@ class ValkeyClient:
         }
         pool_kwargs: dict[str, object] = {
             "max_connections": self._config.max_connections,
+            # Proactively ping idle connections every 30 s so reconnect happens
+            # during health-check (background) rather than during a pipeline call
+            # (BP-239: lazy reconnect blocks asyncio event loop via
+            # non-cancellable socket.getaddrinfo thread).
+            "health_check_interval": 30,
         }
         if self._config.ssl:
             pool_kwargs["connection_class"] = SSLConnection

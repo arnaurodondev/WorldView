@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     routing_ohlcv_eod: str = "yahoo_finance:100,eodhd:80"  # timeframes: 1d,1w,1M
     routing_quotes: str = "eodhd:100"
     routing_fundamentals: str = "eodhd:100"
+    # Finnhub provides these for free — set to "finnhub:100,eodhd:80" to prefer Finnhub.
+    routing_news_sentiment: str = "eodhd:100"
+    routing_earnings_calendar: str = "eodhd:100"
+    routing_insider_transactions: str = "eodhd:100"
 
     # Valkey / Redis
     valkey_url: str = "redis://localhost:6379/0"

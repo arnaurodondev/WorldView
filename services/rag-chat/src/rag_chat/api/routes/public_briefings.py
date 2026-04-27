@@ -16,7 +16,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 
 from rag_chat.api.schemas import PublicBriefingResponse
-from rag_chat.domain.errors import ProviderUnavailableError, RateLimitExceededError
+from rag_chat.domain.errors import EntityNotFoundError, ProviderUnavailableError, RateLimitExceededError
 
 router = APIRouter(prefix="/api/v1", tags=["briefings"])
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -181,6 +181,21 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         raise HTTPException(status_code=429, detail=str(e)) from e
     except ProviderUnavailableError as e:
         raise HTTPException(status_code=503, detail="Briefing generation unavailable") from e
+    except EntityNotFoundError as e:
+        # Entity does not exist in the knowledge graph — return 404 (not 503).
+        # This happens when a market-data instrument_id is passed instead of a KG entity_id,
+        # or when the entity has not yet been ingested into the KG.
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        # Malformed entity_id (e.g. invalid UUID string) — return 404 instead of 503.
+        # UUID("bad-string") raises ValueError; treating as "entity not found" is correct
+        # because a well-formed entity_id is a prerequisite for any lookup.
+        log.warning(  # type: ignore[no-any-return]
+            "briefing_invalid_entity_id",
+            error=str(e),
+            entity_id=entity_id,
+        )
+        raise HTTPException(status_code=404, detail=f"Invalid entity_id: {entity_id}") from e
     except Exception as e:
         log.error(  # type: ignore[no-any-return]
             "briefing_generation_failed",

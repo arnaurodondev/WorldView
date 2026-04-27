@@ -328,3 +328,31 @@ async def test_instrument_briefing_generation_failure_503(settings: RagChatSetti
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/v1/briefings/instrument/entity-123", headers=_JWT_HEADERS)
     assert resp.status_code == 503
+
+
+async def test_instrument_briefing_entity_not_found_404(settings: RagChatSettings) -> None:
+    """EntityNotFoundError from UC -> 404 (not 503).
+
+    WHY this test: before this fix, a wrong entity_id (e.g. a market-data instrument_id
+    instead of a KG entity_id) caused S7 to return empty nodes, which triggered
+    EntityNotFoundError in BriefingContextGatherer.gather_instrument_context().
+    That exception fell through to the catch-all `except Exception` handler in
+    the route and returned 503 ("Briefing generation unavailable").
+
+    After the fix: EntityNotFoundError is caught explicitly and mapped to 404
+    so the frontend can distinguish "entity doesn't exist" from a real server error.
+    """
+    from rag_chat.domain.errors import EntityNotFoundError
+
+    app = _make_app(
+        settings,
+        uc_result=EntityNotFoundError("Entity 00000000-0000-0000-0000-000000000999 not found"),
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/api/v1/briefings/instrument/00000000-0000-0000-0000-000000000999",
+            headers=_JWT_HEADERS,
+        )
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()

@@ -14,7 +14,7 @@ def _settings(**overrides: object) -> Settings:
     defaults = {
         "s1_portfolio_base_url": "http://s1:8001",
         "s8_internal_jwt": "test-s8-token",
-        "s1_internal_token": "test-s1-token",
+        "s1_internal_jwt": "test-s1-jwt",
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]
@@ -122,21 +122,21 @@ class TestS1Client:
         assert await client.health_check() is False
 
     @pytest.mark.unit
-    async def test_internal_token_sent_in_header(self) -> None:
+    async def test_internal_jwt_sent_in_header(self) -> None:
+        """PRD-0025: S1Client must send X-Internal-JWT (RS256), not X-Internal-Token."""
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"watchers": []}
         mock_resp.raise_for_status = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        # M-01: S1Client uses s1_internal_token (not internal_service_token) as the header value
-        client = S1Client(_settings(s1_internal_token="secret-tok"), client=mock_client)
+        client = S1Client(_settings(s1_internal_jwt="rs256.test.jwt"), client=mock_client)
         await client.get_watchers_by_entity("eid-1")
 
         call_args = mock_client.get.call_args
-        # headers may be in kwargs or positional — check both
         headers = call_args.kwargs.get("headers") or (call_args.args[1] if len(call_args.args) > 1 else {})
-        assert headers.get("X-Internal-Token") == "secret-tok"
+        assert headers.get("X-Internal-JWT") == "rs256.test.jwt"
+        assert "X-Internal-Token" not in headers
 
 
 class TestGetUserEmail:

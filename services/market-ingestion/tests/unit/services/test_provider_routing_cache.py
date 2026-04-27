@@ -19,6 +19,9 @@ def _make_settings(**overrides: str) -> MagicMock:
         "routing_ohlcv_eod": "yahoo_finance:100,eodhd:80",
         "routing_quotes": "eodhd:100",
         "routing_fundamentals": "eodhd:100",
+        "routing_news_sentiment": "finnhub:100,eodhd:80",
+        "routing_earnings_calendar": "finnhub:100,eodhd:80",
+        "routing_insider_transactions": "finnhub:100,eodhd:80",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -149,5 +152,6 @@ class TestProviderRoutingCache:
             routing_fundamentals="eodhd:100",
         )
         count = cache.load_from_config(settings)
-        # 6 intraday TFs + 3 EOD TFs + 1 quotes + 1 fundamentals = 11
-        assert count == 11
+        # 6 intraday TFs + 3 EOD TFs + 1 quotes + 1 fundamentals
+        # + 1 news_sentiment + 1 earnings_calendar + 1 insider_transactions = 14
+        assert count == 14

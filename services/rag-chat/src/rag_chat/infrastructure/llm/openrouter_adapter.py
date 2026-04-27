@@ -17,7 +17,7 @@ import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-_MODEL = "deepseek/deepseek-r1-distill-qwen-32b"
+_DEFAULT_MODEL = "deepseek/deepseek-r1-distill-qwen-32b"
 _BASE_URL = "https://openrouter.ai/api/v1"
 
 
@@ -26,6 +26,8 @@ class OpenRouterCompletionAdapter:
 
     Args:
         api_key:     OpenRouter API key.
+        model:       Model ID override (default: deepseek/deepseek-r1-distill-qwen-32b).
+                     Configurable via RAG_CHAT_OPENROUTER_COMPLETION_MODEL env var.
         http_client: Optional pre-built httpx.AsyncClient for testing.
         timeout:     Request timeout in seconds (default 30).
     """
@@ -35,11 +37,13 @@ class OpenRouterCompletionAdapter:
     def __init__(
         self,
         api_key: str,
+        model: str = _DEFAULT_MODEL,
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
+        self._model = model
         self._timeout = timeout
         self._client = http_client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
@@ -55,7 +59,7 @@ class OpenRouterCompletionAdapter:
     ) -> AsyncIterator[str]:
         """Yield text chunks from OpenRouter streaming endpoint."""
         payload = {
-            "model": _MODEL,
+            "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "max_tokens": max_tokens,

@@ -273,15 +273,24 @@ async def get_relevant_news(
 ) -> dict[str, Any]:
     """Get most relevant news articles.
 
-    ``headers`` are forwarded to S5 for ``X-Internal-JWT`` authentication.
+    Proxies to S6 nlp-pipeline GET /news/top which provides display_relevance_score
+    ranked articles.  Adds ``offset`` and ``limit`` envelope fields for frontend
+    NewsResponse compatibility (the frontend expects {articles, total, offset, limit}).
+
+    NOTE: S5 content-store never implemented /v1/articles/relevant; S6 /news/top
+    is the canonical ranked-news source (PRD-0026).
     """
-    return await _checked_get(
-        clients.content_store,
-        "content-store",
-        "/v1/articles/relevant",
+    raw = await _checked_get(
+        clients.nlp_pipeline,
+        "nlp-pipeline",
+        "/api/v1/news/top",
         headers=headers,
         params={"limit": limit},
     )
+    # Ensure envelope fields expected by the frontend NewsResponse type
+    raw.setdefault("offset", 0)
+    raw.setdefault("limit", limit)
+    return raw
 
 
 async def get_map_layers(

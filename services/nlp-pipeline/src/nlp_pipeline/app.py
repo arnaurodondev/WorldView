@@ -94,6 +94,41 @@ async def _expire_stale_embeddings(
         await session.commit()
 
 
+def _build_embedding_client(settings: Settings) -> object:
+    """Instantiate the embedding adapter for the API process (/api/v1/embed endpoint).
+
+    Provider is selected via NLP_PIPELINE_EMBEDDING_PROVIDER.  Must match the
+    provider configured for article_consumer_main so that ingestion embeddings
+    and query-time embeddings land in the same vector space.
+
+    Returns a client with an ``embed(inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]``
+    coroutine method.
+    """
+    import asyncio
+
+    provider = settings.embedding_provider.lower()
+    if provider == "deepinfra" and settings.embedding_api_key:
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
+
+        return DeepInfraEmbeddingAdapter(
+            api_key=settings.embedding_api_key,
+            model_id=settings.embedding_api_model_id,
+            base_url=settings.embedding_api_base_url,
+        )
+    if provider == "jina" and settings.jina_api_key:
+        from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
+
+        return JinaEmbeddingAdapter(api_key=settings.jina_api_key)
+    # Default: Ollama (or fallback when key is missing)
+    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
+
+    return OllamaEmbeddingAdapter(
+        base_url=settings.ollama_base_url,
+        model_id=settings.embedding_model_id,
+        semaphore=asyncio.Semaphore(1),  # API process: single concurrent embed to avoid contention
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — sets up database and Valkey for API endpoints.
@@ -151,6 +186,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     watchlist_cache = WatchlistCache(client=valkey._redis, key=settings.valkey_watchlist_key)  # type: ignore[attr-defined]
     app.state.valkey = valkey
     app.state.watchlist_cache = watchlist_cache
+
+    # 5b. Embedding client for POST /api/v1/embed — provider-selectable.
+    # The API process runs separately from article_consumer_main; it needs its own
+    # embedding client instance so the embed endpoint is not tied to Ollama.
+    app.state.embedding_client = _build_embedding_client(settings)
+    log.info(
+        "api_embedding_client_ready",
+        provider=settings.embedding_provider,
+    )
 
     # 5. Optional: MinIO chunk text store (for search use case text hydration)
     app.state.chunk_text_store = None

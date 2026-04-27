@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 
     # ── LLM API providers (primary + fallback chain) ──────────────────────────
-    deepinfra_api_key: str | None = None  # primary: deepseek-ai/DeepSeek-R1-Distill-Llama-70B
-    openrouter_api_key: str | None = None  # fallback: deepseek/deepseek-r1-distill-qwen-32b
+    deepinfra_api_key: str | None = None  # primary: configurable via completion_model
+    openrouter_api_key: str | None = None  # fallback: configurable via openrouter_completion_model
 
     # ── Intent classification (DeepInfra GPU — replaces qwen3:0.6b Ollama CPU) ─
     # Uses the same deepinfra_api_key above.  Small model (3B) → ~100-200ms GPU.
@@ -68,15 +68,17 @@ class Settings(BaseSettings):
     # Cohere Rerank v2 provides ~300ms cross-encoder quality via REST API.
     cohere_api_key: str | None = None  # optional; fusion_score fallback when absent
 
-    # ── External embeddings (Jina AI — replaces bge-large Ollama) ─────────────
-    # WHY: bge-large on CPU Ollama takes 7-13s per embed; contention with qwen3
-    # causes timeout storms.  Jina embeddings-v3 is 1024-dim (same schema) at
-    # ~100-300ms via REST API.
-    jina_api_key: str | None = None  # optional; Ollama bge-large fallback when absent
+    # ── External embeddings (Jina AI — replaces S6/Ollama for query embedding) ─
+    # When set, rag-chat embeds queries directly via Jina AI (1024-dim, ~100-300ms)
+    # instead of proxying through S6 → Ollama bge-large (7-13s on CPU).
+    # Jina embeddings-v3 is 1024-dim (same pgvector schema as bge-large).
+    jina_api_key: str | None = None  # optional; S6/Ollama fallback when absent
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
     completion_model: str = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"  # RAG_CHAT_COMPLETION_MODEL
+    # OpenRouter fallback model — configurable independently from the DeepInfra primary.
+    openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
@@ -92,7 +94,10 @@ class Settings(BaseSettings):
     s3_base_url: str = "http://market-data:8003"
     s1_base_url: str = "http://portfolio:8001"
     s5_base_url: str = "http://alert:8010"  # Alert service (S5) — used by BriefingContextGatherer
-    s1_internal_token: str  # required — set via RAG_CHAT_S1_INTERNAL_TOKEN
+    # Deprecated (PRD-0025): S1 Portfolio now uses X-Internal-JWT (RS256) propagated
+    # from the ContextVar set by InternalJWTMiddleware. This field is kept with a
+    # default to avoid startup ValidationError on existing deployments, but is unused.
+    s1_internal_token: str = ""
 
     # ── Feature flags ─────────────────────────────────────────────────────────
     cypher_enabled: bool = False

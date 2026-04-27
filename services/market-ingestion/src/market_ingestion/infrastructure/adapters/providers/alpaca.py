@@ -6,6 +6,11 @@ APCA-API-SECRET-KEY) — they must NEVER appear in URLs or log fields.
 
 Free tier: unlimited API calls; IEX feed (15-min delayed); SIP feed available on
 paid plans.  The ``feed`` constructor parameter selects IEX by default.
+
+Crypto routing: symbols ending in ``-USD`` (e.g. ``BTC-USD``) are automatically
+routed to the v1beta3 crypto endpoint (``/v1beta3/crypto/us/bars``) and their
+symbols are converted to Alpaca's ``COIN/USD`` slash format (e.g. ``BTC/USD``).
+The ``feed`` parameter is NOT sent for crypto requests.
 """
 
 from __future__ import annotations
@@ -43,6 +48,28 @@ _TIMEFRAME_MAP: dict[str, str] = {
     "1h": "1Hour",
     "4h": "4Hour",
 }
+
+
+def _is_crypto_symbol(symbol: str) -> bool:
+    """True for crypto tickers in our ``COIN-USD`` house format (e.g. ``BTC-USD``)."""
+    return symbol.upper().endswith("-USD")
+
+
+def _to_alpaca_crypto_symbol(symbol: str) -> str:
+    """Convert ``BTC-USD`` → ``BTC/USD`` for Alpaca's crypto bars endpoint."""
+    return symbol.upper().replace("-", "/")
+
+
+def _to_alpaca_equity_symbol(symbol: str) -> str:
+    """Normalize equity symbols for Alpaca's stock endpoint.
+
+    Alpaca requires dot-separated class shares (``BRK.B``) but our house format
+    uses dashes (``BRK-B``).  Only non-crypto dashes are converted — crypto
+    symbols are handled separately by ``_to_alpaca_crypto_symbol``.
+    """
+    if _is_crypto_symbol(symbol):
+        return symbol
+    return symbol.replace("-", ".")
 
 
 class AlpacaProviderAdapter(BaseProviderAdapter):
@@ -118,14 +145,26 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                 f"Alpaca does not support timeframe {timeframe!r}; " f"supported: {', '.join(sorted(_TIMEFRAME_MAP))}"
             )
 
-        url = f"{self._base_url}/v2/stocks/bars"
-        params: dict[str, Any] = {
-            "symbols": symbol,
-            "timeframe": alpaca_tf,
-            "limit": 10000,
-            "feed": self._feed,
-            "sort": "asc",
-        }
+        # Crypto symbols use a different endpoint and slash-separated format.
+        if _is_crypto_symbol(symbol):
+            alpaca_sym = _to_alpaca_crypto_symbol(symbol)
+            url = f"{self._base_url}/v1beta3/crypto/us/bars"
+            params: dict[str, Any] = {
+                "symbols": alpaca_sym,
+                "timeframe": alpaca_tf,
+                "limit": 10000,
+                "sort": "asc",
+            }
+        else:
+            alpaca_sym = _to_alpaca_equity_symbol(symbol)
+            url = f"{self._base_url}/v2/stocks/bars"
+            params = {
+                "symbols": alpaca_sym,
+                "timeframe": alpaca_tf,
+                "limit": 10000,
+                "feed": self._feed,
+                "sort": "asc",
+            }
         if start is not None:
             params["start"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         if end is not None:
@@ -136,7 +175,11 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
         duration_ms = int((time.monotonic() - t0) * 1000)
 
         # Parse the Alpaca response — shape: {"bars": {"AAPL": [...]}, ...}
-        bars = self._parse_bars(raw_json, symbol)
+        # Crypto responses key by Alpaca format (BTC/USD); normalise back to our format.
+        bars = self._parse_bars(raw_json, alpaca_sym)
+        if alpaca_sym != symbol and not bars:
+            # Fallback: try keying by original symbol in case Alpaca mirrors formats.
+            bars = self._parse_bars(raw_json, symbol)
         raw_bytes = json.dumps(bars).encode()
 
         self._record_api_call(
@@ -187,19 +230,32 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
 
         results: dict[str, ProviderFetchResult] = {}
 
-        # Chunk symbols into groups of _BATCH_SIZE (1000).
-        for i in range(0, len(symbols), self._BATCH_SIZE):
-            chunk = symbols[i : i + self._BATCH_SIZE]
-            chunk_csv = ",".join(chunk)
+        # Split into equity vs crypto — each needs a different endpoint.
+        equity_symbols = [s for s in symbols if not _is_crypto_symbol(s)]
+        crypto_symbols = [s for s in symbols if _is_crypto_symbol(s)]
 
-            url = f"{self._base_url}/v2/stocks/bars"
-            params: dict[str, Any] = {
-                "symbols": chunk_csv,
-                "timeframe": alpaca_tf,
-                "limit": 10000,
-                "feed": self._feed,
-                "sort": "asc",
-            }
+        async def _fetch_chunk(chunk: list[str], *, is_crypto: bool) -> None:
+            if is_crypto:
+                alpaca_syms = [_to_alpaca_crypto_symbol(s) for s in chunk]
+                chunk_csv = ",".join(alpaca_syms)
+                url = f"{self._base_url}/v1beta3/crypto/us/bars"
+                params: dict[str, Any] = {
+                    "symbols": chunk_csv,
+                    "timeframe": alpaca_tf,
+                    "limit": 10000,
+                    "sort": "asc",
+                }
+            else:
+                alpaca_syms = [_to_alpaca_equity_symbol(s) for s in chunk]
+                chunk_csv = ",".join(alpaca_syms)
+                url = f"{self._base_url}/v2/stocks/bars"
+                params = {
+                    "symbols": chunk_csv,
+                    "timeframe": alpaca_tf,
+                    "limit": 10000,
+                    "feed": self._feed,
+                    "sort": "asc",
+                }
             if start is not None:
                 params["start"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
             if end is not None:
@@ -209,7 +265,6 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
             raw_json = await self._get(url, params)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
-            # Parse response — shape: {"bars": {"AAPL": [...], "MSFT": [...]}, ...}
             try:
                 data = json.loads(raw_json)
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -217,8 +272,8 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
 
             bars_map: dict[str, list[dict[str, Any]]] = data.get("bars") or {}
 
-            for sym in chunk:
-                sym_bars = self._normalize_bars(bars_map.get(sym, []))
+            for sym, alpaca_sym in zip(chunk, alpaca_syms, strict=False):
+                sym_bars = self._normalize_bars(bars_map.get(alpaca_sym) or bars_map.get(sym, []))
                 raw_bytes = json.dumps(sym_bars).encode()
 
                 self._record_api_call(
@@ -242,6 +297,12 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
                     range_end=end,
                     bars_returned=len(sym_bars),
                 )
+
+        for i in range(0, len(equity_symbols), self._BATCH_SIZE):
+            await _fetch_chunk(equity_symbols[i : i + self._BATCH_SIZE], is_crypto=False)
+
+        for i in range(0, len(crypto_symbols), self._BATCH_SIZE):
+            await _fetch_chunk(crypto_symbols[i : i + self._BATCH_SIZE], is_crypto=True)
 
         return results
 

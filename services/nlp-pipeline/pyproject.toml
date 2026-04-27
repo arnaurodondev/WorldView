@@ -12,7 +12,7 @@ dependencies = [
     "contracts",
     "messaging",
     "observability",
-    "ml-clients",
+    "ml-clients[openai]",
     "prompts",
     "storage",
     "fastapi==0.111",

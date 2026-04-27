@@ -101,10 +101,10 @@ function EpsTooltip({
   if (!active || !payload?.length) return null;
   const eps = payload[0]?.value;
   return (
-    <div className="rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono shadow-md">
+    <div className="rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono">
       <p className="mb-0.5 font-medium text-foreground">{label}</p>
       {eps != null ? (
-        <p className={eps >= 0 ? "text-[#26A69A]" : "text-[#EF5350]"}>
+        <p className={eps >= 0 ? "text-positive" : "text-negative"}>
           EPS: ${eps.toFixed(2)}
         </p>
       ) : (

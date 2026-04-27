@@ -11,7 +11,6 @@ Run with::
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import signal
 import sys
 
@@ -66,9 +65,6 @@ async def main() -> None:
     )
 
     # ML clients
-    from ml_clients.adapters.ollama_embedding import (
-        OllamaEmbeddingAdapter,  # type: ignore[import-not-found]
-    )
     from ml_clients.adapters.ollama_extraction import (
         OllamaExtractionAdapter,  # type: ignore[import-not-found]
     )
@@ -93,11 +89,51 @@ async def main() -> None:
             semaphore=asyncio.Semaphore(1),
         )
         log.info("gliner_local_adapter_selected", model_path=settings.ner_model_id)
-    embedding_client = OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        semaphore=ml_sem,
-    )
+
+    # Embedding client — provider selected via NLP_PIPELINE_EMBEDDING_PROVIDER.
+    # All providers produce 1024-dim vectors compatible with the pgvector schema.
+    # WARNING: switching providers requires re-embedding all stored chunks.
+    _embedding_provider = settings.embedding_provider.lower()
+    if _embedding_provider == "deepinfra" and settings.embedding_api_key:
+        from ml_clients.adapters.deepinfra_embedding import (  # type: ignore[import-not-found]
+            DeepInfraEmbeddingAdapter,
+        )
+
+        embedding_client = DeepInfraEmbeddingAdapter(
+            api_key=settings.embedding_api_key,
+            model_id=settings.embedding_api_model_id,
+            base_url=settings.embedding_api_base_url,
+        )
+        log.info(
+            "embedding_deepinfra_adapter_selected",
+            model_id=settings.embedding_api_model_id,
+            base_url=settings.embedding_api_base_url,
+        )
+    elif _embedding_provider == "jina" and settings.jina_api_key:
+        from ml_clients.adapters.jina_embedding import (  # type: ignore[import-not-found]
+            JinaEmbeddingAdapter,
+        )
+
+        embedding_client = JinaEmbeddingAdapter(  # type: ignore[assignment]
+            api_key=settings.jina_api_key,
+        )
+        log.info("embedding_jina_adapter_selected")
+    else:
+        if _embedding_provider not in ("ollama", ""):
+            log.warning(
+                "embedding_provider_key_missing_fallback_to_ollama",
+                provider=_embedding_provider,
+            )
+        from ml_clients.adapters.ollama_embedding import (  # type: ignore[import-not-found]
+            OllamaEmbeddingAdapter,
+        )
+
+        embedding_client = OllamaEmbeddingAdapter(  # type: ignore[assignment]
+            base_url=settings.ollama_base_url,
+            model_id=settings.embedding_model_id,
+            semaphore=ml_sem,
+        )
+        log.info("embedding_ollama_adapter_selected", model_id=settings.embedding_model_id)
     # Deep extraction: use DeepInfra (external API) when extraction_api_key is configured.
     # qwen2.5:7b-instruct is too large for CPU self-hosting (7B model); DeepInfra hosts it on GPUs.
     # Falls back to OllamaExtractionAdapter (which will fail gracefully) if no API key.
@@ -179,6 +215,18 @@ async def main() -> None:
         chunk_text_store=_chunk_text_store,
     )
 
+    # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.
+    # redis.asyncio uses lazy connection; the first call triggers DNS resolution
+    # via socket.getaddrinfo() in a thread-pool executor.  If the connection
+    # drops after a long idle period, reconnect happens mid-pipeline and the
+    # non-cancellable thread blocks the graceful shutdown sequence.  Warming up
+    # here ensures the connection is established at a safe, non-critical point.
+    try:
+        await watchlist_cache.get_all_watched()
+        log.info("valkey_connection_warmed_up")
+    except Exception:
+        log.warning("valkey_warmup_failed", exc_info=True)
+
     try:
         consumer_task = asyncio.create_task(consumer.run())
 
@@ -202,8 +250,14 @@ async def main() -> None:
             await asyncio.wait_for(consumer_task, timeout=30.0)
         except TimeoutError:
             consumer_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await consumer_task
+            try:
+                # Give the task 5 s to honour the cancellation.  If it is stuck
+                # in a thread-pool executor (e.g. socket.getaddrinfo) it cannot
+                # be cancelled; sys.exit lets Docker reclaim the process cleanly.
+                await asyncio.wait_for(consumer_task, timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError):
+                log.warning("consumer_task_stuck_forcing_exit")
+                sys.exit(1)
     except Exception as exc:
         log.error("article_consumer_fatal_error", error=str(exc))
         sys.exit(1)

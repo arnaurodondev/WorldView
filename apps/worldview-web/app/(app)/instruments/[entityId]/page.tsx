@@ -85,12 +85,16 @@ export default function InstrumentDetailPage() {
     staleTime: 5 * 60_000,
   });
 
+  // WHY constant (not inline 20): pagination limit is referenced in both the
+  // queryFn and the "Load more" condition — a single source of truth prevents drift.
+  const NEWS_PAGE_SIZE = 20;
+
   // ── Fetch entity news for the News tab ────────────────────────────────────
-  const { data: newsResp, isLoading: newsLoading } = useQuery({
+  const { data: newsResp, isLoading: newsLoading, isError: newsError } = useQuery({
     queryKey: ["entity-news", entityId, newsOffset],
     queryFn: () =>
       createGateway(accessToken).getEntityNews(entityId, {
-        limit: 20,
+        limit: NEWS_PAGE_SIZE,
         offset: newsOffset,
         // WHY display_relevance_score: S6 endpoint accepts "display_relevance_score"
         // or "published_at". The old value "relevance" was a legacy S5 param name.
@@ -270,6 +274,13 @@ export default function InstrumentDetailPage() {
                   <Skeleton className="h-3 w-1/2" />
                 </div>
               ))
+            ) : newsError ? (
+              // WHY separate error state (not reusing empty state): failed fetch ≠ no
+              // articles — user needs to know it's a network issue, not empty data.
+              <InlineEmptyState
+                message="Failed to load news. Please try again."
+                className="px-3"
+              />
             ) : filteredArticles.length === 0 ? (
               // WHY InlineEmptyState (was p-6 text-sm): terminal compact inline message
               <InlineEmptyState
@@ -287,16 +298,14 @@ export default function InstrumentDetailPage() {
                 ))}
 
                 {/* Pagination: load more */}
-                {/* WHY 20: RankedNewsResponse has no .limit field (unlike NewsResponse).
-                    Use the same hardcoded limit passed to getEntityNews above. */}
-                {newsResp && newsOffset + 20 < newsResp.total && (
+                {newsResp && newsOffset + NEWS_PAGE_SIZE < newsResp.total && (
                   // WHY Button variant="outline" size="sm" (was plain button):
                   // styled button communicates interactivity more clearly than plain text
                   <div className="px-3 py-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setNewsOffset((o) => o + 20)}
+                      onClick={() => setNewsOffset((o) => o + NEWS_PAGE_SIZE)}
                       className="h-7 text-xs"
                     >
                       Load more articles

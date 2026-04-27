@@ -444,7 +444,11 @@ async def run_entity_resolution_block(
             mention.resolution_confidence = confidence
             mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
             try:
-                await _insert_provisional(mention, intelligence_session)
+                # Use a SAVEPOINT so a UNIQUE-constraint failure on this insert
+                # does NOT abort the outer transaction (BP-239: session-transaction
+                # poisoning via unguarded INSERT in entity resolution).
+                async with intelligence_session.begin_nested():  # type: ignore[attr-defined]
+                    await _insert_provisional(mention, intelligence_session)
             except Exception:
                 logger.warning(
                     "entity_resolution.provisional_insert_failed",

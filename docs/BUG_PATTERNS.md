@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-241](#bp-241) | Alert / Valkey dedup | Resetting Kafka offsets for replay doesn't clear Valkey dedup keys — all events silently deduplicated; `alert_db.alerts` stays empty | `services/alert/src/alert/infrastructure/messaging/consumers/intelligence_consumer.py`; any consumer with Valkey-backed dedup |
+| [BP-240](#bp-240) | Alert / inter-service auth | `S1Client._headers()` sends `X-Internal-Token` after PRD-0025 migrated S1 to `X-Internal-JWT` — every watchlist call returns 401; no alert ever created; best-effort client silently swallows error | `services/alert/src/alert/infrastructure/clients/s1_client.py`; any service client not updated when upstream migrates to RS256 JWT |
 | [BP-239](#bp-239) | Market-data / fundamentals router | S3 router missing section endpoints for sections that exist in FundamentalsSection enum + use case — 404 on section-specific paths | `services/market-data/src/market_data/api/routers/fundamentals.py`; any service with enum-backed section dispatch |
 | [BP-235](#bp-235) | Market-data / prediction markets | `ON CONFLICT ON CONSTRAINT uq_pms_market_snapshot` raises `UndefinedObjectError` — migration 005 created a UNIQUE INDEX, not a named CONSTRAINT; `ON CONFLICT ON CONSTRAINT` only works with named constraints | `services/market-data/src/market_data/infrastructure/db/repositories/prediction_market_repo.py:insert_if_not_exists()` |
 | [BP-234](#bp-234) | Market ingestion / scheduler | `ECONOMIC_EVENTS`, `MACRO_INDICATOR`, `INSIDER_TRANSACTIONS` dataset types fall through to `scheduler_unsupported_dataset_type` debug log → never enqueued; missing `_build_incremental_task` branches and factory methods | `services/market-ingestion/src/market_ingestion/application/use_cases/schedule_tasks.py:_build_incremental_task()`; `domain/entities/ingestion_task.py` |
@@ -6713,3 +6715,148 @@ When adding a new `FundamentalsSection` enum value:
 2. Add a test in `test_fundamentals_api.py` that calls the new endpoint path and asserts `section == "new_value"` in the response.
 3. Verify with `GET /api/v1/fundamentals/screen/fields` that the new section's metrics appear in the screener metadata.
 4. Update `docs/services/api-gateway.md` to document the S9 proxy for the new section (if applicable).
+
+---
+
+## BP-240 — Alert S1Client Sends Wrong Auth Header After PRD-0025 Migration
+
+| Field | Value |
+|-------|-------|
+| **Service** | alert (S10) — `infrastructure/clients/s1_client.py` |
+| **Severity** | HIGH (zero alerts generated; silent failure) |
+| **Discovered** | 2026-04-27 live platform investigation |
+| **Root cause** | After PRD-0025 migrated S1 portfolio to RS256 `X-Internal-JWT` auth, the alert service's `S1Client._headers()` still sent `X-Internal-Token` (the old legacy header). Portfolio's `InternalJWTMiddleware` rejects this with 401. The `S1Client` treats all errors as "S1 unavailable" and returns empty watchers — no alert is created, no user notification, no error surfaced. |
+| **Symptom** | `GET /v1/alerts/pending` returns `[]`. Consumer logs show `watchlist_s1_unavailable` with `401 Unauthorized` for every entity lookup. `alert_db.alerts` table stays empty. |
+| **Fix** | Add `self._jwt = settings.s1_internal_jwt` in `S1Client.__init__`. Update `_headers()` to prefer `X-Internal-JWT` when set, fall back to `X-Internal-Token` for backwards compat. Add `ALERT_S1_INTERNAL_JWT` (a long-lived RS256 service JWT) to `configs/docker.env`. |
+
+### Prevention
+
+- When PRD-0025 (`X-Internal-JWT`) migration is applied to any upstream service, immediately audit ALL downstream callers that use a client for that service. Best-effort clients (those that swallow errors) will silently degrade — no error surfaces until you query the DB and find zero rows.
+- Add integration tests for inter-service auth: `test_s1_client_sends_jwt_header()` and `test_watchlist_returns_watchers_for_seeded_entity()`.
+- When a service client swallows errors (`except ... return []`), add a counter metric (`s1_client_auth_failures_total`) so silent failures are observable in Grafana.
+
+---
+
+## BP-241 — Alert Dedup Keys Block Replay After Config Fix
+
+| Field | Value |
+|-------|-------|
+| **Service** | alert (S10) — Valkey dedup pattern |
+| **Severity** | LOW (operational — blocks manual testing; not production issue) |
+| **Discovered** | 2026-04-27 live platform investigation |
+| **Root cause** | `IntelligenceConsumer` marks each `event_id` in Valkey with a 24h TTL on first processing. When the consumer had 401 auth failures, it still marked events as processed (after calling `is_duplicate` → `mark_processed`). Resetting Kafka offsets to replay events doesn't clear the Valkey dedup state, so all replayed events are dropped as duplicates. |
+| **Symptom** | After fixing S1Client auth and resetting Kafka offsets to `--to-earliest`, consumer shows LAG=0 but `alert_db.alerts` stays empty. No log entries. |
+| **Fix** | When manually replaying events after a config fix: (1) stop consumer, (2) reset Kafka offsets, (3) delete Valkey dedup keys: `redis-cli EVAL "local k=redis.call('keys',ARGV[1]) if #k>0 then return redis.call('del',unpack(k)) end return 0" 0 "s10:dedup:*"`, (4) restart consumer. |
+
+### Prevention
+
+- Document the replay procedure in `docs/workflows/alert-replay.md`.
+- Consider adding a `--reset-dedup` CLI flag to the consumer that clears its Valkey namespace before starting (dev mode only, guarded by `APP_ENV != production`).
+
+
+## BP-242 — Missing Error State in News Tab (Silent Empty on Fetch Failure)
+
+| Field | Value |
+|-------|-------|
+| **Service** | worldview-web — `app/(app)/instruments/[entityId]/page.tsx` |
+| **Severity** | MEDIUM (incorrect UX — user sees "no articles" instead of error) |
+| **Discovered** | 2026-04-27 instrument page QA pass |
+| **Root cause** | The news tab's conditional rendering checked `newsLoading` then `filteredArticles.length === 0`, but never checked `isError`. A network failure sets `newsResp = undefined` and `isError = true`, causing `filteredArticles = []`, which renders the empty state message instead of an error. |
+| **Symptom** | When `GET /v1/entities/{id}/articles` returns 5xx or times out, the News tab silently shows "No news articles match the current filters." — no indication of a fetch failure. |
+| **Fix** | Destructure `isError: newsError` from `useQuery`. Add an error branch (`newsError ? <InlineEmptyState message="Failed to load news..." />`) before the empty-articles branch in the conditional render. |
+
+### Prevention
+
+- In every TanStack Query-powered tab/panel: always destructure `isError` alongside `isLoading` and `data`.
+- Render order must be: **loading skeleton → error state → empty state → data**. Skipping the error branch causes silent failures.
+- Code review checklist: any `isLoading && !data ? skeleton : items.length === 0 ? empty : data` pattern is missing the error branch.
+
+
+## BP-243 — Alpaca Crypto Symbols Sent to Stock Endpoint (HTTP 400)
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) — `infrastructure/adapters/providers/alpaca.py` |
+| **Severity** | HIGH (all crypto OHLCV tasks permanently fail) |
+| **Discovered** | 2026-04-27 ingestion pipeline investigation |
+| **Root cause** | `AlpacaProviderAdapter.fetch_ohlcv()` always used `/v2/stocks/bars` regardless of symbol type. Alpaca rejects crypto symbols (e.g. `BTC-USD`) with HTTP 400 `{"message":"invalid symbol"}` on the stock endpoint. Crypto requires a separate endpoint: `/v1beta3/crypto/us/bars`, and Alpaca expects slash format (`BTC/USD`) not dash (`BTC-USD`). |
+| **Symptom** | All `-USD` crypto symbols fail permanently with `Alpaca client error HTTP 400`. Since `ProviderDataError` (HTTP 4xx) is non-retryable, tasks move directly to `FAILED` status. |
+| **Fix** | Added `_is_crypto_symbol()` and `_to_alpaca_crypto_symbol()` helpers. `fetch_ohlcv()` and `fetch_ohlcv_batch()` now branch on symbol type: crypto → `/v1beta3/crypto/us/bars` without `feed` param; equity → `/v2/stocks/bars` with `feed=iex`. |
+
+### Prevention
+
+- Provider adapters that support multiple asset classes MUST detect symbol type and route to the correct endpoint.
+- Add crypto symbols to the Alpaca adapter test fixture so this is caught by unit tests.
+- When adding a new provider, verify all symbol formats it supports and add type-routing from day one.
+
+---
+
+## BP-244 — Alpaca Class Share Symbols Rejected (BRK-B → BRK.B)
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) — `infrastructure/adapters/providers/alpaca.py` |
+| **Severity** | MEDIUM (class shares permanently fail) |
+| **Discovered** | 2026-04-27 ingestion pipeline investigation |
+| **Root cause** | Our house symbol format uses dashes for class shares (`BRK-B`), but Alpaca requires dots (`BRK.B`). Alpaca returns HTTP 400 `{"message":"invalid symbol: BRK-B"}`. |
+| **Fix** | Added `_to_alpaca_equity_symbol()` that converts `-` → `.` for non-crypto equity symbols before sending to Alpaca. Applied in both `fetch_ohlcv()` and `fetch_ohlcv_batch()`. |
+
+### Prevention
+
+- All provider adapters must document their symbol format requirements.
+- Symbol normalization belongs in the adapter, not the use case or scheduler.
+- Class share symbols with dashes appear in multiple providers — always verify the expected format in provider docs.
+
+---
+
+## BP-245 — Docker Compose Per-Role Images Not Rebuilt by Base Service Build
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) — Docker Compose build configuration |
+| **Severity** | MEDIUM (stale code deployed despite rebuild, hard to diagnose) |
+| **Discovered** | 2026-04-27 ingestion pipeline investigation |
+| **Root cause** | Services with multiple roles (scheduler, worker, dispatcher) each have their own `build:` block in `docker-compose.yml`, producing separate image tags: `worldview-market-ingestion-scheduler`, `worldview-market-ingestion-worker`, `worldview-market-ingestion`. Running `docker compose build market-ingestion` only rebuilds the base service image — the scheduler and worker images are NOT rebuilt. Code changes are not deployed to those containers until their specific image is rebuilt. |
+| **Symptom** | `docker compose build market-ingestion && docker compose up -d --force-recreate market-ingestion-scheduler` runs old code. `python -c "import inspect; print(inspect.getsource(...))"` inside the container confirms old code. |
+| **Fix** | When code changes affect market-ingestion, rebuild all three: `docker compose build --no-cache market-ingestion market-ingestion-scheduler market-ingestion-worker`. The `--no-cache` flag is required to bypass BuildKit layer caching. |
+
+### Prevention
+
+- Always rebuild all role-specific images when changing shared service code.
+- Consider merging scheduler/worker into a single image with a CMD arg, or using Docker Compose `image:` inheritance to share the same build output.
+- When verifying deployed code, always inspect the running container's source directly, not just the tagged image.
+
+---
+
+## BP-246 — SQLAlchemy Session Poisoning Leaves Content-Ingestion Tasks Stuck in CLAIMED
+
+| Field | Value |
+|-------|-------|
+| **Service** | content-ingestion (S4) — `infrastructure/workers/worker.py` |
+| **Severity** | HIGH (tasks permanently stuck in CLAIMED — never retried or failed) |
+| **Discovered** | 2026-04-27 ingestion pipeline investigation |
+| **Root cause** | When a DB connection drops mid-transaction (SQLAlchemy "Can't reconnect until invalid transaction is rolled back"), the outer session is "poisoned". The exception handler calls `session.rollback()` (which also fails) then tries `task_repo.update_status(RETRY)` via the same poisoned session — this write also fails. The task is left in CLAIMED status with no recovery path. The `recover_expired_leases()` mechanism in the scheduler will eventually reclaim it after lease expiry, but this adds unnecessary delay. |
+| **Symptom** | Tasks stuck in `CLAIMED` status long after expected completion time. `content_ingestion_tasks` shows tasks with `status='claimed'` and `lease_expires` already in the past. |
+| **Fix** | Added `_rescue_stuck_task()` method that opens a fresh DB connection (new session from `_write_factory()`) to write the terminal status, bypassing the poisoned session. The exception handler now catches rollback errors (swallows them) and always calls `_rescue_stuck_task()`. |
+
+### Prevention
+
+- Any worker that holds a task lease MUST have a fallback that uses a fresh connection to release the lease on failure.
+- Pool pre-ping (`pool_pre_ping=True`) only validates connections at acquisition time — it does NOT prevent in-flight drops.
+- Session scope should be as narrow as possible: mark RUNNING → release session → do I/O → new session for writes.
+
+## BP-247 — Batch OHLCV Fetch Uses First Task's Date Range for All Symbols
+
+| Field | Value |
+|-------|-------|
+| **Service** | market-ingestion (S2) — `infrastructure/workers/worker.py:284-289` |
+| **Severity** | LOW (latent — does not manifest in current scheduler configuration) |
+| **Discovered** | 2026-04-27 batch efficiency investigation |
+| **Root cause** | `_try_batch_execute()` passes `start=group_tasks[0].range_start, end=group_tasks[0].range_end` to `fetch_ohlcv_batch()` — the first task's date range is used for ALL symbols in the batch. This is safe only when all tasks in the group have the same date range (which the scheduler guarantees for same-day tasks via `today_midnight` truncation). If backfill tasks with different date ranges are mixed with regular tasks, some symbols will get data from the wrong date range. |
+| **Symptom** | Silent: symbols get bars for the first task's date range rather than their own. No error — Alpaca returns bars for whatever range is requested. Data may be missing or doubled for affected symbols. |
+| **Fix** | Group tasks by `(provider, timeframe, range_start, range_end)` instead of `(provider, timeframe)` so each unique date-range combination gets its own batch call. |
+
+### Prevention
+
+- Batch grouping keys must include ALL parameters that vary between tasks — not just the subset that enables grouping.
+- When adding backfill task support, always verify that batch execution handles mixed date-range groups correctly.

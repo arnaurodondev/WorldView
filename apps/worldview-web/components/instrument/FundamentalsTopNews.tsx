@@ -100,7 +100,7 @@ export function FundamentalsTopNews({ entityId, onViewAllNews }: FundamentalsTop
             href={article.url ?? "#"}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-between h-[22px] px-2 border-b border-border/30 gap-2 hover:bg-muted/20 transition-colors group"
+            className="flex items-center justify-between h-[22px] px-2 border-b border-border/30 gap-2 hover:bg-muted/50 transition-colors group"
           >
             {/* Title — truncated to available width */}
             <span className="font-mono text-[10px] text-foreground truncate flex-1 group-hover:text-primary transition-colors">

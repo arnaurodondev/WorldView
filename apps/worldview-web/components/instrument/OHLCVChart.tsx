@@ -351,6 +351,18 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     ma200SeriesRef.current?.applyOptions({ visible: showMA200 });
   }, [showMA200]);
 
+  // ── Escape key handler for fullscreen ───────────────────────────────────────
+  // WHY separate useEffect: listens for Escape key only when fullscreen is active,
+  // so we don't add unnecessary global key listeners during normal chart usage.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFullscreen]);
+
   // ── Fullscreen resize ──────────────────────────────────────────────────────
   // WHY separate effect (not inline toggle handler): the chart resize must happen
   // AFTER React commits the DOM change (the fixed overlay needs to be in the DOM

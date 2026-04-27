@@ -1263,6 +1263,35 @@ async def get_news_entity(entity_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# NOTE: /entities/{entity_id}/articles MUST be registered before /entities/{entity_id}/graph
+# to avoid ambiguity with other entity sub-resource paths. FastAPI matches in registration order.
+@router.get("/entities/{entity_id}/articles")
+async def get_entity_articles(entity_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/articles → S6 NLP Pipeline.
+
+    Canonical alias for /v1/news/entity/{entity_id} — same S6 endpoint.
+
+    WHY this alias exists: the frontend Instrument page components (InstrumentTopNews,
+    FundamentalsTopNews, IntelligenceTab) reference /v1/entities/{id}/articles as the
+    canonical path for entity-scoped news.  Maintaining both /v1/news/entity/{id} and
+    this path ensures backward compat while giving instrument-page consumers a natural
+    resource-oriented URL shape.
+
+    Requires authentication. Forwards query parameters (start_date, end_date,
+    order_by, limit, offset) unchanged.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.nlp_pipeline.get(
+        f"/api/v1/entities/{entity_id}/articles",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Briefings (PRD-0028 Wave S9-1) ───────────────────────────────────────────
 
 
@@ -1351,8 +1380,15 @@ async def create_portfolio(request: Request) -> Any:
 
     # Inject owner_user_id from the verified JWT claim — never trust the client to
     # supply their own user_id (that would allow account takeover via forged ID).
+    # WHY dict.get() not getattr(): request.state.user is always a plain dict (set by
+    # OIDCAuthMiddleware), never a Pydantic model or dataclass. getattr() only works on
+    # object attributes, not dict keys, so it silently returned None and caused 422.
     user = request.state.user
-    user_id = getattr(user, "user_id", None) or getattr(user, "sub", None) or ""
+    user_id = (
+        (user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None))
+        or (user.get("sub") if isinstance(user, dict) else getattr(user, "sub", None))
+        or ""
+    )
     enriched_body: dict[str, Any] = {
         **frontend_body,
         "owner_user_id": str(user_id),

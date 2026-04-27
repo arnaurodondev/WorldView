@@ -554,6 +554,51 @@ async def test_news_entity_authenticated(authed_app, authed_mock_clients) -> Non
     assert "entity_id" not in call_kwargs.get("params", {})
 
 
+# ── F-014: /v1/entities/{entity_id}/articles canonical alias ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_entity_articles_requires_auth(app, mock_clients) -> None:
+    """GET /v1/entities/{id}/articles without auth → 401."""
+    entity_id = "00000000-0000-0000-0000-000000000001"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(f"/v1/entities/{entity_id}/articles")
+
+    assert resp.status_code == 401
+    mock_clients.nlp_pipeline.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entity_articles_authenticated(authed_app, authed_mock_clients) -> None:
+    """GET /v1/entities/{id}/articles with auth → proxied to S6 entity articles endpoint.
+
+    This is the canonical path alias for /v1/news/entity/{id}.  Both routes proxy
+    to S6's GET /api/v1/entities/{entity_id}/articles endpoint.
+    """
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(
+        return_value=_mock_response(200, b'{"articles": [], "total": 0}'),
+    )
+
+    entity_id = "00000000-0000-0000-0000-000000000002"
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{entity_id}/articles",
+            params={"limit": "5"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.nlp_pipeline.get.assert_called_once()
+    call_args = authed_mock_clients.nlp_pipeline.get.call_args[0]
+    # Verify entity_id is a path segment routed to S6's entity articles endpoint.
+    assert f"/api/v1/entities/{entity_id}/articles" in call_args[0]
+    call_kwargs = authed_mock_clients.nlp_pipeline.get.call_args[1]
+    # Verify entity_id is NOT leaked as a query parameter.
+    assert "entity_id" not in call_kwargs.get("params", {})
+
+
 # ── F-02: Public proxy routes forward system JWT headers ──────────────────────
 
 

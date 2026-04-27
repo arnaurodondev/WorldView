@@ -99,10 +99,10 @@ export function WeekRangeBar({ low, high, current, className = "", showLabels = 
           the 14px label row would overflow the 28px row height. */}
       {showLabels && (
         <div className="flex justify-between">
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
             {formatPrice(low)}
           </span>
-          <span className="font-mono text-[10px] text-muted-foreground">
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
             {formatPrice(high)}
           </span>
         </div>

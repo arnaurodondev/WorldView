@@ -102,7 +102,9 @@ class Settings(BaseSettings):
     # env var to a pre-signed long-lived service JWT.  Without it every briefing
     # call to S8 will return 401 (InternalJWTMiddleware rejects the missing header).
     s8_internal_jwt: str = ""
-    s1_internal_token: str = ""
+    # PRD-0025: S1 portfolio now requires X-Internal-JWT (RS256) — same pattern as S8.
+    # Set this to a pre-signed long-lived service JWT (valid ~1 year for dev).
+    s1_internal_jwt: str = ""
     s3_market_data_base_url: str = "http://market-data:8003"
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
@@ -128,13 +130,13 @@ class Settings(BaseSettings):
                     "Set this env var to a pre-signed RS256 service JWT to enable email digest generation."
                 ),
             )
-        if not self.s1_internal_token:
+        if not self.s1_internal_jwt:
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "s1_internal_token_not_set",
+                "s1_internal_jwt_not_set",
                 message=(
-                    "ALERT_S1_INTERNAL_TOKEN is not set. "
-                    "The EmailScheduler will fail to resolve user emails from S1. "
-                    "Set this env var to enable email digest delivery."
+                    "ALERT_S1_INTERNAL_JWT is not set. "
+                    "The S1Client will send no auth header — S1 Portfolio will return 401. "
+                    "Set this env var to a pre-signed RS256 service JWT to enable watchlist lookups."
                 ),
             )
         if "postgres:postgres" in self.database_url.get_secret_value():
