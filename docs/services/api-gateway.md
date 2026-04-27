@@ -80,7 +80,13 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/v1/ohlcv/{instrument_id}` | OHLCV price history | Yes |
 | GET | `/v1/quotes/{instrument_id}` | Latest quote | Yes |
 | POST | `/v1/quotes/batch` | Batch quotes for multiple instruments | Yes |
-| GET | `/v1/fundamentals/{instrument_id}` | Fundamental data | Yes |
+| GET | `/v1/fundamentals/{instrument_id}` | All fundamentals sections (composite) | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/technicals` | Technical indicators snapshot (beta, SMA50/200, short interest) → S3 `/technicals-snapshot` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/share-statistics` | Share statistics (float, short interest, insider/institutional %) → S3 `/share-statistics` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/insider-transactions` | Recent insider buys/sells → S3 `/insider-transactions-snapshot` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/earnings-trend` | Forward EPS/revenue analyst estimates → S3 `/earnings-trend` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/earnings-annual-trend` | Annual earnings projections → S3 `/earnings-annual-trend` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/splits-dividends` | Stock splits and dividend history → S3 `/splits-dividends` | Yes |
 | POST | `/v1/fundamentals/screen` | Dynamic screener | No |
 | GET | `/v1/fundamentals/screen/fields` | Available screener fields | No |
 | GET | `/v1/fundamentals/timeseries` | Fundamental timeseries | No |
