@@ -362,12 +362,12 @@ export function createGateway(token?: string | null) {
     /**
      * getBatchQuotes — prices for multiple instruments at once
      * Used by: Sidebar watchlist (30s refetch), Portfolio page, TopBar index tickers
-     * Body: { ids: string[] }
+     * Body: { instrument_ids: string[] } — field name matches BatchQuoteRequest Pydantic model
      */
     getBatchQuotes(ids: string[]): Promise<BatchQuoteResponse> {
       return apiFetch<BatchQuoteResponse>("/v1/quotes/batch", {
         method: "POST",
-        body: { ids },
+        body: { instrument_ids: ids },
         token: t,
       });
     },
@@ -387,14 +387,52 @@ export function createGateway(token?: string | null) {
 
     /**
      * getEntityGraph — egocentric knowledge graph for sigma.js
-     * depth: number of hops from center node (default 2)
+     *
+     * WHY limit is derived from depth, NOT sent to S7 as depth:
+     * S7's GET /api/v1/entities/{id}/graph does NOT have a `depth` param —
+     * it only has `limit` (max relations to return, default 50, max 200).
+     * The `depth` concept (1-hop vs 2-hop) does NOT exist in S7's SQL query;
+     * S7 returns all direct relations up to `limit`.
+     *
+     * Sending `?depth=2` is silently ignored by S7 (FastAPI discards unknown
+     * query params). The graph size is controlled entirely by `limit`.
+     *
+     * WHY cap by depth level:
+     * - depth=1 (compact sidebar SVG in EntityGraphPanel): needs at most 15
+     *   relations. More causes visual clutter and N+1 entity lookups in S7's
+     *   GetEntityGraphUseCase (one DB round-trip per unique entity in relations).
+     * - depth=2 (full sigma.js graph in IntelligenceTab): can absorb more data
+     *   but capping at 40 prevents >40 sequential entity fetches in S7.
+     *   The sigma.js renderer handles 40 nodes comfortably at 60fps.
+     *
+     * WHY pass `min_confidence=0.3` for depth=1:
+     * Low-confidence edges add visual noise in the compact SVG sidebar.
+     * The full Intelligence tab (depth=2) keeps min_confidence=0 to show
+     * the full relationship picture.
+     *
+     * @param entityId - Entity UUID
+     * @param depth - Visual depth level: 1 = compact sidebar, 2 = full graph
      */
     getEntityGraph(
       entityId: string,
       depth = 2,
     ): Promise<EntityGraph> {
+      // WHY separate limits: depth=1 sidebar has limited visual space (320×280px
+      // SVG); fetching more than 15 relations causes N+1 lookups in S7 with no
+      // visual benefit. depth=2 uses WebGL sigma.js which handles more nodes.
+      const limit = depth === 1 ? 15 : 40;
+
+      // WHY min_confidence for depth=1: sidebar SVG should show only high-quality
+      // edges (≥0.3 confidence). The full Intelligence tab shows all edges.
+      const minConfidence = depth === 1 ? 0.3 : 0.0;
+
+      const params = new URLSearchParams({
+        limit: String(limit),
+        min_confidence: String(minConfidence),
+      });
+
       return apiFetch<EntityGraph>(
-        `/v1/entities/${encodeURIComponent(entityId)}/graph?depth=${depth}`,
+        `/v1/entities/${encodeURIComponent(entityId)}/graph?${params.toString()}`,
         { token: t },
       );
     },
