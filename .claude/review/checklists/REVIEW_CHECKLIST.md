@@ -172,6 +172,9 @@ Mark N/A for pure backend changes.
 - [ ] No PII in `localStorage` or `sessionStorage`
 - [ ] No secrets or API keys in `NEXT_PUBLIC_*` env vars or client-side code
 - [ ] WebSocket auth uses `?token=<access_token>`, not `?user_id=` (HR-038, ADR-F-02)
+- [ ] Direct WS connections to backend services use the **full registered path** (`/api/v1/...`), not the Next.js-rewrite-stripped path (`/v1/...`) — BP-248
+- [ ] `switch` statements over string values from external APIs have a `default` branch — BP-250
+- [ ] Python `StrEnum` values (lowercase) are normalized with `.toUpperCase()` before comparison against TypeScript uppercase unions — BP-250
 - [ ] SSE streams use `AbortController` with cleanup on unmount (HR-039)
 
 ### 10f. Dark Theme Compliance

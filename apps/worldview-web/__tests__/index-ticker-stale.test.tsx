@@ -44,12 +44,21 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway mock ───────────────────────────────────────────────────────────────
-// WHY: IndexTicker only calls getBatchQuotes — we only need to mock that method.
+// WHY: IndexTicker now uses a two-step flow: searchInstruments (ticker→id) then
+// getBatchQuotes (ids→quotes). Both methods must be mocked.
+// WHY searchInstruments returns id === ticker: the test fixtures key quotes by
+// ticker symbol (e.g., "SPY"), so using ticker-as-id keeps the lookup consistent.
 const mockGetBatchQuotes = vi.fn();
+const mockSearchInstruments = vi.fn().mockImplementation((ticker: string) =>
+  Promise.resolve({
+    results: [{ instrument_id: ticker, ticker, name: ticker, exchange: "US", entity_id: ticker }],
+  })
+);
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getBatchQuotes: mockGetBatchQuotes,
+    searchInstruments: mockSearchInstruments,
     // Auth plumbing
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "test-token",

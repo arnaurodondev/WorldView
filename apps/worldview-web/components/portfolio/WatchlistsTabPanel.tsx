@@ -317,7 +317,7 @@ function AddSymbolBar({
           id="watchlist-search-listbox"
           role="listbox"
           aria-label="Search results"
-          className="absolute left-2 right-2 top-full z-50 mt-0.5 overflow-hidden rounded-[2px] border border-border bg-card shadow-md"
+          className="absolute left-2 right-2 top-full z-50 mt-0.5 overflow-hidden rounded-[2px] border border-border bg-card"
         >
           {!hasResults && debouncedQuery.length > 0 ? (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">

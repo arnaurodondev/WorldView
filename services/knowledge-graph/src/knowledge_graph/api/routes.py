@@ -79,6 +79,28 @@ def _relation_response(row: dict[str, object]) -> RelationResponse:
     )
 
 
+# ── Entity ticker lookup ──────────────────────────────────────────────────────
+
+
+@router.get("/entities/lookup")
+async def get_entity_by_ticker(
+    ticker: str = Query(..., min_length=1, max_length=20),
+    repos: EntityGraphReposDep = ...,  # type: ignore[assignment]
+) -> dict[str, str]:
+    """Resolve a ticker symbol to its KG entity_id.
+
+    Used by the gateway to enrich company overview responses with the authoritative
+    KG entity_id. Instrument IDs (market-data UUIDs) differ from KG entity_ids
+    (canonical_entities UUIDs) — ADR-F-12.
+
+    Returns {"entity_id": "<uuid>", "ticker": "<ticker>"} or 404 if not found.
+    """
+    row = await repos.entity_repo.find_by_ticker(ticker)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No entity found for ticker: {ticker}")
+    return {"entity_id": str(row["entity_id"]), "ticker": str(row.get("ticker") or ticker)}
+
+
 # ── Neighbourhood query ───────────────────────────────────────────────────────
 
 

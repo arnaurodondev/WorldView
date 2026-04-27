@@ -56,9 +56,11 @@ export function PreMarketMoversWidget() {
   // WHY fetch gainers and get a combined list: getTopMovers returns one side at
   // a time. For the dashboard we need both — we make two queries (gainers + losers)
   // so each side can be independently cached and refetched.
+  // WHY period in queryKey: ensures a cache miss and re-fetch when the user
+  // switches between 1D, 1W, and 1M — otherwise stale 1D results would persist.
   const { data: gainersData, isLoading: gainersLoading } = useQuery({
-    queryKey: ["dashboard-top-movers-gainers"],
-    queryFn: () => createGateway(accessToken).getTopMovers("gainers", 10),
+    queryKey: ["dashboard-top-movers-gainers", period],
+    queryFn: () => createGateway(accessToken).getTopMovers("gainers", 10, period),
     enabled: !!accessToken,
     // WHY 60_000: top movers is a real-time feed; 1-min refresh is appropriate
     staleTime: 60_000,
@@ -66,8 +68,8 @@ export function PreMarketMoversWidget() {
   });
 
   const { data: losersData, isLoading: losersLoading } = useQuery({
-    queryKey: ["dashboard-top-movers-losers"],
-    queryFn: () => createGateway(accessToken).getTopMovers("losers", 10),
+    queryKey: ["dashboard-top-movers-losers", period],
+    queryFn: () => createGateway(accessToken).getTopMovers("losers", 10, period),
     enabled: !!accessToken,
     staleTime: 60_000,
     refetchInterval: 60_000,

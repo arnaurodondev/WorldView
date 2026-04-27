@@ -442,16 +442,30 @@ class FakeBrokerageClient:
 
         # Call recording
         self.register_calls: list[str] = []
+        self.delete_calls: list[str] = []
         self.portal_url_calls: list[str] = []
         self.revoke_calls: list[tuple[SnapTradeUser, str]] = []
 
         # Failure controls
         self.should_raise_on_revoke: bool = False
         self.should_raise_on_activities: bool = False
+        self.should_raise_on_register: bool = False
+        self.register_already_exists: bool = False
 
     async def register_user(self, user_id_hint: str) -> SnapTradeUser:
+        if self.register_already_exists and not self.delete_calls:
+            # Simulate "already registered" on the first call; reset after delete_user
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError(
+                "SnapTrade user already registered",
+                details={"user_id_hint": user_id_hint, "reason": "already_exists"},
+            )
         self.register_calls.append(user_id_hint)
         return self.register_user_result
+
+    async def delete_user(self, user_id_hint: str) -> None:
+        self.delete_calls.append(user_id_hint)
 
     async def generate_portal_url(self, user: SnapTradeUser, redirect_uri: str) -> str:
         self.portal_url_calls.append(redirect_uri)

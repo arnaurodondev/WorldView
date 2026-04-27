@@ -64,10 +64,19 @@ export function RecentAlerts() {
         seen.add(a.alert_id);
         combined.push({
           id: a.alert_id,
-          severity: a.severity,
+          // WHY toUpperCase(): S10 AlertSeverity StrEnum returns lowercase ("low", "critical").
+          // AlertPayload.severity expects uppercase. Normalise to match severityColor() cases.
+          severity: (a.severity?.toUpperCase() ?? "LOW") as AlertPayload["severity"],
           alert_type: a.alert_type,
-          entity_id: a.entity_id,
-          message: a.body,
+          entity_id: a.entity_id ?? null,
+          // WHY fallback chain: REST PendingAlertResponse returns `payload: dict` not `body: string`.
+          // Try payload.message first, then body (legacy), then alert_type as last resort.
+          message: String(
+            (a.payload as Record<string, unknown> | undefined)?.message
+            ?? a.body
+            ?? a.alert_type
+            ?? ""
+          ),
           created_at: a.created_at,
         });
       }

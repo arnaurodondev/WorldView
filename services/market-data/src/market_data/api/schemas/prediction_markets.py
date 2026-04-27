@@ -26,6 +26,9 @@ class PredictionMarketSummaryResponse(BaseModel):
     resolution_status: str
     resolved_answer: str | None
     updated_at: datetime
+    # WHY default None: added in migration 009; existing rows return null until
+    # the consumer repopulates them on the next poll cycle.
+    market_slug: str | None = None
 
 
 class PredictionMarketDetailResponse(PredictionMarketSummaryResponse):

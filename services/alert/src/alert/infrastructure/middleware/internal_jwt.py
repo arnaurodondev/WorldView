@@ -78,6 +78,10 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
+            # BP-159b: Also store skip_verification flag on app.state so WebSocket
+            # handlers (which bypass BaseHTTPMiddleware dispatch) can use it.
+            if hasattr(app, "state"):
+                app.state._internal_jwt_skip_verification = True
             logger.critical(  # type: ignore[no-any-return]
                 "internal_jwt_skip_verification_enabled",
                 detail=(

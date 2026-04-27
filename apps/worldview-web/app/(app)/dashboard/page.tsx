@@ -38,6 +38,7 @@ import { SectorHeatmapWidget } from "@/components/dashboard/SectorHeatmapWidget"
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary";
 import { PreMarketMoversWidget } from "@/components/dashboard/PreMarketMoversWidget";
 import { PredictionMarketsWidget } from "@/components/dashboard/PredictionMarketsWidget";
+import { AiSignalsWidget } from "@/components/dashboard/AiSignalsWidget";
 import { EconomicCalendar } from "@/components/dashboard/EconomicCalendar";
 import { EarningsCalendarWidget } from "@/components/dashboard/EarningsCalendarWidget";
 import { PortfolioNewsWidget } from "@/components/dashboard/PortfolioNewsWidget";
@@ -63,7 +64,7 @@ export default function DashboardPage() {
     //   grid cells stretch to fill with their own overflow-auto/hidden
     <div
       className="grid grid-cols-12 gap-px overflow-auto bg-background"
-      style={{ height: "calc(100vh - 36px)" }}
+      style={{ height: "calc(100vh - 36px)", gridTemplateRows: "auto 130px auto auto" }}
     >
 
       {/* ── Row 1: Morning Brief — full width ────────────────────────────── */}
@@ -81,46 +82,53 @@ export default function DashboardPage() {
 
       {/* ── Row 2: Market Snapshot (4) + Sector Heatmap (8) ─────────────── */}
       {/* WHY 4+8 split: MarketSnapshot is a 6-row list (compact); SectorHeatmap
-          shows 11 GICS sectors as horizontal bars — needs the wider slot */}
-      {/* WHY h-full on all col-span wrappers: widgets use `h-full` internally to
-          fill the grid cell height (flex flex-col h-full). Without h-full on the
-          wrapper the CSS h-full inside has no containing block height to reference —
-          the inner h-full becomes 0. The grid auto-rows give each row a fixed height;
-          h-full here makes the wrapper fill that row height so inner flex panels stretch. */}
-      <div className="col-span-4 h-full">
+          shows 11 GICS sectors as horizontal bars — needs the wider slot.
+          WHY gridTemplateRows caps Row 2 at 130px: at full auto-height these two
+          widgets swallow too much vertical space. 130px accommodates the h-5 header
+          + 5 data rows at 22px each. Row 1/3/4 remain auto-sized.
+          WHY border border-border/40 on every cell (A-2): gap-px alone is too subtle
+          on many displays. An explicit 40%-opacity border ensures panel seams are
+          visible without competing with Row 1's accent border-primary/60. */}
+      <div className="col-span-4 h-full border border-border/40">
         <MarketSnapshotWidget />
       </div>
-      <div className="col-span-8 h-full">
+      <div className="col-span-8 h-full border border-border/40">
         <SectorHeatmapWidget />
       </div>
 
-      {/* ── Row 3: Portfolio Summary (4) + Top Movers (5) + Prediction (3) ─ */}
-      {/* WHY 4+5+3: Portfolio is content-rich (needs 4); Movers uses 2-col
-          layout (needs 5 for two sub-columns); Prediction Markets is a short
-          3-row list (3 columns is sufficient) */}
-      <div className="col-span-4 h-full">
+      {/* ── Row 3: Portfolio (4) + Top Movers (4) + Prediction (2) + AI Signals (2) ─ */}
+      {/* WHY 4+4+2+2 (A-5 restructure from 4+5+3):
+          — Portfolio stays at 4 (content-rich, holdings list)
+          — Movers reduced from 5 → 4 (the 2-col gainers/losers layout still fits at col-span-4)
+          — Prediction Markets reduced from 3 → 2 (it shows 3 rows max, col-span-2 is sufficient)
+          — AI Signals is new at col-span-2 (ticker + bar + score% fits in a narrow slot)
+          All four cells get border border-border/40 (A-2). */}
+      <div className="col-span-4 h-full border border-border/40">
         <PortfolioSummary />
       </div>
-      <div className="col-span-5 h-full">
+      <div className="col-span-4 h-full border border-border/40">
         <PreMarketMoversWidget />
       </div>
-      <div className="col-span-3 h-full">
+      <div className="col-span-2 h-full border border-border/40">
         <PredictionMarketsWidget />
+      </div>
+      <div className="col-span-2 h-full border border-border/40">
+        <AiSignalsWidget />
       </div>
 
       {/* ── Row 4: Econ Calendar (3) + Earnings (3) + News (3) + Alerts (3) ─ */}
       {/* WHY symmetric 3+3+3+3: all four widgets are equally important context
           for end-of-morning review — no one panel deserves more space */}
-      <div className="col-span-3 h-full">
+      <div className="col-span-3 h-full border border-border/40">
         <EconomicCalendar />
       </div>
-      <div className="col-span-3 h-full">
+      <div className="col-span-3 h-full border border-border/40">
         <EarningsCalendarWidget />
       </div>
-      <div className="col-span-3 h-full">
+      <div className="col-span-3 h-full border border-border/40">
         <PortfolioNewsWidget />
       </div>
-      <div className="col-span-3 h-full">
+      <div className="col-span-3 h-full border border-border/40">
         <RecentAlerts />
       </div>
 

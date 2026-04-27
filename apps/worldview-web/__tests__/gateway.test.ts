@@ -407,7 +407,9 @@ describe("createGateway() — response transformations", () => {
   });
 
   it("getTopMovers() transforms screener results to Mover[]", async () => {
-    // Realistic S9 composed endpoint — returns raw screener results
+    // Realistic S9 composed endpoint — returns raw screener results.
+    // WHY 0.0523 (not 5.23): S3 daily_return is a decimal fraction (0.0523 = 5.23%).
+    // BP-243: the transform multiplies by 100 so change_pct arrives as 5.23.
     mockFetch(200, {
       results: [
         {
@@ -415,7 +417,7 @@ describe("createGateway() — response transformations", () => {
           symbol: "NVDA",
           name: "NVIDIA Corp",
           exchange: "US",
-          metrics: { daily_return: 5.23, market_cap: 3200000000000 },
+          metrics: { daily_return: 0.0523, market_cap: 3200000000000 },
         },
       ],
       total: 1,
@@ -427,7 +429,7 @@ describe("createGateway() — response transformations", () => {
     expect(result.movers).toHaveLength(1);
     expect(result.movers[0].ticker).toBe("NVDA");
     expect(result.movers[0].name).toBe("NVIDIA Corp");
-    expect(result.movers[0].change_pct).toBe(5.23);
+    expect(result.movers[0].change_pct).toBeCloseTo(5.23);
   });
 
   it("getTopMovers() passes through pre-shaped movers response", async () => {

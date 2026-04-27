@@ -16,8 +16,9 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery and useAuth.
+// WHY "use client": uses useQuery, useAuth, and useState for ECON filter toggle.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,13 +26,44 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
 
+// ── ECON filter ───────────────────────────────────────────────────────────────
+
+/**
+ * Keywords that identify economics-related prediction markets.
+ *
+ * WHY client-side filter: the Polymarket API doesn't expose category tags
+ * consistently; keyword matching on the title is more reliable. This list
+ * covers the major macro/monetary topics that finance traders care about.
+ * The filter is optional (toggled by the ECON button) so traders can see
+ * all markets or economics-only markets as needed.
+ */
+const ECON_KEYWORDS = [
+  "gdp", "inflation", "fed", "federal reserve", "interest rate", "cpi",
+  "unemployment", "recession", "rate cut", "rate hike", "fomc", "payroll",
+  "pce", "treasury", "yield", "deficit", "tariff", "trade war", "economic",
+  "fiscal", "monetary", "pmi", "ism",
+];
+
+/**
+ * isEconomics — true if the market title contains any economics keyword.
+ * WHY case-insensitive: titles may use "Fed" or "fed" interchangeably.
+ */
+const isEconomics = (title: string): boolean =>
+  ECON_KEYWORDS.some((kw) => title.toLowerCase().includes(kw));
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
  * PredictionMarketsWidget — top 3 open prediction markets with yes-probability.
+ * Includes an optional ECON filter to show only economics-related markets.
  */
 export function PredictionMarketsWidget() {
   const { accessToken } = useAuth();
+
+  // WHY econOnly state: traders specialising in macro often only want economics
+  // markets visible. The toggle persists for the session (local state) — not URL
+  // because it's a dashboard widget preference, not a navigable view.
+  const [econOnly, setEconOnly] = useState<boolean>(false);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-prediction-markets"],
@@ -44,8 +76,13 @@ export function PredictionMarketsWidget() {
     refetchInterval: 60_000,
   });
 
-  // Show only the first 3 markets on the dashboard
-  const topMarkets = (data?.markets ?? []).slice(0, 3);
+  // Apply ECON filter client-side: if econOnly, keep only economics markets.
+  // WHY fetch 5 then filter: we overfetch slightly so the ECON filter has enough
+  // candidates without an extra API call. The limit=5 limit is a reasonable
+  // overfetch for a widget showing 3 results.
+  const allMarkets = data?.markets ?? [];
+  const filteredMarkets = econOnly ? allMarkets.filter((m) => isEconomics(m.title)) : allMarkets;
+  const topMarkets = filteredMarkets.slice(0, 3);
   const totalMarkets = data?.total ?? 0;
 
   return (
@@ -53,11 +90,29 @@ export function PredictionMarketsWidget() {
     // gap-px grid already provides panel separation via background bleed.
     <div className="flex h-full flex-col bg-background">
 
-      {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+      {/* ── Section header §0.9 pattern + ECON toggle ───────────────────── */}
+      {/* WHY justify-between: section label on the left, ECON toggle on the right —
+          follows the same header layout pattern as SectorHeatmapWidget and
+          PreMarketMoversWidget. Keeps all controls in the header row (Bloomberg convention). */}
+      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           PREDICTION MARKETS
         </span>
+        {/* WHY ECON button: macro-focused traders only care about economics markets.
+            The toggle filters client-side (no extra API call) — immediate response.
+            WHY aria-pressed: communicates toggle state to screen readers. */}
+        <button
+          onClick={() => setEconOnly((v) => !v)}
+          className={cn(
+            "px-1.5 text-[9px] font-mono uppercase transition-colors",
+            econOnly
+              ? "bg-primary/20 text-primary"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          aria-pressed={econOnly}
+        >
+          ECON
+        </button>
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
@@ -98,9 +153,17 @@ export function PredictionMarketsWidget() {
             const yesProbColor = yesPct > 60 ? "text-positive" : yesPct < 40 ? "text-muted-foreground" : "text-muted-foreground";
             const noProbColor = noPct > 60 ? "text-negative" : "text-muted-foreground";
 
-            // WHY prefer market.url: API returns the Polymarket/Kalshi URL directly.
-            // Fallback to Polymarket homepage if URL is absent.
-            const marketUrl = market.url ?? "https://polymarket.com/";
+            // WHY prefer market.url: API returns the Polymarket URL directly.
+            // WHY market_slug fallback: PLAN-0043 B-2 added market_slug to the DB
+            // (e.g. "will-gdp-exceed-2pct-q3-2026"). Polymarket uses event slugs in
+            // canonical URLs: polymarket.com/event/{slug}. This gives a real page
+            // rather than the generic homepage — traders land on the exact market.
+            // WHY title-search last resort: if both url and market_slug are absent
+            // (e.g. legacy rows), a title search on Polymarket finds the market
+            // better than a silent no-op or homepage redirect.
+            const marketUrl = market.url
+              || (market.market_slug ? `https://polymarket.com/event/${market.market_slug}` : null)
+              || `https://polymarket.com/markets?q=${encodeURIComponent(market.title)}`;
 
             function handleMarketClick() {
               // Open in new tab — trader reads market context alongside the terminal.

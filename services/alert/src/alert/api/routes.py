@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+import jwt
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from alert.api.dependencies import AckUseCaseDep, CurrentUserIdDep, GetPendingAlertsUseCaseDep
@@ -134,13 +135,38 @@ async def alerts_stream(
     Delivery is best-effort: if no client is connected when a message arrives,
     the message is dropped.  On reconnect, clients catch up via GET /alerts/pending.
     """
-    user_id_raw = getattr(websocket.state, "user_id", None)
-    if not user_id_raw:
+    # WHY inline JWT validation: BaseHTTPMiddleware skips dispatch() for WebSocket
+    # ASGI scopes (scope["type"] != "http"), so InternalJWTMiddleware never runs
+    # for WS connections. websocket.state.user_id is therefore never populated.
+    # We validate the ws-token directly here instead.
+    token = websocket.query_params.get("token")
+    if not token:
         await websocket.close(code=4001)
         return
+
+    public_key = getattr(websocket.app.state, "_internal_jwt_public_key", None)
+    skip_verification = getattr(websocket.app.state, "_internal_jwt_skip_verification", False)
+
+    if public_key is None and not skip_verification:
+        # Fail-closed: JWKS not yet loaded (only possible during startup race).
+        await websocket.close(code=1011)
+        return
+
     try:
-        user_id = UUID(str(user_id_raw))
-    except (ValueError, AttributeError):
+        if skip_verification:
+            # Test/dev mode only — InternalJWTMiddleware was configured with
+            # skip_verification=True (no JWKS endpoint available).
+            payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256"])
+        else:
+            payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256"],
+                issuer="worldview-gateway",
+                options={"require": ["sub", "exp", "iss"]},
+            )
+        user_id = UUID(payload["sub"])
+    except (jwt.InvalidTokenError, ValueError, KeyError):
         await websocket.close(code=4001)
         return
 

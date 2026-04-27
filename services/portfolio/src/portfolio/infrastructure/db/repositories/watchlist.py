@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from portfolio.application.ports.repositories import WatchlistRepository
 from portfolio.domain.entities.watchlist import Watchlist
 from portfolio.domain.enums import WatchlistStatus
+from portfolio.domain.errors import WatchlistAlreadyExistsError
 from portfolio.infrastructure.db.models.watchlist import WatchlistModel
 
 if TYPE_CHECKING:
@@ -45,6 +47,9 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
             select(WatchlistModel).where(
                 WatchlistModel.user_id == user_id,
                 WatchlistModel.tenant_id == tenant_id,
+                # Only return active watchlists — soft-deleted rows must never appear
+                # in the user-facing list (Bug 1: deleted watchlists were leaking through).
+                WatchlistModel.status == "active",
             ),
         )
         return [self._to_entity(r) for r in result.scalars()]
@@ -64,7 +69,17 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
         else:
             row.name = watchlist.name
             row.status = str(watchlist.status)
-        await self._session.flush()
+        # Catch name uniqueness violation — the DB constraint uq_watchlists_user_name
+        # covers all rows (including soft-deleted). Translating the IntegrityError here
+        # keeps the application/domain layers free from infrastructure exceptions.
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            if "uq_watchlists_user_name" in str(exc.orig):
+                raise WatchlistAlreadyExistsError(
+                    f"Watchlist '{watchlist.name}' already exists for user {watchlist.user_id}"
+                ) from exc
+            raise
 
     async def hard_delete(self, watchlist_id: UUID) -> None:
         """Physically remove the watchlist row (admin/test teardown only).

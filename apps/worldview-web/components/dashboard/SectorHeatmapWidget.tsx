@@ -53,8 +53,11 @@ export function SectorHeatmapWidget() {
   const [period, setPeriod] = useState<SectorPeriod>("1D");
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["sector-heatmap-widget"],
-    queryFn: () => createGateway(accessToken).getMarketHeatmap(),
+    // WHY period in queryKey: TanStack Query uses the key to identify cached data.
+    // Including `period` ensures a new request is made when the user switches periods
+    // instead of serving stale 1D data for 1W queries.
+    queryKey: ["sector-heatmap-widget", period],
+    queryFn: () => createGateway(accessToken).getMarketHeatmap(period),
     enabled: !!accessToken,
     // WHY 300_000 (5min): sector performance is a macro view; sub-minute refresh
     // would be noise. 5 min ensures fresh enough data while reducing S9 load.
@@ -68,7 +71,9 @@ export function SectorHeatmapWidget() {
     <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern with period selector ─────────────── */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
+      {/* WHY h-5 (A-2): Row 2 is capped at 130px. h-5 (20px) vs h-6 (24px)
+          frees 4px so more sector bars are visible within the constrained height. */}
+      <div className="flex h-5 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           SECTOR PERFORMANCE
         </span>

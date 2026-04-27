@@ -60,13 +60,18 @@ class IBrokerageClient(Protocol):
     async def register_user(self, user_id_hint: str) -> SnapTradeUser:
         """Register a new SnapTrade user and return the user credentials.
 
-        Args:
-            user_id_hint: An opaque string identifier (typically the Worldview
-                user ID string) used as the SnapTrade userId.
+        Raises ``BrokerageApiError(reason="already_exists")`` when the user is
+        already registered in SnapTrade (HTTP 409). Callers should handle this
+        by recovering credentials from the DB (``delete_user`` + re-register if lost).
+        """
+        ...
 
-        Returns:
-            A ``SnapTradeUser`` with both ``snaptrade_user_id`` and
-            ``snaptrade_user_secret`` populated.
+    async def delete_user(self, user_id_hint: str) -> None:
+        """Delete a SnapTrade user — used to recover from "already_exists" when credentials are lost.
+
+        Called ONLY when ``register_user`` raises ``BrokerageApiError(reason="already_exists")``
+        and no stored credentials can be found in the DB (e.g., after a full data wipe).
+        After deletion, the caller re-registers the user fresh.
         """
         ...
 

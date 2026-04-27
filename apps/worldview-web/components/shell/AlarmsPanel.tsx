@@ -134,9 +134,16 @@ export function AlarmsPanel() {
                 aria-label={`${alert.severity} severity`}
               />
 
-              {/* Alert title — truncated to 1 line (sidebar is narrow) */}
+              {/* Alert title — truncated to 1 line (sidebar is narrow).
+                  WHY fallback chain: S10 PendingAlertResponse populates payload.message
+                  rather than the legacy title/body fields (see types/api.ts Alert comment).
+                  We try title first (may be populated), then payload.message, then
+                  alert_type as a last resort so the row is never blank. */}
               <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
-                {alert.title}
+                {alert.title ||
+                 String((alert.payload as { message?: string } | undefined)?.message ?? "") ||
+                 alert.alert_type ||
+                 "Alert"}
               </span>
 
               {/* Relative time — compact, monospace for alignment */}

@@ -55,7 +55,7 @@ export function MarketSnapshotWidget() {
         SNAPSHOT_TICKERS.map((ticker) =>
           gw.searchInstruments(ticker, 1).then((resp) => ({
             ticker,
-            instrument_id: resp.results[0]?.instrument_id ?? null,
+            instrument_id: resp.results?.[0]?.instrument_id ?? null,
           })),
         ),
       );
@@ -104,7 +104,9 @@ export function MarketSnapshotWidget() {
     <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
+      {/* WHY h-5 (A-2): Row 2 is capped at 130px. Reducing header from h-6 (24px)
+          to h-5 (20px) frees 4px — lets one more data row be fully visible. */}
+      <div className="flex h-5 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           MARKET SNAPSHOT
         </span>
