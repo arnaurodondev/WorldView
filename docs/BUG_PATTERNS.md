@@ -6672,3 +6672,22 @@ Any table that uses a `next_refresh_at IS NOT NULL AND next_refresh_at < now()` 
 ### Prevention
 
 Whenever writing to a `vector(N)` column via asyncpg (raw SQL or SQLAlchemy `text()`), always convert the embedding list to string format. Do NOT rely on SQLAlchemy ORM type coercion — it does not apply to `text()` queries. The pattern `"[" + ",".join(str(x) for x in v) + "]"` is the canonical fix. See also BP-233 for the ANN SELECT case.
+
+---
+
+## BP-238 — Ollama Model Reference Without Registry Verification Causes Silent 100% Fallback
+
+| Field | Value |
+|-------|-------|
+| **Service** | rag-chat (S8) — `BGEReranker`, `OllamaIntentClassifier` |
+| **Severity** | HIGH (entire capability permanently degraded; error only visible in logs) |
+| **Discovered** | 2026-04-27 model externalization investigation |
+| **Root cause** | Config fields like `ollama_reranker_model=bge-reranker-v2-m3` reference models that either: (a) do not exist in the Ollama registry at all (`bge-reranker-v2-m3` → "file does not exist" on `ollama pull`), or (b) cannot be served without model-swap from a competing model, causing timeout on every call. In both cases the caller catches `Exception`, logs a warning, and returns the fallback — creating a **silent permanent degradation** where logs show 100% fallback rate but the system continues to function at reduced quality. |
+| **Symptom** | Every reranker call logs `"event": "reranker_fallback"` — no reranking ever happens. Every classifier call logs `"event": "ollama_intent_classifier_fallback"` — `sub_questions` and `rephrased_query` never populated. RAG quality silently degrades. |
+| **Fix** | For models not in Ollama registry: externalize to an API provider (Cohere Rerank for `bge-reranker-v2-m3`, DeepInfra for `qwen3:0.6b`). Implement the external adapter with graceful fallback. Wire the external adapter as primary in the service lifespan when the API key is set. |
+
+### Prevention
+
+1. At startup, validate each `ollama_*_model` config field by calling `GET /api/tags` on the Ollama container and checking the model is listed. Log `ERROR` if missing.
+2. Any component with a `try: ... except Exception: fallback()` pattern should emit a counter metric (`fallback_count`) so alerting can trigger when fallback rate exceeds threshold.
+3. Before referencing a new Ollama model in config, run `ollama pull <model>` in the dev environment and verify it succeeds. Add this to the PR checklist for any `ollama_*_model` config change.
