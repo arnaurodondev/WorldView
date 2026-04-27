@@ -122,6 +122,20 @@ class SnapTradeClient:
             # userSecret is NOT logged — only passed back to the use case
         )
 
+    async def delete_user(self, user_id_hint: str) -> None:
+        """Delete a SnapTrade user — only called when credentials are lost after DB wipe."""
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._authentication.delete_snap_trade_user(user_id=user_id_hint),
+            )
+        except Exception as exc:
+            logger.warning("snaptrade_delete_user_failed", user_id_hint=user_id_hint, error=type(exc).__name__)
+            raise BrokerageApiError(
+                f"SnapTrade delete_user failed: {type(exc).__name__}",
+                details={"user_id_hint": user_id_hint},
+            ) from exc
+
     async def generate_portal_url(self, user: SnapTradeUser, redirect_uri: str) -> str:
         """Generate a Connection Portal URL.
 

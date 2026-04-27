@@ -21,7 +21,7 @@
 // WHY "use client": uses useQuery (TanStack, client-only), useRouter (navigation),
 // useState for the watchlist dropdown, and live data (30s refresh).
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
@@ -46,20 +46,48 @@ export function WatchlistPanel() {
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  // WHY dropdownRef + click-outside listener: clicking outside the dropdown header
-  // should close it. Without this, the dropdown stays open as the user scrolls/clicks
-  // elsewhere in the sidebar — a confusing UX for a power-user trading terminal.
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  // WHY dropdownRef + buttonRef: the dropdown renders at a fixed position (see below)
+  // to escape the sidebar's overflow-hidden ancestors. We track two elements for
+  // click-outside detection: the trigger button wrapper and the floating list itself.
+  const dropdownRef = useRef<HTMLDivElement>(null);   // trigger button container
+  const dropdownListRef = useRef<HTMLDivElement>(null); // fixed-position dropdown list
+
+  // WHY { top, right } state: we compute the dropdown's fixed position from the
+  // button's bounding rect at the moment the user clicks open. This is recalculated
+  // on every open so that it stays correct after sidebar resize or window scroll.
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null);
+
+  // WHY two-ref check in click-outside: the dropdown list is position:fixed and
+  // therefore NOT a DOM descendant of dropdownRef — clicking inside the list would
+  // be treated as "outside the trigger" and immediately close the dropdown.
+  const handleClickOutside = useCallback((e: MouseEvent) => {
+    const target = e.target as Node;
+    const insideTrigger = dropdownRef.current?.contains(target) ?? false;
+    const insideList = dropdownListRef.current?.contains(target) ?? false;
+    if (!insideTrigger && !insideList) setDropdownOpen(false);
+  }, []);
+
   useEffect(() => {
     if (!dropdownOpen) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownOpen]);
+  }, [dropdownOpen, handleClickOutside]);
+
+  // Compute the fixed position of the dropdown when the user opens it.
+  // WHY not absolute: the sidebar <aside> has overflow-hidden (needed for width
+  // animation). An absolutely-positioned child is clipped by every overflow-hidden
+  // ancestor — making parts of the dropdown invisible and unclickable. Fixed
+  // positioning escapes all overflow-hidden ancestors and is relative to the viewport.
+  const openDropdown = useCallback(() => {
+    if (dropdownRef.current) {
+      const rect = dropdownRef.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + 2,                          // 2px gap below the button
+        right: window.innerWidth - rect.right,         // right-aligned to the button
+      });
+    }
+    setDropdownOpen(true);
+  }, []);
 
   // Fetch the user's watchlists — all of them (needed for the dropdown switcher)
   // WHY staleTime 30s: watchlist membership changes infrequently (user-driven);
@@ -108,16 +136,32 @@ export function WatchlistPanel() {
         {activeWatchlist && (
           <div className="relative" ref={dropdownRef}>
             <button
-              onClick={() => setDropdownOpen((prev) => !prev)}
+              // WHY openDropdown (not inline toggle): we must compute the fixed position
+              // from the button's bounding rect before setting dropdownOpen=true.
+              onClick={() => dropdownOpen ? setDropdownOpen(false) : openDropdown()}
               className="text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors duration-0"
               aria-label={`Switch watchlist (current: ${activeWatchlist.name})`}
               aria-expanded={dropdownOpen}
             >
               {activeWatchlist.name} ▾
             </button>
-            {/* Dropdown list — only shown when there are multiple watchlists to switch between */}
-            {dropdownOpen && watchlistsData && watchlistsData.length > 0 && (
-              <div className="absolute right-0 top-full z-50 min-w-[140px] border border-border bg-card shadow-md">
+
+            {/* Dropdown list — rendered at fixed position to escape overflow-hidden sidebar.
+                WHY position:fixed via inline style: Tailwind's `fixed` class would work but
+                we need dynamic top/right values computed at runtime from getBoundingClientRect.
+                WHY max-h-[240px] overflow-y-auto: users may have many watchlists; capping
+                at 240px (~10 rows) keeps the dropdown within the viewport while allowing scroll. */}
+            {dropdownOpen && watchlistsData && watchlistsData.length > 0 && dropdownPos && (
+              <div
+                ref={dropdownListRef}
+                style={{
+                  position: "fixed",
+                  top: dropdownPos.top,
+                  right: dropdownPos.right,
+                  zIndex: 9999,      // above all sidebar elements including z-50 drag handle
+                }}
+                className="min-w-[160px] max-h-[240px] overflow-y-auto border border-border bg-card shadow-md"
+              >
                 {watchlistsData.map((wl) => (
                   <button
                     key={wl.watchlist_id}

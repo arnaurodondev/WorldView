@@ -141,11 +141,21 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const [showMA50, setShowMA50] = useState(false);
   const [showMA200, setShowMA200] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // WHY isFullscreenRef: the ResizeObserver callback is captured inside a useEffect
+  // with empty deps, so it holds a stale closure over `isFullscreen`. A ref stays
+  // current across renders and can be read inside the stale closure safely.
+  const isFullscreenRef = useRef(false);
 
   // WHY chartError state: if the dynamic import for lightweight-charts fails (e.g.,
   // CDN down, bundle corruption, network timeout), we show a fallback instead of
   // blank space. Financial UI must NEVER silently fail — blank charts erode trust.
   const [chartError, setChartError] = useState(false);
+
+  // WHY sync effect: keeps isFullscreenRef.current in step with the state value so
+  // the ResizeObserver closure (which is stale by design) can read the current value.
+  useEffect(() => {
+    isFullscreenRef.current = isFullscreen;
+  }, [isFullscreen]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -271,7 +281,9 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
     // WHY ResizeObserver: chart must resize when container width changes
     const observer = new ResizeObserver(() => {
-      if (chartRef.current && containerRef.current && !isFullscreen) {
+      // WHY isFullscreenRef.current (not isFullscreen): the closure is stale by
+      // design (empty deps). The ref always reflects the current state value.
+      if (chartRef.current && containerRef.current && !isFullscreenRef.current) {
         chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
       }
     });

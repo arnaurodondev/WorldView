@@ -182,6 +182,9 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
             close_time=_parse_occurred_at(value["close_time"]) if value.get("close_time") else None,
             resolution_status=value.get("resolution_status", "open"),
             resolved_answer=value.get("resolved_answer"),
+            # WHY or None: Avro field is ["null","string"] so absent field → None;
+            # empty string "" from older events → coerce to None for DB consistency.
+            market_slug=value.get("market_slug") or None,
         )
 
         outcomes_prices: dict[str, float] = {

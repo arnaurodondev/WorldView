@@ -203,6 +203,9 @@ class PredictionMarket:
     close_time: datetime | None = None
     resolution_status: str = "open"
     resolved_answer: str | None = None
+    # WHY default None: added in migration 009; existing rows populated on next
+    # consumer poll. None = "slug not yet known" (distinct from "" which is invalid).
+    market_slug: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 

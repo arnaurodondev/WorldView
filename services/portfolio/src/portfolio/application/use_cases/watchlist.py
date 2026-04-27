@@ -93,9 +93,11 @@ class CreateWatchlistUseCase:
         # Application-layer duplicate check — catches the common case early and produces
         # a friendly error. The DB unique constraint (uq_watchlists_user_name_active) is
         # the authoritative guard against race conditions (M-010: TOCTOU note).
+        # list_by_user already filters to active-only (Bug 1 fix), so the is_active()
+        # guard is redundant here and was removed (Bug 2 fix).
         existing = await uow.watchlists.list_by_user(cmd.user_id, cmd.tenant_id)
         for w in existing:
-            if w.is_active() and w.name == cmd.name:
+            if w.name == cmd.name:
                 raise WatchlistAlreadyExistsError(f"Watchlist '{cmd.name}' already exists for user {cmd.user_id}")
 
         watchlist = Watchlist(

@@ -35,6 +35,7 @@ def _row_to_market(row: Any) -> PredictionMarket:
         close_time=row.close_time,
         resolution_status=row.resolution_status,
         resolved_answer=row.resolved_answer,
+        market_slug=row.market_slug,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -74,6 +75,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                 close_time=market.close_time,
                 resolution_status=market.resolution_status,
                 resolved_answer=market.resolved_answer,
+                market_slug=market.market_slug,
             )
             .on_conflict_do_update(
                 index_elements=["market_id"],
@@ -84,6 +86,10 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                     "close_time": pg_insert(PredictionMarketModel).excluded.close_time,
                     "resolution_status": pg_insert(PredictionMarketModel).excluded.resolution_status,
                     "resolved_answer": pg_insert(PredictionMarketModel).excluded.resolved_answer,
+                    # WHY update market_slug on conflict: slug may arrive on a later poll
+                    # if the Gamma API added it after initial ingestion. Always take the
+                    # newest non-null value. COALESCE keeps existing slug if new one is null.
+                    "market_slug": text("COALESCE(EXCLUDED.market_slug, prediction_markets.market_slug)"),
                     "updated_at": text("now()"),
                 },
             )
@@ -97,6 +103,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                 PredictionMarketModel.close_time,
                 PredictionMarketModel.resolution_status,
                 PredictionMarketModel.resolved_answer,
+                PredictionMarketModel.market_slug,
                 PredictionMarketModel.created_at,
                 PredictionMarketModel.updated_at,
             )
@@ -112,7 +119,8 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         result = await self._session.execute(
             text(
                 "SELECT id, market_id, source, question, description, outcomes, "
-                "close_time, resolution_status, resolved_answer, created_at, updated_at "
+                "close_time, resolution_status, resolved_answer, market_slug, "
+                "created_at, updated_at "
                 "FROM prediction_markets WHERE market_id = :market_id LIMIT 1"
             ).bindparams(market_id=market_id)
         )
@@ -136,8 +144,8 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         # Base query — always-true predicate allows clean appending below.
         base = (
             "SELECT id, market_id, source, question, description, outcomes, "
-            "close_time, resolution_status, resolved_answer, created_at, updated_at, "
-            "COUNT(*) OVER() AS total "
+            "close_time, resolution_status, resolved_answer, market_slug, "
+            "created_at, updated_at, COUNT(*) OVER() AS total "
             "FROM prediction_markets"
         )
         predicates: list[str] = []

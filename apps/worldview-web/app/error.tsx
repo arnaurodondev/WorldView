@@ -29,6 +29,7 @@
 "use client";
 // WHY "use client": required by Next.js for error.tsx — see docstring above.
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { XCircle } from "lucide-react";
 
@@ -47,7 +48,15 @@ interface ErrorPageProps {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function ErrorPage({ reset }: ErrorPageProps) {
+export default function ErrorPage({ error, reset }: ErrorPageProps) {
+  // WHY useEffect: logs the real error to the browser console so developers can
+  // see the actual stack trace. The UI shows a generic message intentionally.
+  // WHY unconditional (not dev-only): makes it debuggable in both dev and production.
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.error("[ErrorBoundary caught]", error.message, error);
+  }, [error]);
+
   return (
     // WHY min-h-screen + flex + items-center: vertically centres the error card
     // on the full viewport height. This page renders outside the (app) layout

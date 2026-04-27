@@ -39,6 +39,7 @@ _VALID_EVENT: dict = {
     "resolution_status": "open",
     "resolved_answer": None,
     "minio_bronze_key": None,
+    "market_slug": None,
     "correlation_id": None,
 }
 

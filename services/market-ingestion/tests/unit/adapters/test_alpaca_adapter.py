@@ -307,10 +307,12 @@ async def test_provider_api_call_credit_cost_zero() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_quotes_raises_provider_unavailable() -> None:
-    """fetch_quotes must raise ProviderUnavailable — Alpaca doesn't support quotes."""
-    adapter = _make_adapter()
-    with pytest.raises(ProviderUnavailable, match="quotes"):
+async def test_fetch_quotes_bad_credentials_403() -> None:
+    """fetch_quotes: HTTP 403 → ProviderUnavailable (mirrors fetch_ohlcv error handling)."""
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(status_code=403))
+    adapter = _make_adapter(client=client)
+    with pytest.raises(ProviderUnavailable, match="forbidden"):
         await adapter.fetch_quotes("AAPL")
 
 
@@ -350,6 +352,77 @@ def test_equity_symbol_normalization() -> None:
     assert _to_alpaca_equity_symbol("AAPL") == "AAPL"
     # Crypto symbols pass through unchanged (handled by crypto path separately)
     assert _to_alpaca_equity_symbol("BTC-USD") == "BTC-USD"
+
+
+@pytest.mark.asyncio
+async def test_fetch_quotes_returns_latest_bar_close() -> None:
+    """fetch_quotes uses /v2/stocks/bars (limit=1, sort=desc) and maps close to the quote."""
+    # Response format: same as fetch_ohlcv — bars map with symbol → list of bars
+    latest_bar_response = json.dumps(
+        {
+            "bars": {
+                "AAPL": [
+                    {
+                        "t": "2024-01-02T21:00:00Z",
+                        "o": 183.0,
+                        "h": 185.0,
+                        "l": 182.5,
+                        "c": 184.5,
+                        "v": 50000,
+                    }
+                ]
+            },
+            "next_page_token": None,
+        }
+    ).encode()
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=latest_bar_response))
+    adapter = _make_adapter(client=client)
+
+    result = await adapter.fetch_quotes("AAPL")
+
+    call_args = client.get.call_args
+    url_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
+    params_arg = call_args.kwargs.get("params", {})
+    assert "/v2/stocks/bars" in url_arg, f"Expected stocks bars endpoint; got {url_arg}"
+    assert params_arg.get("limit") == 1
+    assert params_arg.get("sort") == "desc"
+
+    from market_ingestion.domain.enums import DatasetType
+
+    assert result.provider == Provider.ALPACA
+    assert result.dataset_type == DatasetType.QUOTES
+    assert result.symbol == "AAPL"
+    assert result.bars_returned == 1
+
+    quote = json.loads(result.raw_data)
+    assert quote["close"] == 184.5
+    assert quote["volume"] == 50000
+    assert "2024-01-02" in quote["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_quotes_crypto_raises_provider_unavailable() -> None:
+    """Crypto symbols raise ProviderUnavailable for fetch_quotes."""
+    adapter = _make_adapter()
+    with pytest.raises(ProviderUnavailable, match="crypto"):
+        await adapter.fetch_quotes("BTC-USD")
+
+
+@pytest.mark.asyncio
+async def test_fetch_quotes_empty_bars_returns_null_close() -> None:
+    """Empty bars response → close=None, bars_returned=0 — no exception."""
+    empty_response = json.dumps({"bars": {}}).encode()
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_mock_response(content=empty_response))
+    adapter = _make_adapter(client=client)
+
+    result = await adapter.fetch_quotes("NONEXISTENT")
+
+    assert result.bars_returned == 0
+    quote = json.loads(result.raw_data)
+    assert quote["close"] is None
 
 
 @pytest.mark.asyncio

@@ -89,22 +89,30 @@ export default function InstrumentDetailPage() {
   // queryFn and the "Load more" condition — a single source of truth prevents drift.
   const NEWS_PAGE_SIZE = 20;
 
+  const instrument = overview?.instrument;
+
+  // WHY kgEntityId derived before guards and queries: The URL segment (`entityId`) may
+  // be a market-data instrument_id (dashboard/search navigate with instrument_id).
+  // The S9 overview endpoint accepts both, but KG/news/briefing endpoints require the
+  // authoritative KG entity_id. We derive it early so the news query also uses the
+  // correct ID. Initially falls back to entityId (URL param) until overview loads.
+  // ADR-F-12: entity_id ≠ instrument_id; all KG endpoints require entity_id.
+  const kgEntityId = instrument?.entity_id ?? entityId;
+
   // ── Fetch entity news for the News tab ────────────────────────────────────
   const { data: newsResp, isLoading: newsLoading, isError: newsError } = useQuery({
-    queryKey: ["entity-news", entityId, newsOffset],
+    queryKey: ["entity-news", kgEntityId, newsOffset],
     queryFn: () =>
-      createGateway(accessToken).getEntityNews(entityId, {
+      createGateway(accessToken).getEntityNews(kgEntityId, {
         limit: NEWS_PAGE_SIZE,
         offset: newsOffset,
         // WHY display_relevance_score: S6 endpoint accepts "display_relevance_score"
         // or "published_at". The old value "relevance" was a legacy S5 param name.
         order_by: "display_relevance_score",
       }),
-    enabled: !!accessToken && !!entityId,
+    enabled: !!accessToken && !!kgEntityId,
     staleTime: 2 * 60_000,
   });
-
-  const instrument = overview?.instrument;
 
   // ── Page loading state ─────────────────────────────────────────────────────
   if (overviewLoading && !overview) {
@@ -189,7 +197,7 @@ export default function InstrumentDetailPage() {
       {/* WHY InstrumentAISubheader (was InstrumentBriefPanel): Wave 5 redesign
           uses a sessionStorage-persisted expand state and the AI yellow-left-border
           pattern. InstrumentBriefPanel used a plain collapse with React state only. */}
-      <InstrumentAISubheader entityId={entityId} />
+      <InstrumentAISubheader entityId={kgEntityId} />
 
       {/* ── Tab navigation (controlled) ────────────────────────────────────── */}
       {/* WHY value + onValueChange (not defaultValue): OverviewLayout's "More news"
@@ -218,7 +226,7 @@ export default function InstrumentDetailPage() {
         <TabsContent value="overview" className="mt-0 flex-1 overflow-auto">
           <OverviewLayout
             instrumentId={instrument.instrument_id}
-            entityId={entityId}
+            entityId={kgEntityId}
             centerLabel={instrument.ticker}
             initialBars={overview?.ohlcv?.bars}
             fundamentals={fund ?? null}
@@ -234,7 +242,7 @@ export default function InstrumentDetailPage() {
             instrumentId={instrument.instrument_id}
             initialData={overview?.fundamentals}
             currentPrice={overview?.quote?.price ?? null}
-            entityId={entityId}
+            entityId={kgEntityId}
             instrument={instrument}
             onViewAllNews={() => setActiveTab("news")}
           />
@@ -319,7 +327,7 @@ export default function InstrumentDetailPage() {
 
         {/* ── Intelligence tab ─────────────────────────────────────────────── */}
         <TabsContent value="intelligence" className="mt-0 flex-1 overflow-auto">
-          <IntelligenceTab entityId={entityId} />
+          <IntelligenceTab entityId={kgEntityId} />
         </TabsContent>
       </Tabs>
     </div>

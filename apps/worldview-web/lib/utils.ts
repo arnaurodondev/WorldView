@@ -244,11 +244,15 @@ export function heatCellColor(changePct: number | null): {
 
 /**
  * severityColor — map AlertSeverity to Tailwind classes for badges
+ *
+ * WHY string (not union type): S10 REST API returns StrEnum values as lowercase
+ * ("low", "medium", "high", "critical") while the WS stream may send uppercase.
+ * Normalising to uppercase here prevents a no-match → undefined destructure crash.
  */
 export function severityColor(
-  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+  severity: string,
 ): { bg: string; text: string } {
-  switch (severity) {
+  switch (severity.toUpperCase()) {
     case "CRITICAL":
       return { bg: "bg-destructive/20", text: "text-negative" };
     case "HIGH":
@@ -256,6 +260,7 @@ export function severityColor(
     case "MEDIUM":
       return { bg: "bg-muted", text: "text-muted-foreground" };
     case "LOW":
+    default:
       return { bg: "bg-muted/50", text: "text-muted-foreground" };
   }
 }

@@ -9,9 +9,11 @@ from uuid import UUID
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.domain.entities.brokerage_connection import BrokerageConnection
 from portfolio.domain.enums import ConnectionStatus
 from portfolio.domain.errors import (
+    BrokerageApiError,
     BrokerageConnectionForbiddenError,
     BrokerageConnectionNotFoundError,
     PortfolioNotFoundError,
@@ -22,7 +24,6 @@ if TYPE_CHECKING:
     from portfolio.application.ports.brokerage_client import IBrokerageClient
     from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
-    from portfolio.domain.errors import BrokerageApiError  # noqa: F401 (referenced in docstring)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -81,7 +82,42 @@ class InitiateBrokerageConnectionUseCase:
         redirect_uri_with_id = f"{snaptrade_redirect_uri}?connectionId={connection_id}"
 
         # 4. SnapTrade API calls — before uow.commit() (BP-057)
-        snaptrade_user = await brokerage_client.register_user(user_id_hint=str(cmd.user_id))
+        # WHY recovery block: SnapTrade is a persistent external service. After a DB
+        # wipe (dev) or data loss (prod), the SnapTrade user may already exist but we
+        # no longer have their credentials. Two recovery paths:
+        #   a) Credentials exist in DB → reuse them (generate a new portal URL).
+        #   b) Credentials lost → delete the SnapTrade user, then re-register fresh.
+        try:
+            snaptrade_user = await brokerage_client.register_user(user_id_hint=str(cmd.user_id))
+        except BrokerageApiError as exc:
+            if exc.details.get("reason") != "already_exists":
+                raise
+            # Path a: find stored credentials for any existing connection this user has.
+            existing = await uow.brokerage_connections.list_by_user(cmd.user_id, cmd.tenant_id)
+            cred_conn = next(
+                (c for c in existing if c.status != ConnectionStatus.DISCONNECTED),
+                existing[0] if existing else None,
+            )
+            if cred_conn is not None:
+                snaptrade_user = SnapTradeUser(
+                    snaptrade_user_id=cred_conn.snaptrade_user_id,
+                    snaptrade_user_secret=cred_conn.snaptrade_user_secret,
+                )
+                logger.info(  # type: ignore[no-any-return]
+                    "brokerage_reuse_existing_credentials",
+                    user_id=str(cmd.user_id),
+                    source_connection_id=str(cred_conn.id),
+                )
+            else:
+                # Path b: credentials are gone — delete SnapTrade user and re-register.
+                # Needed after DB wipe in dev or after full data loss in prod.
+                await brokerage_client.delete_user(user_id_hint=str(cmd.user_id))
+                snaptrade_user = await brokerage_client.register_user(user_id_hint=str(cmd.user_id))
+                logger.info(  # type: ignore[no-any-return]
+                    "brokerage_snaptrade_user_deleted_and_reregistered",
+                    user_id=str(cmd.user_id),
+                )
+
         portal_url = await brokerage_client.generate_portal_url(
             user=snaptrade_user,
             redirect_uri=redirect_uri_with_id,

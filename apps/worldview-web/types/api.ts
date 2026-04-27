@@ -560,6 +560,9 @@ export interface Alert {
   severity: AlertSeverity;
   title: string;
   body: string;
+  // WHY payload: S10 PendingAlertResponse returns payload (dict) as the structured data.
+  // body/title/ticker are legacy fields that may not be populated by the current API.
+  payload?: Record<string, unknown>;
   metadata: Record<string, unknown>;
   created_at: string;
   acknowledged_at: string | null;
@@ -620,6 +623,10 @@ export interface PredictionMarket {
   tickers: string[];
   source: "polymarket" | "kalshi";
   url: string;
+  // WHY market_slug: PLAN-0043 B-2 added market_slug to S3 DB + S9 response.
+  // Enables constructing canonical Polymarket URLs (polymarket.com/event/{slug})
+  // instead of a title-search fallback. Nullable because older rows lack the slug.
+  market_slug: string | null;
   updated_at: string;
 }
 

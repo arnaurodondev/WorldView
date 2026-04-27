@@ -221,6 +221,10 @@ class CanonicalEntityRepositoryPort(ABC):
         Returns only entities that exist — missing IDs are silently omitted.
         """
 
+    @abstractmethod
+    async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
+        """Find entity by ticker symbol (case-insensitive). Returns None if not found."""
+
 
 # ── Entity embedding ANN port (PRD-0017 §6.5) ────────────────────────────────
 

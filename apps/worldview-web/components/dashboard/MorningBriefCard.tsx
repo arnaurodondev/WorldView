@@ -9,15 +9,18 @@
  * ReactMarkdown + remark-gfm renders tables, task lists, and strikethrough in
  * addition to standard Markdown — matching the rich formatting the LLM generates.
  *
- * WHY EXPAND/COLLAPSE: The brief can be 500+ words. A collapsed preview (first 200 chars)
- * respects screen real estate — the user can expand when they want full detail.
+ * WHY COMPACT REDESIGN (Wave A-1, PLAN-0043):
+ * The old layout had metadata rows (stale indicator, generated timestamp, read-more
+ * button) stacked vertically, eating ~60px of a short Row 1 cell. The new layout
+ * uses a single h-5 header row for all metadata so the text area fills the rest.
+ * This mirrors Bloomberg Terminal's compact header-bar pattern.
  *
  * WHY 503 HANDLING AS SOFT ERROR: S8 briefing endpoint returns 503 while generating.
  * A 503 → "generating" UX is better than a hard error that breaks the dashboard.
  *
- * WHO USES IT: app/(app)/dashboard/page.tsx
+ * WHO USES IT: app/(app)/dashboard/page.tsx (Row 1, col-span-12)
  * DATA SOURCE: S9 GET /api/v1/briefings/morning → S8 GET /api/v1/briefings/morning
- * DESIGN REFERENCE: PRD-0028 §6.5 Dashboard, canvas State A MorningBriefCard
+ * DESIGN REFERENCE: PLAN-0043 Wave A-1, PRD-0028 §6.5 Dashboard
  */
 
 "use client";
@@ -32,11 +35,10 @@ import ReactMarkdown from "react-markdown";
 // WHY remarkGfm: enables GitHub Flavored Markdown extensions (tables, task lists,
 // strikethrough) that the LLM may include in the briefing output.
 import remarkGfm from "remark-gfm";
-import { RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
 // WHY import BriefingResponse (not MorningBrief): PLAN-0034 unified the briefing
 // response type — both morning and instrument briefs now return BriefingResponse
 // which includes citations, risk_summary, and cached flag.
@@ -47,7 +49,7 @@ import type { BriefingResponse } from "@/types/api";
 /** Show first 200 chars in collapsed state — enough for 2-3 sentences */
 const PREVIEW_CHARS = 200;
 
-/** Brief older than 12h shows a refresh prompt */
+/** Brief older than 12h shows a stale badge in the header */
 const STALE_MS = 12 * 60 * 60 * 1000;
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -80,11 +82,23 @@ export function MorningBriefCard() {
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="space-y-2 p-1">
-        {/* 5-line skeleton matching typical brief length */}
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className={`h-4 ${i === 4 ? "w-2/3" : "w-full"}`} style={{ animationDelay: `${i * 50}ms` }} />
-        ))}
+      // WHY flex flex-col h-full: component must fill its grid cell height so
+      // Row 1 height is driven by the cell, not by the brief content length.
+      <div className="flex h-full flex-col">
+        {/* Placeholder header so height matches the loaded state */}
+        <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
+          <Skeleton className="h-2.5 w-[160px]" />
+        </div>
+        {/* 5-line skeleton matching typical brief length in the text area */}
+        <div className="flex-1 overflow-auto px-1 pt-1">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton
+              key={i}
+              className={`mb-1 h-3 ${i === 4 ? "w-2/3" : "w-full"}`}
+              style={{ animationDelay: `${i * 50}ms` }}
+            />
+          ))}
+        </div>
       </div>
     );
   }
@@ -98,76 +112,56 @@ export function MorningBriefCard() {
       (error.message.includes("503") || error.message.includes("unavailable"));
 
     return (
-      <div className="flex items-center justify-between py-1">
-        <p className="text-sm text-muted-foreground">
-          {is503
-            ? "Brief generating... check back in a few minutes."
-            : "Morning brief unavailable."}
-        </p>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void refetch()}
-          disabled={isFetching}
-          className="ml-2 h-6 px-2 text-xs"
-          title="Retry"
-        >
-          <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
-        </Button>
+      <div className="flex h-full flex-col">
+        <MetaHeader />
+        <div className="flex flex-1 items-center gap-2 px-1">
+          <p className="text-[10px] text-muted-foreground">
+            {is503
+              ? "Brief generating… check back in a few minutes."
+              : "Morning brief unavailable."}
+          </p>
+          <button
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-50"
+            title="Retry"
+            aria-label="Retry loading brief"
+          >
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
     );
   }
 
-  // ── No data ────────────────────────────────────────────────────────────────
-  // WHY "AI brief unavailable — system initializing" (not "No brief available"):
-  // "System initializing" sets correct expectations — the platform may be warming
-  // up ML inference services or the briefing generation job hasn't run yet today.
-  // A blank space here would confuse traders into thinking the widget is broken.
-  if (!brief) {
+  // ── No data / empty content guard ─────────────────────────────────────────
+  // WHY check both: the API may return a brief object with an empty narrative
+  // (LLM generated zero tokens). Show the fallback message in both cases.
+  const safeContent = brief?.narrative?.trim() ?? "";
+  if (!brief || !safeContent) {
     return (
-      <p className="py-1 text-sm text-muted-foreground">
-        AI brief unavailable — system initializing
-      </p>
+      <div className="flex h-full flex-col">
+        <MetaHeader />
+        <div className="flex flex-1 items-center px-1">
+          <p className="text-[10px] text-muted-foreground">
+            AI brief unavailable — system initializing
+          </p>
+        </div>
+      </div>
     );
   }
-
-  // ── Empty content guard ────────────────────────────────────────────────────
-  // WHY check safeContent length: the API may return a brief object with an empty
-  // string for `narrative` if the LLM generated zero tokens (e.g., context was empty
-  // or the generation timed out). In this case the UI would render a blank panel
-  // (ReactMarkdown on "" produces nothing). Show the fallback message instead.
-  //
-  // WHY "narrative" (not "content"): S8's PublicBriefingResponse schema field is
-  // "narrative". The types/api.ts BriefingResponse interface mirrors this exactly.
-  // Using brief.content would always be undefined → always show the fallback.
-  const safeContentEarly = brief.narrative ?? "";
-  if (!safeContentEarly.trim()) {
-    return (
-      <p className="py-1 text-sm text-muted-foreground">
-        AI brief unavailable — system initializing
-      </p>
-    );
-  }
-
-  // ── Stale brief indicator ──────────────────────────────────────────────────
-  const generatedAt = new Date(brief.generated_at);
-  const isStale = Date.now() - generatedAt.getTime() > STALE_MS;
 
   // ── Content rendering ──────────────────────────────────────────────────────
-  // WHY replace entity names with links: lets traders click directly to the
-  // instrument detail page — faster than searching. Regex scans entity_mentions.
-  // WHY reuse safeContentEarly: we already computed `brief.content ?? ""` above
-  // for the empty-guard check — reuse it here to avoid a second null-coalesce.
-  const safeContent = safeContentEarly;
+  const generatedAt = new Date(brief.generated_at);
+  const isStale = Date.now() - generatedAt.getTime() > STALE_MS;
+  // WHY "YYYY-MM-DD HH:MM" format: compact enough for the 9px header label;
+  // ISO 8601 slice [0,16] gives "YYYY-MM-DDTHH:MM" — replace T with space.
+  const ts = generatedAt.toISOString().slice(0, 16).replace("T", " ");
 
+  // WHY replace entity names with links: lets traders click directly to the
+  // instrument detail page — faster than searching.
   const contentWithLinks = (brief.entity_mentions ?? []).reduce((text, mention) => {
-    // WHY empty-name guard: if mention.name is "" then escapeRegex("") returns ""
-    // and new RegExp("\\b\\b", "g") matches EVERY word boundary in the string.
-    // With 9+ empty-name mentions, each reduce iteration inserts "/instruments/UUID"
-    // (which contains new word chars like "instruments") into every boundary, causing
-    // exponential string growth → RangeError: Invalid string length → error boundary.
     if (!mention.name) return text;
-    // WHY word boundary match: avoid partial matches inside longer names
     const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
     return text.replace(
       regex,
@@ -179,100 +173,124 @@ export function MorningBriefCard() {
   const preview = safeContent.slice(0, PREVIEW_CHARS);
 
   return (
-    <div>
-      {/* Stale indicator — show if brief is > 12h old */}
-      {isStale && (
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs text-amber-400">Brief may be outdated</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="h-5 px-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <RefreshCw className={`mr-1 h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-      )}
+    // WHY flex flex-col h-full: fills Row 1 grid cell; header is fixed h-5,
+    // text area fills the rest with overflow-auto for long briefs.
+    <div className="flex h-full flex-col">
 
-      {/* Brief text — collapsed or expanded */}
-      {/* WHY ReactMarkdown: the LLM returns markdown with headers, bold, lists.
-          ReactMarkdown renders these as proper HTML elements with semantic structure.
-          remarkGfm adds support for tables, task lists, and strikethrough. */}
-      {/*
-       * WHY NOT prose/prose-sm/prose-invert (UI-002):
-       * Tailwind's `prose` plugin is designed for article/blog typography — it sets
-       * generous font sizes (prose-sm base is still 14px), large heading sizes (h2
-       * becomes 1.25em → ~17.5px), and spacious line heights/margins. For a financial
-       * terminal widget that lives in a compact card alongside 8 other panels, this
-       * feels like a newspaper inside a Bloomberg terminal.
-       *
-       * Instead we use Tailwind's arbitrary-selector syntax `[&_selector]:property`
-       * to directly style each markdown-generated HTML element at text-xs (12px).
-       * This keeps ALL content — headings, paragraphs, lists — at terminal density
-       * while preserving the semantic structure ReactMarkdown emits.
-       *
-       * The `[&_h2]` pattern (underscore = descendant) means "any h2 inside this div",
-       * equivalent to `.container h2 { ... }` in plain CSS.
-       */}
-      <div className="max-w-none text-xs leading-relaxed text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-1 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-xs [&_h2]:font-semibold [&_h3]:mt-1 [&_h3]:text-xs [&_h3]:font-medium [&_li]:leading-relaxed [&_p]:mt-1 [&_strong]:font-semibold [&_ul]:mt-1 [&_ul]:pl-3">
-        {isLong && !expanded ? (
-          // WHY slice plain text for preview (not rendered content):
-          // Slicing the raw markdown avoids breaking markdown syntax mid-tag.
-          // Show plain text preview, then render full markdown when expanded.
-          // WHY text-xs here (not text-sm): matches the expanded rendered content so
-          // the visual density does not jump when the user clicks "Read more".
-          <p className="text-xs leading-relaxed text-foreground/90">
-            {preview}
-            <span className="text-muted-foreground">...</span>
-          </p>
-        ) : (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            // WHY custom link component: entity mentions are replaced with
-            // markdown links ([name](/instruments/id)) above. This custom
-            // renderer uses Next.js Link for client-side navigation instead
-            // of a full page reload.
-            components={{
-              a: ({ href, children }) => (
-                <Link
-                  href={href ?? "#"}
-                  className="text-primary hover:underline"
-                >
-                  {children}
-                </Link>
-              ),
-            }}
-          >
-            {contentWithLinks}
-          </ReactMarkdown>
+      {/* ── Header row: timestamp (left) + stale badge + refresh (right) ─── */}
+      {/* WHY h-5 (20px): compact header matching other dashboard widget headers
+          (A-2 standardised all to h-5). Single row holds all metadata.
+          WHY left-right split: timestamp is informational (secondary); stale
+          badge + refresh are actionable (primary when stale). */}
+      <div className="flex h-5 shrink-0 items-center justify-between border-b border-border/40 px-1">
+        {/* Generated timestamp — muted, monospace for scannable date/time */}
+        <span className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
+          Generated {ts} UTC
+        </span>
+
+        {/* Stale badge + refresh — only visible when brief is > 12h old */}
+        {isStale && (
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] text-amber-400">stale</span>
+            <button
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+              title="Refresh morning brief"
+              aria-label="Refresh morning brief"
+            >
+              <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Expand/collapse toggle */}
-      {isLong && (
-        <button
-          onClick={() => setExpanded((prev) => !prev)}
-          className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          {expanded ? (
+      {/* ── Text area: flex-1 so it fills remaining Row 1 height ────────────── */}
+      {/* WHY flex-1 overflow-auto: brief text can be 500+ words; overflow-auto
+          lets users scroll without expanding the grid row.
+          WHY text-[10px] (not text-xs=12px): Row 1 is short by design; 10px
+          fits more lines before overflow and matches terminal density standards. */}
+      <div className="flex-1 overflow-auto px-1 py-0.5">
+        {/*
+         * WHY NOT prose/prose-sm/prose-invert (UI-002):
+         * Tailwind's `prose` sets generous font sizes (prose-sm base 14px) and
+         * large heading margins designed for articles. For a compact terminal
+         * widget this wastes vertical space. We use `[&_selector]:property`
+         * selectors to override each markdown element at 10px directly.
+         */}
+        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[11px] [&_h1]:font-semibold [&_h2]:mb-0 [&_h2]:mt-1 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h3]:mt-0.5 [&_h3]:text-[10px] [&_h3]:font-medium [&_li]:leading-snug [&_p]:mt-0.5 [&_strong]:font-semibold [&_ul]:mt-0.5 [&_ul]:pl-3">
+          {isLong && !expanded ? (
+            // WHY slice plain text for preview (not rendered content):
+            // Slicing the raw markdown avoids breaking markdown syntax mid-tag.
+            // Preview renders as plain text at text-[10px] matching expanded density.
             <>
-              <ChevronUp className="h-3 w-3" /> Show less
+              <p className="text-[10px] leading-snug text-foreground/90">
+                {preview}
+                {/* Inline "…more" link — no separate row, no vertical reflow */}
+                <span className="text-muted-foreground">… </span>
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="text-[9px] text-primary hover:underline"
+                  aria-label="Expand morning brief"
+                >
+                  more
+                </button>
+              </p>
             </>
           ) : (
-            <>
-              <ChevronDown className="h-3 w-3" /> Read more
-            </>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              // WHY custom link component: entity mentions are replaced with
+              // markdown links ([name](/instruments/id)) above. This custom
+              // renderer uses Next.js Link for client-side navigation instead
+              // of a full page reload.
+              components={{
+                a: ({ href, children }) => (
+                  <Link href={href ?? "#"} className="text-primary hover:underline">
+                    {children}
+                  </Link>
+                ),
+              }}
+            >
+              {contentWithLinks}
+            </ReactMarkdown>
           )}
-        </button>
+        </div>
+      </div>
+
+      {/* ── "Show less" link — only when expanded ────────────────────────────── */}
+      {/* WHY separate from the text div: the show-less link is a footer-style
+          action, not content. Keeping it outside the scrollable text area means
+          it's always visible (not hidden below a long scroll). */}
+      {isLong && expanded && (
+        <div className="shrink-0 border-t border-border/40 px-1 py-0.5">
+          <button
+            onClick={() => setExpanded(false)}
+            className="text-[9px] text-muted-foreground hover:text-foreground"
+            aria-label="Collapse morning brief"
+          >
+            show less
+          </button>
+        </div>
       )}
 
-      {/* Generated timestamp */}
-      <p className="mt-2 font-mono text-[10px] tabular-nums text-muted-foreground">
-        Generated {generatedAt.toISOString().slice(0, 16).replace("T", " ")} UTC
-      </p>
+    </div>
+  );
+}
+
+// ── MetaHeader ────────────────────────────────────────────────────────────────
+
+/**
+ * MetaHeader — placeholder h-5 header bar used in loading/error/empty states
+ * where the generated-at timestamp is not yet available.
+ * WHY: ensures all states have the same top chrome so height is predictable.
+ */
+function MetaHeader() {
+  return (
+    <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
+      <span className="text-[9px] uppercase tracking-[0.08em] text-muted-foreground/40">
+        MORNING BRIEF
+      </span>
     </div>
   );
 }

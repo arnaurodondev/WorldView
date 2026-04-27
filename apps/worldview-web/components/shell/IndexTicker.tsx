@@ -5,10 +5,11 @@
  * Portfolio managers need a constant visual reference for SPY, QQQ, VIX, and BTC
  * to quickly gauge market sentiment without navigating away.
  *
- * WHY batch quotes (not 4 individual requests):
- * POST /v1/quotes/batch fetches all 4 instruments in one round-trip.
- * 4 parallel requests would create unnecessary server load and could arrive in
- * inconsistent order. Batch ensures all 4 prices are from the same snapshot.
+ * WHY TWO-STEP (search → batch quote):
+ * The batch quotes endpoint requires UUIDs (instrument_ids), not ticker symbols.
+ * Step 1 resolves each ticker to its instrument_id UUID via the search API.
+ * Step 2 batch-quotes the resolved UUIDs. The resolution is cached for 30 min
+ * because instrument_ids are stable — they never change for a given ticker.
  *
  * WHY 15s refetch interval:
  * Equity prices update every 15-30s in production (rate limits on EODHD delayed quotes).
@@ -41,19 +42,51 @@ const INDEX_TICKERS = [
 export function IndexTicker() {
   const { accessToken } = useAuth();
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["index-tickers"],
+  // ── Step 1: Resolve ticker symbols → instrument_id UUIDs ─────────────────
+  // WHY separate query (not inline): instrument_ids are stable — search results
+  // don't change. Caching the resolution for 30 min avoids repeated search calls.
+  // WHY Promise.allSettled (not Promise.all): one failed search should not block
+  // the others — we render whatever tickers we could resolve.
+  const { data: tickerToId } = useQuery({
+    queryKey: ["index-ticker-ids"],
     queryFn: async () => {
       const gw = createGateway(accessToken);
-      return gw.getBatchQuotes(INDEX_TICKERS.map((t) => t.id));
+      const searches = await Promise.allSettled(
+        INDEX_TICKERS.map((t) =>
+          gw.searchInstruments(t.id, 1).then((r) => ({
+            ticker: t.id,
+            instrumentId: r.results?.[0]?.instrument_id ?? null,
+          }))
+        )
+      );
+      const map: Record<string, string | null> = {};
+      searches.forEach((r) => {
+        if (r.status === "fulfilled") map[r.value.ticker] = r.value.instrumentId;
+      });
+      return map;
+    },
+    // WHY 30min: instrument_ids are stable identifiers — no need to re-resolve often.
+    staleTime: 30 * 60_000,
+    enabled: !!accessToken,
+  });
+
+  // ── Step 2: Batch-quote resolved instrument_id UUIDs ─────────────────────
+  // WHY filter(Boolean): skip any ticker whose resolution failed (null instrumentId).
+  const resolvedIds = Object.values(tickerToId ?? {}).filter((id): id is string => !!id);
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["index-tickers", resolvedIds],
+    queryFn: async () => {
+      const gw = createGateway(accessToken);
+      return gw.getBatchQuotes(resolvedIds);
     },
     // WHY refetchInterval: prices should update every 15s while user is on screen
     refetchInterval: 15_000,
     // WHY staleTime 0: we always want fresh prices from the cache perspective;
     // refetchInterval handles the actual refresh cadence
     staleTime: 0,
-    // WHY disabled when no token: batch quotes require auth. Show — placeholders.
-    enabled: !!accessToken,
+    // WHY disabled when no resolved IDs: wait for Step 1 to finish before fetching.
+    enabled: !!accessToken && resolvedIds.length > 0,
   });
 
   if (isLoading) {
@@ -77,7 +110,10 @@ export function IndexTicker() {
     // the 44px TopBar chrome. gap-4 (16px) added unnecessary width on wide monitors.
     <div className="flex items-center gap-2">
       {INDEX_TICKERS.map((ticker) => {
-        const quote = quotes[ticker.id];
+        // WHY lookup via tickerToId: batch quotes are keyed by instrument_id UUID,
+        // not ticker symbol. Map back: ticker → instrument_id → quote.
+        const instrumentId = tickerToId?.[ticker.id];
+        const quote = instrumentId ? quotes[instrumentId] : undefined;
 
         // WHY: stale/delayed prices should not show live change-direction coloring.
         // The price may have moved since it was recorded — green/red would be misleading.

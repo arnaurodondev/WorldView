@@ -47,6 +47,8 @@ class PredictionMarketModel(TimestampMixin, Base):
     # D-01: tracks the timestamp of the most recent snapshot for this market.
     # Updated by the consumer on each upsert via trigger or explicit write.
     last_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # WHY nullable: existing rows have no slug; backfilled on next consumer poll (migration 009).
+    market_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class PredictionMarketSnapshotModel(Base):

@@ -95,6 +95,34 @@ WHERE canonical_name = :canonical_name AND entity_type = :entity_type
         row = result.fetchone()
         return UUID(str(row[0])) if row else None
 
+    async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
+        """Find entity by ticker symbol (case-insensitive exact match).
+
+        Returns the entity dict or None when no entity is seeded for that ticker.
+        Used by the gateway to resolve instrument_id → KG entity_id via ticker.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+FROM canonical_entities
+WHERE UPPER(ticker) = UPPER(:ticker)
+LIMIT 1
+"""),
+            {"ticker": ticker},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return {
+            "entity_id": row[0],
+            "canonical_name": row[1],
+            "entity_type": row[2],
+            "isin": row[3],
+            "ticker": row[4],
+            "exchange": row[5],
+            "metadata": row[6],
+        }
+
     async def create(
         self,
         canonical_name: str,

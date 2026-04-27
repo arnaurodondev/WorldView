@@ -1236,6 +1236,9 @@ export function createGateway(token?: string | null) {
           resolution_status: string;
           resolved_answer: string | null;
           updated_at: string;
+          // WHY market_slug: added in B-2 (migration 009); may be null for markets
+          // ingested before the field was added. Null → empty URL → search fallback.
+          market_slug: string | null;
         }>;
         total: number;
         limit: number;
@@ -1268,7 +1271,14 @@ export function createGateway(token?: string | null) {
           entity_ids: [], // Not available in summary response — would need entity linking
           tickers: [], // Same — summary doesn't include ticker associations
           source: "polymarket" as const, // Currently only Polymarket is integrated (PRD-0019)
-          url: "", // Not available in summary response
+          // WHY construct URL from market_slug: S3 now returns the Polymarket event slug
+          // (migration 009). Null slug → empty URL → PredictionMarketsWidget falls back
+          // to a search URL so clicking a row always opens a real page (Wave A-4).
+          url: m.market_slug ? `https://polymarket.com/event/${m.market_slug}` : "",
+          // WHY pass market_slug through: PredictionMarketsWidget (Wave A-4) builds
+          // the URL client-side using market_slug as a second fallback after url.
+          // Preserving it avoids re-fetching when url is empty.
+          market_slug: m.market_slug,
           updated_at: m.updated_at,
         };
       });
@@ -1280,11 +1290,18 @@ export function createGateway(token?: string | null) {
 
     /**
      * getMarketHeatmap — GICS sector performance for dashboard
+     *
+     * WHY period param: PLAN-0043 B-4 wires the period selector buttons (1D/1W/1M)
+     * in the dashboard SectorHeatmapWidget to the S9 endpoint. Passing period here
+     * ensures TanStack Query re-fetches when the user switches periods.
+     * - 1D: S9 makes 11 parallel screener calls (one per GICS sector)
+     * - 1W/1M: S9 delegates to S3 OHLCV aggregate endpoint (more accurate)
      */
-    getMarketHeatmap(): Promise<MarketHeatmapResponse> {
-      return apiFetch<MarketHeatmapResponse>("/v1/market/heatmap", {
-        token: t,
-      });
+    getMarketHeatmap(period: "1D" | "1W" | "1M" = "1D"): Promise<MarketHeatmapResponse> {
+      return apiFetch<MarketHeatmapResponse>(
+        `/v1/market/heatmap?period=${period}`,
+        { token: t },
+      );
     },
 
     /**
@@ -1299,6 +1316,11 @@ export function createGateway(token?: string | null) {
     async getTopMovers(
       moverType: "gainers" | "losers" = "gainers",
       limit = 10,
+      // WHY period param: PLAN-0043 B-4 wires the period selector buttons (1D/1W/1M)
+      // in PreMarketMoversWidget to the S9 endpoint. The period is passed through to
+      // S9 which routes 1D → screener and 1W/1M → S3 OHLCV period-movers endpoint.
+      // Default 1D keeps backward compatibility.
+      period: "1D" | "1W" | "1M" = "1D",
     ): Promise<TopMoversResponse> {
       // S9 composed endpoint returns raw screener results from S3.
       // S3's ScreenInstrumentResponse uses field name `ticker` (not `symbol`).
@@ -1334,7 +1356,7 @@ export function createGateway(token?: string | null) {
         type?: string;
         total?: number;
       }>(
-        `/v1/market/top-movers?type=${moverType}&limit=${limit}`,
+        `/v1/market/top-movers?type=${moverType}&limit=${limit}&period=${period}`,
         { token: t },
       );
 
@@ -1357,7 +1379,10 @@ export function createGateway(token?: string | null) {
         ticker: r.ticker ?? r.symbol ?? r.name?.split(" ")[0] ?? r.instrument_id?.slice(0, 6) ?? "",
         name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
         price: 0, // Not available from screener — would need a quote lookup
-        change_pct: r.metrics?.daily_return ?? 0,
+        // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
+        // The Mover.change_pct field is treated as a percentage by MoverRow
+        // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
+        change_pct: (r.metrics?.daily_return ?? 0) * 100,
         volume: null as number | null,
       }));
 

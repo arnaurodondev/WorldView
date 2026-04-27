@@ -14,7 +14,7 @@
  * WS TOKEN PATTERN (ADR-F-02):
  * Browsers cannot set custom headers on WebSocket connections (unlike fetch).
  * S10 requires auth. Solution: fetch a short-lived ws-token (30s TTL) from S9,
- * then append it as a query param: ws://s10/v1/alerts/stream?token=<ws_token>.
+ * then append it as a query param: ws://s10/api/v1/alerts/stream?token=<ws_token>.
  * On each reconnect: fetch a fresh ws-token (the old one expired in 30s).
  *
  * RECONNECT BACKOFF:
@@ -103,13 +103,17 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
 
   /** dispatch — route an incoming alert to the correct state bucket */
   const dispatch = useCallback((alert: AlertPayload) => {
-    if (alert.severity === "CRITICAL") {
+    // WHY toUpperCase(): S10 AlertSeverity StrEnum emits lowercase ("critical") but
+    // AlertPayload.severity is typed as uppercase union ("CRITICAL"). Normalise here
+    // so the CRITICAL routing check and downstream severityColor() calls both work.
+    const normalised: AlertPayload = { ...alert, severity: (alert.severity?.toUpperCase() ?? "LOW") as AlertPayload["severity"] };
+    if (normalised.severity === "CRITICAL") {
       // CRITICAL alerts go to the critical queue for immediate full-screen display
-      setCriticalQueue((prev) => [...prev, alert]);
+      setCriticalQueue((prev) => [...prev, normalised]);
     } else {
       // Non-critical alerts go to recentAlerts (capped at MAX_RECENT)
       setRecentAlerts((prev) => {
-        const updated = [alert, ...prev];
+        const updated = [normalised, ...prev];
         // WHY slice: avoid unbounded memory growth for long-running sessions
         return updated.slice(0, MAX_RECENT);
       });
@@ -133,9 +137,13 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
 
       // Step 2: open WebSocket directly to S10 (not through /api/ — Next.js rewrites
       // don't proxy WebSocket connections — ADR-F-02)
+      // WHY /api/v1/alerts/stream (not /v1/alerts/stream): S10's APIRouter uses
+      // prefix="/api/v1", so the full registered path is /api/v1/alerts/stream.
+      // Using the bare /v1/... path produces an HTTP 403 because Starlette rejects
+      // unmatched WebSocket upgrade requests with 403 (not 404).
       const wsBase = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8010";
       const ws = new WebSocket(
-        `${wsBase}/v1/alerts/stream?token=${encodeURIComponent(tokenData.token)}`,
+        `${wsBase}/api/v1/alerts/stream?token=${encodeURIComponent(tokenData.token)}`,
       );
 
       ws.onopen = () => {

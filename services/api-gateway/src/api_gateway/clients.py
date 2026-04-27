@@ -149,6 +149,27 @@ async def get_company_overview(
         _safe(f"/api/v1/fundamentals/{company_id}"),
     )
 
+    # WHY KG entity_id lookup (not instrument_id): ADR-F-12 — KG entity_id ≠ instrument_id.
+    # The market-data service (S3) has no entity_id; entity linking lives in S7.
+    # We resolve instrument ticker → KG entity_id via the KG lookup endpoint so that
+    # briefing/graph/news endpoints on the instrument page receive the correct KG id.
+    # Falls back to company_id when the ticker isn't seeded in the KG.
+    ticker_symbol: str = instrument_raw.get("symbol", "")
+    kg_entity_id: str = company_id  # default: fall back to company_id (instrument_id)
+    if ticker_symbol:
+        try:
+            kg_resp = await _checked_get(
+                clients.knowledge_graph,
+                "knowledge-graph",
+                "/api/v1/entities/lookup",
+                headers=_h(),
+                params={"ticker": ticker_symbol},
+            )
+            if kg_resp.get("entity_id"):
+                kg_entity_id = str(kg_resp["entity_id"])
+        except Exception:  # noqa: S110
+            pass  # KG lookup is best-effort; fall back to company_id
+
     # Extract name / currency / sector from the first company-profile record's data blob.
     profile_data: dict[str, Any] = {}
     for rec in profile_raw.get("records", []):
@@ -177,7 +198,7 @@ async def get_company_overview(
     # response — no extra round-trip needed (UI-004 fix, 2026-04-24).
     instrument: dict[str, Any] = {
         "instrument_id": instrument_raw.get("id", company_id),
-        "entity_id": instrument_raw.get("id", company_id),
+        "entity_id": kg_entity_id,
         "ticker": instrument_raw.get("symbol", ""),
         "name": profile_data.get("Name") or instrument_raw.get("symbol", ""),
         "exchange": instrument_raw.get("exchange", ""),

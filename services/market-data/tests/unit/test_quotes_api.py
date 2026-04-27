@@ -107,16 +107,27 @@ def test_get_quote_not_found() -> None:
 
 def test_batch_quotes_post() -> None:
     """POST /api/v1/quotes/batch returns quotes for all requested instruments."""
-    quote = _make_quote("instr-001")
+    iid_found = "01900000-0000-7000-8000-000000001001"
+    iid_missing = "01900000-0000-7000-8000-000000001999"
+    quote = _make_quote(iid_found)
     mock_uc, mock_cache = _make_mocks(quote=quote)
-    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == "instr-001" else None)
+    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == iid_found else None)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": ["instr-001", "instr-missing"]})
+    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": [iid_found, iid_missing]})
     assert resp.status_code == 200
     data = resp.json()["quotes"]
-    assert "instr-001" in data
-    assert "instr-missing" in data
+    assert iid_found in data
+    assert iid_missing in data
+
+
+def test_batch_quotes_post_rejects_non_uuid() -> None:
+    """POST /api/v1/quotes/batch returns 422 for non-UUID instrument_ids."""
+    mock_uc, mock_cache = _make_mocks(quote=None)
+    _, client = _make_app(mock_uc, mock_cache)
+
+    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": ["SPY"]})
+    assert resp.status_code == 422
 
 
 def test_batch_quotes_get_latest() -> None:

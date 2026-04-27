@@ -18,9 +18,9 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery (TanStack), useState for time-range toggle.
+// WHY "use client": uses useQuery (TanStack Query) for data fetching,
+// useAuth to get the access token, useState for component-level state.
 
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { TrendingUp, TrendingDown } from "lucide-react";
@@ -29,28 +29,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-type TimeRange = "5D" | "5W";
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function PortfolioSummary() {
   const { accessToken } = useAuth();
-  // WHY localStorage for time range: persist user preference across page navigations
-  const [range, setRange] = useState<TimeRange>(() => {
-    // WHY try/catch: localStorage access can fail in some SSR edge cases
-    try {
-      return (localStorage.getItem("portfolio-range") as TimeRange) ?? "5D";
-    } catch {
-      return "5D";
-    }
-  });
-
-  // WHY period state: 1D/1W/1M selector for performance view — local state for now,
-  // will be wired to an API parameter in a future wave when the portfolio performance
-  // endpoint supports time-range filtering. Default "1D" = today's session.
-  const [period, setPeriod] = useState<"1D" | "1W" | "1M">("1D");
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
@@ -169,71 +151,29 @@ export function PortfolioSummary() {
     // WHY flex-col h-full: fills the grid cell height so the section header and
     // period selector pattern is consistent across Row 3.
     <div className="flex h-full flex-col bg-background">
-      {/* ── Section header §0.9 pattern with period selector ─────────────── */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
-        {/* Portfolio name label */}
+      {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
+      {/* WHY simple header (no period buttons): PLAN-0043 A-3 removes the
+          1D/1W/1M period buttons from PortfolioSummary — portfolio data doesn't
+          have a period-based S9 endpoint yet. The global dashboard period selector
+          (for heatmap + movers) is separate and lives in those widgets' own headers.
+          Removing non-functional buttons reduces UI noise. */}
+      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           PORTFOLIO
         </span>
-        {/* WHY period + range controls share the header row: Bloomberg convention —
-            all time-selector controls live in the header so they're immediately
-            visible alongside the section label. The 1D/1W/1M selector will be
-            wired to filter the performance chart in a future wave; the 5D/5W toggle
-            controls which holding P&L horizon is displayed below. */}
-        <div className="flex items-center gap-2">
-          {/* 1D/1W/1M period selector — same pattern as SectorHeatmapWidget */}
-          <div className="flex gap-px">
-            {(["1D", "1W", "1M"] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`px-1.5 text-[9px] font-mono uppercase transition-colors ${
-                  period === p
-                    ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-                aria-pressed={period === p}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       {/* Inner content — padded to match other widgets */}
       <div className="flex-1 overflow-auto px-2 py-1">
 
-      {/* Portfolio name + 5D/5W range toggle sub-header */}
-      {/* WHY show portfolio name here too: the section header shows "PORTFOLIO" (generic);
+      {/* Portfolio name sub-header */}
+      {/* WHY show portfolio name here: the section header shows "PORTFOLIO" (generic);
           this line shows the ACTUAL portfolio name (e.g. "Tech Growth") so the trader
-          knows which portfolio they're looking at without navigating to the portfolio page.
-          WHY keep 5D/5W alongside 1D/1W/1M: the two controls serve different purposes —
-          1D/1W/1M is a performance-period view (chart horizon, wired in future wave);
-          5D/5W is a P&L snapshot window for the holdings table below (wired to `range` state). */}
-      <div className="mb-2 flex items-center justify-between">
+          knows which portfolio they're looking at without navigating to the portfolio page. */}
+      <div className="mb-2">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {firstPortfolio.name}
         </span>
-        {/* WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default */}
-        <div className="flex rounded-[2px] border border-border">
-          {(["5D", "5W"] as TimeRange[]).map((r) => (
-            <button
-              key={r}
-              onClick={() => {
-                setRange(r);
-                localStorage.setItem("portfolio-range", r);
-              }}
-              className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                range === r
-                  ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Total value — large, prominent */}

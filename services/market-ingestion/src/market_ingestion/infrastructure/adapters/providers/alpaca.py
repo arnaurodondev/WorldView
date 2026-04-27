@@ -142,7 +142,7 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
         alpaca_tf = _TIMEFRAME_MAP.get(timeframe)
         if alpaca_tf is None:
             raise ProviderUnavailable(
-                f"Alpaca does not support timeframe {timeframe!r}; " f"supported: {', '.join(sorted(_TIMEFRAME_MAP))}"
+                f"Alpaca does not support timeframe {timeframe!r}; supported: {', '.join(sorted(_TIMEFRAME_MAP))}"
             )
 
         # Crypto symbols use a different endpoint and slash-separated format.
@@ -225,7 +225,7 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
         alpaca_tf = _TIMEFRAME_MAP.get(timeframe)
         if alpaca_tf is None:
             raise ProviderUnavailable(
-                f"Alpaca does not support timeframe {timeframe!r}; " f"supported: {', '.join(sorted(_TIMEFRAME_MAP))}"
+                f"Alpaca does not support timeframe {timeframe!r}; supported: {', '.join(sorted(_TIMEFRAME_MAP))}"
             )
 
         results: dict[str, ProviderFetchResult] = {}
@@ -323,10 +323,85 @@ class AlpacaProviderAdapter(BaseProviderAdapter):
             exchange=exchange,
         )
 
-    # ── Unsupported methods ──────────────────────────────────────────────────
+    # ── Quotes via latest 1-minute bar ───────────────────────────────────────
 
     async def fetch_quotes(self, symbol: str, exchange: str | None = None) -> ProviderFetchResult:
-        raise ProviderUnavailable("Alpaca does not provide quotes; use EODHD")
+        """Return the latest quote for *symbol* derived from the most recent 1-minute bar.
+
+        Alpaca's free tier does not have a dedicated real-time quotes endpoint.
+        Instead we hit ``/v2/stocks/latest/bars`` which returns the last completed
+        1-minute bar.  The bar's close price is used as the last price; bid/ask are
+        omitted (``None``) since Alpaca IEX feed does not expose them.  Downstream
+        ``_remap_quote()`` in ``execute_task.py`` falls back to the close price for
+        bid/ask automatically.
+
+        Crypto symbols raise ``ProviderUnavailable`` — crypto tickers do not have
+        traditional bid/ask quotes and are better served by OHLCV data directly.
+        """
+        if _is_crypto_symbol(symbol):
+            raise ProviderUnavailable("Alpaca fetch_quotes: crypto quotes not supported; use OHLCV data instead")
+
+        alpaca_sym = _to_alpaca_equity_symbol(symbol)
+        # Alpaca has no "latest bar" multi-symbol endpoint that accepts a symbols param.
+        # Instead: fetch the most recent 1-minute bar using the standard bars endpoint
+        # with limit=1 and sort=desc (newest first).  This reuses the same endpoint
+        # and parsing logic as fetch_ohlcv(), so there are no new failure modes.
+        url = f"{self._base_url}/v2/stocks/bars"
+        params: dict[str, Any] = {
+            "symbols": alpaca_sym,
+            "timeframe": "1Min",
+            "limit": 1,
+            "sort": "desc",
+            "feed": self._feed,
+        }
+
+        t0 = time.monotonic()
+        raw_bytes = await self._get(url, params)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+
+        try:
+            data = json.loads(raw_bytes)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ProviderDataError(f"Alpaca returned non-JSON response: {type(exc).__name__}") from exc
+
+        bars_map: dict[str, list[dict[str, Any]]] = data.get("bars") or {}
+        # The bars map returns a list; take the first (and only) bar since limit=1.
+        raw_bars: list[dict[str, Any]] = bars_map.get(alpaca_sym) or bars_map.get(symbol) or []
+        bar: dict[str, Any] = raw_bars[0] if raw_bars else {}
+
+        # Map the bar fields to a dict that _remap_quote() understands:
+        # close → last (via "close" fallback in _remap_quote)
+        # Alpaca IEX feed does not provide bid/ask → left as None, _remap_quote
+        # falls back to close for both.
+        quote_dict: dict[str, Any] = {
+            "close": float(bar["c"]) if bar.get("c") is not None else None,
+            "timestamp": bar.get("t") or datetime.now(tz=UTC).isoformat(),
+            "volume": int(bar["v"]) if bar.get("v") is not None else None,
+            "high": float(bar["h"]) if bar.get("h") is not None else None,
+            "low": float(bar["l"]) if bar.get("l") is not None else None,
+            "open": float(bar["o"]) if bar.get("o") is not None else None,
+        }
+
+        self._record_api_call(
+            dataset_type=DatasetType.QUOTES.value,
+            symbol=symbol,
+            exchange=exchange or "",
+            timeframe="",
+            bars_returned=1 if bar else 0,
+            latency_ms=duration_ms,
+            credit_cost=0,
+        )
+
+        return ProviderFetchResult(
+            provider=Provider.ALPACA,
+            dataset_type=DatasetType.QUOTES,
+            symbol=symbol,
+            raw_data=json.dumps(quote_dict).encode(),
+            content_type="application/json",
+            fetched_at=datetime.now(tz=UTC),
+            duration_ms=duration_ms,
+            bars_returned=1 if bar else 0,
+        )
 
     async def fetch_fundamentals(
         self,

@@ -88,6 +88,7 @@ async def list_prediction_markets(
             close_time=market.close_time,
             resolution_status=market.resolution_status,
             resolved_answer=market.resolved_answer,
+            market_slug=market.market_slug,
             updated_at=market.updated_at,
         )
         for market, prices in pairs
@@ -157,6 +158,7 @@ async def get_prediction_market(
         close_time=market.close_time,
         resolution_status=market.resolution_status,
         resolved_answer=market.resolved_answer,
+        market_slug=market.market_slug,
         updated_at=market.updated_at,
         created_at=market.created_at,
     )

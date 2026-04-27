@@ -119,6 +119,8 @@ class TestPredictionMarketFetchResult:
             "endDate": "2026-12-31T00:00:00Z",
             "status": "active",
             "resolvedAnswer": None,
+            # WHY include slug: Gamma API responses carry event slug for URL construction.
+            "slug": "will-it-rain-tomorrow",
         }
         raw.update(overrides)
         return raw
@@ -143,6 +145,7 @@ class TestPredictionMarketFetchResult:
         assert result.raw_bytes == json.dumps(raw).encode()
         assert result.fetched_at == fetched_at
         assert result.minio_bronze_key is None
+        assert result.market_slug == "will-it-rain-tomorrow"
 
     def test_prediction_market_fetch_result_from_gamma_response_missing_optional(self) -> None:
         raw = {
@@ -225,3 +228,27 @@ class TestPredictionMarketFetchResult:
         assert len(result.outcomes) == 2
         assert result.outcomes[0].name == "Yes"
         assert result.outcomes[0].price == pytest.approx(0.62)
+
+    def test_from_gamma_response_market_slug_fallback_fields(self) -> None:
+        """market_slug falls back to groupItemSlug, then market_slug, then empty."""
+        # Primary: "slug" field
+        raw_slug = self._gamma_raw(slug="primary-slug")
+        assert PredictionMarketFetchResult.from_gamma_response(raw_slug, _utc_now()).market_slug == "primary-slug"
+
+        # Fallback: "groupItemSlug" when "slug" absent
+        raw_group = {
+            "conditionId": "c1",
+            "question": "Q?",
+            "tokens": [
+                {"outcome": "Yes", "token_id": "t1", "price": "0.5"},
+                {"outcome": "No", "token_id": "t2", "price": "0.5"},
+            ],
+            "groupItemSlug": "group-item-slug",
+        }
+        assert PredictionMarketFetchResult.from_gamma_response(raw_group, _utc_now()).market_slug == "group-item-slug"
+
+        # Missing: all slug fields absent → empty string
+        raw_none = self._gamma_raw()
+        raw_none.pop("slug", None)
+        result = PredictionMarketFetchResult.from_gamma_response(raw_none, _utc_now())
+        assert result.market_slug == ""

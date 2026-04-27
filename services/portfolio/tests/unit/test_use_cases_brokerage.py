@@ -229,6 +229,102 @@ class TestInitiateBrokerageConnection:
         )
         assert uow.commit_count - commits_before == 1
 
+    @pytest.mark.asyncio
+    async def test_already_registered_reuses_existing_db_credentials(
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
+    ) -> None:
+        """BP-251: when SnapTrade returns 409 and credentials exist in DB → reuse them.
+
+        Scenario: user has a PENDING connection in the DB (previous initiation that
+        never completed callback). SnapTrade already knows this user. The use case
+        must recover by reusing the stored credentials instead of returning 503.
+        """
+        tenant = seeded["tenant"]
+        user = seeded["user"]
+        portfolio = seeded["portfolio"]
+
+        # Seed an existing PENDING connection with known credentials
+        existing_conn = BrokerageConnection(
+            id=uuid.uuid4(),
+            tenant_id=tenant.id,  # type: ignore[union-attr]
+            user_id=user.id,  # type: ignore[union-attr]
+            portfolio_id=portfolio.id,  # type: ignore[union-attr]
+            snaptrade_user_id="stored-snap-user",
+            snaptrade_user_secret="stored-snap-secret",
+            snaptrade_tos_accepted_at=datetime.now(UTC),
+            status=ConnectionStatus.PENDING,
+        )
+        uow.brokerage_connections._store[existing_conn.id] = existing_conn
+
+        # Simulate SnapTrade returning 409 on register
+        broker.register_already_exists = True
+
+        uc = InitiateBrokerageConnectionUseCase()
+        result = await uc.execute(
+            InitiateBrokerageConnectionCommand(
+                tenant_id=tenant.id,  # type: ignore[union-attr]
+                user_id=user.id,  # type: ignore[union-attr]
+                portfolio_id=portfolio.id,  # type: ignore[union-attr]
+                snaptrade_tos_accepted=True,
+            ),
+            uow,
+            broker,
+            _REDIRECT_BASE,
+        )
+
+        # Should succeed using stored credentials — no new registration
+        assert result.redirect_uri == "https://snaptrade.example.com/connect"
+        assert result.connection_id is not None
+        # delete_user should NOT have been called (path a: credentials found)
+        assert broker.delete_calls == []
+        # A new PENDING connection is saved with the recovered credentials
+        saved = uow.brokerage_connections._store[result.connection_id]
+        assert saved.status == ConnectionStatus.PENDING
+        assert saved.snaptrade_user_id == "stored-snap-user"
+
+    @pytest.mark.asyncio
+    async def test_already_registered_no_db_creds_deletes_and_reregisters(
+        self,
+        uow: FakeUnitOfWork,
+        broker: FakeBrokerageClient,
+        seeded: dict[str, object],
+    ) -> None:
+        """BP-251 path b: SnapTrade 409 + no DB credentials → delete + re-register.
+
+        Scenario: DB was wiped (make dev-rebuild) but SnapTrade still has the user.
+        The use case must delete the SnapTrade user and re-register fresh.
+        """
+        tenant = seeded["tenant"]
+        user = seeded["user"]
+        portfolio = seeded["portfolio"]
+
+        # No existing brokerage connections in DB (fresh DB)
+        broker.register_already_exists = True
+
+        uc = InitiateBrokerageConnectionUseCase()
+        result = await uc.execute(
+            InitiateBrokerageConnectionCommand(
+                tenant_id=tenant.id,  # type: ignore[union-attr]
+                user_id=user.id,  # type: ignore[union-attr]
+                portfolio_id=portfolio.id,  # type: ignore[union-attr]
+                snaptrade_tos_accepted=True,
+            ),
+            uow,
+            broker,
+            _REDIRECT_BASE,
+        )
+
+        # delete_user must have been called exactly once (path b)
+        assert len(broker.delete_calls) == 1
+        # After deletion, register_user succeeded
+        assert len(broker.register_calls) == 1
+        assert result.connection_id is not None
+        saved = uow.brokerage_connections._store[result.connection_id]
+        assert saved.status == ConnectionStatus.PENDING
+
 
 # ── ActivateBrokerageConnectionUseCase ────────────────────────────────────────
 

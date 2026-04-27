@@ -49,6 +49,10 @@ def build_prediction_market_payload(result: PredictionMarketFetchResult) -> dict
         "resolution_status": result.resolution_status,
         "resolved_answer": result.resolved_answer,
         "minio_bronze_key": result.minio_bronze_key,
+        # WHY `or None`: empty string "" is a falsy sentinel meaning "no slug";
+        # the Avro schema declares this field as ["null", "string"] with default null.
+        # Sending "" would be valid Avro but misleading — null is the correct absent signal.
+        "market_slug": result.market_slug or None,
         "correlation_id": None,
     }
 

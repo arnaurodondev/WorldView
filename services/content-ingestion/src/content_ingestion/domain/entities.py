@@ -206,9 +206,7 @@ class ContentIngestionTask:
         """
         if self.status not in _CLAIMABLE_STATUSES:
             return False
-        if self.next_attempt_at is not None and self.next_attempt_at > common.time.utc_now():
-            return False
-        return True
+        return not (self.next_attempt_at is not None and self.next_attempt_at > common.time.utc_now())
 
     def is_lease_expired(self, now: datetime) -> bool:
         """True if the current lease has passed its expiry time."""
@@ -287,6 +285,10 @@ class PredictionMarketFetchResult:
     resolution_status: str = "open"
     resolved_answer: str | None = None
     minio_bronze_key: str | None = None
+    # WHY market_slug: Polymarket event slug (e.g. "will-bitcoin-reach-100k") used to
+    # construct the Polymarket event URL on the frontend. Absent from older Gamma API
+    # responses → default "". Forward-compatible: new field with safe default.
+    market_slug: str = ""
     id: UUID = field(default_factory=common.ids.new_uuid7)
 
     def __post_init__(self) -> None:
@@ -363,6 +365,11 @@ class PredictionMarketFetchResult:
             except (ValueError, AttributeError):
                 close_time = None
 
+        # WHY try multiple slug fields: Gamma API uses "slug" on market objects and
+        # "groupItemSlug" on grouped markets. The "market_slug" key is used in older
+        # snapshots. Prefer whichever is populated; default "" for missing/null values.
+        market_slug = raw.get("slug") or raw.get("market_slug") or raw.get("groupItemSlug") or ""
+
         return cls(
             source_type=SourceType.POLYMARKET,
             market_id=raw.get("conditionId", ""),
@@ -377,4 +384,5 @@ class PredictionMarketFetchResult:
             raw_bytes=json.dumps(raw).encode(),
             fetched_at=fetched_at,
             minio_bronze_key=None,
+            market_slug=market_slug,
         )

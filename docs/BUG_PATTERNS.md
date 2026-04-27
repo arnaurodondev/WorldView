@@ -7007,3 +7007,24 @@ When adding a new `FundamentalsSection` enum value:
 - Resolver fallback chains that progressively lose data context (e.g., Step 1 has quote + OHLCV; Step 5 has only OHLCV) MUST explicitly propagate fields like `prev_close` to downstream builders.
 - "TODO: computed in W1-X" comments in domain code are tech debt trackers — they MUST have a corresponding task in the plan. Never deploy code that permanently returns `None` for a field the frontend depends on.
 - After deploying price-calculation fixes, always flush Valkey price snapshot cache to avoid serving stale zero-change values.
+
+---
+
+## BP-251 — SnapTrade "User Already Registered" (409) Returns 503 After DB Wipe
+
+| Field | Value |
+|-------|-------|
+| **Service** | S1 portfolio — `application/use_cases/brokerage_connection.py` |
+| **Severity** | HIGH (brokerage connection initiation fails with 503 after every `make dev-rebuild`) |
+| **Discovered** | 2026-04-28 investigation |
+| **Root cause** | SnapTrade is a persistent external service. After a DB wipe (`make dev-rebuild`), `portfolio_db` is fresh but SnapTrade still has the demo user registered (user_id_hint = `01900000-...0010`). `SnapTradeClient.register_user()` correctly detects the 409 and raises `BrokerageApiError(reason="already_exists")`. The `InitiateBrokerageConnectionUseCase` did not catch this — it propagated to the exception handler which maps `BrokerageApiError → HTTP 503`. |
+| **Symptom** | `POST /api/v1/brokerage-connections` → 503. Portfolio logs show `snaptrade_user_already_registered` warning immediately followed by the 503 response. Reproduces on every fresh dev rebuild. |
+| **Fix** | `InitiateBrokerageConnectionUseCase` now catches `BrokerageApiError(reason="already_exists")` and applies two recovery paths: (a) credentials in DB → reuse stored `snaptrade_user_id/secret` to generate a new portal URL; (b) credentials lost (DB wiped) → call `brokerage_client.delete_user()` + re-register fresh. `delete_user` method added to `IBrokerageClient`, `SnapTradeClient`, and `FakeBrokerageClient`. |
+
+### Prevention
+
+- External services (SnapTrade, Stripe, Plaid) maintain state independently of the local DB. After any DB wipe, existing registrations in the external service will return "already exists" errors. The use case layer MUST handle these gracefully with explicit recovery logic — never let external API errors bubble up as 503 without a fallback.
+- All `BrokerageApiError` catches must distinguish `reason == "already_exists"` (recoverable) from other SDK errors (genuinely unavailable → 503 is correct).
+- Add `delete_user` / de-registration to the `IBrokerageClient` protocol alongside `register_user` so recovery paths can always be implemented without protocol changes.
+
+**Regression tests**: `TestInitiateBrokerageConnection::test_already_registered_reuses_existing_db_credentials`, `test_already_registered_no_db_creds_deletes_and_reregisters`

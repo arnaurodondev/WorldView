@@ -437,6 +437,7 @@ def create_app() -> FastAPI:
         fundamental_metrics,
         fundamentals,
         instruments,
+        market,
         ohlcv,
         prediction_markets,
         price_snapshot,
@@ -445,6 +446,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(instruments.router, prefix="/api/v1")
+    app.include_router(market.router, prefix="/api/v1")
     app.include_router(ohlcv.router, prefix="/api/v1")
     app.include_router(quotes.router, prefix="/api/v1")
     # fundamental_metrics MUST be registered before fundamentals to avoid
