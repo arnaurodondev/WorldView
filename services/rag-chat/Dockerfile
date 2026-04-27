@@ -6,21 +6,31 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
-COPY libs/common /build/libs/common
-COPY libs/messaging /build/libs/messaging
-COPY libs/observability /build/libs/observability
-COPY libs/ml-clients /build/libs/ml-clients
-COPY libs/prompts /build/libs/prompts
-COPY services/rag-chat /build/services/rag-chat
+# Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
+COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
+COPY libs/common/src /build/libs/common/src
+COPY libs/messaging/pyproject.toml /build/libs/messaging/pyproject.toml
+COPY libs/messaging/src /build/libs/messaging/src
+COPY libs/observability/pyproject.toml /build/libs/observability/pyproject.toml
+COPY libs/observability/src /build/libs/observability/src
+COPY libs/ml-clients/pyproject.toml /build/libs/ml-clients/pyproject.toml
+COPY libs/ml-clients/src /build/libs/ml-clients/src
+COPY libs/prompts/pyproject.toml /build/libs/prompts/pyproject.toml
+COPY libs/prompts/src /build/libs/prompts/src
 
-RUN uv venv /app/.venv && \
-    uv pip install --no-cache --python /app/.venv \
-        -e /build/libs/common \
-        -e /build/libs/messaging \
-        -e /build/libs/observability \
-        -e /build/libs/ml-clients \
-        -e /build/libs/prompts \
-        -e /build/services/rag-chat
+COPY services/rag-chat/pyproject.toml /build/services/rag-chat/pyproject.toml
+COPY services/rag-chat/src /build/services/rag-chat/src
+
+# Non-editable install with uv cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv && \
+    uv pip install --python /app/.venv \
+        /build/libs/common \
+        /build/libs/messaging \
+        /build/libs/observability \
+        /build/libs/ml-clients \
+        /build/libs/prompts \
+        /build/services/rag-chat
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -30,13 +40,12 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/rag-chat/src /app/src
-COPY --from=builder /build/services/rag-chat/alembic /app/alembic
-COPY --from=builder /build/services/rag-chat/alembic.ini /app/alembic.ini
+COPY services/rag-chat/alembic /app/alembic
+COPY services/rag-chat/alembic.ini /app/alembic.ini
 
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/messaging/src:/app/libs/observability/src:/app/libs/ml-clients/src:/app/libs/prompts/src"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
