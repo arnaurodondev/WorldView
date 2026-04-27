@@ -800,9 +800,11 @@ Extend OHLCVChart to support:
 
 ## Sub-Plan D — Fundamentals Tab Overhaul
 
-### Wave D-1: Section Cards + Revenue/Earnings Trend Chart
+### Wave D-1: Section Cards + Revenue/Earnings Trend Chart ✅
 
 **Goal**: Elevate fundamentals sections from flat border-b dividers to bg-card panels, and add a full-width Revenue & Earnings trend chart at the top using the timeseries endpoint.
+
+**Status**: **DONE** — 2026-04-27 · 418 Vitest tests pass · tsc --noEmit clean · container healthy · timeseries returns 8 AAPL quarterly revenue data points
 
 **Depends on**: Wave B-1
 **Estimated effort**: 45-60 min
@@ -927,10 +929,11 @@ Replace the plain text "52W HIGH / 52W LOW" rows in the 52-Week Range section wi
 - [ ] Falls back gracefully when values are null
 
 #### Validation Gate
-- [ ] TypeScript compilation passes
-- [ ] All existing Vitest tests pass
-- [ ] Section cards visible with proper elevation
-- [ ] Revenue chart renders (may show empty state without live data)
+- [x] TypeScript compilation passes
+- [x] All existing Vitest tests pass (418/418)
+- [x] Section cards visible with proper elevation
+- [x] Revenue chart renders (live data confirmed: 8 quarterly revenue points for AAPL)
+- [x] Docker build clean (no ESLint/compile errors)
 
 #### Break Impact
 
