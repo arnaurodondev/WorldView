@@ -49,7 +49,9 @@ export function PredictionMarketsWidget() {
   const totalMarkets = data?.total ?? 0;
 
   return (
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background: consistent with all other dashboard widgets — the
+    // gap-px grid already provides panel separation via background bleed.
+    <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -93,11 +95,34 @@ export function PredictionMarketsWidget() {
                   ? "text-negative"
                   : "text-muted-foreground";
 
+            // WHY prefer market.url: the API returns the Polymarket/Kalshi URL
+            // directly on the market object. If for any reason it's absent (e.g.
+            // future source that doesn't provide URLs), we fall back to the
+            // canonical Polymarket search page so the link is never dead.
+            const marketUrl = market.url ?? `https://polymarket.com/`;
+
+            function handleMarketClick() {
+              // Open prediction market in new tab — same reasoning as PortfolioNewsWidget:
+              // traders read market context alongside the terminal, not instead of it.
+              window.open(marketUrl, "_blank", "noopener,noreferrer");
+            }
+
             return (
               // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
+              // WHY cursor-pointer + hover:bg-muted/30: standard terminal row interactivity
               <div
                 key={market.market_id}
-                className="flex h-[22px] items-center gap-1.5 px-2"
+                className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+                onClick={handleMarketClick}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleMarketClick();
+                  }
+                }}
+                aria-label={`Open prediction market: ${market.title}`}
               >
                 {/* Market title — truncated to fit */}
                 <span

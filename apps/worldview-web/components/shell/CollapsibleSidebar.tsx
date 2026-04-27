@@ -171,15 +171,17 @@ export function CollapsibleSidebar({
       className={cn(
         // WHY flex-col: vertical stack — nav → watchlist → alarms → bottom
         // WHY h-full: fills the vertical space between TopBar and viewport bottom
-        // WHY bg-card (not bg-background): sidebar is a raised surface per elevation rules
+        // WHY bg-background (not bg-card): using bg-card (#18181b) while main area uses
+        // bg-background (#09090b) creates TWO visible lines — the CSS border-r AND the
+        // color-change boundary. Matching backgrounds means only the single explicit
+        // CSS border (or drag handle line) is visible. This matches Bloomberg Terminal
+        // convention: one hairline separator, not two.
         // WHY overflow-hidden: prevents labels from bleeding out during width animation
-        // WHY border-r only when collapsed: in expanded state the drag handle provides
-        // the visual dividing line (its inner w-px div). If we also set border-r on the
-        // aside, the border (at the element's right edge) and the handle's visual line
-        // (inside the 4px hit area) appear at different pixel positions → double border.
-        // In collapsed state the handle is hidden, so border-r is the only separator.
-        "relative flex flex-col h-full bg-card overflow-hidden shrink-0",
-        !expanded && "border-r border-border",
+        // WHY border-r always: a single consistent right border regardless of expanded
+        // state avoids the "no separator" flash when transitioning. The drag handle is
+        // still visible on hover (absolute inset-0 group-hover indicator) but the border
+        // provides the baseline separator at all times.
+        "relative flex flex-col h-full bg-background overflow-hidden shrink-0 border-r border-border",
         // WHY transition-[width]: only the width animates — color/padding changes remain instant
         // WHY ease-out: snappy opening (fast start, smooth finish) not linear
         // WHY only animate on toggle (not drag): we skip the transition during mouse-drag

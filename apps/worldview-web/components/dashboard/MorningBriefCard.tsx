@@ -119,9 +119,29 @@ export function MorningBriefCard() {
   }
 
   // ── No data ────────────────────────────────────────────────────────────────
+  // WHY "AI brief unavailable — system initializing" (not "No brief available"):
+  // "System initializing" sets correct expectations — the platform may be warming
+  // up ML inference services or the briefing generation job hasn't run yet today.
+  // A blank space here would confuse traders into thinking the widget is broken.
   if (!brief) {
     return (
-      <p className="py-1 text-sm text-muted-foreground">No brief available yet.</p>
+      <p className="py-1 text-sm text-muted-foreground">
+        AI brief unavailable — system initializing
+      </p>
+    );
+  }
+
+  // ── Empty content guard ────────────────────────────────────────────────────
+  // WHY check safeContent length: the API may return a brief object with an empty
+  // string for `content` if the LLM generated zero tokens (e.g., context was empty
+  // or the generation timed out). In this case the UI would render a blank panel
+  // (ReactMarkdown on "" produces nothing). Show the fallback message instead.
+  const safeContentEarly = brief.content ?? "";
+  if (!safeContentEarly.trim()) {
+    return (
+      <p className="py-1 text-sm text-muted-foreground">
+        AI brief unavailable — system initializing
+      </p>
     );
   }
 
@@ -132,9 +152,9 @@ export function MorningBriefCard() {
   // ── Content rendering ──────────────────────────────────────────────────────
   // WHY replace entity names with links: lets traders click directly to the
   // instrument detail page — faster than searching. Regex scans entity_mentions.
-  // WHY ?? "": brief.content may be null/undefined if the API returns an incomplete
-  // brief object (e.g., generation failed mid-stream). Avoid TypeError on .length/.slice.
-  const safeContent = brief.content ?? "";
+  // WHY reuse safeContentEarly: we already computed `brief.content ?? ""` above
+  // for the empty-guard check — reuse it here to avoid a second null-coalesce.
+  const safeContent = safeContentEarly;
 
   const contentWithLinks = (brief.entity_mentions ?? []).reduce((text, mention) => {
     // WHY empty-name guard: if mention.name is "" then escapeRegex("") returns ""

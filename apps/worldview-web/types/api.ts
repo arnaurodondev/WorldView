@@ -598,6 +598,12 @@ export interface MarketHeatmapResponse {
 
 export interface Mover {
   instrument_id: string;
+  // WHY optional entity_id: The top-movers endpoint is backed by S3's screener which does
+  // not always return entity_id (S3 uses instrument_id as its primary key). When S9 surfaces
+  // entity_id in the top-movers response, it is populated here. Until then it remains
+  // undefined and navigation falls back to using instrument_id, which the instrument detail
+  // page's S9 overview endpoint accepts via either identifier (ADR-F-12 note in [entityId]/page.tsx).
+  entity_id?: string | null;
   ticker: string;
   name: string;
   price: number;

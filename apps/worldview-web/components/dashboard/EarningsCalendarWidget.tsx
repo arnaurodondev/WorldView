@@ -27,7 +27,11 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
  */
 export function EarningsCalendarWidget() {
   return (
-    <div className="flex h-full flex-col bg-card">
+    // WHY bg-background: consistent with all other dashboard widgets — the
+    // gap-px grid's background bleed already provides the hairline panel borders.
+    // bg-card would create a visually raised surface that mismatches the flat
+    // terminal aesthetic used by PortfolioNewsWidget, PredictionMarketsWidget, etc.
+    <div className="flex h-full flex-col bg-background">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
