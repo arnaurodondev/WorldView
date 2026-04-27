@@ -229,6 +229,7 @@ export default function InstrumentDetailPage() {
           <FundamentalsTab
             instrumentId={instrument.instrument_id}
             initialData={overview?.fundamentals}
+            currentPrice={overview?.quote?.price ?? null}
           />
         </TabsContent>
 

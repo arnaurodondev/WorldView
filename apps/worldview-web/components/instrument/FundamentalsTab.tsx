@@ -14,10 +14,15 @@
  * Growth / Dividends / Balance Sheet). Grouping reduces cognitive load for
  * analysts who only care about one category at a time.
  *
+ * WHY bg-card SECTIONS (Wave D-1): Each section is now an elevated card
+ * (bg-card border rounded-[2px]) instead of a flat border-b divider. Cards
+ * create visual hierarchy and let analysts scan 9 sections without the flat-
+ * spreadsheet effect. Bloomberg DES uses section boxes for the same reason.
+ *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Fundamentals tab)
  * DATA SOURCE: S9 GET /v1/fundamentals/{instrumentId}
  * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail Fundamentals tab, State C-3;
- *                   PRD-0031 §9 Wave 5 FundamentalsTab 9 sections
+ *                   PRD-0031 §9 Wave 5 FundamentalsTab 9 sections; PLAN-0041 Wave D-1
  */
 
 "use client";
@@ -39,6 +44,7 @@ import {
 import type { Fundamentals } from "@/types/api";
 import { AnalystConsensusStrip } from "@/components/instrument/AnalystConsensusStrip";
 import { RevenueTrendSparklines } from "@/components/instrument/RevenueTrendSparklines";
+import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -46,6 +52,11 @@ interface FundamentalsTabProps {
   instrumentId: string;
   /** Prefetched fundamentals from CompanyOverview — shown while full data loads */
   initialData?: Fundamentals | null;
+  /**
+   * Current market price — positions the 52W range bar marker in the 52-Week Range section.
+   * Optional: if null, the range bar renders without a marker (track only).
+   */
+  currentPrice?: number | null;
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
@@ -152,15 +163,22 @@ function MetricRow({
 // ── Section sub-component ─────────────────────────────────────────────────────
 
 /**
- * Section — groups related metrics under a labelled heading
+ * Section — groups related metrics as an elevated card (Wave D-1)
  *
- * WHY border-b on h3: The original heading used muted/60 opacity which was too
- * subtle for Bloomberg-density layouts. A bottom border creates a visible shelf
- * that separates the heading from rows without taking up vertical space with a
- * gap. The border uses border/40 to match the surrounding divide lines in MetricRow.
+ * WHY bg-card border rounded-[2px] (was flat div): Elevated cards create visual
+ * hierarchy so analysts can instantly distinguish the 9 section groups in the
+ * dense metric grid. The old flat border-b divider blended sections into a single
+ * spreadsheet; cards give each group a clear boundary — same visual pattern as
+ * Bloomberg DES section boxes.
  *
- * WHY pb-1 mb-2: The padding keeps the text visually above the border rule;
- * the margin creates breathing room before the first data row.
+ * WHY bg-muted/30 on header: Subtle header tinting distinguishes section title
+ * from the data rows below without overpowering the dark terminal background.
+ *
+ * WHY overflow-hidden: The rounded-[2px] corner clip requires overflow-hidden on
+ * the parent; otherwise, the child rows render over the corners.
+ *
+ * WHY px-2 py-1 in rows (kept): MetricRow already uses py-1 — the card provides
+ * the outer border so internal row spacing remains unchanged.
  */
 function Section({
   title,
@@ -170,19 +188,21 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div>
-      {/* Section heading — border-b replaces the old opacity-60 which was too faint */}
-      <h3 className="mb-2 border-b border-border/40 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {title}
-      </h3>
-      <div className="divide-y divide-border/40">{children}</div>
+    <div className="bg-card border border-border rounded-[2px] overflow-hidden">
+      {/* Card header — subtle bg differentiates title row from data rows */}
+      <div className="border-b border-border px-2 py-1 bg-muted/30">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-medium">
+          {title}
+        </span>
+      </div>
+      <div className="px-2 divide-y divide-border/20">{children}</div>
     </div>
   );
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabProps) {
+export function FundamentalsTab({ instrumentId, initialData, currentPrice }: FundamentalsTabProps) {
   const { accessToken } = useAuth();
 
   const { data: fund, isLoading, isError } = useQuery({
@@ -248,7 +268,9 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
         <AnalystConsensusStrip fundamentals={fund} />
       </div>
       <div className="border-b border-border">
-        <RevenueTrendSparklines fundamentals={fund} />
+        {/* WHY instrumentId (not fundamentals): RevenueTrendSparklines now fetches its own
+            timeseries data from the S9 /v1/fundamentals/timeseries endpoint (Wave D-1). */}
+        <RevenueTrendSparklines instrumentId={instrumentId} />
       </div>
 
       {/* ── Metric grid ─────────────────────────────────────────────────────
@@ -409,6 +431,20 @@ export function FundamentalsTab({ instrumentId, initialData }: FundamentalsTabPr
 
         {/* ── 52-Week Range ───────────────────────────────────────────────── */}
         <Section title="52-Week Range">
+          {/* ── Visual range bar (Wave D-1) ─────────────────────────────────
+              WHY WeekRangeBar above numeric rows: the visual position of the
+              current price within the year's range is the most valuable insight —
+              a bar encodes "near lows" vs "near highs" faster than two numbers.
+              The numeric high/low rows below provide the exact values for precision. */}
+          <div className="py-2">
+            <WeekRangeBar
+              low={fund.week_52_low}
+              high={fund.week_52_high}
+              current={currentPrice ?? null}
+              showLabels={true}
+            />
+          </div>
+
           {/* 52W High/Low: no directional coloring — they're reference values, not signals */}
           <MetricRow label="52-Week High">
             <span className="text-foreground">{formatPrice(fund.week_52_high)}</span>
