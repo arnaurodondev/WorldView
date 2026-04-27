@@ -948,9 +948,11 @@ Replace the plain text "52W HIGH / 52W LOW" rows in the 52-Week Range section wi
 
 ---
 
-### Wave D-2: Fundamentals Right Sidebar — Market Position, Competitors, Ownership, News
+### Wave D-2: Fundamentals Right Sidebar — Market Position, Competitors, Ownership, News ✅
 
 **Goal**: Add a sticky right sidebar to the Fundamentals tab containing: Market Position, Competitor Comparison, Ownership Snapshot, and Top News.
+
+**Status**: **DONE** — 2026-04-27 · 418 Vitest tests pass · tsc --noEmit clean · container healthy · share-statistics 65.3% institutional confirmed live
 
 **Depends on**: Wave B-1
 **Estimated effort**: 60-75 min
@@ -1143,11 +1145,13 @@ iPhone 17 Supply Chain...    1d ago
 - [ ] Loading/empty states
 
 #### Validation Gate
-- [ ] TypeScript compilation passes
-- [ ] All existing Vitest tests pass
-- [ ] Fundamentals tab renders with right sidebar
-- [ ] Each sidebar panel shows loading → content flow
-- [ ] No horizontal overflow at 1280px+
+- [x] TypeScript compilation passes
+- [x] All existing Vitest tests pass (418/418; updated 1 assertion for duplicate market cap display)
+- [x] Fundamentals tab renders with right sidebar
+- [x] Each sidebar panel shows loading → content flow
+- [x] No horizontal overflow at 1280px+
+- [x] Share statistics: 65.3% institutional, 1.64% insider confirmed live
+- [x] Note: S3 share-statistics uses PascalCase keys + direct percentage values (fixed in OwnershipSnapshotPanel)
 
 #### Break Impact
 

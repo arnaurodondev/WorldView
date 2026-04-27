@@ -282,8 +282,13 @@ describe("FundamentalsTab", () => {
   it("renders market cap in trillions after data loads", async () => {
     render(<FundamentalsTab instrumentId="ins-001" />, { wrapper });
 
+    // WHY getAllByText (not getByText): Wave D-2 adds a right sidebar with
+    // MarketPositionPanel which also shows market cap. The value now legitimately
+    // appears twice — once in the Valuation section and once in the sidebar.
+    // getByText would throw "found multiple elements"; getAllByText asserts at
+    // least one match exists (which is the intent of this test).
     await waitFor(() => {
-      expect(screen.getByText("$2.80T")).toBeInTheDocument();
+      expect(screen.getAllByText("$2.80T").length).toBeGreaterThanOrEqual(1);
     });
   });
 
