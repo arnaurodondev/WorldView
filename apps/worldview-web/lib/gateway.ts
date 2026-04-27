@@ -29,6 +29,8 @@ import type {
   Quote,
   BatchQuoteResponse,
   Fundamentals,
+  FundamentalsSectionResponse,
+  FundamentalsTimeseriesResponse,
   EntityGraph,
   ContradictionsResponse,
   NewsResponse,
@@ -379,6 +381,117 @@ export function createGateway(token?: string | null) {
     getFundamentals(instrumentId: string): Promise<Fundamentals> {
       return apiFetch<Fundamentals>(
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getFundamentalsTimeseries — single-metric time series for sparklines
+     *
+     * WHY no auth: S9 route /v1/fundamentals/timeseries is a public endpoint —
+     * it issues a system JWT internally (not a user JWT). No Bearer token sent.
+     *
+     * WHY instrument_id + metric as query params (not path): the S3 endpoint
+     * is designed as a filter over the fundamentals_metrics table, not a
+     * resource path. Multiple instruments or metrics could be fetched with the
+     * same route shape.
+     *
+     * Used by: FundamentalSparkline (Overview sidebar panels + Fundamentals tab inline charts)
+     * Default limit of 20 gives enough points for a sparkline without over-fetching.
+     */
+    getFundamentalsTimeseries(
+      instrumentId: string,
+      metric: string,
+      params?: {
+        start_date?: string;
+        end_date?: string;
+        period_type?: string;
+        limit?: number;
+      },
+    ): Promise<FundamentalsTimeseriesResponse> {
+      // WHY URLSearchParams with conditional spread: filters out undefined values so
+      // optional params don't appear as "undefined" strings in the query string.
+      const qs = new URLSearchParams({
+        instrument_id: instrumentId,
+        metric,
+        ...(params?.start_date ? { start_date: params.start_date } : {}),
+        ...(params?.end_date ? { end_date: params.end_date } : {}),
+        ...(params?.period_type ? { period_type: params.period_type } : {}),
+        ...(params?.limit != null ? { limit: String(params.limit) } : {}),
+      });
+      return apiFetch<FundamentalsTimeseriesResponse>(
+        `/v1/fundamentals/timeseries?${qs.toString()}`,
+        {}, // no auth — public endpoint uses system JWT internally
+      );
+    },
+
+    /**
+     * getTechnicals — technical indicators snapshot from S3
+     *
+     * WHY /technicals (not /technicals-snapshot): S9 exposes the shortened path.
+     * S3 internally stores this as "technicals_snapshot" section.
+     * Used by: TechnicalSnapshot component (Wave D-3), OverviewSidebarMetrics (Wave C-1)
+     */
+    getTechnicals(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/technicals`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getShareStatistics — share count and ownership percentages from S3
+     *
+     * Data fields: shares_outstanding, shares_float, percent_insiders, percent_institutions.
+     * Cast records[0].data to ShareStatisticsData for typed access.
+     * Used by: OwnershipSnapshotPanel (Wave D-2)
+     */
+    getShareStatistics(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/share-statistics`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getInsiderTransactions — recent insider buys/sells from S3
+     *
+     * Returns records with section="insider_transactions_snapshot". Each record's
+     * data array contains individual transactions (date, owner_name, type, shares, value).
+     * Used by: InsiderTransactionsTable (Wave D-3)
+     */
+    getInsiderTransactions(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/insider-transactions`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getEarningsHistory — historical EPS (actual vs estimate) from S3
+     *
+     * WHY named getEarningsHistory (not getEarningsTrend): the S9 path is
+     * /earnings-trend (EODHD naming) but the data is historical earnings records,
+     * not a forward-looking trend. The frontend naming clarifies usage intent.
+     * Used by: EarningsHistoryChart (Wave D-3)
+     */
+    getEarningsHistory(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/earnings-trend`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getSplitsDividends — stock split and dividend history from S3
+     *
+     * Returns records with section="splits_dividends". Contains forward and
+     * historical split ratios, dividend dates, and ex-dividend dates.
+     * Used by: FundamentalsTab (Wave D-1 splits section), future D-3 enrichment
+     */
+    getSplitsDividends(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/splits-dividends`,
         { token: t },
       );
     },

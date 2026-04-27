@@ -245,7 +245,8 @@ Purpose-built components for financial data. Implement these consistently:
 | `MarketComparisonTable` | `components/landing/ComparisonTable.tsx` | Landing page platform comparison matrix |
 | `FeedbackWidget` | `components/feedback/FeedbackWidget.tsx` | Fixed bottom-right feedback button + dialog |
 | `FeedbackDialog` | `components/feedback/FeedbackDialog.tsx` | Category + description form, POST /v1/feedback |
-| `52WeekRangeBar` | `components/instrument/52WeekRangeBar.tsx` | Visual slider showing current price vs 52w range |
+| `52WeekRangeBar` | `components/instrument/52WeekRangeBar.tsx` | Visual slider showing current price vs 52w range; exported as `WeekRangeBar` |
+| `FundamentalSparkline` | `components/instrument/FundamentalSparkline.tsx` | SVG mini trend-line for any fundamentals metric; fetches timeseries data via S9 public endpoint; trend-colors positive/negative/flat |
 | `TechnicalSnapshot` | `components/instrument/TechnicalSnapshot.tsx` | Strip: Beta, MA50↑↓, MA200↑↓, RSI, Short Interest |
 
 ### 5.3 Layout Components
