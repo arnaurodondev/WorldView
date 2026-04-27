@@ -259,3 +259,119 @@ class TestErrorHandling:
             count = await worker.scoring_cycle()
 
         assert count == 0
+
+
+# ── DeepInfra provider path tests ─────────────────────────────────────────────
+
+
+class TestDeepInfraProviderPath:
+    """Tests for when api_key is set → uses external OpenAI-compat endpoint."""
+
+    def _make_worker_with_api(self, factory: MagicMock) -> ArticleRelevanceScoringWorker:
+        return ArticleRelevanceScoringWorker(
+            nlp_session_factory=factory,
+            ollama_url="http://ollama:11434",
+            model="qwen3:0.6b",
+            batch_size=10,
+            timeout_seconds=5,
+            cycle_seconds=1,
+            api_key="test-deepinfra-key",
+            api_base_url="https://api.deepinfra.com/v1/openai",
+            api_model_id="Qwen/Qwen2.5-0.5B-Instruct",
+        )
+
+    @pytest.mark.asyncio
+    async def test_external_api_called_when_api_key_set(self) -> None:
+        """When api_key is set, POST goes to chat/completions, not /api/generate."""
+        articles = [(_DOC_ID, "Apple reports earnings", "NEWS")]
+        factory, session = _make_session_factory(articles)
+
+        openai_resp = {"choices": [{"message": {"content": json.dumps({"score": 0.8, "reason": "earnings"})}}]}
+
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 1
+        call_kwargs = client_mock.post.call_args
+        called_url = call_kwargs[0][0]
+        assert "chat/completions" in called_url
+        assert "api/generate" not in called_url
+        # Check the JSON body has the correct model ID
+        body = call_kwargs[1].get("json", {})
+        assert body["model"] == "Qwen/Qwen2.5-0.5B-Instruct"
+
+    @pytest.mark.asyncio
+    async def test_external_api_score_parsed_correctly(self) -> None:
+        """OpenAI choices[0].message.content JSON is parsed for score."""
+        articles = [(_DOC_ID, "TSLA beats estimates", "NEWS")]
+        factory, session = _make_session_factory(articles)
+
+        openai_resp = {"choices": [{"message": {"content": json.dumps({"score": 0.9, "reason": "beat"})}}]}
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 1
+        write_call = session.execute.call_args_list[-1]
+        params = write_call[0][1]
+        assert abs(params["score"] - 0.9) < 1e-9
+
+    @pytest.mark.asyncio
+    async def test_external_api_bad_json_skips_article(self) -> None:
+        """Malformed JSON from API → skip article, cycle continues."""
+        articles = [(_DOC_ID, "Some news", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": "not json"}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 0  # skipped
+
+    @pytest.mark.asyncio
+    async def test_ollama_used_when_no_api_key(self) -> None:
+        """When api_key is empty, Ollama /api/generate is used (backward compat)."""
+        articles = [(_DOC_ID, "NVDA news", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+        body = json.dumps({"response": json.dumps({"score": 0.5, "reason": "test"})})
+
+        with _mock_http_client(body) as client_mock:
+            worker = _make_worker(factory)  # no api_key
+            await worker.scoring_cycle()
+
+        call_url = client_mock.post.call_args[0][0]
+        assert "api/generate" in call_url

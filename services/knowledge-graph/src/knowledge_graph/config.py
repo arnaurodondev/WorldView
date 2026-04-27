@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     # nomic-embed-text produces 768-dim and raises FatalError on every embed call.
     embedding_model_id: str = "bge-large:latest"
 
+    # Embedding provider selection — controls entity embedding workers.
+    # "ollama"    → local bge-large:latest via OllamaEmbeddingAdapter (default; ~7-13s CPU)
+    # "deepinfra" → BAAI/bge-large-en-v1.5 on DeepInfra GPU (~50-150ms; needs api_key)
+    # IMPORTANT: must use same provider/model as nlp-pipeline to stay in same vector space.
+    # Recommended models on DeepInfra:
+    #   BAAI/bge-large-en-v1.5  (1024-dim, same as bge-large:latest — drop-in compatible)
+    embedding_provider: str = "ollama"  # KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER
+    embedding_api_key: str = ""  # KNOWLEDGE_GRAPH_EMBEDDING_API_KEY
+    embedding_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_EMBEDDING_API_BASE_URL
+    embedding_api_model_id: str = "BAAI/bge-large-en-v1.5"  # KNOWLEDGE_GRAPH_EMBEDDING_API_MODEL_ID
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True
