@@ -1,9 +1,9 @@
 # PLAN-0041: Instrument Page Redesign — Bloomberg-Grade Overview + Fundamentals
 
 **PRD**: Investigation report `docs/audits/2026-04-27-investigation-instrument-page-redesign.md`
-**Status**: in-progress
+**Status**: completed
 **Created**: 2026-04-27
-**Updated**: 2026-04-27 (Wave C-1 + C-2 done)
+**Updated**: 2026-04-27 (Wave D-3 done — all 7 waves complete)
 **Depends on**: None (all prerequisite backend data exists in S3)
 
 ---
@@ -1166,7 +1166,9 @@ iPhone 17 Supply Chain...    1d ago
 
 ---
 
-### Wave D-3: Earnings History, Insider Transactions, Technical Snapshot
+### Wave D-3: Earnings History, Insider Transactions, Technical Snapshot ✅
+
+**Status**: **DONE** — 2026-04-27 · 418 tests pass · tsc + vitest clean · Docker build passes
 
 **Goal**: Build three new data-display components that go in the left content column of the Fundamentals tab, using the S3 section data surfaced through S9.
 
@@ -1343,10 +1345,14 @@ Footer
 - [ ] No layout breaks
 
 #### Validation Gate
-- [ ] TypeScript compilation passes
-- [ ] All existing Vitest tests pass
-- [ ] New components render loading → content states
-- [ ] No console errors
+- [x] TypeScript compilation passes
+- [x] All existing Vitest tests pass (418/418)
+- [x] New components render loading → content states (confirmed via live containers)
+- [x] No console errors
+- [x] Docker production build passes
+- [x] Live data confirmed: 33 EPS annual records, 4+ insider txns, Beta/MA/short data for AAPL
+- **Fix note**: `getEarningsHistory` endpoint corrected from `/earnings-trend` (forward estimates)
+  to `/earnings-annual-trend` (historical actuals) — gateway test updated accordingly
 
 #### Break Impact
 

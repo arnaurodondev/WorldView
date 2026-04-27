@@ -55,6 +55,9 @@ import { MarketPositionPanel } from "@/components/instrument/MarketPositionPanel
 import { PeerComparisonPanel } from "@/components/instrument/PeerComparisonPanel";
 import { OwnershipSnapshotPanel } from "@/components/instrument/OwnershipSnapshotPanel";
 import { FundamentalsTopNews } from "@/components/instrument/FundamentalsTopNews";
+import { EarningsHistoryChart } from "@/components/instrument/EarningsHistoryChart";
+import { InsiderTransactionsTable } from "@/components/instrument/InsiderTransactionsTable";
+import { TechnicalSnapshot } from "@/components/instrument/TechnicalSnapshot";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -563,6 +566,34 @@ export function FundamentalsTab({
           </MetricRow>
         </Section>
       </div>
+
+        {/* ── D-3 Charts & Tables ───────────────────────────────────────────
+            WHY below the metric grid (not above): the chart/table panels are
+            supplementary detail; the metric grid is primary. Bloomberg DES places
+            its EPS history chart below the main fundamentals table for the same reason.
+            WHY space-y-2 p-3: matches the metric grid container padding so the
+            left column has a uniform 12px gutter between the grid bottom edge and
+            the chart panels. */}
+        <div className="space-y-2 p-3">
+          {/* ── EPS Trend chart ───────────────────────────────────────────
+              WHY first: EPS history is the most important trailing indicator in
+              fundamental analysis — analysts check EPS growth before P/E.
+              Bloomberg DES shows EPS history below the metrics grid. */}
+          <EarningsHistoryChart instrumentId={instrumentId} />
+
+          {/* ── Insider activity table ────────────────────────────────────
+              WHY second: insider transactions complement EPS (did executives
+              buy after a strong earnings print?). The two panels together tell
+              the story of both business performance and management conviction. */}
+          <InsiderTransactionsTable instrumentId={instrumentId} />
+
+          {/* ── Technical indicators ──────────────────────────────────────
+              WHY last: technicals are secondary to fundamentals on a fundamentals
+              tab. Beta / MA / short interest are reference numbers, not the
+              primary analysis surface — traders who need technicals use the
+              Overview tab's price chart. */}
+          <TechnicalSnapshot instrumentId={instrumentId} />
+        </div>
 
         {/* ── Data quality footer ───────────────────────────────────────────
             WHY this footer: Bloomberg terminals display data source + timestamp
