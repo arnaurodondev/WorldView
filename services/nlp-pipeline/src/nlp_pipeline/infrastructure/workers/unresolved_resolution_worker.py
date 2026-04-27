@@ -22,6 +22,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import httpx
+
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -261,20 +263,32 @@ class UnresolvedResolutionWorker:
         self,
         mention: EntityMentionModel,
     ) -> tuple[ResolutionOutcome, str | None]:
-        """Call Qwen2.5:3b to classify the mention as entity or noise.
+        """Call LLM to classify the mention as entity or noise.
+
+        When *unresolved_resolution_api_key* is set, delegates to the DeepInfra
+        OpenAI-compatible endpoint (_phase2_llm_classify_external).  Otherwise
+        falls through to the existing Ollama path.
 
         Returns (ResolutionOutcome, noise_reason | None).
-        Returns (UNRESOLVED, None) on JSON parse failure or Ollama error.
+        Returns (UNRESOLVED, None) on JSON parse failure or provider error.
         """
-        import httpx
-
         ollama_url = self._settings.unresolved_resolution_ollama_base_url
         model_id = self._settings.unresolved_resolution_classification_model
+        api_key = self._settings.unresolved_resolution_api_key
+        api_base_url = self._settings.unresolved_resolution_api_base_url
+        api_model_id = self._settings.unresolved_resolution_api_model_id
         timeout_s = self._settings.unresolved_resolution_llm_timeout_s
 
         surface = getattr(mention, "mention_text", "") or ""
         prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(surface=surface[:200])
 
+        # DeepInfra path: use OpenAI-compatible chat completions when api_key is set.
+        if api_key:
+            return await self._phase2_llm_classify_external(
+                mention, prompt, api_key, api_base_url, api_model_id, timeout_s
+            )
+
+        # ── Ollama fallback path (unchanged) ─────────────────────────────────
         payload = {
             "model": model_id,
             "prompt": prompt,
@@ -335,6 +349,90 @@ class UnresolvedResolutionWorker:
                 self._usage_logger.log(
                     model_id=model_id,
                     provider="ollama",
+                    capability="extraction",
+                    tokens_in=0,
+                    tokens_out=0,
+                    latency_ms=0,
+                    estimated_cost_usd=0.0,
+                    success=True,
+                )
+            )
+
+        if is_entity:
+            return ResolutionOutcome.ENTITY_CREATED, None
+        return ResolutionOutcome.NOISE, reason
+
+    async def _phase2_llm_classify_external(
+        self,
+        mention: EntityMentionModel,
+        prompt: str,
+        api_key: str,
+        api_base_url: str,
+        api_model_id: str,
+        timeout_s: float,
+    ) -> tuple[ResolutionOutcome, str | None]:
+        """Call DeepInfra (OpenAI-compat) for binary entity/noise classification.
+
+        Uses chat/completions with response_format=json_object so the model returns
+        a JSON payload directly (no "response" wrapper like Ollama uses).
+
+        Returns (ResolutionOutcome, noise_reason | None).
+        """
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
+            try:
+                response = await asyncio.wait_for(
+                    client.post(
+                        f"{api_base_url.rstrip('/')}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={
+                            "model": api_model_id,
+                            "messages": [{"role": "user", "content": prompt}],
+                            # Force JSON output — avoids free-form prose wrapping the result.
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.0,
+                            "max_tokens": 64,
+                        },
+                    ),
+                    timeout=timeout_s,
+                )
+                response.raise_for_status()
+                raw = response.json()["choices"][0]["message"]["content"]
+                parsed = json.loads(raw)
+                is_entity = bool(parsed.get("is_entity", False))
+                reason: str | None = str(parsed.get("reason", "")) or None
+            except (json.JSONDecodeError, KeyError, ValueError):
+                logger.warning(
+                    "unresolved_resolution_json_parse_failure",
+                    mention_id=str(mention.mention_id),
+                )
+                if self._usage_logger is not None:
+                    asyncio.create_task(  # fire-and-forget  # noqa: RUF006
+                        self._usage_logger.log(
+                            model_id=api_model_id,
+                            provider="deepinfra",
+                            capability="extraction",
+                            tokens_in=0,
+                            tokens_out=0,
+                            latency_ms=0,
+                            estimated_cost_usd=0.0,
+                            success=False,
+                        )
+                    )
+                return ResolutionOutcome.UNRESOLVED, None
+            except Exception:
+                logger.warning(
+                    "unresolved_resolution_external_api_error",
+                    mention_id=str(mention.mention_id),
+                    exc_info=True,
+                )
+                return ResolutionOutcome.UNRESOLVED, None
+
+        # Log usage (success)
+        if self._usage_logger is not None:
+            asyncio.create_task(  # fire-and-forget  # noqa: RUF006
+                self._usage_logger.log(
+                    model_id=api_model_id,
+                    provider="deepinfra",
                     capability="extraction",
                     tokens_in=0,
                     tokens_out=0,

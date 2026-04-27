@@ -65,12 +65,16 @@ async def main() -> None:
         batch_size=settings.relevance_scoring_batch_size,
         timeout_seconds=settings.relevance_scoring_timeout_seconds,
         cycle_seconds=settings.relevance_scoring_cycle_seconds,
+        api_key=settings.relevance_scoring_api_key,
+        api_base_url=settings.relevance_scoring_api_base_url,
+        api_model_id=settings.relevance_scoring_api_model_id,
     )
 
+    _using_external = bool(settings.relevance_scoring_api_key)
     log.info(
         "relevance_scoring_worker_ready",
-        ollama_url=settings.relevance_scoring_ollama_url,
-        model=settings.relevance_scoring_model,
+        provider="deepinfra" if _using_external else "ollama",
+        model=settings.relevance_scoring_api_model_id if _using_external else settings.relevance_scoring_model,
         cycle_seconds=settings.relevance_scoring_cycle_seconds,
     )
     await worker.run_forever(stop_event)

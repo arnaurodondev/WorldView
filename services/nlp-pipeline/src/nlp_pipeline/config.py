@@ -169,6 +169,15 @@ class Settings(BaseSettings):
     relevance_scoring_ollama_url: str = "http://ollama:11434"  # RELEVANCE_SCORING_OLLAMA_URL
     relevance_scoring_model: str = "qwen3:0.6b"  # RELEVANCE_SCORING_MODEL
     relevance_scoring_timeout_seconds: int = 30  # RELEVANCE_SCORING_TIMEOUT_SECONDS
+    # ArticleRelevanceScoringWorker — DeepInfra provider (optional override)
+    # When set, worker uses OpenAI-compatible chat completions instead of Ollama.
+    # Model options (availability depends on DeepInfra account tier):
+    #   meta-llama/Meta-Llama-3.1-8B-Instruct  (confirmed available, ~100-200ms)
+    #   Qwen/Qwen2.5-0.5B-Instruct             (smaller, faster — upgrade account to unlock)
+    #   Qwen/Qwen2.5-1.5B-Instruct             (medium — upgrade account to unlock)
+    relevance_scoring_api_key: str = ""  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY
+    relevance_scoring_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # RELEVANCE_SCORING_API_BASE_URL
+    relevance_scoring_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RELEVANCE_SCORING_API_MODEL_ID
     # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
     s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
     s6_display_weight_llm: float = 0.40  # S6_DISPLAY_WEIGHT_LLM
@@ -186,6 +195,14 @@ class Settings(BaseSettings):
     unresolved_resolution_ollama_base_url: str = "http://ollama:11434"
     unresolved_resolution_classification_model: str = "qwen3:0.6b"
     unresolved_resolution_max_llm_batch: int = 20  # max mentions per Ollama call
+    # UnresolvedResolutionWorker — DeepInfra provider (optional override)
+    # When set, worker uses OpenAI-compatible chat completions instead of Ollama.
+    # Same model options as relevance_scoring (see above).
+    unresolved_resolution_api_key: str = ""  # NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY
+    unresolved_resolution_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # UNRESOLVED_RESOLUTION_API_BASE
+    unresolved_resolution_api_model_id: str = (
+        "meta-llama/Meta-Llama-3.1-8B-Instruct"  # UNRESOLVED_RESOLUTION_API_MODEL_ID
+    )
 
     # LLM usage logging (PLAN-0033)
     llm_usage_log_enabled: bool = True

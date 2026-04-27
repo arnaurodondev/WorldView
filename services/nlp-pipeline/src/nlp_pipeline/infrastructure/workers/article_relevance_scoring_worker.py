@@ -46,7 +46,12 @@ _SYSTEM_PROMPT = (
 
 
 class ArticleRelevanceScoringWorker:
-    """Background worker that scores articles with LLM-based relevance using Qwen2.5:3b."""
+    """Background worker that scores articles with LLM-based relevance using Qwen2.5:3b.
+
+    When *api_key* is non-empty the worker calls DeepInfra (OpenAI-compatible chat
+    completions) instead of the local Ollama instance.  The Ollama path remains fully
+    intact as the fallback when *api_key* is empty (default — backward compatible).
+    """
 
     def __init__(
         self,
@@ -56,6 +61,10 @@ class ArticleRelevanceScoringWorker:
         batch_size: int = 50,
         timeout_seconds: int = 30,
         cycle_seconds: int = 1800,
+        *,
+        api_key: str = "",
+        api_base_url: str = "https://api.deepinfra.com/v1/openai",
+        api_model_id: str = "Qwen/Qwen2.5-0.5B-Instruct",
     ) -> None:
         self._nlp_sf = nlp_session_factory
         self._ollama_url = ollama_url.rstrip("/")
@@ -63,6 +72,10 @@ class ArticleRelevanceScoringWorker:
         self._batch_size = batch_size
         self._timeout = float(timeout_seconds)
         self._cycle_seconds = cycle_seconds
+        # DeepInfra / OpenAI-compat provider fields (empty → use Ollama)
+        self._api_key = api_key
+        self._api_base_url = api_base_url.rstrip("/")
+        self._api_model_id = api_model_id
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -79,18 +92,22 @@ class ArticleRelevanceScoringWorker:
         if not articles:
             return 0
 
-        # ── Phase 2 — Score: call Ollama for each article (no open DB sessions) ───
+        # ── Phase 2 — Score: call LLM for each article (no open DB sessions) ────
+        # Branches on api_key: DeepInfra OpenAI-compat endpoint when set, Ollama otherwise.
         scored: list[tuple[UUID, float]] = []
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 for doc_id, title, source_type in articles:
-                    score = await self._call_ollama(client, title, source_type, doc_id)
+                    if self._api_key:
+                        score = await self._call_external_api(client, title, source_type, doc_id)
+                    else:
+                        score = await self._call_ollama(client, title, source_type, doc_id)
                     if score is not None:
                         scored.append((doc_id, score))
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            # Ollama unavailable — skip the entire cycle; try again next interval
+            # Provider unavailable — skip the entire cycle; try again next interval
             logger.warning(  # type: ignore[no-any-return]
-                "relevance_scoring_ollama_unavailable",
+                "relevance_scoring_provider_unavailable",
                 error=str(exc),
             )
             return 0
@@ -192,6 +209,48 @@ class ArticleRelevanceScoringWorker:
                 article_id=str(doc_id),
                 error=str(exc),
                 raw_response=raw[:200],
+            )
+            return None
+
+    async def _call_external_api(
+        self,
+        client: httpx.AsyncClient,
+        title: str | None,
+        source_type: str | None,
+        doc_id: UUID,
+    ) -> float | None:
+        """Phase 2 helper: POST one article to DeepInfra (OpenAI-compat) and parse the score.
+
+        Uses the chat/completions endpoint with response_format=json_object so the model
+        returns a JSON payload directly (no "response" wrapper like Ollama uses).
+
+        Returns None on JSON parse failure (article skipped, cycle continues).
+        Raises httpx.ConnectError or httpx.TimeoutException → caller skips cycle.
+        """
+        user_content = _SYSTEM_PROMPT + f"\nUser: Title: {title or 'Unknown'}\nSource: {source_type or 'Unknown'}"
+        try:
+            resp = await client.post(
+                f"{self._api_base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={
+                    "model": self._api_model_id,
+                    "messages": [{"role": "user", "content": user_content}],
+                    # Force JSON output — avoids free-form prose wrapping the score object.
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.0,
+                    "max_tokens": 64,
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+            score = float(parsed["score"])
+            return max(0.0, min(1.0, score))
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "relevance_scoring_json_parse_error",
+                article_id=str(doc_id),
+                error=str(exc),
             )
             return None
 

@@ -6860,3 +6860,37 @@ When adding a new `FundamentalsSection` enum value:
 
 - Batch grouping keys must include ALL parameters that vary between tasks — not just the subset that enables grouping.
 - When adding backfill task support, always verify that batch execution handles mixed date-range groups correctly.
+
+## BP-243 — Decimal Fraction vs. Percentage Mismatch in S3→Frontend Data Pipeline
+
+| Field | Value |
+|-------|-------|
+| **Services** | api-gateway (S9) — `clients.py` + `worldview-web` — `lib/gateway.ts` |
+| **Severity** | MEDIUM (incorrect data display — SectorHeatmap shows 0.00% instead of 0.16%; TopMovers shows 0.03% instead of 3.11%) |
+| **Discovered** | 2026-04-27 dashboard investigation |
+| **Root cause** | S3 (market-data) stores all rate metrics (`daily_return`, etc.) as decimal fractions where 1.0 = 100%. S9's `get_market_heatmap()` in `clients.py` passed `avg_change` through directly as `change_pct` without multiplying by 100. Similarly, `gateway.ts` passed `r.metrics.daily_return` directly as `change_pct` in the top-movers transform. Both frontend widgets (`SectorHeatmapWidget`, `PreMarketMoversWidget`) call `.toFixed(2)%` treating the value as a percentage — showing 0.00% instead of 0.16%. |
+| **Symptom** | Sector heatmap shows all sectors at ≈0.00% change. Top movers shows AAPL at +0.03% instead of +3.11%. The data widgets appear broken/empty even though the API calls succeed. |
+| **Fix** | 1. `clients.py get_market_heatmap()`: `round(avg_change * 100, 2)` (was `round(avg_change, 4)`). 2. `gateway.ts getTopMovers()` transform: `(r.metrics?.daily_return ?? 0) * 100` (was `r.metrics?.daily_return ?? 0`). |
+
+### Prevention
+
+- **Contract rule**: When S3 returns a metric ending in `_return` or `_pct` that represents a rate, verify the unit (decimal fraction vs. percentage) before passing to the frontend. S3 uses decimal fractions throughout (0.031 = 3.1%).
+- **Frontend convention**: All `change_pct` fields in frontend types (`Mover.change_pct`, `HeatmapSector.change_pct`) represent percentage values (3.11 for 3.11%). Any gateway transform from S3 metrics must multiply by 100.
+- **Test convention**: Mock data for `daily_return` in tests should use decimal fractions (0.0523 for 5.23%), not percentage values (5.23). Assertions on `change_pct` use percentage values.
+
+## BP-244 — Stale Closure Over React State in useEffect ResizeObserver
+
+| Field | Value |
+|-------|-------|
+| **Services** | worldview-web — `components/instrument/OHLCVChart.tsx` |
+| **Severity** | LOW (incorrect resize behavior when chart is in fullscreen — chart width is reset during fullscreen) |
+| **Discovered** | 2026-04-27 instrument page QA |
+| **Root cause** | A `useEffect(() => { ... }, [])` (empty deps) sets up a `ResizeObserver` callback. The callback captures `isFullscreen` from the closure at mount time, which is always `false`. When the user enters fullscreen, the callback still reads `false` and incorrectly calls `chart.applyOptions({ width })`, overriding the fullscreen layout. |
+| **Symptom** | Chart may flicker or shrink when the browser window is resized while the chart is in fullscreen mode. The ResizeObserver fires and resets the chart width, collapsing the fullscreen view. |
+| **Fix** | Add a `useRef` that shadows the state value and a sync `useEffect` that keeps the ref current. The stale closure reads from the ref instead of the captured state variable. See `OHLCVChart.tsx` `isFullscreenRef` pattern. |
+
+### Prevention
+
+- Any callback registered inside an empty-dep `useEffect` (event listeners, observers, timers) will hold a **stale closure** over all state and props from the mount render.
+- If the callback needs to read current state, use a `useRef` + sync `useEffect` to track it: `const fooRef = useRef(foo); useEffect(() => { fooRef.current = foo; }, [foo]);`
+- Lint rule `react-hooks/exhaustive-deps` will warn about missing dependencies — prefer fixing the deps if possible; use the ref pattern only when the effect must run only once (e.g., chart init).

@@ -53,6 +53,10 @@ def _make_settings(
     s.unresolved_resolution_ollama_base_url = ollama_url
     s.unresolved_resolution_classification_model = model_id
     s.unresolved_resolution_llm_timeout_s = llm_timeout_s
+    # DeepInfra provider fields — default to empty (Ollama path active)
+    s.unresolved_resolution_api_key = ""
+    s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
+    s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
     return s
 
 
@@ -486,3 +490,108 @@ class TestUsageLogging:
         assert call_kwargs["capability"] == "extraction"
         assert call_kwargs["estimated_cost_usd"] == 0.0
         assert call_kwargs["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# DeepInfra provider path
+# ---------------------------------------------------------------------------
+
+
+class TestDeepInfraProviderPath:
+    """Tests for UnresolvedResolutionWorker when api_key triggers external API path."""
+
+    def _make_settings_with_api(self) -> MagicMock:
+        s = _make_settings()
+        # Enable the DeepInfra path
+        s.unresolved_resolution_api_key = "test-key"
+        s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
+        s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+        return s
+
+    @pytest.mark.asyncio
+    async def test_external_api_entity_true_creates_entity(self) -> None:
+        """DeepInfra returns is_entity=true → ENTITY_CREATED outcome."""
+        settings = self._make_settings_with_api()
+        mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="Apple Inc")
+
+        openai_resp = {"choices": [{"message": {"content": '{"is_entity": true, "reason": "major company"}'}}]}
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=resp_mock)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=MagicMock(),
+            settings=settings,
+        )
+
+        with patch(
+            "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            outcome, reason = await worker._phase2_llm_classify(mention)
+
+        assert outcome == ResolutionOutcome.ENTITY_CREATED
+        assert reason is None
+
+    @pytest.mark.asyncio
+    async def test_external_api_entity_false_marks_noise(self) -> None:
+        """DeepInfra returns is_entity=false → NOISE outcome with reason."""
+        settings = self._make_settings_with_api()
+        mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="xyz123")
+
+        openai_resp = {"choices": [{"message": {"content": '{"is_entity": false, "reason": "noise"}'}}]}
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=resp_mock)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=MagicMock(),
+            settings=settings,
+        )
+
+        with patch(
+            "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            outcome, reason = await worker._phase2_llm_classify(mention)
+
+        assert outcome == ResolutionOutcome.NOISE
+        assert reason == "noise"
+
+    @pytest.mark.asyncio
+    async def test_external_api_bad_json_returns_unresolved(self) -> None:
+        """Malformed JSON from external API → UNRESOLVED (safe fallback)."""
+        settings = self._make_settings_with_api()
+        mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="test")
+
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": "bad json {"}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=resp_mock)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=MagicMock(),
+            settings=settings,
+        )
+
+        with patch(
+            "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            outcome, reason = await worker._phase2_llm_classify(mention)
+
+        assert outcome == ResolutionOutcome.UNRESOLVED
