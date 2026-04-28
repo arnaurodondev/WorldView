@@ -29,7 +29,7 @@
 // (which reads from localStorage — browser-only). Server Components cannot
 // access React context or browser APIs.
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
@@ -94,8 +94,20 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // and must mount above the shell's overflow context. The TopBar holds the
   // trigger button but only forwards the toggle callback — see TopBarProps.
   const [askAiOpen, setAskAiOpen] = useState(false);
+  // F-QA-05 fix: keep a ref to the AskAi trigger so we can restore focus
+  // when the panel closes. WCAG 2.4.3 requires focus to return to the
+  // originating control after a transient overlay closes; without this
+  // refocus, focus falls back to <body> and keyboard users lose context.
+  const askAiButtonRef = useRef<HTMLButtonElement | null>(null);
   const handleAskAiOpen = useCallback(() => setAskAiOpen(true), []);
-  const handleAskAiClose = useCallback(() => setAskAiOpen(false), []);
+  const handleAskAiClose = useCallback(() => {
+    setAskAiOpen(false);
+    // requestAnimationFrame ensures the trigger is in the DOM and focusable
+    // before we attempt to focus it. Direct focus() inside the same tick
+    // sometimes misses because React has not yet committed the unmount of
+    // the panel + the panel's autoFocus may still hold the focus token.
+    requestAnimationFrame(() => askAiButtonRef.current?.focus());
+  }, []);
 
   // WHY lazy initializer: reads localStorage once at mount, not on every render.
   // True (expanded) is the default so first-time users see the full labeled sidebar.
@@ -204,6 +216,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           unrealisedPnl={unrealisedPnl}
           onAskAi={handleAskAiOpen}
           askAiOpen={askAiOpen}
+          askAiButtonRef={askAiButtonRef}
         />
 
         {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the

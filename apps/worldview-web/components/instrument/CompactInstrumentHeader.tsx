@@ -23,8 +23,9 @@
 // WHY "use client": uses useState for description expand/collapse toggle.
 
 import { useState } from "react";
-import { ChevronLeft, Check, Copy, Link2 } from "lucide-react";
+import { ChevronLeft, Check, Copy, Link2, AlertCircle } from "lucide-react";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
+import { useCopyState } from "@/hooks/useCopyState";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
 
@@ -74,43 +75,19 @@ export function CompactInstrumentHeader({
   // grid-template-rows animation — needs React state to toggle the CSS variable.
   const [descExpanded, setDescExpanded] = useState(false);
 
-  // PLAN-0050 T-F-6-17 (closes F-I-029) + T-F-6-21 (closes F-I-035):
-  // single state machine for two adjacent affordances — copy ticker, copy
-  // page URL. We share one "feedback" state because both reset to "idle"
-  // after the same 1.2s confirm window; storing each separately would mean
-  // two timers + two booleans for what is effectively the same UI affordance.
-  type CopyState = "idle" | "ticker" | "link";
-  const [copied, setCopied] = useState<CopyState>("idle");
-
-  // WHY guard against navigator.clipboard being undefined: this runs in
-  // jsdom (test environment) where clipboard is not implemented, and on
-  // any insecure-context page (HTTP, file://) where the spec says the
-  // clipboard API is not exposed. Falling back to a no-op keeps the test
-  // harness happy and the code defensive against insecure deployments.
-  function safeCopy(value: string): Promise<void> {
-    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(value);
-    }
-    return Promise.resolve();
-  }
-
-  function handleCopyTicker() {
-    void safeCopy(ticker).then(() => {
-      setCopied("ticker");
-      window.setTimeout(() => setCopied("idle"), 1200);
-    });
-  }
-
-  function handleCopyLink() {
+  // PLAN-0050 T-F-6-17 + T-F-6-21 (closes F-I-029, F-I-035) + QA F-QA-02/03/13:
+  // shared clipboard hook handles timer cleanup on unmount, reports actual
+  // success vs failure (no more lying about Copied! when clipboard is
+  // unavailable), and de-dups the state machine logic across both buttons.
+  const { state: copied, copy } = useCopyState<"ticker" | "link">();
+  const handleCopyTicker = () => void copy(ticker, "ticker");
+  const handleCopyLink = () => {
     // window.location.href is the deepest-link the user is currently
-    // looking at — including query params (?tab=news, ?selected=…).
-    // That's exactly what a colleague needs when the user "shares this view".
+    // looking at — query params included (?tab=news, ?selected=…) — exactly
+    // what a colleague needs when "share this view" is clicked.
     const url = typeof window !== "undefined" ? window.location.href : "";
-    void safeCopy(url).then(() => {
-      setCopied("link");
-      window.setTimeout(() => setCopied("idle"), 1200);
-    });
-  }
+    void copy(url, "link");
+  };
 
   // Derived: format change for display
   const changeStr = change != null
@@ -151,15 +128,30 @@ export function CompactInstrumentHeader({
           type="button"
           onClick={handleCopyTicker}
           className="group flex shrink-0 items-center gap-1 font-mono text-[13px] font-semibold text-foreground hover:text-primary"
-          aria-label={copied === "ticker" ? `Copied ${ticker}` : `Copy ticker ${ticker}`}
-          title={copied === "ticker" ? "Copied!" : "Copy ticker"}
+          aria-label={
+            copied === "ticker"
+              ? `Copied ${ticker}`
+              : copied === "error"
+                ? `Unable to copy — clipboard unavailable`
+                : `Copy ticker ${ticker}`
+          }
+          title={
+            copied === "ticker"
+              ? "Copied!"
+              : copied === "error"
+                ? "Unable to copy — clipboard unavailable"
+                : "Copy ticker"
+          }
         >
           <span>{ticker}</span>
           {copied === "ticker" ? (
             <Check className="h-3 w-3 text-positive" aria-hidden="true" />
+          ) : copied === "error" ? (
+            // F-QA-03: surface the failure path explicitly. Users now see an
+            // amber alert dot instead of being silently told "Copied!" when
+            // their clipboard was actually empty.
+            <AlertCircle className="h-3 w-3 text-warning" aria-hidden="true" />
           ) : (
-            // opacity-0 → 70 on hover keeps the chrome quiet by default and
-            // surfaces the affordance only when the trader's mouse is on the row.
             <Copy
               className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70"
               aria-hidden="true"
@@ -217,11 +209,25 @@ export function CompactInstrumentHeader({
             type="button"
             onClick={handleCopyLink}
             className="text-muted-foreground hover:text-foreground"
-            aria-label={copied === "link" ? "Link copied" : "Copy page link"}
-            title={copied === "link" ? "Copied!" : "Copy link to this view"}
+            aria-label={
+              copied === "link"
+                ? "Link copied"
+                : copied === "error"
+                  ? "Unable to copy link — clipboard unavailable"
+                  : "Copy page link"
+            }
+            title={
+              copied === "link"
+                ? "Copied!"
+                : copied === "error"
+                  ? "Unable to copy"
+                  : "Copy link to this view"
+            }
           >
             {copied === "link" ? (
               <Check className="h-3.5 w-3.5 text-positive" aria-hidden="true" />
+            ) : copied === "error" ? (
+              <AlertCircle className="h-3.5 w-3.5 text-warning" aria-hidden="true" />
             ) : (
               <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
             )}

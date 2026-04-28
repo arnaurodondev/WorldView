@@ -44,10 +44,15 @@ export interface PortfolioMetrics {
   isLoading: boolean;
 }
 
-/** Refresh cadence for live quote-based metrics. See WHY 15s in the file header. */
-const QUOTE_REFETCH_MS = 15_000;
+/**
+ * Refresh cadence for live quote-based metrics. See WHY 15s in the file header.
+ * Exported (F-QA-21) so PortfolioSummary and LiveQuoteBadge can pin to the same
+ * value — drift between consumers caused F-QA-01 when PortfolioSummary kept
+ * `staleTime: 0` after this hook landed.
+ */
+export const QUOTE_REFETCH_MS = 15_000;
 /** Holdings/positions cadence — slower because shape changes only on trades. */
-const HOLDINGS_REFETCH_MS = 30_000;
+export const HOLDINGS_REFETCH_MS = 30_000;
 
 /**
  * usePortfolioMetrics — composite hook returning the live portfolio header.

@@ -29,6 +29,7 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
+import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
 
 // WHY local Period type: avoids importing a global enum just for three values
 // — the dashboard only ever toggles 1D/1W/1M and Bloomberg's panel-header
@@ -71,9 +72,14 @@ export function PortfolioSummary() {
     queryKey: ["holdings-quotes", instrumentIds],
     queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
     enabled: instrumentIds.length > 0 && !!accessToken,
-    // WHY 15s: portfolio widget is visible all day; live prices matter
-    refetchInterval: 15_000,
-    staleTime: 0,
+    // F-QA-01 fix: align staleTime with hooks/usePortfolioMetrics. The prior
+    // `staleTime: 0` defeated the hook's deduplication goal — every mount of
+    // this widget triggered a fetch even when the layout's hook had cached
+    // a fresh quote. Both consumers now share QUOTE_REFETCH_MS (15s) so the
+    // first observer's cache is reused until it ages out, and the
+    // refetchInterval below keeps it fresh in the background.
+    refetchInterval: QUOTE_REFETCH_MS,
+    staleTime: QUOTE_REFETCH_MS,
   });
 
   // ── Query 4: company overview enrichment for ticker/name (BUG-3 fix) ──────
