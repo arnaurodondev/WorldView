@@ -275,29 +275,85 @@ async def test_resample_single_bar_group() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resample_all_five_timeframes() -> None:
-    """execute(bar) with default target_timeframes produces 5 derived bars."""
+async def test_resample_all_six_timeframes() -> None:
+    """execute(bar) with default target_timeframes produces 6 derived bars (5m→1d)."""
     trigger = _make_1m_bar(bar_date=datetime(2024, 6, 3, 9, 13, tzinfo=UTC))
     uow = _make_uow(source_bars=[trigger])
 
     uc = ResampledOHLCVUseCase(uow)
-    result = await uc.execute(trigger)  # default = all 5 timeframes
+    result = await uc.execute(trigger)  # default = all 6 timeframes
 
-    assert len(result) == 5
+    assert len(result) == 6
     expected_tfs = {
         Timeframe.FIVE_MIN,
         Timeframe.FIFTEEN_MIN,
         Timeframe.THIRTY_MIN,
         Timeframe.ONE_HOUR,
         Timeframe.FOUR_HOUR,
+        Timeframe.ONE_DAY,
     }
     actual_tfs = {b.timeframe for b in result}
     assert actual_tfs == expected_tfs
 
-    # bulk_upsert_derived called once with all 5 bars
+    # bulk_upsert_derived called once with all 6 bars
     uow.ohlcv.bulk_upsert_derived.assert_awaited_once()
     upserted = uow.ohlcv.bulk_upsert_derived.call_args[0][0]
-    assert len(upserted) == 5
+    assert len(upserted) == 6
+
+
+# ---------------------------------------------------------------------------
+# T-B-2-03-06b: 1d derivation from 1m source bar
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resample_1d_bar_from_1m() -> None:
+    """A 1m bar at 09:13 derives a 1d bar at midnight UTC with is_partial=True."""
+    trigger = _make_1m_bar(bar_date=datetime(2024, 6, 3, 9, 13, tzinfo=UTC))
+    uow = _make_uow(source_bars=[trigger])
+
+    uc = ResampledOHLCVUseCase(uow)
+    result = await uc.execute(trigger, target_timeframes=[Timeframe.ONE_DAY])
+
+    assert len(result) == 1
+    bar_1d = result[0]
+    assert bar_1d.bar_date == datetime(2024, 6, 3, 0, 0, tzinfo=UTC)
+    assert bar_1d.is_partial is True
+    assert bar_1d.timeframe == Timeframe.ONE_DAY
+    assert bar_1d.is_derived is True
+
+
+# ---------------------------------------------------------------------------
+# T-B-2-03-06c: source_timeframe param — 5m source skips 5m target
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_timeframe_5m_filters_coarser_only() -> None:
+    """With source=5m, the use case only derives timeframes coarser than 5m."""
+    trigger = OHLCVBar(
+        instrument_id="instr-001",
+        timeframe=Timeframe.FIVE_MIN,
+        bar_date=datetime(2024, 6, 3, 9, 15, tzinfo=UTC),
+        open=Decimal("100"),
+        high=Decimal("110"),
+        low=Decimal("90"),
+        close=Decimal("105"),
+        volume=1_000,
+        adjusted_close=None,
+        source="alpaca",
+        provider_priority=ProviderPriority(provider="alpaca", priority=0),
+    )
+    uow = _make_uow(source_bars=[trigger])
+
+    uc = ResampledOHLCVUseCase(uow, source_timeframe=Timeframe.FIVE_MIN)
+    result = await uc.execute(trigger)
+
+    result_tfs = {b.timeframe for b in result}
+    assert Timeframe.FIVE_MIN not in result_tfs, "5m source must not derive 5m target"
+    assert Timeframe.ONE_MIN not in result_tfs, "1m must not appear (coarser filter)"
+    assert Timeframe.FIFTEEN_MIN in result_tfs
+    assert Timeframe.ONE_DAY in result_tfs
 
 
 # ---------------------------------------------------------------------------
