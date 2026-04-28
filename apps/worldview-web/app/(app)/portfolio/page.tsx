@@ -49,6 +49,9 @@ import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTa
 import { SectorAllocationPanel } from "@/components/portfolio/SectorAllocationPanel";
 import { TransactionsTable } from "@/components/portfolio/TransactionsTable";
 import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
+// PLAN-0046 Wave 5 / T-46-5-07 — analytics section (equity curve + exposure +
+// risk metrics) rendered below the holdings table inside the Holdings tab.
+import { PortfolioAnalyticsSection } from "@/components/portfolio/PortfolioAnalyticsSection";
 
 // ── Brokerage components ──────────────────────────────────────────────────────
 // WHY import the existing ConnectBrokerageModal + ConnectedBrokeragesList:
@@ -1277,6 +1280,17 @@ export default function PortfolioPage() {
                 bySector={bySector}
                 byType={byType}
               />
+
+              {/* PLAN-0046 Wave 5 / T-46-5-07 — analytics section.
+                  WHY conditional on activePortfolioId: the analytics queries
+                  need a real portfolio id to fan out to S9. Without one we'd
+                  render three loading states forever. The wider page already
+                  guards on activePortfolioId for the Add-Position button — we
+                  reuse the same gate here so the section appears when there
+                  is meaningful data to show. */}
+              {activePortfolioId && (
+                <PortfolioAnalyticsSection portfolioId={activePortfolioId} />
+              )}
             </div>
           )}
         </TabsContent>

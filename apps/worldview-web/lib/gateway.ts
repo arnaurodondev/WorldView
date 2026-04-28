@@ -64,6 +64,10 @@ import type {
   BrokerageConnection,
   InitiateBrokerageConnectionResponse,
   SyncError,
+  // PLAN-0046 Wave 5 — analytics
+  ValueHistoryResponse,
+  ExposureResponse,
+  RiskMetricsResponse,
 } from "@/types/api";
 
 // ── Base URL ──────────────────────────────────────────────────────────────
@@ -799,6 +803,94 @@ export function createGateway(token?: string | null) {
         return_abs: number;
         covered_pct: number;
       }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/performance?period=${period}`, { token: t });
+    },
+
+    // ── PLAN-0046 Wave 5 — analytics endpoints ────────────────────────
+
+    /**
+     * getValueHistory — equity-curve data for a portfolio.
+     *
+     * WHY transform: S1 serialises Decimal fields as 8-dp strings (matches
+     * every other Decimal in the API). The frontend chart needs numeric
+     * values so it can compute `min`, `max`, deltas — convert at the
+     * gateway boundary (BP-265 awareness: never default to []; use real
+     * fetched data).
+     *
+     * @param portfolioId resolved portfolio UUID
+     * @param params from/to ISO dates (defaults applied server-side: 90d
+     *   look-back, today inclusive); granularity = 1d / 1w / 1m
+     */
+    async getValueHistory(
+      portfolioId: string,
+      params: { from?: string; to?: string; granularity?: "1d" | "1w" | "1m" } = {},
+    ): Promise<ValueHistoryResponse> {
+      const qs = new URLSearchParams({
+        ...(params.from ? { from: params.from } : {}),
+        ...(params.to ? { to: params.to } : {}),
+        ...(params.granularity ? { granularity: params.granularity } : {}),
+      }).toString();
+      const path =
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}/value-history` +
+        (qs ? `?${qs}` : "");
+      const raw = await apiFetch<{
+        points: Array<{
+          date: string;
+          value: string;
+          cost_basis: string;
+          cash: string;
+        }>;
+      }>(path, { token: t });
+      // BP-265 awareness: only default `points` to [] when the server
+      // genuinely omitted it (defensive); otherwise pass through what
+      // we got, parsed.
+      const points = (raw.points ?? []).map((p) => ({
+        date: p.date,
+        value: parseFloat(p.value),
+        cost_basis: parseFloat(p.cost_basis),
+        cash: parseFloat(p.cash),
+      }));
+      return { points };
+    },
+
+    /**
+     * getExposure — current invested / cash / leverage breakdown.
+     *
+     * S1 returns Decimal-as-string; we parseFloat for chart arithmetic.
+     * Empty portfolio → all zeros (NOT NaN — see use case docstring).
+     */
+    async getExposure(portfolioId: string): Promise<ExposureResponse> {
+      const raw = await apiFetch<{
+        invested: string;
+        cash: string;
+        gross_exposure_pct: string;
+        net_exposure_pct: string;
+        leverage: string;
+      }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/exposure`, { token: t });
+      return {
+        invested: parseFloat(raw.invested),
+        cash: parseFloat(raw.cash),
+        gross_exposure_pct: parseFloat(raw.gross_exposure_pct),
+        net_exposure_pct: parseFloat(raw.net_exposure_pct),
+        leverage: parseFloat(raw.leverage),
+      };
+    },
+
+    /**
+     * getRiskMetrics — drawdown / vol / Sharpe / Sortino / beta vs SPY.
+     *
+     * WHY no transform: this is a pure S9 *composition* endpoint — every
+     * field is already a `number | null` JSON-native value. The strip
+     * component renders `null` as "—" so we don't need to coerce.
+     */
+    getRiskMetrics(
+      portfolioId: string,
+      lookbackDays = 90,
+    ): Promise<RiskMetricsResponse> {
+      const qs = new URLSearchParams({ lookback_days: String(lookbackDays) }).toString();
+      return apiFetch<RiskMetricsResponse>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}/risk-metrics?${qs}`,
+        { token: t },
+      );
     },
 
     /**

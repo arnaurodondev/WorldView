@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Generic, TypeVar
 from uuid import UUID
@@ -409,3 +409,51 @@ class SyncErrorResponse(BaseModel):
 
 class GetSyncErrorsResponse(BaseModel):
     items: list[SyncErrorResponse]
+
+
+# ── PLAN-0046 Wave 5 — analytics responses ────────────────────────────────────
+
+
+class ValueHistoryPoint(BaseModel):
+    """One point on the equity curve.
+
+    Decimal fields are serialised as 8-dp strings to keep parity with
+    every other Decimal in the API. The frontend parses them with
+    ``parseFloat`` — string-on-the-wire avoids JS float precision drift
+    on values like 1234.56789012.
+    """
+
+    date: date  # — matches API contract; pydantic resolves the type
+    value: Decimal
+    cost_basis: Decimal
+    cash: Decimal
+
+    @field_serializer("value", "cost_basis", "cash")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class ValueHistoryResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/value-history`` response."""
+
+    points: list[ValueHistoryPoint]
+
+
+class ExposureResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/exposure`` response.
+
+    ``gross_exposure_pct``/``net_exposure_pct`` are FRACTIONS in [0, 1+]
+    (not percent-formatted) to keep parity with every other "_pct"
+    field in the codebase. The frontend multiplies by 100 for display.
+    ``leverage`` is a multiplier (1.0 = no leverage, 2.0 = 2x).
+    """
+
+    invested: Decimal
+    cash: Decimal
+    gross_exposure_pct: Decimal
+    net_exposure_pct: Decimal
+    leverage: Decimal
+
+    @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)

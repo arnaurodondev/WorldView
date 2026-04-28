@@ -1599,6 +1599,47 @@ async def get_portfolio_performance(
     }
 
 
+# ── PLAN-0046 Wave 5 — Portfolio analytics proxies ──────────────────────────
+
+
+@router.get("/portfolios/{portfolio_id}/value-history")
+async def get_portfolio_value_history(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/value-history → S1 Portfolio service.
+
+    PLAN-0046 Wave 5 / T-46-5-01. Forwards ``from`` / ``to`` / ``granularity``
+    query params unchanged. S1 returns 404 if the portfolio is missing or
+    not owned by the caller's tenant — surface that to the frontend.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/value-history",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/portfolios/{portfolio_id}/exposure")
+async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/exposure → S1 Portfolio service.
+
+    PLAN-0046 Wave 5 / T-46-5-02. S1 itself reaches out to S3 over REST
+    to fetch current prices (R9-compliant — no cross-service DB).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/exposure",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/transactions")
 async def list_transactions(request: Request) -> Any:
     """Proxy GET /api/v1/transactions → S1 Portfolio service.

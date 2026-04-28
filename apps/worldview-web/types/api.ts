@@ -545,6 +545,56 @@ export interface TransactionsResponse {
   limit: number;
 }
 
+// ── Portfolio analytics (PLAN-0046 Wave 5) ────────────────────────────────
+
+/**
+ * One point on the equity curve. S1 serialises Decimal fields as 8-dp
+ * strings; the gateway parses them to numbers so chart components can
+ * arithmetic on them directly without parseFloat-at-render-time.
+ */
+export interface ValueHistoryPoint {
+  date: string;       // YYYY-MM-DD
+  value: number;
+  cost_basis: number;
+  cash: number;
+}
+
+export interface ValueHistoryResponse {
+  points: ValueHistoryPoint[];
+}
+
+/**
+ * Current invested / cash / leverage breakdown. ``*_pct`` fields are
+ * fractions in [0, ~1] (NOT percent). Frontend multiplies by 100 for
+ * display per the rest of the codebase convention.
+ */
+export interface ExposureResponse {
+  invested: number;
+  cash: number;
+  gross_exposure_pct: number;
+  net_exposure_pct: number;
+  leverage: number;
+}
+
+/**
+ * Risk metrics from S9 composition endpoint.
+ *
+ * Every numeric field is independently nullable — ``null`` means the
+ * metric is undefined for the given series (insufficient history,
+ * volatility 0, no SPY data, etc.). Frontend renders ``null`` as "—".
+ */
+export interface RiskMetricsResponse {
+  portfolio_id: string;
+  lookback_days: number;
+  drawdown_max: number | null;
+  drawdown_current: number | null;
+  volatility_annualized: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  beta_vs_spy: number | null;
+  n_returns: number;
+}
+
 // ── Watchlist ──────────────────────────────────────────────────────────────
 
 export interface WatchlistMember {

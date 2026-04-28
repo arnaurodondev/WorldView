@@ -7,6 +7,8 @@ raw headers (PRD-0025, F-CRIT-001 remediation).
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -14,12 +16,20 @@ from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
+    ExposureResponse,
     PaginatedResponse,
     PortfolioCreateRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
+    ValueHistoryPoint,
+    ValueHistoryResponse,
 )
 from portfolio.application.use_cases.create_portfolio import CreatePortfolioCommand, CreatePortfolioUseCase
+from portfolio.application.use_cases.get_exposure import GetExposureQuery, GetExposureUseCase
+from portfolio.application.use_cases.get_value_history import (
+    GetValueHistoryQuery,
+    GetValueHistoryUseCase,
+)
 from portfolio.application.use_cases.portfolio_ops import (
     ArchivePortfolioUseCase,
     GetPortfolioUseCase,
@@ -145,3 +155,111 @@ async def archive_portfolio(
     x_tenant_id = _extract_tenant_id(request)
     uc = ArchivePortfolioUseCase()
     await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
+
+
+# ── PLAN-0046 Wave 5 — analytics endpoints ────────────────────────────────────
+
+
+# Default lookback window for the equity curve when the caller does not pass
+# ``from``. 90 calendar days ≈ 63 trading days — matches the convention used by
+# the OHLCV proxy (proxy.py) so the chart and the price history align.
+_DEFAULT_VALUE_HISTORY_LOOKBACK_DAYS = 90
+
+
+@router.get("/portfolios/{portfolio_id}/value-history", response_model=ValueHistoryResponse)
+async def get_value_history(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    granularity: Literal["1d", "1w", "1m"] = Query(default="1d"),
+) -> ValueHistoryResponse:
+    """Return the daily portfolio value snapshots over the requested range.
+
+    PLAN-0046 Wave 5 / T-46-5-01. Powers the equity-curve chart.
+
+    Default range = last 90 days (today inclusive). ``granularity=1w`` /
+    ``1m`` resamples to last-snapshot-per-bucket. Returns 404 (via the
+    ``PortfolioNotFoundError`` exception handler) if the portfolio is
+    missing or not owned by the caller's tenant.
+
+    R27: depends on ``ReadOnlyUnitOfWork`` (read replica).
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    # Default ``to`` to today UTC; default ``from`` to today minus 90 days.
+    # We compute these in the API layer (not the use case) so the use case
+    # remains pure on its inputs and easier to unit-test.
+    today = datetime.now(tz=UTC).date()
+    end = to_date or today
+    start = from_date or (end - timedelta(days=_DEFAULT_VALUE_HISTORY_LOOKBACK_DAYS))
+    if start > end:
+        # 400 instead of silently swapping — surfaces caller error explicitly.
+        raise HTTPException(status_code=400, detail="`from` must be on or before `to`")
+
+    uc = GetValueHistoryUseCase()
+    snapshots = await uc.execute(
+        GetValueHistoryQuery(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+            from_date=start,
+            to_date=end,
+            granularity=granularity,
+        ),
+        uow,
+    )
+
+    return ValueHistoryResponse(
+        points=[
+            ValueHistoryPoint(
+                date=s.snapshot_date,
+                value=s.total_value,
+                cost_basis=s.total_cost,
+                cash=s.cash_value,
+            )
+            for s in snapshots
+        ],
+    )
+
+
+@router.get("/portfolios/{portfolio_id}/exposure", response_model=ExposureResponse)
+async def get_exposure(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+) -> ExposureResponse:
+    """Return the current invested / cash / leverage breakdown.
+
+    PLAN-0046 Wave 5 / T-46-5-02. R9: the use case fetches current
+    prices from S3 via REST through the ``CurrentPriceClient`` port —
+    no cross-service DB access.
+
+    Empty portfolios return all zeros (NOT NaN) so the frontend can
+    render a clean empty state.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    # Pull the shared (long-lived) HTTP-backed price client off app.state.
+    # Constructed once at lifespan startup so connections are pooled.
+    price_client = request.app.state.current_price_client
+
+    uc = GetExposureUseCase(price_client=price_client)
+    result = await uc.execute(
+        GetExposureQuery(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+        ),
+        uow,
+    )
+    return ExposureResponse(
+        invested=result.invested,
+        cash=result.cash,
+        gross_exposure_pct=result.gross_exposure_pct,
+        net_exposure_pct=result.net_exposure_pct,
+        leverage=result.leverage,
+    )
