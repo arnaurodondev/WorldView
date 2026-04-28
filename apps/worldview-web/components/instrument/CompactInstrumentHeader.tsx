@@ -76,17 +76,20 @@ export function CompactInstrumentHeader({
   const [descExpanded, setDescExpanded] = useState(false);
 
   // PLAN-0050 T-F-6-17 + T-F-6-21 (closes F-I-029, F-I-035) + QA F-QA-02/03/13:
-  // shared clipboard hook handles timer cleanup on unmount, reports actual
-  // success vs failure (no more lying about Copied! when clipboard is
-  // unavailable), and de-dups the state machine logic across both buttons.
-  const { state: copied, copy } = useCopyState<"ticker" | "link">();
-  const handleCopyTicker = () => void copy(ticker, "ticker");
+  // shared clipboard hook handles timer cleanup on unmount and reports
+  // actual success vs failure (no more lying about Copied! when clipboard
+  // is unavailable). F-QA2-05 fix: each button gets its OWN hook instance
+  // so a click on the link button doesn't visually revert the ticker
+  // button's Check icon mid-feedback during the share-both-rapidly flow.
+  const ticker$ = useCopyState<"ticker">();
+  const link$ = useCopyState<"link">();
+  const handleCopyTicker = () => void ticker$.copy(ticker, "ticker");
   const handleCopyLink = () => {
     // window.location.href is the deepest-link the user is currently
     // looking at — query params included (?tab=news, ?selected=…) — exactly
     // what a colleague needs when "share this view" is clicked.
     const url = typeof window !== "undefined" ? window.location.href : "";
-    void copy(url, "link");
+    void link$.copy(url, "link");
   };
 
   // Derived: format change for display
@@ -129,24 +132,24 @@ export function CompactInstrumentHeader({
           onClick={handleCopyTicker}
           className="group flex shrink-0 items-center gap-1 font-mono text-[13px] font-semibold text-foreground hover:text-primary"
           aria-label={
-            copied === "ticker"
+            ticker$.state === "ticker"
               ? `Copied ${ticker}`
-              : copied === "error"
+              : ticker$.state === "error"
                 ? `Unable to copy — clipboard unavailable`
                 : `Copy ticker ${ticker}`
           }
           title={
-            copied === "ticker"
+            ticker$.state === "ticker"
               ? "Copied!"
-              : copied === "error"
+              : ticker$.state === "error"
                 ? "Unable to copy — clipboard unavailable"
                 : "Copy ticker"
           }
         >
           <span>{ticker}</span>
-          {copied === "ticker" ? (
+          {ticker$.state === "ticker" ? (
             <Check className="h-3 w-3 text-positive" aria-hidden="true" />
-          ) : copied === "error" ? (
+          ) : ticker$.state === "error" ? (
             // F-QA-03: surface the failure path explicitly. Users now see an
             // amber alert dot instead of being silently told "Copied!" when
             // their clipboard was actually empty.
@@ -210,23 +213,23 @@ export function CompactInstrumentHeader({
             onClick={handleCopyLink}
             className="text-muted-foreground hover:text-foreground"
             aria-label={
-              copied === "link"
+              link$.state === "link"
                 ? "Link copied"
-                : copied === "error"
+                : link$.state === "error"
                   ? "Unable to copy link — clipboard unavailable"
                   : "Copy page link"
             }
             title={
-              copied === "link"
+              link$.state === "link"
                 ? "Copied!"
-                : copied === "error"
+                : link$.state === "error"
                   ? "Unable to copy"
                   : "Copy link to this view"
             }
           >
-            {copied === "link" ? (
+            {link$.state === "link" ? (
               <Check className="h-3.5 w-3.5 text-positive" aria-hidden="true" />
-            ) : copied === "error" ? (
+            ) : link$.state === "error" ? (
               <AlertCircle className="h-3.5 w-3.5 text-warning" aria-hidden="true" />
             ) : (
               <Link2 className="h-3.5 w-3.5" aria-hidden="true" />

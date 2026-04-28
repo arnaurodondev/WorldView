@@ -33,37 +33,33 @@ import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
 
 /**
- * Allowlist of query-key prefixes that this button is allowed to invalidate.
+ * Denylist of query-key prefixes that this button MUST NOT invalidate.
  *
- * F-QA-04 fix: the prior `invalidateQueries()` (no filter) would also invalidate
- * SSE/WebSocket-bound observers (alert stream, chat stream) — re-running the
- * setup of those connections produces duplicate streams and a flash of empty
- * state. Restricting to dashboard-style polling queries keeps the "wake up
- * the dashboard" gesture limited to the data classes the user actually wants
- * refreshed when they click this button.
- *
- * Add a new prefix here when introducing a new poll-based query that should
- * participate in "Refresh All".
+ * F-QA2-01 fix: the prior allowlist over-corrected F-QA-04 by silently
+ * dropping ~10 dashboard widgets (sector heatmap, market snapshot, top
+ * movers, index ticker, etc.) from the "Refresh All" gesture — those
+ * panels stayed on stale data while the user thought they had refreshed
+ * everything. We invert the model: invalidate everything *except* the
+ * known-problematic streaming-bound observers, which is the small,
+ * enumerable set:
+ *   - alert-stream / chat-stream      → re-running setup duplicates
+ *                                        the SSE/WebSocket connection
+ *   - alert-ws-* / chat-ws-*           → same family of observers
+ * Any future polling key automatically participates without an audit;
+ * any future streaming key is added here when introduced.
  */
-const REFRESH_ALLOWED_PREFIXES = [
-  "portfolios",
-  "holdings",
-  "holdings-quotes",
-  "dashboard-",
-  "quote-live",
-  "exposure",
-  "screener",
-  "instrument-search",
-  "alerts-pending", // REST poll companion to the WS stream — safe to refresh
-  "layout-pending-alert-count",
+const REFRESH_DENIED_PREFIXES = [
+  "alert-stream",
+  "chat-stream",
+  "alert-ws",  // catches alert-ws-token and similar variants
+  "chat-ws",
 ];
 
 function isRefreshAllowed(queryKey: readonly unknown[]): boolean {
   const head = queryKey[0];
   if (typeof head !== "string") return false;
-  return REFRESH_ALLOWED_PREFIXES.some((p) =>
-    p.endsWith("-") ? head.startsWith(p) : head === p,
-  );
+  // Allow by default; deny only the streaming-bound observers.
+  return !REFRESH_DENIED_PREFIXES.some((p) => head === p || head.startsWith(`${p}-`));
 }
 
 export function RefreshAllButton() {
@@ -115,7 +111,9 @@ export function RefreshAllButton() {
       // Larger sizing would falsely promote it above the alert count badge.
       className="p-1 text-muted-foreground transition-colors hover:text-foreground"
       aria-label="Refresh all dashboard data"
-      title="Refresh all (R)"
+      // F-QA2-02 fix: dropped the "(R)" hint — there is no global R-key
+      // handler. Reinstate when the keybinding is wired.
+      title="Refresh all"
     >
       <RotateCw
         className={`h-4 w-4 ${spinning ? "animate-spin" : ""}`}
