@@ -425,11 +425,15 @@ export function PortfolioSummary() {
 
       {/* Link to full portfolio */}
       {holdings.length > 4 && (
+        // T-B-2-06: truncate + px-2 prevents long counts (e.g., "+46 more")
+        // from overflowing the widget on narrow viewports. The redundant
+        // " → View all" suffix is dropped because the entire row is the
+        // click target — duplicating affordance language adds noise.
         <Link
           href="/portfolio"
-          className="mt-2 block text-center text-xs text-muted-foreground hover:text-foreground"
+          className="mt-2 block truncate px-2 text-center text-xs text-muted-foreground hover:text-foreground"
         >
-          +{holdings.length - 4} more → View all
+          +{holdings.length - 4} more
         </Link>
       )}
 

@@ -72,8 +72,12 @@ const TILE_HEIGHT_PX = 56;
 /**
  * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
  * so wrap rows never overflow due to gap accumulation.
+ *
+ * WHY 2 (was 4): at 11 sectors with 4px gaps, sub-pixel rounding pushed the
+ * last column past the widget border at 1280px viewports (B-2-03). 2px gives
+ * the same visual "card margin" feel without overflow risk.
  */
-const GAP_PX = 4;
+const GAP_PX = 2;
 
 /**
  * colorClassFor — map an absolute % change to a Tailwind opacity-step utility
@@ -217,7 +221,10 @@ export function SectorHeatmapWidget() {
   return (
     // WHY flex flex-col h-full: fills the grid cell so the wrap container can
     // expand to multiple tile rows when many sectors are present.
-    <div className="flex h-full flex-col bg-background">
+    // WHY overflow-hidden: any sub-pixel rounding from `flex-basis: calc(...)`
+    // on the inner tiles is clipped at the widget border instead of bleeding
+    // into adjacent grid cells (B-2-03 fix).
+    <div className="flex h-full flex-col overflow-hidden bg-background">
 
       {/* ── Section header (matches §0.9 panel-header pattern) ──────────── */}
       {/* WHY h-5 (20px): Row 2 cap is 130px. Saving 4px vs h-6 keeps two tile
@@ -256,7 +263,8 @@ export function SectorHeatmapWidget() {
 
       {/* ── Loading state — shimmer of 8 grey tiles in a flex row ────────── */}
       {isHeatmapLoading && (
-        <div className="flex flex-1 flex-wrap gap-1 p-1">
+        // Match the loaded-state padding/gap so there is no visible jump.
+        <div className="flex flex-1 flex-wrap gap-0.5 px-0.5 py-0">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton
               key={i}
@@ -293,11 +301,13 @@ export function SectorHeatmapWidget() {
 
       {/* ── Treemap tile container ───────────────────────────────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
-        // WHY p-1 + gap-1: 4px gap + 4px outer padding gives every tile a
-        // visible "card" margin without wasting too much pixel area.
+        // WHY px-0.5 py-0 + gap-0.5: 2px gaps + 2px horizontal padding only
+        // (was p-1+gap-1). At 11 GICS sectors, the prior 4px gap+padding made
+        // the last column overflow at 1280px. Tighter gaps prevent this and
+        // also better fit the Bloomberg "dense grid" aesthetic.
         // WHY flex-wrap: when the tile widths sum past 100% (which they always
         // will after the floor), tiles wrap to new rows without overflowing.
-        <div className="flex flex-1 flex-wrap gap-1 p-1">
+        <div className="flex flex-1 flex-wrap gap-0.5 px-0.5 py-0">
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile
               key={sector.name}

@@ -117,3 +117,115 @@ class TestAlertRepositoryTenantId:
         entity = AlertRepository._to_entity(row)
 
         assert entity.tenant_id is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0049 T-A-1-02 — enrichment column round-trip (F-QA-01)
+# Pin that title / ticker / entity_name / signal_label survive the
+# Alert → AlertModel → _to_entity round-trip. A typo in `save()` or
+# `_to_entity()` would otherwise only surface in production.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAlertRepositoryEnrichmentColumns:
+    @pytest.mark.unit
+    async def test_save_persists_all_enrichment_columns(self) -> None:
+        """AlertModel receives all four enrichment columns from Alert."""
+        alert = _make_alert()
+        alert.title = "Apple Inc.: Bullish guidance"
+        alert.ticker = "AAPL"
+        alert.entity_name = "Apple Inc."
+        alert.signal_label = "Bullish guidance"
+
+        captured: list = []
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda m: captured.append(m))
+        mock_session.flush = AsyncMock()
+
+        repo = AlertRepository(session=mock_session)
+        await repo.save(alert)
+
+        assert captured, "AlertModel was not added to the session"
+        model = captured[0]
+        assert model.title == "Apple Inc.: Bullish guidance"
+        assert model.ticker == "AAPL"
+        assert model.entity_name == "Apple Inc."
+        assert model.signal_label == "Bullish guidance"
+
+    @pytest.mark.unit
+    async def test_save_persists_null_enrichment_columns(self) -> None:
+        """When Alert has None defaults for all enrichment fields, the model rows them as None."""
+        alert = _make_alert()  # defaults to None for all four
+
+        captured: list = []
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock(side_effect=lambda m: captured.append(m))
+        mock_session.flush = AsyncMock()
+
+        repo = AlertRepository(session=mock_session)
+        await repo.save(alert)
+
+        model = captured[0]
+        assert model.title is None
+        assert model.ticker is None
+        assert model.entity_name is None
+        assert model.signal_label is None
+
+    @pytest.mark.unit
+    async def test_to_entity_round_trips_enrichment_columns(self) -> None:
+        """_to_entity reads all four enrichment columns back into Alert."""
+        from alert.infrastructure.db.models import AlertModel
+
+        row = AlertModel(
+            alert_id=uuid4(),
+            entity_id=uuid4(),
+            alert_type="SIGNAL",
+            source_event_id=uuid4(),
+            source_topic="nlp.signal.detected.v1",
+            payload={},
+            dedup_key="z1",
+            severity="low",
+            tenant_id=None,
+            created_at=datetime.now(UTC),
+            title="Apple Inc.: Bullish guidance",
+            ticker="AAPL",
+            entity_name="Apple Inc.",
+            signal_label="Bullish guidance",
+        )
+
+        entity = AlertRepository._to_entity(row)
+
+        assert entity.title == "Apple Inc.: Bullish guidance"
+        assert entity.ticker == "AAPL"
+        assert entity.entity_name == "Apple Inc."
+        assert entity.signal_label == "Bullish guidance"
+
+    @pytest.mark.unit
+    async def test_to_entity_round_trips_null_enrichment_columns(self) -> None:
+        """Legacy rows (NULL enrichment columns) round-trip cleanly to None."""
+        from alert.infrastructure.db.models import AlertModel
+
+        row = AlertModel(
+            alert_id=uuid4(),
+            entity_id=uuid4(),
+            alert_type="SIGNAL",
+            source_event_id=uuid4(),
+            source_topic="nlp.signal.detected.v1",
+            payload={},
+            dedup_key="z2",
+            severity="low",
+            tenant_id=None,
+            created_at=datetime.now(UTC),
+            title=None,
+            ticker=None,
+            entity_name=None,
+            signal_label=None,
+        )
+
+        entity = AlertRepository._to_entity(row)
+
+        assert entity.title is None
+        assert entity.ticker is None
+        assert entity.entity_name is None
+        assert entity.signal_label is None

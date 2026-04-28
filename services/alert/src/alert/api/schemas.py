@@ -11,7 +11,13 @@ from pydantic import BaseModel, EmailStr, Field
 
 
 class PendingAlertResponse(BaseModel):
-    """A single pending (unacknowledged) alert for a user."""
+    """A single pending (unacknowledged) alert for a user.
+
+    PLAN-0049 T-A-1-02 / T-D-4-04: surface the persisted enrichment fields
+    (title, ticker, entity_name, signal_label) so the frontend never has to
+    fall back to bare-severity strings like ``"LOW signal"`` (F-D-006).
+    All four are optional for forward-compat — old rows persist NULL.
+    """
 
     pending_id: UUID
     alert_id: UUID
@@ -21,6 +27,10 @@ class PendingAlertResponse(BaseModel):
     payload: dict  # type: ignore[type-arg]
     created_at: datetime
     severity: str  # "low" | "medium" | "high" | "critical" (PRD-0021 §6.5)
+    title: str | None = None
+    ticker: str | None = None
+    entity_name: str | None = None
+    signal_label: str | None = None
 
 
 class PendingAlertsResponse(BaseModel):

@@ -75,6 +75,15 @@ class Alert:
     dedup_key: str = ""
     created_at: datetime = field(default_factory=utc_now)
     tenant_id: UUID | None = field(default=None)
+    # ── Enrichment fields (PLAN-0049 T-A-1-02) ────────────────────────────────
+    # All four nullable / Optional so existing constructors and existing DB rows
+    # remain valid — these are forward-compatible additions (BP-007, BP-019).
+    # Source of truth for the user-facing alert subject. ``title`` is composed
+    # in AlertFanoutUseCase from ``signal_label`` + ``entity_name`` / ``ticker``.
+    title: str | None = None
+    ticker: str | None = None
+    entity_name: str | None = None
+    signal_label: str | None = None
 
     @staticmethod
     def compute_dedup_key(

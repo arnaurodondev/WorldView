@@ -95,6 +95,19 @@ class BriefingRequest(BaseModel):
     lookback_days: int = Field(7, ge=1, le=30)
 
 
+class BriefSection(BaseModel):
+    """One section of a structured AI brief (PLAN-0049 T-A-1-04, F-D-001).
+
+    Renders as a heading followed by a bullet list. The frontend
+    ``<MorningBriefCard>`` and ``<InstrumentAISubheader>`` prefer this
+    structured shape when ``sections`` is non-empty; otherwise both fall
+    back to rendering ``narrative`` through ``<MarkdownContent>``.
+    """
+
+    title: str = Field(..., max_length=120)
+    bullets: list[str] = Field(..., min_length=1, max_length=8)
+
+
 class BriefingResponse(BaseModel):
     """Response from POST /internal/v1/briefings.
 
@@ -102,6 +115,11 @@ class BriefingResponse(BaseModel):
     headline produced by the v2.2 prompt's ``## SUMMARY`` block. Older
     callers that don't populate it default to ``None`` for forward
     compatibility (R11: never break wire format).
+
+    PLAN-0049 T-A-1-04 added optional ``headline`` and ``sections``: when
+    populated, the frontend renders structured cards instead of bare
+    markdown. ``narrative`` is kept as the always-present fallback so older
+    clients keep working unchanged (graceful degradation, BP-019).
     """
 
     narrative: str
@@ -112,6 +130,9 @@ class BriefingResponse(BaseModel):
     # summary block. The frontend handles `summary == null` by falling back to
     # showing a clamp-3 of the narrative — safe degradation across rollouts.
     summary: str | None = None
+    # PLAN-0049 additive fields. Leave blank for backwards compatibility.
+    headline: str | None = Field(default=None, max_length=240)
+    sections: list[BriefSection] = Field(default_factory=list)
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
@@ -139,3 +160,8 @@ class PublicBriefingResponse(BaseModel):
     # before v2.2 will lack this field. The frontend treats None as "no two-tier
     # output available — render clamp-3 of narrative as before".
     summary: str | None = None
+    # PLAN-0049 T-A-1-04 — structured render fields. Optional for forward
+    # compat: when present, the frontend renders headline + sections; when
+    # absent, it falls back to narrative through ``<MarkdownContent>``.
+    headline: str | None = Field(default=None, max_length=240)
+    sections: list[BriefSection] = Field(default_factory=list)

@@ -12,6 +12,14 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from rag_chat.application.metrics.prometheus import (
+    rag_cache_hits,
+    rag_contradiction_surfaced,
+    rag_injection_blocked,
+    rag_latency,
+    rag_queries_total,
+    rag_retrieval_items,
+)
 from rag_chat.application.pipeline.context_assembler import (
     ContextAssembler,
     ContradictionAssembler,
@@ -21,14 +29,6 @@ from rag_chat.application.pipeline.prompt_builder import PromptBuilder
 from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery
-from rag_chat.infrastructure.metrics.prometheus import (
-    rag_cache_hits,
-    rag_contradiction_surfaced,
-    rag_injection_blocked,
-    rag_latency,
-    rag_queries_total,
-    rag_retrieval_items,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

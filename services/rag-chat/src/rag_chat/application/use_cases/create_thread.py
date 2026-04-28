@@ -8,8 +8,8 @@ from uuid import UUID
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+from rag_chat.application.metrics.prometheus import rag_thread_count
 from rag_chat.domain.entities.conversation import ConversationThread
-from rag_chat.infrastructure.metrics.prometheus import rag_thread_count
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort

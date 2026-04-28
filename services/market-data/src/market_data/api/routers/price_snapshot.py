@@ -23,6 +23,7 @@ directly importing infrastructure repositories.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -30,8 +31,10 @@ from market_data.api.dependencies import ReadUoWDep
 from market_data.api.schemas.price_snapshot import BatchPriceSnapshotRequest, PriceSnapshotResponse
 from market_data.domain.enums import Timeframe
 from market_data.domain.price_snapshot import PriceSnapshotResolver
-from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
 from observability.logging import get_logger  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
 
 logger = get_logger(__name__)
 

@@ -341,13 +341,19 @@ class BriefingContextGatherer:
         return list(ids)
 
     async def _fetch_top_news(self, *, internal_jwt: str | None = None) -> list[NewsArticleSummary]:
-        """GET /api/v1/news/top from S6 → list of NewsArticleSummary."""
+        """GET /api/v1/news/top from S6 → list of NewsArticleSummary.
+
+        PLAN-0049 T-C-3-04: ``limit`` raised from 10 → 30. Audit F-B-005 reported
+        the dashboard portfolio-news widget only displaying 4 articles; the
+        upstream brief was the limiting factor. 30 keeps payload bounded while
+        giving downstream surfaces enough to fill multi-row widgets.
+        """
         headers: dict[str, str] = {}
         if internal_jwt:
             headers["X-Internal-JWT"] = internal_jwt
         raw = await self._s6._get(
             "/api/v1/news/top",
-            params={"hours": 24, "limit": 10, "min_display_score": 0.15},
+            params={"hours": 24, "limit": 30, "min_display_score": 0.15},
             extra_headers=headers or None,
         )
         return _map_news_articles(raw.get("articles", []))
@@ -359,10 +365,12 @@ class BriefingContextGatherer:
         ownership guard in the signals router, which returns 404 for entities not
         on the tenant watchlist.  The briefing use case must fetch articles for any
         entity regardless of watchlist membership.
+
+        PLAN-0049 T-C-3-04: ``limit`` raised from 10 → 30 (matches _fetch_top_news).
         """
         raw = await self._s6._get(
             f"/api/v1/entities/{entity_id}/briefing-articles",
-            params={"limit": 10},
+            params={"limit": 30},
         )
         return _map_news_articles(raw.get("articles", []))
 

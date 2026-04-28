@@ -36,6 +36,10 @@ class AlertRepository:
             severity=str(alert.severity),
             tenant_id=alert.tenant_id,
             created_at=alert.created_at,
+            title=alert.title,
+            ticker=alert.ticker,
+            entity_name=alert.entity_name,
+            signal_label=alert.signal_label,
         )
         self._session.add(row)
         try:
@@ -77,4 +81,8 @@ class AlertRepository:
             severity=sev,
             created_at=row.created_at,
             tenant_id=row.tenant_id,
+            title=row.title,
+            ticker=row.ticker,
+            entity_name=row.entity_name,
+            signal_label=row.signal_label,
         )

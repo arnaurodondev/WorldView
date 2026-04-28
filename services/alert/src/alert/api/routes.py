@@ -65,6 +65,12 @@ async def get_pending_alerts(
             payload=alert.payload,
             created_at=p.created_at,
             severity=str(alert.severity),
+            # PLAN-0049 T-D-4-04: pass enrichment columns through so the frontend
+            # never has to fall back to "<SEVERITY> signal" labels (F-D-006).
+            title=alert.title,
+            ticker=alert.ticker,
+            entity_name=alert.entity_name,
+            signal_label=alert.signal_label,
         )
         for p, alert in pairs
     ]

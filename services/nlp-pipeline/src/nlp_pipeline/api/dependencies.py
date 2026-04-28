@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +13,9 @@ from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQu
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
-from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
+
+if TYPE_CHECKING:
+    from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository  # noqa: TCH004
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
@@ -126,6 +128,8 @@ def get_entity_mention_repo(
 
     Used by GET /api/v1/entities/{entity_id}/articles in the entities router.
     """
+    from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
+
     return EntityMentionRepository(session)
 
 

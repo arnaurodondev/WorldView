@@ -310,7 +310,7 @@ class ExecuteTaskUseCase:
                 # NOTE: metric increment intentionally lives here rather than in an
                 # infrastructure callback to keep the quota-block -> persist-retry ->
                 # increment -> raise sequence atomic.  Accepted layer violation (F-010).
-                from market_ingestion.infrastructure.metrics.eodhd import (
+                from market_ingestion.application.metrics.eodhd import (
                     eodhd_quota_blocked_total,
                 )
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
-from rag_chat.infrastructure.metrics.prometheus import rag_thread_count
+from rag_chat.application.metrics.prometheus import rag_thread_count
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort

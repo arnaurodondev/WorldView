@@ -693,8 +693,19 @@ export interface Alert {
   ticker: string | null;
   alert_type: string;
   severity: AlertSeverity;
-  title: string;
+  // WHY title is `string | null` (not `string`):
+  // PLAN-0049 added a backend-composed `title` column to the alerts table; old
+  // alerts persisted before the migration are NULL. Frontend uses a fallback
+  // ladder (title → signal_label → humanised alert_type) — making title
+  // non-nullable here would require populating it for legacy rows, which
+  // PLAN-0049 explicitly chose not to do (fallback chain handles it).
+  title: string | null;
   body: string;
+  // PLAN-0049 T-A-1-02 enrichment fields. All optional / nullable:
+  // - Old alerts persisted before migration 0006 will have these as NULL.
+  // - Forward-compat (additive) so older clients ignoring them keep working.
+  entity_name?: string | null;
+  signal_label?: string | null;
   // WHY payload: S10 PendingAlertResponse returns payload (dict) as the structured data.
   // body/title/ticker are legacy fields that may not be populated by the current API.
   payload?: Record<string, unknown>;
@@ -834,6 +845,18 @@ export interface BriefingResponse {
   generated_at: string;
   cached: boolean;
   entity_id: string | null;
+  // PLAN-0049 T-A-1-04 — structured render fields. ``sections`` is populated
+  // when the backend's _parse_sections_from_markdown() succeeded; ``[]`` when
+  // it couldn't parse, in which case the frontend falls back to MarkdownContent
+  // over ``narrative``. ``headline`` mirrors ``summary`` for the top-of-card line.
+  headline?: string | null;
+  sections?: BriefSection[];
+}
+
+/** A structured section of a brief — populated when the backend parser succeeds. */
+export interface BriefSection {
+  title: string;
+  bullets: string[];
 }
 
 // ── Market Heatmap ────────────────────────────────────────────────────────
