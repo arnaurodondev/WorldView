@@ -232,27 +232,30 @@ export function PortfolioSummary() {
           return (
             <div
               key={h.holding_id}
-              // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
-              className="flex items-center justify-between rounded-[2px] px-1 py-0.5 hover:bg-muted/50"
+              className="flex h-[22px] items-center gap-1 rounded-[2px] px-1 hover:bg-muted/50"
             >
-              {/* Ticker + name */}
-              <div className="min-w-0">
-                <span className="font-mono text-xs font-medium tabular-nums text-foreground">
-                  {h.ticker}
-                </span>
-                <span className="ml-2 truncate text-[10px] text-muted-foreground">
-                  {h.name}
-                </span>
-              </div>
-              {/* Value + P&L */}
-              <div className="flex shrink-0 items-center gap-3">
-                <span className="font-mono text-xs tabular-nums text-foreground">
-                  {formatPrice(holdingValue)}
-                </span>
-                <span className={`font-mono text-[10px] tabular-nums ${priceChangeClass(pnlPct)}`}>
-                  {formatPercent(pnlPct / 100)}
-                </span>
-              </div>
+              {/* Ticker — monospace, fixed width for alignment */}
+              <span className="w-[40px] shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
+                {h.ticker || "—"}
+              </span>
+              {/* Name — truncated, muted */}
+              <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+                {h.name || h.instrument_id.slice(0, 8)}
+              </span>
+              {/* Qty — compact shares count */}
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                {h.quantity % 1 === 0
+                  ? h.quantity.toLocaleString()
+                  : h.quantity.toFixed(2)}×
+              </span>
+              {/* Value */}
+              <span className="w-[54px] shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
+                {formatPrice(holdingValue)}
+              </span>
+              {/* P&L % */}
+              <span className={`w-[40px] shrink-0 text-right font-mono text-[10px] tabular-nums ${priceChangeClass(pnlPct)}`}>
+                {formatPercent(pnlPct / 100)}
+              </span>
             </div>
           );
         })}

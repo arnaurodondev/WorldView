@@ -34,6 +34,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 /**
+ * formatPortfolioValue — compact portfolio NAV for the TopBar rail.
+ * WHY compact: the TopBar has limited horizontal space. $1.2M is scannable;
+ * $1,234,567 is not at the rail font size. Returns "—" while null (loading).
+ */
+function formatPortfolioValue(value: number | null | undefined): string {
+  if (value == null) return "—";
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `$${Math.round(value / 1_000)}K`;
+  return `$${Math.round(value).toLocaleString()}`;
+}
+
+/**
  * getInitials — extract user initials for avatar fallback
  * WHY: Most internal users don't have avatar images; initials make the avatar
  * informative rather than showing a generic silhouette.
@@ -48,9 +60,11 @@ function getInitials(name: string | null | undefined): string {
 interface TopBarProps {
   /** Unread alert count — passed from AlertStreamContext via layout */
   unreadAlerts?: number;
+  /** Portfolio total value in USD — passed from layout REST query (null while loading) */
+  portfolioValue?: number | null;
 }
 
-export function TopBar({ unreadAlerts = 0 }: TopBarProps) {
+export function TopBar({ unreadAlerts = 0, portfolioValue }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
 
@@ -94,6 +108,15 @@ export function TopBar({ unreadAlerts = 0 }: TopBarProps) {
         <UtcClock />
 
         <MarketStatusPill />
+
+        {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
+            WHY muted-foreground/80: secondary context, not a primary trading signal.
+            WHY formatPortfolioValue: compact notation ($1.2M, $123K) fits in 80px. */}
+        {portfolioValue !== undefined && (
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground/80">
+            PORT {formatPortfolioValue(portfolioValue)}
+          </span>
+        )}
 
         {/* Alert bell — shows unread count badge */}
         <button

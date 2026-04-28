@@ -46,9 +46,6 @@ import type { BriefingResponse } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Show first 200 chars in collapsed state — enough for 2-3 sentences */
-const PREVIEW_CHARS = 200;
-
 /** Brief older than 12h shows a stale badge in the header */
 const STALE_MS = 12 * 60 * 60 * 1000;
 
@@ -169,8 +166,14 @@ export function MorningBriefCard() {
     );
   }, safeContent);
 
-  const isLong = safeContent.length > PREVIEW_CHARS;
-  const preview = safeContent.slice(0, PREVIEW_CHARS);
+  // Extract a 1-line headline for the collapsed state — first H2 or first bold phrase.
+  // WHY extractHeadline here (not a helper): keeps the logic co-located with the
+  // one component that uses it. Bloomberg Terminal always surfaces a top-line signal
+  // so traders can absorb the brief's key message without reading the body.
+  const headline = extractHeadline(safeContent);
+  // A brief is "long" if there is meaningful content beyond the headline.
+  // We always show 3 body lines; the expand button appears when there is more.
+  const isLong = safeContent.length > 200;
 
   return (
     // WHY flex flex-col h-full: fills Row 1 grid cell; header is fixed h-5,
@@ -178,10 +181,6 @@ export function MorningBriefCard() {
     <div className="flex h-full flex-col">
 
       {/* ── Header row: timestamp (left) + stale badge + refresh (right) ─── */}
-      {/* WHY h-5 (20px): compact header matching other dashboard widget headers
-          (A-2 standardised all to h-5). Single row holds all metadata.
-          WHY left-right split: timestamp is informational (secondary); stale
-          badge + refresh are actionable (primary when stale). */}
       <div className="flex h-5 shrink-0 items-center justify-between border-b border-border/40 px-1">
         {/* Generated timestamp — muted, monospace for scannable date/time */}
         <span className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
@@ -206,44 +205,60 @@ export function MorningBriefCard() {
       </div>
 
       {/* ── Text area: flex-1 so it fills remaining Row 1 height ────────────── */}
-      {/* WHY flex-1 overflow-auto: brief text can be 500+ words; overflow-auto
-          lets users scroll without expanding the grid row.
-          WHY text-[10px] (not text-xs=12px): Row 1 is short by design; 10px
-          fits more lines before overflow and matches terminal density standards. */}
       <div className="flex-1 overflow-auto px-1 py-0.5">
-        {/*
-         * WHY NOT prose/prose-sm/prose-invert (UI-002):
-         * Tailwind's `prose` sets generous font sizes (prose-sm base 14px) and
-         * large heading margins designed for articles. For a compact terminal
-         * widget this wastes vertical space. We use `[&_selector]:property`
-         * selectors to override each markdown element at 10px directly.
-         */}
-        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[11px] [&_h1]:font-semibold [&_h2]:mb-0 [&_h2]:mt-1 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h3]:mt-0.5 [&_h3]:text-[10px] [&_h3]:font-medium [&_li]:leading-snug [&_p]:mt-0.5 [&_strong]:font-semibold [&_ul]:mt-0.5 [&_ul]:pl-3">
-          {isLong && !expanded ? (
-            // WHY slice plain text for preview (not rendered content):
-            // Slicing the raw markdown avoids breaking markdown syntax mid-tag.
-            // Preview renders as plain text at text-[10px] matching expanded density.
+        {/* WHY shared ReactMarkdown classes: both collapsed and expanded use the
+            same markdown styling so the transition between states is seamless. */}
+        {/* WHY ReactMarkdown for all states: entity mentions ([Apple](/instruments/ent-1))
+            must render as clickable links even in the collapsed preview. Plain <p> text
+            would display the raw markdown syntax, breaking entity navigation. */}
+        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0 [&_h2]:mt-1.5 [&_h2]:text-[9px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mt-0.5 [&_h3]:text-[10px] [&_h3]:font-medium [&_li]:leading-snug [&_p]:mt-0.5 [&_strong]:font-semibold [&_ul]:mt-0.5 [&_ul]:pl-3">
+          {!expanded ? (
+            // ── Collapsed view: headline + clamp-3 ReactMarkdown preview ─────
+            // WHY headline first: Bloomberg-grade briefs lead with the most
+            // important signal. A trader reads "Fed signals pause" in 1s.
+            // WHY ReactMarkdown in collapsed: entity mentions must render as
+            // links even in preview (not raw markdown text).
             <>
-              <p className="text-[10px] leading-snug text-foreground/90">
-                {preview}
-                {/* Inline "…more" link — no separate row, no vertical reflow */}
-                <span className="text-muted-foreground">… </span>
+              {headline && (
+                <p className="mb-0.5 font-semibold leading-tight">
+                  {headline}
+                </p>
+              )}
+              {/* WHY [&>*:first-child]:mt-0: remove top margin from first
+                  child element so the preview aligns flush with the headline */}
+              <div className="line-clamp-3 [&>*:first-child]:mt-0">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a: ({ href, children }) => (
+                      <Link href={href ?? "#"} className="text-primary hover:underline">
+                        {children}
+                      </Link>
+                    ),
+                    // WHY strip headers: ## headings in a 3-line clamp waste the
+                    // visible space with section labels; show body content instead.
+                    h1: ({ children }) => <span>{children} </span>,
+                    h2: ({ children }) => <span>{children} </span>,
+                    h3: ({ children }) => <span>{children} </span>,
+                  }}
+                >
+                  {contentWithLinks}
+                </ReactMarkdown>
+              </div>
+              {isLong && (
                 <button
                   onClick={() => setExpanded(true)}
-                  className="text-[9px] text-primary hover:underline"
+                  className="mt-0.5 text-[9px] text-primary hover:underline"
                   aria-label="Expand morning brief"
                 >
-                  more
+                  Read more →
                 </button>
-              </p>
+              )}
             </>
           ) : (
+            // ── Expanded view: full markdown rendering ────────────────────────
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
-              // WHY custom link component: entity mentions are replaced with
-              // markdown links ([name](/instruments/id)) above. This custom
-              // renderer uses Next.js Link for client-side navigation instead
-              // of a full page reload.
               components={{
                 a: ({ href, children }) => (
                   <Link href={href ?? "#"} className="text-primary hover:underline">
@@ -259,9 +274,6 @@ export function MorningBriefCard() {
       </div>
 
       {/* ── "Show less" link — only when expanded ────────────────────────────── */}
-      {/* WHY separate from the text div: the show-less link is a footer-style
-          action, not content. Keeping it outside the scrollable text area means
-          it's always visible (not hidden below a long scroll). */}
       {isLong && expanded && (
         <div className="shrink-0 border-t border-border/40 px-1 py-0.5">
           <button
@@ -269,7 +281,7 @@ export function MorningBriefCard() {
             className="text-[9px] text-muted-foreground hover:text-foreground"
             aria-label="Collapse morning brief"
           >
-            show less
+            show less ↑
           </button>
         </div>
       )}
@@ -300,4 +312,31 @@ function MetaHeader() {
 /** escapeRegex — escape special chars in entity names for use in RegExp */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * extractHeadline — pull the most important 1-line signal from brief markdown.
+ * WHY: Institutional traders expect a top-line summary before reading the brief
+ * body. We try H2 headers first (LLM sections like "## Market Regime"), then
+ * bold phrases ("**Key Signal: …**"), then the first sentence as a fallback.
+ * Returns null if the brief is too short to warrant a separate headline.
+ */
+function extractHeadline(markdown: string): string | null {
+  if (!markdown || markdown.length < 40) return null;
+
+  // Try first ## H2 header (LLM-generated section titles like "## Market Regime")
+  const h2Match = markdown.match(/^##\s+(.+)$/m);
+  if (h2Match?.[1]) return h2Match[1].trim();
+
+  // Try first **bold phrase** (often the LLM key signal)
+  const boldMatch = markdown.match(/\*\*([^*]{10,80})\*\*/);
+  if (boldMatch?.[1]) return boldMatch[1].trim();
+
+  // Fallback: first meaningful sentence (>30 chars) from the first paragraph
+  const firstPara = markdown.split(/\n\n/)[0] ?? "";
+  const clean = firstPara.replace(/[#*`_]/g, "").trim();
+  const sentenceEnd = clean.search(/[.!?]/);
+  if (sentenceEnd > 30) return clean.slice(0, sentenceEnd + 1).trim();
+
+  return null;
 }

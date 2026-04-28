@@ -104,8 +104,12 @@ describe("MorningBriefCard", () => {
     // WHY waitFor: useQuery is async — the component shows skeletons first,
     // then renders data after the mock gateway resolves.
     await waitFor(() => {
-      // ReactMarkdown converts **bold** to <strong> — check for the text content
-      expect(screen.getByText(/Market Update/)).toBeInTheDocument();
+      // WHY getAllByText (not getByText): the new MorningBriefCard redesign
+      // (Wave A-2) shows "Market Update" in two places — once as the extracted
+      // headline and once in the ReactMarkdown-rendered body. getAllByText accepts
+      // 1+ matches; we just need to confirm it appears at least once.
+      const matches = screen.getAllByText(/Market Update/);
+      expect(matches.length).toBeGreaterThanOrEqual(1);
     });
   });
 

@@ -347,7 +347,7 @@ class BriefingContextGatherer:
             headers["X-Internal-JWT"] = internal_jwt
         raw = await self._s6._get(
             "/api/v1/news/top",
-            params={"hours": 24, "limit": 10, "min_display_score": 0.3},
+            params={"hours": 24, "limit": 10, "min_display_score": 0.15},
             extra_headers=headers or None,
         )
         return _map_news_articles(raw.get("articles", []))

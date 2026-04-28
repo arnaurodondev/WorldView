@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from portfolio.application.use_cases.read_models import EnrichedHolding
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
@@ -174,6 +175,9 @@ class HoldingRepository(ABC):
 
     @abstractmethod
     async def list_by_portfolio(self, portfolio_id: UUID) -> list[Holding]: ...
+
+    @abstractmethod
+    async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]: ...
 
     @abstractmethod
     async def save(self, holding: Holding) -> None: ...

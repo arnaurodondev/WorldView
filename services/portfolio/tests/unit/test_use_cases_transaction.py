@@ -20,6 +20,7 @@ from portfolio.application.ports.repositories import (
     UserRepository,
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.use_cases.read_models import EnrichedHolding
 from portfolio.application.use_cases.record_transaction import (
     RecordTransactionCommand,
     RecordTransactionUseCase,
@@ -157,6 +158,10 @@ class FakeHoldingRepo(HoldingRepository):
 
     async def list_by_portfolio(self, portfolio_id):
         return [h for (pid, _), h in self._holdings.items() if pid == portfolio_id]
+
+    async def list_by_portfolio_enriched(self, portfolio_id):
+        holdings = [h for (pid, _), h in self._holdings.items() if pid == portfolio_id]
+        return [EnrichedHolding(holding=h, ticker=None, name=None, entity_id=None) for h in holdings]
 
     async def save(self, holding):
         self._holdings[(holding.portfolio_id, holding.instrument_id)] = holding

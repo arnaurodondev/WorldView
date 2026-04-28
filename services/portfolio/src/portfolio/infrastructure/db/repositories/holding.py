@@ -8,8 +8,10 @@ from uuid import UUID
 from sqlalchemy import select
 
 from portfolio.application.ports.repositories import HoldingRepository
+from portfolio.application.use_cases.read_models import EnrichedHolding
 from portfolio.domain.entities.holding import Holding
 from portfolio.infrastructure.db.models.holding import HoldingModel
+from portfolio.infrastructure.db.models.instrument import InstrumentModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +46,32 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
     async def list_by_portfolio(self, portfolio_id: UUID) -> list[Holding]:
         result = await self._session.execute(select(HoldingModel).where(HoldingModel.portfolio_id == portfolio_id))
         return [self._to_entity(r) for r in result.scalars()]
+
+    async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]:
+        """Return holdings with ticker/name/entity_id from the instruments table.
+
+        WHY LEFT OUTER JOIN: a holding may reference an instrument_id that has not
+        yet been synced from S3 (race condition between SnapTrade sync and instrument
+        consumer). LEFT JOIN ensures all holdings are returned even without an instrument
+        record — the enrichment fields default to None and the frontend degrades gracefully.
+        """
+        stmt = (
+            select(HoldingModel, InstrumentModel.symbol, InstrumentModel.name, InstrumentModel.entity_id)
+            .outerjoin(InstrumentModel, HoldingModel.instrument_id == InstrumentModel.id)
+            .where(HoldingModel.portfolio_id == portfolio_id)
+        )
+        result = await self._session.execute(stmt)
+        enriched: list[EnrichedHolding] = []
+        for holding_row, symbol, name, entity_id in result.tuples():
+            enriched.append(
+                EnrichedHolding(
+                    holding=self._to_entity(holding_row),
+                    ticker=symbol,
+                    name=name,
+                    entity_id=entity_id,
+                )
+            )
+        return enriched
 
     async def save(self, holding: Holding) -> None:
         row = await self._session.get(HoldingModel, holding.id)

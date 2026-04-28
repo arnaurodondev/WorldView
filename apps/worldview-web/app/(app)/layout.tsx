@@ -31,6 +31,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
@@ -38,6 +39,7 @@ import { FlashOverlay } from "@/components/shell/FlashOverlay";
 import { StatusBar } from "@/components/shell/StatusBar";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
+import { createGateway } from "@/lib/gateway";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -61,9 +63,58 @@ interface AppLayoutProps {
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
-  const { isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated, accessToken } = useAuth();
   const router = useRouter();
   const { unreadCount } = useAlertStream();
+
+  // WHY REST pending count: the WebSocket unreadCount only tracks alerts received
+  // during this browser session — it resets to 0 on page refresh. The TopBar badge
+  // must show the persistent DB pending count so it matches the AlarmsPanel sidebar.
+  // We poll every 60s (low frequency — this is layout-level, not a critical widget).
+  const { data: pendingAlertsData } = useQuery({
+    queryKey: ["layout-pending-alert-count"],
+    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 1 }),
+    enabled: !!accessToken && isAuthenticated,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+  // WHY Math.max: show the larger of REST total vs WS session count.
+  // During active sessions new WS alerts may arrive before the 60s REST poll.
+  const badgeCount = Math.max(pendingAlertsData?.total ?? 0, unreadCount);
+
+  // Portfolio NAV for TopBar — uses the same query keys as PortfolioSummary so
+  // TanStack Query deduplicates the HTTP calls (no extra network overhead).
+  // WHY layout-level: TopBar is persistent across page navigations; the value
+  // must not flicker on each route change.
+  const { data: portfoliosData } = useQuery({
+    queryKey: ["portfolios"],
+    queryFn: () => createGateway(accessToken).getPortfolios(),
+    enabled: !!accessToken && isAuthenticated,
+    staleTime: 60_000,
+  });
+  const firstPortfolioId = portfoliosData?.[0]?.portfolio_id;
+  const { data: holdingsResp } = useQuery({
+    queryKey: ["holdings", firstPortfolioId],
+    queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
+    enabled: !!accessToken && isAuthenticated && !!firstPortfolioId,
+    staleTime: 30_000,
+  });
+  const navInstrumentIds = holdingsResp?.holdings.map((h) => h.instrument_id) ?? [];
+  const { data: navQuotes } = useQuery({
+    queryKey: ["holdings-quotes", navInstrumentIds],
+    queryFn: () => createGateway(accessToken).getBatchQuotes(navInstrumentIds),
+    enabled: navInstrumentIds.length > 0 && !!accessToken && isAuthenticated,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  // Compute total NAV: sum(quantity × live_price) for all holdings
+  const portfolioValue: number | null = holdingsResp?.holdings.length
+    ? holdingsResp.holdings.reduce((sum, h) => {
+        const quote = navQuotes?.quotes?.[h.instrument_id];
+        const price = quote?.price ?? h.average_cost;
+        return sum + price * h.quantity;
+      }, 0)
+    : null;
 
   // WHY lazy initializer: reads localStorage once at mount, not on every render.
   // True (expanded) is the default so first-time users see the full labeled sidebar.
@@ -165,7 +216,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
        * main content area scrolls independently without moving the TopBar/Sidebar */}
       <div className="flex h-screen flex-col bg-background">
-        <TopBar unreadAlerts={unreadCount} />
+        <TopBar unreadAlerts={badgeCount} portfolioValue={portfolioValue} />
 
         {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the
          * remaining height below the TopBar, each scrolling independently. */}

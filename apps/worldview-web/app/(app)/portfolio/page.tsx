@@ -552,6 +552,10 @@ export default function PortfolioPage() {
   // The URL always shows /portfolio regardless of which portfolio is active.
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
 
+  // WHY selectedPeriod in state: the 1D/1W/1M buttons control the period shown in the
+  // performance strip. Default 1D matches Bloomberg convention ("today's return first").
+  const [selectedPeriod, setSelectedPeriod] = useState<"1D" | "1W" | "1M">("1D");
+
   // WHY connectModalOpen state here: the modal trigger lives in the Transactions tab
   // brokerage section but the modal must persist through tab switches.
   const [connectModalOpen, setConnectModalOpen] = useState(false);
@@ -712,6 +716,21 @@ export default function PortfolioPage() {
     enabled: watchlistInstrumentIds.length > 0 && !!accessToken,
     refetchInterval: 30_000,
     staleTime: 0,
+  });
+
+  // ── Query 7: portfolio period performance ─────────────────────────────────
+  // WHY independent from holdings queries: performance depends on OHLCV data from S3,
+  // not live quotes. Re-runs only when the portfolio or period changes — not on the
+  // 15s quote poll cycle that drives the live holdings table.
+  const { data: performanceData, isLoading: performanceLoading } = useQuery({
+    queryKey: ["portfolio-performance", activePortfolioId, selectedPeriod],
+    queryFn: () =>
+      createGateway(accessToken).getPortfolioPerformance(
+        activePortfolioId!,
+        selectedPeriod,
+      ),
+    enabled: !!accessToken && !!activePortfolioId,
+    staleTime: 60_000,
   });
 
   // ── Stable derived values (memoised to avoid reference churn) ────────────
@@ -1034,6 +1053,59 @@ export default function PortfolioPage() {
             New Portfolio
           </button>
         </div>
+      </div>
+
+      {/* ── Period selector + performance strip ──────────────────────────── */}
+      {/* WHY period selector at page level (not inside KPIStrip): the period
+          drives a separate API query (S9 composition) not the KPI computation.
+          Keeping state here avoids prop-drilling and makes the query visible
+          in the same component that renders the result. */}
+      <div className="flex shrink-0 items-center justify-between border-b border-border bg-background px-3 py-1">
+        {/* Period buttons — 1D / 1W / 1M */}
+        <div className="flex items-center gap-0.5">
+          {(["1D", "1W", "1M"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setSelectedPeriod(p)}
+              className={[
+                "h-5 w-8 rounded-[2px] font-mono text-[10px] tabular-nums transition-colors",
+                selectedPeriod === p
+                  ? "bg-primary/15 text-primary font-semibold"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+              ].join(" ")}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+
+        {/* Performance result — compact inline display */}
+        {performanceLoading ? (
+          <span className="font-mono text-[10px] text-muted-foreground">—</span>
+        ) : performanceData ? (
+          <span
+            className={[
+              "font-mono text-[10px] tabular-nums font-medium",
+              performanceData.return_pct >= 0 ? "text-positive" : "text-negative",
+            ].join(" ")}
+            title={
+              performanceData.covered_pct < 1
+                ? `Approximate — only ${Math.round(performanceData.covered_pct * 100)}% of positions have market data`
+                : `${selectedPeriod} portfolio return`
+            }
+          >
+            {/* WHY "~" prefix: standard Bloomberg convention when covered_pct < 1 */}
+            {performanceData.covered_pct < 0.99 && (
+              <span className="text-muted-foreground">~</span>
+            )}
+            {performanceData.return_pct >= 0 ? "+" : ""}
+            {performanceData.return_pct.toFixed(2)}%
+            <span className="ml-1 text-muted-foreground/70">
+              ({performanceData.return_abs >= 0 ? "+" : ""}
+              ${Math.abs(performanceData.return_abs).toFixed(0)})
+            </span>
+          </span>
+        ) : null}
       </div>
 
       {/* ── KPI Strip ─────────────────────────────────────────────────────── */}

@@ -693,7 +693,8 @@ export function createGateway(token?: string | null) {
      * The frontend expects `HoldingsResponse = {portfolio_id, holdings: Holding[], total_value, ...}`.
      */
     async getHoldings(portfolioId: string): Promise<HoldingsResponse> {
-      // S1 returns a plain array of HoldingResponse objects
+      // S1 returns a plain array of HoldingResponse objects (now enriched with
+      // ticker/name/entity_id via instruments LEFT JOIN — PLAN-0045 C-1)
       const raw = await apiFetch<
         Array<{
           id: string;
@@ -702,6 +703,9 @@ export function createGateway(token?: string | null) {
           quantity: string; // S1 serialises Decimal as "0.00000000" string
           average_cost: string; // same decimal string format
           currency: string;
+          ticker: string | null;       // from instruments table (null if not synced yet)
+          name: string | null;         // from instruments table
+          entity_id: string | null;    // from instruments table
         }>
       >(`/v1/holdings/${encodeURIComponent(portfolioId)}`, { token: t });
 
@@ -713,12 +717,9 @@ export function createGateway(token?: string | null) {
         holding_id: h.id,
         portfolio_id: h.portfolio_id,
         instrument_id: h.instrument_id,
-        // WHY empty string defaults: S1 does not return entity_id, ticker, or name on holdings.
-        // These are enriched later by the PortfolioPage component via batch quote lookups.
-        // Using empty defaults prevents TypeScript errors and allows graceful degradation.
-        entity_id: "",
-        ticker: "",
-        name: "",
+        entity_id: h.entity_id ?? "",
+        ticker: h.ticker ?? "",
+        name: h.name ?? "",
         // WHY parseFloat: S1 serialises Decimal fields as "0.00000000" strings (Pydantic
         // field_serializer for Numeric(18,8)). The frontend expects numbers for arithmetic.
         quantity: parseFloat(h.quantity) || 0,
@@ -740,6 +741,36 @@ export function createGateway(token?: string | null) {
         total_unrealised_pnl: null,
         total_unrealised_pnl_pct: null,
       };
+    },
+
+    /**
+     * getPortfolioPerformance — period return for a portfolio.
+     *
+     * WHY composition endpoint (not raw proxy): S9 fetches holdings from S1 and
+     * OHLCV bars from S3, then computes the weighted portfolio return. The frontend
+     * cannot safely call two backend services due to CORS and auth constraints.
+     *
+     * Returns `covered_pct` (0-1) so the UI can show "~" prefix when < 100% of
+     * positions have market data available (e.g., new tickers not yet ingested).
+     */
+    async getPortfolioPerformance(
+      portfolioId: string,
+      period: "1D" | "1W" | "1M",
+    ): Promise<{
+      portfolio_id: string;
+      period: string;
+      return_pct: number;
+      return_abs: number;
+      covered_pct: number;
+    }> {
+      const t = token ?? undefined;
+      return apiFetch<{
+        portfolio_id: string;
+        period: string;
+        return_pct: number;
+        return_abs: number;
+        covered_pct: number;
+      }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/performance?period=${period}`, { token: t });
     },
 
     /**

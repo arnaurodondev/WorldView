@@ -52,7 +52,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # SnapTrade defaults (PRD-0022 §12) — SecretStr; compare via get_secret_value()
     assert s.snaptrade_client_id.get_secret_value() == ""
     assert s.snaptrade_consumer_key.get_secret_value() == ""
-    assert s.snaptrade_redirect_uri == "http://localhost:5173/portfolio/brokerage/callback"
+    assert s.snaptrade_redirect_uri == "http://localhost:3001/portfolio/brokerage/callback"
     assert s.brokerage_sync_cycle_seconds == 14400
     assert s.brokerage_sync_history_days == 730
 
