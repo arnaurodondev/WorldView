@@ -131,6 +131,10 @@ interface PointShape {
   value: number;
   cost_basis: number;
   cash: number;
+  // F-501 (QA iter-5): per-point data-quality flag mirrored from S1.
+  // Always present after the gateway normalises ``undefined`` → ``"ok"``,
+  // but typed as optional so legacy data shapes (e.g. fixtures) still pass.
+  data_quality?: string;
 }
 
 function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
@@ -144,6 +148,15 @@ function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
       ? ((point.value - point.cost_basis) / point.cost_basis) * 100
       : null;
 
+  // F-501: render a "Partial prices" caveat when the snapshot was patched
+  // up via the F-401 fallback (stale close or cost-basis substitution).
+  // WHY a yellow/warning caption (not red): "partial_prices" is an honest
+  // estimate within the F-401 1% tolerance, not an error — yellow signals
+  // "trust but verify" rather than "broken". Uses the design-system
+  // `--warning` token (resolves via globals.css HSL triplet) for parity
+  // with every other warning surface in the app.
+  const isPartial = point.data_quality && point.data_quality !== "ok";
+
   return (
     <div
       // WHY raw bg-card / border-border / text-foreground tokens: Midnight Pro
@@ -154,6 +167,22 @@ function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
       <div className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground mb-1">
         {point.date}
       </div>
+      {isPartial && (
+        // F-501: tiny caption below the date so the badge sits in the
+        // metadata zone of the tooltip (not in the numbers grid where it
+        // would compete with Value/Cost/Return for visual weight).
+        <div
+          className="text-[10px] leading-tight mb-1"
+          style={{ color: "hsl(var(--warning))" }}
+          // WHY inline style for the colour: the `--warning` HSL triplet
+          // is defined in globals.css but Tailwind's arbitrary value
+          // resolver doesn't pick it up consistently inside Recharts'
+          // portal-rendered Tooltip. An explicit `style` attribute is the
+          // safe escape hatch — same pattern the chart line itself uses.
+        >
+          Partial prices
+        </div>
+      )}
       <div className="font-mono tabular-nums text-[11px] space-y-0.5">
         <div className="flex justify-between gap-3">
           <span className="text-muted-foreground">Value</span>

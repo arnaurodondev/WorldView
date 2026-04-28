@@ -447,12 +447,24 @@ class ValueHistoryPoint(BaseModel):
     every other Decimal in the API. The frontend parses them with
     ``parseFloat`` — string-on-the-wire avoids JS float precision drift
     on values like 1234.56789012.
+
+    F-501 (QA iter-5): ``data_quality`` propagates the snapshot row's
+    quality flag to the wire so the equity-curve tooltip can render a
+    "Partial prices" caveat when a point's ``value`` was patched up via
+    the F-401 stale-price / cost-basis fallback. Defaults to ``"ok"`` so
+    legacy rows that pre-date the column (NULL in the DB) still
+    serialise cleanly. Forward-compatible: older clients that don't
+    read the field are unaffected.
     """
 
     date: date  # — matches API contract; pydantic resolves the type
     value: Decimal
     cost_basis: Decimal
     cash: Decimal
+    # F-501: optional on input (server may pass None for pre-migration rows)
+    # but always emitted as a non-empty string on the wire — defaulting NULL
+    # to "ok" so the frontend has a single, predictable string-typed field.
+    data_quality: str = "ok"
 
     @field_serializer("value", "cost_basis", "cash")
     def serialize_decimal(self, v: Decimal) -> str:
