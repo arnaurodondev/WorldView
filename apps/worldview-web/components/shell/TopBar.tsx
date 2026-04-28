@@ -62,9 +62,23 @@ interface TopBarProps {
   unreadAlerts?: number;
   /** Portfolio total value in USD — passed from layout REST query (null while loading) */
   portfolioValue?: number | null;
+  /**
+   * Today's portfolio P&L in USD (sum of qty × per-share daily change).
+   * Pass null while batch quotes are loading; the value is hidden until known.
+   * WHY in TopBar (C-2): Bloomberg-style top rails always surface a daily move
+   * number — investors want it within sight regardless of which page they're on.
+   */
+  dailyPnl?: number | null;
+  /** Total unrealised (mark-to-market) P&L in USD — same null semantics as above. */
+  unrealisedPnl?: number | null;
 }
 
-export function TopBar({ unreadAlerts = 0, portfolioValue }: TopBarProps) {
+export function TopBar({
+  unreadAlerts = 0,
+  portfolioValue,
+  dailyPnl,
+  unrealisedPnl,
+}: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
 
@@ -80,10 +94,18 @@ export function TopBar({ unreadAlerts = 0, portfolioValue }: TopBarProps) {
     // maximize data-display vertical space. 36px still clears WCAG touch target
     // minimums for all interactive elements (buttons have h-7 minimum within).
     // WHY border-b border-border: crisp structural edge separating chrome from content.
-    <header className="flex h-9 w-full shrink-0 items-center justify-between border-b border-border bg-background px-3">
+    //
+    // PLAN-0048 Wave C-1 — Layout was previously [left] [absolute-centered ticker] [right].
+    // The absolute centering meant the right cluster could overflow into the ticker at
+    // narrower viewports (the ticker was painted under it because it sat outside the flex
+    // flow). We now use a single flex row with three siblings where the IndexTicker is
+    // the only flex-1 child, so it absorbs slack and truncates first under pressure
+    // instead of colliding with the portfolio rail.
+    <header className="flex h-9 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
-      {/* WHY gap-3 (not gap-4): tighter spacing at reduced bar height */}
-      <div className="flex items-center gap-3">
+      {/* WHY shrink-0: the logo + search must never shrink — they're nav anchors.
+          Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
+      <div className="flex shrink-0 items-center gap-3">
         {/* Wordmark — text for crisp rendering at all DPIs */}
         <button
           onClick={() => router.push("/dashboard")}
@@ -95,26 +117,105 @@ export function TopBar({ unreadAlerts = 0, portfolioValue }: TopBarProps) {
         <GlobalSearch />
       </div>
 
-      {/* ── Center: Market data ───────────────────────────────────── */}
-      {/* WHY absolute center: prevents the market data from shifting
-          when the left/right sections change width */}
-      <div className="absolute left-1/2 -translate-x-1/2">
+      {/* ── Center: Market data (IndexTicker) ─────────────────────── */}
+      {/* WHY flex-1 + min-w-0 + max-w-[640px]:
+          - flex-1: this child absorbs all horizontal slack so left/right blocks
+            stay pinned to their edges.
+          - min-w-0: required for any flex child that may need to shrink below
+            its intrinsic content width — without it, the SPY/QQQ/VIX/BTC row
+            would force the parent to overflow at 1280px.
+          - max-w-[640px]: prevents the ticker from ballooning on ultrawide
+            viewports; once it exceeds ~640px the extra whitespace just adds
+            empty padding around prices that should sit visually centered.
+          - overflow-hidden: lets the ticker truncate gracefully (its own
+            internal layout already supports truncation). */}
+      <div className="flex min-w-0 max-w-[640px] flex-1 justify-center overflow-hidden">
         <IndexTicker />
       </div>
 
       {/* ── Right: Tools + User ──────────────────────────────────── */}
-      {/* WHY gap-2 (not gap-3): compact at 36px bar height */}
-      <div className="flex items-center gap-2">
+      {/* WHY shrink-0: portfolio rail must NEVER wrap or truncate — it is
+          the user's account snapshot and must always be readable. The ticker
+          (flex-1) is the designated truncation victim under width pressure.
+          WHY gap-2: compact at 36px bar height. */}
+      <div className="flex shrink-0 items-center gap-2">
         <UtcClock />
 
         <MarketStatusPill />
 
+        {/* ── Portfolio rail (PLAN-0048 C-1) ──────────────────────────────
+            Three labeled values rendered as a single flex group with
+            explicit min-width slots so values don't jump as digits change.
+
+            WHY explicit min-w-* on every value:
+            - The width must be PRE-ALLOCATED. If the values shrink/grow with
+              content (e.g. "$3K" → "+$45.6K"), neighboring labels shift left
+              and right on every refetch. Tabular-nums fixes per-character
+              width but not the overall span — we still need min-w to lock
+              the slot. Picked widths cover worst-case strings:
+                * "$1.2M" / "$123K" / "—"  → min-w-[3.25rem] (52px)
+                * "+$45.6K" with sign      → min-w-[3.75rem] (60px)
+            - All three numeric values use font-mono + tabular-nums so digits
+              align column-wise inside their slot.
+            WHY text-[11px] (was text-[10px]): user feedback (audit
+            2026-04-28) — 10px is too dense; 11px gains breathing room
+            without growing the 36px bar height. Labels also bumped to 11px
+            for visual parity. */}
+
         {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
-            WHY muted-foreground/80: secondary context, not a primary trading signal.
-            WHY formatPortfolioValue: compact notation ($1.2M, $123K) fits in 80px. */}
+            WHY whitespace-nowrap: prevents "PORT $1.2M" from breaking onto two
+            lines if a parent ever sets flex-wrap. */}
         {portfolioValue !== undefined && (
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground/80">
-            PORT {formatPortfolioValue(portfolioValue)}
+          <span
+            className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
+            title="Total portfolio value (live quote-based)"
+            aria-label={`Portfolio value ${formatPortfolioValue(portfolioValue)}`}
+          >
+            <span className="text-muted-foreground">PORT</span>
+            {/* min-w slot reserves space so neighbour labels don't jump */}
+            <span className="inline-block min-w-[3.25rem] text-right text-foreground">
+              {formatPortfolioValue(portfolioValue)}
+            </span>
+          </span>
+        )}
+
+        {/* Day P&L — colored teal/red so direction is instantly readable.
+            WHY explicit "Day P&L" label (renamed from "Daily"): user audit
+            feedback — "Daily" alone is ambiguous (daily what? bar? brief?).
+            "Day P&L" matches the standard Bloomberg/IBKR account rail label. */}
+        {dailyPnl != null && (
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              dailyPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
+            }`}
+            title="Today's portfolio P&L (live quote-based)"
+            aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
+          >
+            <span className="text-muted-foreground">Day P&amp;L</span>
+            <span className="inline-block min-w-[3.75rem] text-right">
+              {dailyPnl >= 0 ? "+" : "-"}
+              {formatPortfolioValue(Math.abs(dailyPnl))}
+            </span>
+          </span>
+        )}
+
+        {/* Total P&L — total mark-to-market vs cost basis.
+            WHY "Total P&L" (renamed from "Unrlzd"): user audit feedback —
+            "Unrlzd" is a finance-jargon abbreviation; "Total P&L" reads
+            correctly to anyone and still fits in the rail at 11px. */}
+        {unrealisedPnl != null && (
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              unrealisedPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
+            }`}
+            title="Total unrealised P&L vs cost basis (mark-to-market)"
+            aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
+          >
+            <span className="text-muted-foreground">Total P&amp;L</span>
+            <span className="inline-block min-w-[3.75rem] text-right">
+              {unrealisedPnl >= 0 ? "+" : "-"}
+              {formatPortfolioValue(Math.abs(unrealisedPnl))}
+            </span>
           </span>
         )}
 
