@@ -9,13 +9,18 @@ from decimal import Decimal
 import pytest
 from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
 from portfolio.domain.enums import (
+    PortfolioKind,
     PortfolioStatus,
     TenantStatus,
     TransactionDirection,
     TransactionType,
     UserStatus,
 )
-from portfolio.domain.errors import InsufficientHoldingsError, PortfolioArchivedError
+from portfolio.domain.errors import (
+    InsufficientHoldingsError,
+    PortfolioArchivedError,
+    RootPortfolioNotArchivableError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -124,6 +129,39 @@ class TestPortfolio:
     def test_default_currency_is_usd(self) -> None:
         portfolio = self._make_portfolio()
         assert portfolio.currency == "USD"
+
+    # ── PLAN-0046 Wave 3 / T-46-3-01 — kind discriminator ───────────────
+
+    def test_default_kind_is_manual(self) -> None:
+        # Backwards-compat: the existing CreatePortfolioUseCase doesn't pass
+        # kind, so the default must remain MANUAL — anything else would
+        # silently mark every new manual portfolio as something else.
+        portfolio = self._make_portfolio()
+        assert portfolio.kind == PortfolioKind.MANUAL
+
+    def test_kind_can_be_set_to_root(self) -> None:
+        portfolio = self._make_portfolio(kind=PortfolioKind.ROOT)
+        assert portfolio.kind == PortfolioKind.ROOT
+
+    def test_archive_raises_for_root_portfolio(self) -> None:
+        # Domain guard for T-46-3-01: archiving the aggregate "All Accounts"
+        # view would orphan the user's root — must always raise.
+        portfolio = self._make_portfolio(kind=PortfolioKind.ROOT)
+        with pytest.raises(RootPortfolioNotArchivableError):
+            portfolio.archive()
+
+    def test_archive_succeeds_for_manual_portfolio(self) -> None:
+        # Sanity check: the new guard must not regress the normal path.
+        portfolio = self._make_portfolio(kind=PortfolioKind.MANUAL)
+        portfolio.archive()
+        assert portfolio.status == PortfolioStatus.ARCHIVED
+
+    def test_archive_succeeds_for_brokerage_portfolio(self) -> None:
+        # Brokerage portfolios are user-owned and may be archived if the
+        # connection is removed. Only ROOT is special.
+        portfolio = self._make_portfolio(kind=PortfolioKind.BROKERAGE)
+        portfolio.archive()
+        assert portfolio.status == PortfolioStatus.ARCHIVED
 
 
 # ── Transaction ───────────────────────────────────────────────────────────────

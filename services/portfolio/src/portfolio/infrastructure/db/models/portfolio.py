@@ -25,4 +25,8 @@ class PortfolioModel(Base):
     name: Mapped[str]
     currency: Mapped[str] = mapped_column(default="USD")
     status: Mapped[str] = mapped_column(default="active")
+    # PLAN-0046 Wave 3 / T-46-3-01. ``kind`` is added by Alembic migration 0011
+    # with ``server_default='manual'`` so existing rows backfill safely (BP-126).
+    # The mapped_column also carries ``default='manual'`` for ORM-level INSERTs.
+    kind: Mapped[str] = mapped_column(default="manual", server_default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

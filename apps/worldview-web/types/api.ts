@@ -470,6 +470,16 @@ export interface Portfolio {
   owner_id: string;
   created_at: string;
   updated_at: string;
+  // PLAN-0046 Wave 3 / T-46-3-04 — kind discriminator from S1.
+  //   "manual"    : user-created, transactions entered by hand
+  //   "brokerage" : created during a SnapTrade brokerage connection flow
+  //   "root"      : auto-provisioned aggregate ("All Accounts") — read-only,
+  //                 cannot be deleted, holds no positions of its own.
+  // The frontend uses this to (a) sort the root entry first in the selector,
+  // (b) show an "ALL" badge, and (c) hide/disable the delete button.
+  // Optional only because older S9 builds may not yet emit it; once the
+  // gateway response is updated this can become required.
+  kind?: "manual" | "brokerage" | "root";
 }
 
 export interface Holding {

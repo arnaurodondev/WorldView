@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
+from portfolio.domain.enums import PortfolioKind
 from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 
 if TYPE_CHECKING:
@@ -45,6 +46,15 @@ class GetHoldingsUseCase:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
         if portfolio.owner_id != owner_id:
             raise AuthorizationError("Not authorized to view this portfolio's holdings")
+
+        # PLAN-0046 Wave 3 / T-46-3-03: ROOT portfolios aggregate the user's
+        # other portfolios. Replace the WHERE portfolio_id = X predicate with
+        # WHERE portfolio_id IN (sub-portfolios), then collapse by instrument_id
+        # with quantity sum + qty-weighted average cost.
+        if portfolio.kind == PortfolioKind.ROOT:
+            sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
+            return await uow.holdings.list_by_portfolio_ids_aggregated_enriched(sub_ids)
+
         return await uow.holdings.list_by_portfolio_enriched(portfolio_id)
 
 
@@ -63,4 +73,17 @@ class ListTransactionsUseCase:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
         if portfolio.owner_id != owner_id:
             raise AuthorizationError("Not authorized to view this portfolio's transactions")
+
+        # PLAN-0046 Wave 3 / T-46-3-03: ROOT portfolios show the union of
+        # transactions across the user's sub-portfolios, sorted newest-first.
+        # No aggregation — every original transaction row is preserved.
+        if portfolio.kind == PortfolioKind.ROOT:
+            sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
+            return await uow.transactions.list_by_portfolio_ids(
+                sub_ids,
+                tenant_id,
+                limit=limit,
+                offset=offset,
+            )
+
         return await uow.transactions.list_by_portfolio(portfolio_id, tenant_id, limit=limit, offset=offset)

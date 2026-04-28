@@ -55,6 +55,8 @@ def _to_response(portfolio) -> PortfolioResponse:  # type: ignore[no-untyped-def
         name=portfolio.name,
         currency=portfolio.currency,
         status=str(portfolio.status),
+        # PLAN-0046 Wave 3 / T-46-3-01 — surface kind to API clients.
+        kind=str(portfolio.kind),
         created_at=portfolio.created_at,
     )
 

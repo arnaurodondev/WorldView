@@ -8,8 +8,8 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-from portfolio.domain.enums import PortfolioStatus
-from portfolio.domain.errors import PortfolioArchivedError
+from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+from portfolio.domain.errors import PortfolioArchivedError, RootPortfolioNotArchivableError
 
 
 @dataclass
@@ -17,6 +17,11 @@ class Portfolio:
     """A named collection of holdings owned by a single user within a tenant.
 
     Unique constraint: (owner_id, name).
+
+    PLAN-0046 Wave 3 / T-46-3-01: ``kind`` discriminates between user-managed
+    (MANUAL), broker-synced (BROKERAGE) and the auto-provisioned aggregate
+    (ROOT). The DB enforces ``UNIQUE (owner_id) WHERE kind = 'root'`` so each
+    user has at most one root portfolio.
     """
 
     tenant_id: UUID
@@ -25,6 +30,9 @@ class Portfolio:
     currency: str = "USD"
     id: UUID = field(default_factory=new_uuid)
     status: PortfolioStatus = PortfolioStatus.ACTIVE
+    # Default ``MANUAL`` keeps backwards compatibility with all existing
+    # construction sites (CreatePortfolioUseCase, brokerage flows, tests).
+    kind: PortfolioKind = PortfolioKind.MANUAL
     created_at: datetime = field(default_factory=utc_now)
 
     def is_active(self) -> bool:
@@ -39,4 +47,13 @@ class Portfolio:
         self.name = new_name
 
     def archive(self) -> None:
+        # PLAN-0046 Wave 3: the ROOT portfolio is undeletable. The check lives
+        # here (not in the use case) so every code path — API archive, brokerage
+        # cleanup, future cron jobs — gets the same guard for free.
+        if self.kind == PortfolioKind.ROOT:
+            raise RootPortfolioNotArchivableError(
+                "Root portfolio cannot be archived",
+                tenant_id=self.tenant_id,
+                details={"portfolio_id": str(self.id), "kind": str(self.kind)},
+            )
         self.status = PortfolioStatus.ARCHIVED

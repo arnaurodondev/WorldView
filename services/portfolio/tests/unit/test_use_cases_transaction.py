@@ -103,6 +103,14 @@ class FakePortfolioRepo(PortfolioRepository):
 
     async def save(self, portfolio): ...
 
+    # PLAN-0046 Wave 3 / T-46-3-02 — required by abstract base.
+    async def find_root_by_owner(self, owner_id, tenant_id):
+        return None
+
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_non_root_active_ids_by_owner(self, owner_id, tenant_id):
+        return []
+
 
 class FakeInstrumentRepo(InstrumentRepository):
     def __init__(self, instrument: InstrumentRef | None = None) -> None:
@@ -147,6 +155,10 @@ class FakeTransactionRepo(TransactionRepository):
     async def save(self, transaction):
         self.saved.append(transaction)
 
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_by_portfolio_ids(self, portfolio_ids, tenant_id, limit: int = 100, offset: int = 0):
+        return [], 0
+
 
 class FakeHoldingRepo(HoldingRepository):
     def __init__(self) -> None:
@@ -169,6 +181,10 @@ class FakeHoldingRepo(HoldingRepository):
         # PLAN-0046 / BP-264: parity with the production repo; required to
         # satisfy the new HoldingRepository.delete abstract method.
         self._holdings.pop((portfolio_id, instrument_id), None)
+
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_by_portfolio_ids_aggregated_enriched(self, portfolio_ids):
+        return []
 
 
 class FakeOutboxRepo(OutboxRepository):

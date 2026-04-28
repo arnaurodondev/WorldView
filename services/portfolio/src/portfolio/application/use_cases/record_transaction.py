@@ -16,6 +16,7 @@ from portfolio.application.ports.repositories import OutboxRecord
 from portfolio.domain.entities.transaction import Transaction
 from portfolio.domain.errors import (
     AuthorizationError,
+    CannotRecordTransactionOnRootPortfolioError,
     CurrencyMismatchError,
     IdempotencyConflictError,
     IdempotencyKeyInvalidError,
@@ -29,6 +30,10 @@ from portfolio.domain.events import TransactionRecorded
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
     from portfolio.domain.enums import TransactionDirection, TransactionType
+
+# Imported eagerly (not under TYPE_CHECKING) because PortfolioKind is referenced
+# at runtime in the ROOT-rejection guard below.
+from portfolio.domain.enums import PortfolioKind
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -115,14 +120,18 @@ class RecordTransactionUseCase:
         if portfolio.owner_id != cmd.owner_id:
             raise AuthorizationError("Not authorized to record transactions for this portfolio")
 
-        # PLAN-0046 Wave 3 (T-46-1-03 defensive marker): when the ``kind`` enum
-        # ships in Wave 3 we must reject root portfolios here — they aggregate
-        # other portfolios and have no transactions of their own. The actual
-        # ``portfolio.kind == PortfolioKind.ROOT`` check lives in Wave 3; until
-        # then this comment marks the line where it will be added so reviewers
-        # can find the insertion point at a glance.
-        # TODO(PLAN-0046 Wave 3): if portfolio.kind == PortfolioKind.ROOT: raise
-        #     PortfolioKindNotAllowedError("Root portfolios cannot record transactions")
+        # PLAN-0046 Wave 3 / T-46-3-03: reject ROOT portfolios. The root
+        # portfolio is a read-time aggregate over the user's other portfolios
+        # and holds no positions of its own — accepting transactions here
+        # would silently create rows that the holdings fan-out can never
+        # surface (see GetHoldingsUseCase). Returning 400 lets API clients
+        # detect the misuse explicitly.
+        if portfolio.kind == PortfolioKind.ROOT:
+            raise CannotRecordTransactionOnRootPortfolioError(
+                "Cannot record transactions against the root (aggregate) portfolio.",
+                tenant_id=cmd.tenant_id,
+                details={"portfolio_id": str(cmd.portfolio_id)},
+            )
 
         # Validate currency matches portfolio
         if cmd.currency != portfolio.currency:

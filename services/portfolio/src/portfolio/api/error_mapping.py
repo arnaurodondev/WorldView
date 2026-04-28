@@ -10,11 +10,13 @@ from portfolio.domain.errors import (
     BrokerageConnectionNotFoundError,
     BrokerageConnectionStateError,
     BusinessRuleViolationError,
+    CannotRecordTransactionOnRootPortfolioError,
     ConcurrencyError,
     DomainError,
     EntityAlreadyExistsError,
     EntityNotFoundError,
     IdempotencyKeyConflictError,
+    RootPortfolioNotArchivableError,
     TosNotAcceptedError,
     ValidationError,
 )
@@ -34,6 +36,12 @@ ERROR_STATUS_MAP: dict[type[DomainError], int] = {
     BrokerageConnectionStateError: 422,  # overrides BusinessRuleViolationError → 409
     BrokerageConnectionAlreadyDisconnectedError: 422,
     BrokerageApiError: 503,
+    # PLAN-0046 Wave 3: explicit 400 (not 409) so the frontend can show a
+    # specific tooltip and the error code is unambiguous in API logs. The
+    # error inherits BusinessRuleViolationError which would default to 409
+    # via MRO walk; listing the subclass first overrides that.
+    RootPortfolioNotArchivableError: 400,
+    CannotRecordTransactionOnRootPortfolioError: 400,
 }
 
 

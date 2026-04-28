@@ -119,6 +119,25 @@ class PortfolioRepository(ABC):
     @abstractmethod
     async def save(self, portfolio: Portfolio) -> None: ...
 
+    @abstractmethod
+    async def find_root_by_owner(self, owner_id: UUID, tenant_id: UUID) -> Portfolio | None:
+        """Return the owner's ROOT portfolio (kind='root') if any.
+
+        PLAN-0046 Wave 3 / T-46-3-02. Used by ``EnsureRootPortfolioUseCase``
+        to keep auto-provisioning idempotent — at most one ROOT per owner
+        is enforced by a partial unique index.
+        """
+        ...
+
+    @abstractmethod
+    async def list_non_root_active_ids_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[UUID]:
+        """Return ids of the owner's non-root, status=active portfolios.
+
+        PLAN-0046 Wave 3 / T-46-3-03. Powers the holdings/transactions
+        fan-out for ROOT portfolios.
+        """
+        ...
+
 
 class InstrumentRepository(ABC):
     @abstractmethod
@@ -166,6 +185,23 @@ class TransactionRepository(ABC):
     ) -> tuple[list[Transaction], int]: ...
 
     @abstractmethod
+    async def list_by_portfolio_ids(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        """Union of transactions across multiple portfolios, sorted by
+        ``executed_at DESC`` then ``created_at DESC`` for stable pagination.
+
+        PLAN-0046 Wave 3 / T-46-3-03. Used by ``ListTransactionsUseCase`` for
+        ROOT portfolios — no aggregation, just a UNION newest-first.
+        Empty input → empty list, total=0.
+        """
+        ...
+
+    @abstractmethod
     async def save(self, transaction: Transaction) -> None: ...
 
 
@@ -178,6 +214,29 @@ class HoldingRepository(ABC):
 
     @abstractmethod
     async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]: ...
+
+    @abstractmethod
+    async def list_by_portfolio_ids_aggregated_enriched(
+        self,
+        portfolio_ids: list[UUID],
+    ) -> list[EnrichedHolding]:
+        """Aggregate holdings across multiple portfolios for a ROOT view.
+
+        PLAN-0046 Wave 3 / T-46-3-03. Returns a single ``EnrichedHolding`` row
+        per ``instrument_id``, where:
+
+        - ``quantity`` = ``SUM(quantity)`` across all listed portfolios
+        - ``average_cost`` = qty-weighted average:
+          ``SUM(qty * avg_cost) / NULLIF(SUM(qty), 0)``
+
+        ``holding.portfolio_id`` is set to the *first* portfolio_id seen for
+        the instrument so the row remains a valid ``Holding`` entity. The
+        aggregated ``id`` is synthesized (never persisted) — callers must
+        treat ROOT-aggregated rows as read-only.
+
+        When ``portfolio_ids`` is empty the result is an empty list.
+        """
+        ...
 
     @abstractmethod
     async def save(self, holding: Holding) -> None: ...

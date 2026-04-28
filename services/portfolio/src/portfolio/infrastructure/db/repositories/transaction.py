@@ -84,6 +84,39 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
         result = await self._session.execute(select(TransactionModel).where(*base_where).limit(limit).offset(offset))
         return [self._to_entity(r) for r in result.scalars()], total
 
+    async def list_by_portfolio_ids(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        """Union of transactions across multiple portfolios for ROOT view.
+
+        PLAN-0046 Wave 3 / T-46-3-03. Sorted ``executed_at DESC, created_at
+        DESC`` so pagination is stable even when several transactions share
+        the same trade date (very common for SnapTrade syncs).
+        """
+        if not portfolio_ids:
+            return [], 0
+
+        base_where = (
+            TransactionModel.portfolio_id.in_(portfolio_ids),
+            TransactionModel.tenant_id == tenant_id,
+        )
+        count_result = await self._session.execute(
+            select(func.count()).select_from(TransactionModel).where(*base_where),
+        )
+        total: int = count_result.scalar_one()
+        result = await self._session.execute(
+            select(TransactionModel)
+            .where(*base_where)
+            .order_by(TransactionModel.executed_at.desc(), TransactionModel.created_at.desc())
+            .limit(limit)
+            .offset(offset),
+        )
+        return [self._to_entity(r) for r in result.scalars()], total
+
     async def save(self, transaction: Transaction) -> None:
         row = await self._session.get(TransactionModel, transaction.id)
         if row is None:

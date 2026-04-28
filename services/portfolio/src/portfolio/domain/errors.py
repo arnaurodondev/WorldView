@@ -136,6 +136,31 @@ class PortfolioArchivedError(BusinessRuleViolationError):
     error_code = "PORTFOLIO_ARCHIVED"
 
 
+class RootPortfolioNotArchivableError(BusinessRuleViolationError):
+    """Raised when a user (or API call) attempts to archive/delete the
+    auto-provisioned ROOT portfolio.
+
+    PLAN-0046 Wave 3 / T-46-3-01. The root portfolio aggregates positions
+    across all other portfolios; deleting it would orphan the user's "All
+    Accounts" view. The API maps this to HTTP 400 explicitly (see
+    error_mapping.py) so the frontend can show a precise tooltip.
+    """
+
+    error_code = "ROOT_PORTFOLIO_NOT_ARCHIVABLE"
+
+
+class CannotRecordTransactionOnRootPortfolioError(BusinessRuleViolationError):
+    """Raised when ``RecordTransactionUseCase`` is called against a ROOT
+    portfolio.
+
+    PLAN-0046 Wave 3 / T-46-3-03. Root portfolios are pure read-time
+    aggregations of their owner's other portfolios — they have no
+    independent transaction stream. The API maps this to HTTP 400.
+    """
+
+    error_code = "CANNOT_RECORD_TRANSACTION_ON_ROOT"
+
+
 class InsufficientHoldingsError(BusinessRuleViolationError):
     error_code = "INSUFFICIENT_HOLDINGS"
 
