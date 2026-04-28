@@ -238,6 +238,31 @@ class WatchlistMemberResponse(BaseModel):
     added_at: datetime
 
 
+# ── Watchlist member listing (PLAN-0046 / T-46-2-02) ──────────────────────────
+
+
+class WatchlistMemberListItem(BaseModel):
+    """A member as exposed by ``GET /v1/watchlists/{id}/members``.
+
+    Carries the denormalised ``ticker``/``name``/``instrument_id`` resolved
+    at add-time (see Alembic 0010). All three are nullable for historical rows.
+    """
+
+    entity_id: UUID
+    entity_type: str
+    ticker: str | None = None
+    name: str | None = None
+    instrument_id: UUID | None = None
+    added_at: datetime
+
+
+class WatchlistMemberListResponse(BaseModel):
+    """Paginated response for watchlist members."""
+
+    members: list[WatchlistMemberListItem]
+    total: int
+
+
 # ── Alert preference schemas ───────────────────────────────────────────────────
 
 

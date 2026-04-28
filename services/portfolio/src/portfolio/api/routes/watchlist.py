@@ -15,16 +15,22 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep, WatchlistCacheDep
 from portfolio.api.schemas import (
     WatchlistCreateRequest,
     WatchlistMemberCreateRequest,
+    WatchlistMemberListItem,
+    WatchlistMemberListResponse,
     WatchlistMemberResponse,
     WatchlistRenameRequest,
     WatchlistResponse,
+)
+from portfolio.application.use_cases.list_watchlist_members import (
+    ListWatchlistMembersQuery,
+    ListWatchlistMembersUseCase,
 )
 from portfolio.application.use_cases.watchlist import (
     AddWatchlistMemberCommand,
@@ -166,6 +172,56 @@ async def rename_watchlist(
         name=wl.name,
         status=str(wl.status),
         created_at=wl.created_at,
+    )
+
+
+@router.get(
+    "/{watchlist_id}/members",
+    response_model=WatchlistMemberListResponse,
+)
+async def list_members(
+    watchlist_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    # WHY Query() with bounds: standard ``limit``/``offset`` pagination shared
+    # with other portfolio list endpoints. ``le=500`` caps the worst case so a
+    # single request can't blow up the response payload — watchlists are
+    # typically <50 members so 100 is a safe default and 500 is generous.
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> WatchlistMemberListResponse:
+    """List members of a watchlist (PLAN-0046 / T-46-2-02).
+
+    Returns 404 (via ``WatchlistNotFoundError`` from the use case) when the
+    watchlist either doesn't exist or belongs to a different owner — we don't
+    expose ownership information.
+    """
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
+    uc = ListWatchlistMembersUseCase()
+    result = await uc.execute(
+        ListWatchlistMembersQuery(
+            watchlist_id=watchlist_id,
+            owner_id=x_owner_id,
+            tenant_id=x_tenant_id,
+            limit=limit,
+            offset=offset,
+        ),
+        uow,
+    )
+    return WatchlistMemberListResponse(
+        members=[
+            WatchlistMemberListItem(
+                entity_id=m.entity_id,
+                entity_type=m.entity_type,
+                ticker=m.ticker,
+                name=m.name,
+                instrument_id=m.instrument_id,
+                added_at=m.added_at,
+            )
+            for m in result.members
+        ],
+        total=result.total,
     )
 
 

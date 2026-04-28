@@ -324,6 +324,21 @@ class FakeWatchlistMemberRepository(WatchlistMemberRepository):
     async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]:
         return [m for (wid, _), m in self._store.items() if wid == watchlist_id]
 
+    async def list_by_watchlist_paginated(
+        self,
+        watchlist_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WatchlistMember], int]:
+        # PLAN-0046 / T-46-2-02: paginated read used by ListWatchlistMembersUseCase.
+        # Sort by added_at to mirror the SQL repo's ORDER BY for stable paging.
+        members = sorted(
+            (m for (wid, _), m in self._store.items() if wid == watchlist_id),
+            key=lambda m: m.added_at,
+        )
+        total = len(members)
+        return members[offset : offset + limit], total
+
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]:
         return [m for (_, eid), m in self._store.items() if eid == entity_id]
 

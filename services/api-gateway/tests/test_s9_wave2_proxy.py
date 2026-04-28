@@ -294,6 +294,53 @@ async def test_watchlist_delete_returns_200(authed_app, authed_mock_clients) -> 
 
 
 @pytest.mark.asyncio
+async def test_watchlist_members_list_requires_auth(app, mock_clients) -> None:
+    """GET /v1/watchlists/{id}/members without auth → 401 (PLAN-0046 / T-46-2-02)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/watchlists/wl-1/members")
+
+    assert resp.status_code == 401
+    mock_clients.portfolio.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_watchlist_members_list_proxies_to_s1(
+    authed_app,
+    authed_mock_clients,
+) -> None:
+    """GET /v1/watchlists/{id}/members proxied to S1 with pagination preserved.
+
+    PLAN-0046 / BP-265 — the gateway must actually fetch members rather than
+    silently returning an empty array.
+    """
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            b'{"members": [{"entity_id": "e-1", "entity_type": "company",'
+            b' "ticker": "AAPL", "name": "Apple Inc.",'
+            b' "instrument_id": "i-1", "added_at": "2026-01-01T00:00:00Z"}],'
+            b' "total": 1}',
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-1/members?limit=50&offset=10",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_called_once()
+    call_args = authed_mock_clients.portfolio.get.call_args[0]
+    # Verify the path and that the query string was forwarded verbatim.
+    assert "/api/v1/watchlists/wl-1/members" in call_args[0]
+    assert "limit=50" in call_args[0]
+    assert "offset=10" in call_args[0]
+
+
+@pytest.mark.asyncio
 async def test_watchlist_member_add(authed_app, authed_mock_clients) -> None:
     """POST /v1/watchlists/{id}/members forwards body to S1."""
     authed_mock_clients.portfolio.post = AsyncMock(

@@ -7,6 +7,10 @@ from uuid import uuid4
 
 import pytest
 from portfolio.application.ports.cache import NoOpWatchlistCache
+from portfolio.application.use_cases.list_watchlist_members import (
+    ListWatchlistMembersQuery,
+    ListWatchlistMembersUseCase,
+)
 from portfolio.application.use_cases.tenant import CreateTenantCommand, CreateTenantUseCase
 from portfolio.application.use_cases.user import CreateUserCommand, CreateUserUseCase
 from portfolio.application.use_cases.watchlist import (
@@ -23,6 +27,7 @@ from portfolio.application.use_cases.watchlist import (
     RenameWatchlistCommand,
     RenameWatchlistUseCase,
 )
+from portfolio.domain.entities.instrument import InstrumentRef
 from portfolio.domain.enums import WatchlistStatus
 from portfolio.domain.errors import (
     AuthorizationError,
@@ -431,3 +436,185 @@ async def test_remove_member_calls_cache_invalidation(
         CapturingCache(),
     )
     assert entity_id in invalidated
+
+
+# ── Add member resolves ticker/name/instrument_id (PLAN-0046 / T-46-2-01) ────
+
+
+@pytest.mark.asyncio
+async def test_add_member_resolves_ticker_name_from_local_instrument(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """When the local instruments cache has a row with the same entity_id,
+    the new WatchlistMember is persisted with ticker/name/instrument_id filled."""
+    entity_id = uuid4()
+    instrument = InstrumentRef(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        source_event_id=uuid4(),
+        name="Apple Inc.",
+        entity_id=entity_id,
+    )
+    uow.seed_instrument(instrument)
+
+    uc = AddWatchlistMemberUseCase()
+    member = await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
+        ),
+        uow,
+    )
+
+    assert member.ticker == "AAPL"
+    assert member.name == "Apple Inc."
+    assert member.instrument_id == instrument.id
+
+
+@pytest.mark.asyncio
+async def test_add_member_persists_null_when_no_local_instrument(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """If no local instrument matches the entity_id, the add still succeeds
+    and the denormalised fields stay None (best-effort resolution)."""
+    uc = AddWatchlistMemberUseCase()
+    member = await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=uuid4(),
+        ),
+        uow,
+    )
+    assert member.ticker is None
+    assert member.name is None
+    assert member.instrument_id is None
+
+
+# ── ListWatchlistMembersUseCase (PLAN-0046 / T-46-2-02) ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_members_returns_members_for_owner(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    # Add two members so the response has stable shape
+    add_uc = AddWatchlistMemberUseCase()
+    eid_a = uuid4()
+    eid_b = uuid4()
+    await add_uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=eid_a,
+        ),
+        uow,
+    )
+    await add_uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=eid_b,
+        ),
+        uow,
+    )
+
+    uc = ListWatchlistMembersUseCase()
+    result = await uc.execute(
+        ListWatchlistMembersQuery(
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            tenant_id=tenant.id,
+        ),
+        uow,
+    )
+
+    assert result.total == 2
+    assert {m.entity_id for m in result.members} == {eid_a, eid_b}
+
+
+@pytest.mark.asyncio
+async def test_list_members_unknown_watchlist_raises_not_found(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+) -> None:
+    uc = ListWatchlistMembersUseCase()
+    with pytest.raises(WatchlistNotFoundError):
+        await uc.execute(
+            ListWatchlistMembersQuery(
+                watchlist_id=uuid4(),
+                owner_id=user.id,
+                tenant_id=tenant.id,
+            ),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_members_wrong_owner_returns_404_not_403(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """Spec: never leak the existence of another user's watchlist —
+    ownership mismatch must surface as WatchlistNotFoundError (→ 404)."""
+    uc = ListWatchlistMembersUseCase()
+    with pytest.raises(WatchlistNotFoundError):
+        await uc.execute(
+            ListWatchlistMembersQuery(
+                watchlist_id=watchlist.id,
+                owner_id=uuid4(),
+                tenant_id=tenant.id,
+            ),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_members_pagination_respects_limit_and_offset(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    add_uc = AddWatchlistMemberUseCase()
+    for _ in range(3):
+        await add_uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=uuid4(),
+            ),
+            uow,
+        )
+
+    uc = ListWatchlistMembersUseCase()
+    page = await uc.execute(
+        ListWatchlistMembersQuery(
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            tenant_id=tenant.id,
+            limit=2,
+            offset=1,
+        ),
+        uow,
+    )
+    assert page.total == 3
+    assert len(page.members) == 2

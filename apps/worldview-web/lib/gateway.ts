@@ -159,23 +159,39 @@ async function apiFetch<T>(
  * Key differences:
  * - `id` → `watchlist_id` (domain naming convention)
  * - `user_id` → `owner_id` (frontend uses owner_id for consistency with Portfolio)
- * - `members` defaults to [] (S1 list endpoint does not include members)
  * - `updated_at` defaults to `created_at` (S1 does not track updated_at on watchlists)
+ *
+ * PLAN-0046 / BP-265 — historical bug: this mapper used to hard-code
+ *   `members: []`. That silently masked the missing `GET /watchlists/{id}/members`
+ *   endpoint and made the tab look empty even when symbols had been added. Lesson:
+ *   collections returned by gateway mappers must always come from a real fetch —
+ *   defaulting to `[]` because "we don't have it yet" hides the gap. Callers
+ *   pass the real members in via the optional `members` argument; if undefined
+ *   we still default to [] but only to support the create/rename payloads which
+ *   genuinely don't include members. List flows MUST resolve members before
+ *   handing off to the UI.
  */
-function mapRawWatchlist(raw: {
-  id: string;
-  tenant_id: string;
-  user_id: string;
-  name: string;
-  status: string;
-  created_at: string;
-}): Watchlist {
+function mapRawWatchlist(
+  raw: {
+    id: string;
+    tenant_id: string;
+    user_id: string;
+    name: string;
+    status: string;
+    created_at: string;
+  },
+  members?: WatchlistMember[],
+): Watchlist {
+  // WHY ?? not ||: explicit `[]` from the caller (an empty watchlist) is a
+  // real value and must NOT be replaced with another empty array. Only
+  // `undefined` (no caller-supplied members) falls through to the default.
+  const resolvedMembers = members ?? ([] as WatchlistMember[]);
   return {
     watchlist_id: raw.id,
     name: raw.name,
     owner_id: raw.user_id,
-    members: [] as WatchlistMember[],
-    member_count: 0,
+    members: resolvedMembers,
+    member_count: resolvedMembers.length,
     created_at: raw.created_at,
     updated_at: raw.created_at, // S1 has no updated_at; use created_at as fallback
   };
@@ -1088,13 +1104,17 @@ export function createGateway(token?: string | null) {
     /**
      * getWatchlist — single watchlist with member list
      *
-     * WHY transform: Same field mapping as getWatchlists() — S1 returns `WatchlistResponse`
-     * with `id`/`user_id`. Note: S1 does NOT include members in the single-watchlist response
-     * either (the route returns WatchlistResponse, not a joined response). Members would need
-     * a separate GET /watchlists/{id}/members call if S1 exposed one. For now, members default
-     * to an empty array and the component handles the empty state.
+     * PLAN-0046 / T-46-2-03 — now also fans out to `getWatchlistMembers` so
+     * the returned `Watchlist` has a populated `members` array. Without this
+     * the consumer of `getWatchlist` would see an empty tab (BP-265).
+     *
+     * WHY two requests: S1 keeps the watchlist metadata route and the members
+     * route separate so the metadata can be cached independently. The cost is
+     * one extra round-trip on a relatively cheap endpoint, which is acceptable.
      */
     async getWatchlist(watchlistId: string): Promise<Watchlist> {
+      // First fetch the watchlist metadata. We deliberately fire this before
+      // the members request so a 404 here short-circuits the second call.
       const raw = await apiFetch<{
         id: string;
         tenant_id: string;
@@ -1107,7 +1127,53 @@ export function createGateway(token?: string | null) {
         { token: t },
       );
 
-      return mapRawWatchlist(raw);
+      // Fetch the members in a second call. We do not run these in parallel
+      // because if the first 404s we want to skip the second altogether.
+      const members = await this.getWatchlistMembers(watchlistId);
+      return mapRawWatchlist(raw, members);
+    },
+
+    /**
+     * getWatchlistMembers — list members of a single watchlist
+     *
+     * PLAN-0046 / T-46-2-03 — pairs with the new
+     * `GET /v1/watchlists/{id}/members` proxied to S1. Returns the raw
+     * `WatchlistMember[]` shape used by the UI table; the gateway response
+     * already matches the type so we just narrow the cast.
+     *
+     * WHY a method (not inlined into getWatchlist): the watchlists tab fetches
+     * members lazily for the active watchlist only — fetching everyone's
+     * members up-front would multiply the round-trips. Exposing this as its
+     * own method lets the React component's `useQuery` cache members per
+     * watchlist independently from the watchlist list.
+     */
+    async getWatchlistMembers(watchlistId: string): Promise<WatchlistMember[]> {
+      const resp = await apiFetch<{
+        members: Array<{
+          entity_id: string;
+          entity_type: string;
+          ticker: string | null;
+          name: string | null;
+          instrument_id: string | null;
+          added_at: string;
+        }>;
+        total: number;
+      }>(
+        `/v1/watchlists/${encodeURIComponent(watchlistId)}/members`,
+        { token: t },
+      );
+
+      // Translate to the frontend `WatchlistMember` shape — `name` is a
+      // required string in the type, so coerce nullable backend names to "—".
+      // (Backend may return null when the local instrument cache miss
+      // happened at add-time; see Alembic 0010 docstring.)
+      return (resp.members ?? []).map((m) => ({
+        entity_id: m.entity_id,
+        instrument_id: m.instrument_id,
+        ticker: m.ticker,
+        name: m.name ?? "—",
+        added_at: m.added_at,
+      }));
     },
 
     /**

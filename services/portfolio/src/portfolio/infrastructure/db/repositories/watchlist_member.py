@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from portfolio.application.ports.repositories import WatcherDTO, WatchlistMemberRepository
 from portfolio.domain.entities.watchlist_member import WatchlistMember
@@ -28,6 +28,12 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             entity_id=row.entity_id,
             entity_type=row.entity_type,
             added_at=row.added_at,
+            # PLAN-0046 / T-46-2-01: denormalised columns. Nullable for
+            # historical rows. See migration 0010 docstring for the full
+            # rationale (avoids cross-service joins per R9).
+            ticker=row.ticker,
+            name=row.name,
+            instrument_id=row.instrument_id,
         )
 
     async def get(self, watchlist_id: UUID, entity_id: UUID) -> WatchlistMember | None:
@@ -45,6 +51,35 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             select(WatchlistMemberModel).where(WatchlistMemberModel.watchlist_id == watchlist_id),
         )
         return [self._to_entity(r) for r in result.scalars()]
+
+    async def list_by_watchlist_paginated(
+        self,
+        watchlist_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WatchlistMember], int]:
+        """Paginated members for a single watchlist (PLAN-0046 / T-46-2-02).
+
+        Sorted by ``added_at`` ascending so pagination is stable.
+        ``total`` is computed in a separate COUNT query to keep the page query
+        cheap; the watchlist is owner-scoped so the dataset stays small.
+        """
+        count_result = await self._session.execute(
+            select(func.count())
+            .select_from(WatchlistMemberModel)
+            .where(
+                WatchlistMemberModel.watchlist_id == watchlist_id,
+            ),
+        )
+        total: int = count_result.scalar_one()
+        page_result = await self._session.execute(
+            select(WatchlistMemberModel)
+            .where(WatchlistMemberModel.watchlist_id == watchlist_id)
+            .order_by(WatchlistMemberModel.added_at.asc())
+            .limit(limit)
+            .offset(offset),
+        )
+        return [self._to_entity(r) for r in page_result.scalars()], total
 
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]:
         """Return members for entity_id only from active watchlists."""
@@ -100,6 +135,10 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
                 entity_id=member.entity_id,
                 entity_type=member.entity_type,
                 added_at=member.added_at,
+                # PLAN-0046 / T-46-2-01: persist denormalised resolution snapshot.
+                ticker=member.ticker,
+                name=member.name,
+                instrument_id=member.instrument_id,
             )
             self._session.add(row)
             await self._session.flush()
