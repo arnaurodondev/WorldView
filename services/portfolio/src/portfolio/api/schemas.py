@@ -148,6 +148,10 @@ class HoldingResponse(BaseModel):
     quantity: Decimal
     average_cost: Decimal
     currency: str
+    # Enriched from instruments table via LEFT JOIN (None when instrument record absent)
+    ticker: str | None = None
+    name: str | None = None
+    entity_id: UUID | None = None
 
     @field_serializer("quantity", "average_cost")
     def serialize_decimal(self, v: Decimal) -> str:

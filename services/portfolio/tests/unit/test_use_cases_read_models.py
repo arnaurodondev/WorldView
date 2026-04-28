@@ -108,8 +108,12 @@ async def test_get_holdings_returns_correct_data(
     uc = GetHoldingsUseCase()
     results = await uc.execute(portfolio.id, active_user.id, active_tenant.id, uow)
     assert len(results) == 1
-    assert results[0].quantity == Decimal(10)
-    assert results[0].average_cost == Decimal(150)
+    # GetHoldingsUseCase now returns EnrichedHolding DTOs — access via .holding
+    assert results[0].holding.quantity == Decimal(10)
+    assert results[0].holding.average_cost == Decimal(150)
+    # Fake repo returns None for ticker/name/entity_id (no instruments table in fakes)
+    assert results[0].ticker is None
+    assert results[0].name is None
 
 
 # ── Transactions ──────────────────────────────────────────────────────────────

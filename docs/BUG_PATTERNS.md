@@ -7048,3 +7048,24 @@ When adding a new `FundamentalsSection` enum value:
 - When consuming Pydantic StrEnum values from Python APIs in TypeScript, always verify whether the enum serialises as upper or lowercase. Python `StrEnum` preserves the assigned value (`LOW = "low"` → `"low"`), NOT the Python attribute name.
 - Contract tests should verify the `severity` field casing against the TypeScript type.
 - Frontend components consuming `Alert.severity` should normalise to uppercase at the mapping boundary (gateway method or context), not deep inside rendering logic.
+
+---
+
+## BP-254 — Derivation Consumer Hardcodes Source Timeframe
+
+**Date discovered**: 2026-04-28
+**Affected areas**: Market-data intraday resampling, multi-timeframe OHLCV pipelines
+
+**Pattern**:
+When a Kafka consumer derives coarser bars from a fine-grained OHLCV source (e.g., 1m → 5m/15m/1h), the source timeframe is hardcoded in both the consumer filter AND the use-case DB query. If the finest available granularity later changes from 1m to 5m or 15m, the consumer silently stops processing (wrong filter) and the use case fetches zero source bars (wrong timeframe query).
+
+**Root cause**:
+`IntradayResamplingConsumer` filters `timeframe == "1m"` (hardcoded string) and `ResampledOHLCVUseCase` queries `timeframe=Timeframe.ONE_MIN` (hardcoded enum). Neither is driven by configuration.
+
+**Fix**:
+Inject `source_timeframe: Timeframe` via constructor into `ResampledOHLCVUseCase` (defaults to `ONE_MIN`). Pass it from `IntradayResamplingConsumer` which reads it from `Settings.intraday_source_tf`. Consumer filter also driven from the same setting. Changing the env var then migrates the entire pipeline to the new finest granularity without code changes.
+
+**Prevention**:
+- Any consumer that filters on a specific timeframe string must read that string from config, not hardcode it.
+- Any use case that queries bars of a specific timeframe must accept that timeframe as a constructor parameter.
+- Add a test asserting that changing `source_timeframe` in the use case changes the DB query timeframe.

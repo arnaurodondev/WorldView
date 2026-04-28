@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -1419,6 +1420,183 @@ async def get_holdings(portfolio_id: str, request: Request) -> Any:
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/portfolios/{portfolio_id}/performance")
+async def get_portfolio_performance(
+    portfolio_id: str,
+    period: str = Query(default="1D", pattern="^(1D|1W|1M)$"),
+    request: Request = ...,  # type: ignore[assignment]
+) -> Any:
+    """Composition endpoint — portfolio period return.
+
+    WHY a composition endpoint (not a proxy): S1 holds position sizes but not
+    prices; S3 (market-data) holds OHLCV but not portfolio weights. Computing a
+    weighted portfolio return requires data from both services simultaneously.
+    The frontend cannot safely call two services itself (CORS + auth complexity),
+    so S9 stitches the two data sources here.
+
+    Algorithm:
+      1. Fetch holdings from S1 — gives us quantity + average_cost per instrument
+      2. Fetch the last N OHLCV bars from S3 for all instrument_ids in bulk
+         (1D → 2 bars; 1W → 6 bars; 1M → 23 bars)
+      3. For each holding: weight = cost_basis_value / total_cost_basis
+         period_return_i = close_end / close_start - 1
+      4. Weighted sum → portfolio period return
+
+    Graceful degradation: if S3 has no bars for an instrument (e.g. a new
+    ticker not yet ingested), that position is excluded from the calculation.
+    The response includes a `covered_pct` field so the frontend can show a
+    caveat when coverage is partial.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+
+    # Step 1 — fetch holdings from S1
+    holdings_resp = await clients.portfolio.get(
+        f"/api/v1/holdings/{portfolio_id}",
+        headers=headers,
+    )
+    if holdings_resp.status_code != 200:
+        return Response(
+            content=holdings_resp.content,
+            status_code=holdings_resp.status_code,
+            media_type="application/json",
+        )
+
+    try:
+        holdings_data = json.loads(holdings_resp.content)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid response from portfolio service")  # noqa: B904
+
+    if not holdings_data:
+        return {
+            "portfolio_id": portfolio_id,
+            "period": period,
+            "return_pct": 0.0,
+            "return_abs": 0.0,
+            "covered_pct": 0.0,
+        }
+
+    # Period → calendar-day lookback for the OHLCV start date.
+    # WHY calendar days (not trading days): the S3 bulk endpoint filters by start/end
+    # date (not count). We use calendar days with buffer for weekends/holidays so the
+    # range always covers the required number of trading days.
+    # 1D → 5 days back (covers Mon→last-close; e.g. Mon Apr 28 → Fri Apr 25 has bars)
+    # 1W → 10 calendar days (~5 trading days with weekend buffer)
+    # 1M → 35 calendar days (~22 trading days with buffer)
+    period_lookback = {"1D": 5, "1W": 10, "1M": 35}
+    lookback_days = period_lookback[period]
+    today = datetime.now(tz=UTC).date()
+    start_date = today - timedelta(days=lookback_days)
+
+    instrument_ids = [str(h["instrument_id"]) for h in holdings_data if h.get("instrument_id")]
+    if not instrument_ids:
+        return {
+            "portfolio_id": portfolio_id,
+            "period": period,
+            "return_pct": 0.0,
+            "return_abs": 0.0,
+            "covered_pct": 0.0,
+        }
+
+    # Step 2 — fetch OHLCV bulk from S3 (one request for all instruments)
+    # WHY start/end date params (not limit): the S3 bulk endpoint doesn't accept limit.
+    # Using a calendar-day window ensures each period shows distinct return values.
+    s3_headers = _auth_headers(request)
+    try:
+        ohlcv_params: list[tuple[str, str]] = [("instrument_ids", iid) for iid in instrument_ids] + [
+            ("timeframe", "1d"),
+            ("start", start_date.isoformat()),
+            ("end", today.isoformat()),
+        ]
+        ohlcv_resp = await clients.market_data.get(
+            "/api/v1/ohlcv/bulk",
+            params=ohlcv_params,  # type: ignore[arg-type]
+            headers=s3_headers,
+        )
+    except Exception:
+        logger.warning("portfolio_performance_ohlcv_fetch_failed", portfolio_id=portfolio_id, exc_info=True)
+        raise HTTPException(status_code=502, detail="Market data unavailable")  # noqa: B904
+
+    if ohlcv_resp.status_code != 200:
+        logger.warning(
+            "portfolio_performance_ohlcv_non200",
+            portfolio_id=portfolio_id,
+            status=ohlcv_resp.status_code,
+        )
+        raise HTTPException(status_code=502, detail="Market data returned an error")
+
+    try:
+        ohlcv_data = json.loads(ohlcv_resp.content)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid OHLCV response")  # noqa: B904
+
+    # Build a map: instrument_id → sorted list of close prices (oldest first)
+    price_map: dict[str, list[float]] = {}
+    for series in ohlcv_data:
+        items = series.get("items", [])
+        if not items:
+            continue
+        # items are newest-first from S3 (limit=N returns last N bars); sort ascending
+        sorted_bars = sorted(items, key=lambda b: b.get("bar_date", ""))
+        closes = [float(b["close"]) for b in sorted_bars if b.get("close") is not None]
+        if len(closes) >= 2:
+            # Use index [0] as start price and [-1] as end price within the window
+            # S3 may return fewer bars than requested for recently-listed instruments
+            instrument_id = str(sorted_bars[0].get("instrument_id", ""))
+            if instrument_id:
+                price_map[instrument_id] = closes
+
+    # Step 3 — compute weighted portfolio return
+    total_cost_basis = 0.0
+    covered_cost_basis = 0.0
+    weighted_return_sum = 0.0
+    weighted_abs_sum = 0.0
+
+    for h in holdings_data:
+        iid = str(h.get("instrument_id", ""))
+        try:
+            qty = float(h.get("quantity", 0))
+            cost = float(h.get("average_cost", 0))
+        except (TypeError, ValueError):
+            continue
+        cost_basis = qty * cost
+        total_cost_basis += cost_basis
+
+        closes = price_map.get(iid) or []
+        if len(closes) < 2:
+            continue
+
+        period_return = closes[-1] / closes[0] - 1
+        covered_cost_basis += cost_basis
+        weighted_return_sum += period_return * cost_basis
+        weighted_abs_sum += period_return * cost_basis  # same factor, in cost-basis units
+
+    if total_cost_basis <= 0:
+        return {
+            "portfolio_id": portfolio_id,
+            "period": period,
+            "return_pct": 0.0,
+            "return_abs": 0.0,
+            "covered_pct": 0.0,
+        }
+
+    covered_pct = covered_cost_basis / total_cost_basis if total_cost_basis > 0 else 0.0
+    portfolio_return_pct = (weighted_return_sum / covered_cost_basis * 100) if covered_cost_basis > 0 else 0.0
+    # Return in absolute USD is the return % applied to covered cost basis
+    portfolio_return_abs = weighted_abs_sum if covered_cost_basis > 0 else 0.0
+
+    return {
+        "portfolio_id": portfolio_id,
+        "period": period,
+        "return_pct": round(portfolio_return_pct, 4),
+        "return_abs": round(portfolio_return_abs, 2),
+        "covered_pct": round(covered_pct, 4),
+    }
 
 
 @router.get("/transactions")

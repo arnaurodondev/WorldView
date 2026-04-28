@@ -20,6 +20,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 // ── Shell component mocks ─────────────────────────────────────────────────────
@@ -109,6 +110,20 @@ vi.mock("@/hooks/useAuth", () => ({
   useAuth: mockUseAuth,
 }));
 
+// ── Gateway mock ─────────────────────────────────────────────────────────────
+// WHY: AppLayout now calls useQuery via createGateway for pending alert count and
+// portfolio NAV. Without a QueryClientProvider + gateway mock these queries throw
+// "No QueryClient set". We mock the gateway to return stable empty responses so
+// the auth guard tests remain focused on auth behavior, not API responses.
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({
+    getPendingAlerts: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 1, offset: 0 }),
+    getPortfolios: vi.fn().mockResolvedValue([]),
+    getHoldings: vi.fn().mockResolvedValue({ portfolio_id: "p1", holdings: [], total_value: null }),
+    getBatchQuotes: vi.fn().mockResolvedValue({ quotes: {} }),
+  })),
+}));
+
 // ── Component under test ──────────────────────────────────────────────────────
 // Static import works here because vi.mock() calls above are hoisted by Vitest's
 // Vite transform to run before any import statement resolves.
@@ -150,6 +165,15 @@ beforeEach(() => {
   mockRouterReplace.mockReset();
 });
 
+// ── QueryClient wrapper ───────────────────────────────────────────────────────
+// WHY: AppLayout calls useQuery for alert badge count and portfolio NAV.
+// These hooks require QueryClientProvider — wrapping each render in a fresh
+// QueryClient prevents test cross-contamination (stale cache between tests).
+function makeWrapper({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("AppLayout — auth guard", () => {
@@ -172,6 +196,7 @@ describe("AppLayout — auth guard", () => {
       <AppLayout>
         <div data-testid="protected-child">Protected Content</div>
       </AppLayout>,
+      { wrapper: makeWrapper },
     );
 
     // WHY check for "Initializing session" text: matches the exact spinner copy
@@ -202,6 +227,7 @@ describe("AppLayout — auth guard", () => {
       <AppLayout>
         <div data-testid="protected-child">Sensitive Data</div>
       </AppLayout>,
+      { wrapper: makeWrapper },
     );
 
     // Wait for the useEffect to fire (runs after render, calls router.replace())
@@ -244,6 +270,7 @@ describe("AppLayout — auth guard", () => {
       <AppLayout>
         <div data-testid="protected-child">Dashboard Content</div>
       </AppLayout>,
+      { wrapper: makeWrapper },
     );
 
     // Shell components must be mounted (TopBar provides market status + nav)

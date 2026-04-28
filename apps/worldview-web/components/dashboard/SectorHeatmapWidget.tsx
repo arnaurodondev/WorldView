@@ -149,11 +149,24 @@ export function SectorHeatmapWidget() {
       )}
 
       {!isLoading && data?.sectors && data.sectors.length > 0 && (
-        // WHY divide-y divide-border/30: hairline separators between rows
-        <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {data.sectors.map((sector) => (
-            <SectorRow key={sector.name} sector={sector} />
-          ))}
+        // WHY 2-column grid (PLAN-0045 D-2): single-column layout only showed ~5 sectors
+        // in the 130px Row 2 height. 2-column splits 11 sectors into two 6/5 lists —
+        // all sectors visible simultaneously at 22px per row within the fixed height.
+        // WHY divide-x on the grid and divide-y on each column: hairline separators
+        // match the terminal panel-seam pattern for both axes.
+        <div className="flex flex-1 divide-x divide-border/30 overflow-hidden">
+          {/* Left column: first half of sectors (ceil) */}
+          <div className="flex-1 divide-y divide-border/30 overflow-hidden">
+            {data.sectors.slice(0, Math.ceil(data.sectors.length / 2)).map((sector) => (
+              <SectorRow key={sector.name} sector={sector} compact />
+            ))}
+          </div>
+          {/* Right column: second half of sectors */}
+          <div className="flex-1 divide-y divide-border/30 overflow-hidden">
+            {data.sectors.slice(Math.ceil(data.sectors.length / 2)).map((sector) => (
+              <SectorRow key={sector.name} sector={sector} compact />
+            ))}
+          </div>
         </div>
       )}
 
@@ -168,8 +181,10 @@ export function SectorHeatmapWidget() {
  *
  * WHY separate sub-component: keeps the list map clean and the bar calculation
  * logic testable in isolation.
+ * WHY compact prop: in the 2-column layout (col-span-4 cell) each column is ~half
+ * the width — sector name must be shorter and value more terse to avoid overflow.
  */
-function SectorRow({ sector }: { sector: HeatmapSector }) {
+function SectorRow({ sector, compact = false }: { sector: HeatmapSector; compact?: boolean }) {
   const changePct = sector.change_pct;
 
   // ── Bar width calculation ──────────────────────────────────────────────────
@@ -186,24 +201,23 @@ function SectorRow({ sector }: { sector: HeatmapSector }) {
 
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
-    <div className="flex h-[22px] items-center gap-2 px-2">
+    <div className="flex h-[22px] items-center gap-1 px-1">
 
-      {/* Sector name — fixed width so bars align vertically */}
-      <span className="w-[120px] shrink-0 text-[11px] text-foreground">
-        {abbreviateSector(sector.name)}
+      {/* Sector name — fixed width; compact mode uses shorter width for 2-col layout */}
+      <span className={cn(
+        "shrink-0 text-[10px] text-foreground truncate",
+        compact ? "w-[72px]" : "w-[120px]",
+      )}>
+        {compact ? abbreviateSectorShort(sector.name) : abbreviateSector(sector.name)}
       </span>
 
       {/* Bar container — fills available space */}
       {/* WHY h-1 bg-muted/30: thin 4px bar on muted track, terminal-dense */}
       <div className="relative h-1 flex-1 bg-muted/30">
-        {/* Bar fill — color and width reflect direction/magnitude */}
         {changePct !== null && (
           <div
             className={cn(
               "absolute left-0 top-0 h-full",
-              // WHY bg-positive/30 and bg-negative/20: the /30 and /20 opacities
-              // give a visible but not aggressive fill — we're in a dark terminal
-              // where high-saturation fills compete with text legibility.
               isPositive ? "bg-positive/30" : "bg-negative/20",
             )}
             style={{ width: `${barWidthPct}%` }}
@@ -214,7 +228,8 @@ function SectorRow({ sector }: { sector: HeatmapSector }) {
       {/* Percentage value — right-aligned, colored by direction */}
       <span
         className={cn(
-          "w-[50px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "shrink-0 text-right font-mono text-[10px] tabular-nums",
+          compact ? "w-[38px]" : "w-[50px]",
           isPositive ? "text-positive" : isNegative ? "text-negative" : "text-muted-foreground",
         )}
       >
@@ -230,7 +245,7 @@ function SectorRow({ sector }: { sector: HeatmapSector }) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * abbreviateSector — shorten GICS sector names for compact row display
+ * abbreviateSector — shorten GICS sector names for compact row display (120px label).
  * WHY: sector names like "Consumer Discretionary" would overflow the 120px label
  */
 function abbreviateSector(name: string): string {
@@ -248,4 +263,25 @@ function abbreviateSector(name: string): string {
     Energy: "Energy",
   };
   return abbreviations[name] ?? name.slice(0, 15);
+}
+
+/**
+ * abbreviateSectorShort — ultra-compact names for 72px column in 2-column layout.
+ * WHY: 2-col grid halves the available width; shorter names prevent overflow.
+ */
+function abbreviateSectorShort(name: string): string {
+  const abbreviations: Record<string, string> = {
+    "Information Technology": "Tech",
+    "Health Care": "Health",
+    "Consumer Discretionary": "Discr",
+    "Consumer Staples": "Staples",
+    "Communication Services": "Comm",
+    Financials: "Fins",
+    Industrials: "Indust",
+    Materials: "Mats",
+    "Real Estate": "R.Estate",
+    Utilities: "Utils",
+    Energy: "Energy",
+  };
+  return abbreviations[name] ?? name.slice(0, 8);
 }

@@ -42,15 +42,18 @@ async def get_holdings(
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
     uc = GetHoldingsUseCase()
-    holdings = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
+    enriched_holdings = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
     return [
         HoldingResponse(
-            id=h.id,
-            portfolio_id=h.portfolio_id,
-            instrument_id=h.instrument_id,
-            quantity=h.quantity,
-            average_cost=h.average_cost,
-            currency=h.currency,
+            id=eh.holding.id,
+            portfolio_id=eh.holding.portfolio_id,
+            instrument_id=eh.holding.instrument_id,
+            quantity=eh.holding.quantity,
+            average_cost=eh.holding.average_cost,
+            currency=eh.holding.currency,
+            ticker=eh.ticker,
+            name=eh.name,
+            entity_id=eh.entity_id,
         )
-        for h in holdings
+        for eh in enriched_holdings
     ]

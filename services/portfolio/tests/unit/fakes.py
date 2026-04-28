@@ -27,6 +27,7 @@ from portfolio.application.ports.repositories import (
     WatchlistRepository,
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.use_cases.read_models import EnrichedHolding
 
 if TYPE_CHECKING:
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
@@ -227,6 +228,10 @@ class FakeHoldingRepository(HoldingRepository):
 
     async def list_by_portfolio(self, portfolio_id: UUID) -> list[Holding]:
         return [h for (pid, _), h in self._store.items() if pid == portfolio_id]
+
+    async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]:
+        holdings = [h for (pid, _), h in self._store.items() if pid == portfolio_id]
+        return [EnrichedHolding(holding=h, ticker=None, name=None, entity_id=None) for h in holdings]
 
     async def save(self, holding: Holding) -> None:
         self._store[(holding.portfolio_id, holding.instrument_id)] = holding

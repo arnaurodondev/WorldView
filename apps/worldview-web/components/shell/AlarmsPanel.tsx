@@ -36,16 +36,21 @@ const MAX_ROWS = 5;
 
 /**
  * severityDotClass — Tailwind class for the 6px severity indicator dot.
+ * WHY toUpperCase(): S10 AlertSeverity StrEnum serialises as lowercase ("low", "high" etc.)
+ * but our TypeScript type expects uppercase. Normalising here handles both cases (BP-252).
  * WHY bg-destructive for CRITICAL: the global destructive token maps to
  * --negative (#EF5350) in our palette — the correct semantic red.
  * WHY bg-warning for MEDIUM: amber conveys urgency without implying failure.
  */
-function severityDotClass(severity: Alert["severity"]): string {
-  switch (severity) {
+function severityDotClass(severity: string): string {
+  // Normalise to uppercase so lowercase S10 values ("low", "high") match (BP-252)
+  const norm = severity?.toUpperCase() as Alert["severity"];
+  switch (norm) {
     case "CRITICAL": return "bg-destructive";
     case "HIGH":     return "bg-negative";
     case "MEDIUM":   return "bg-warning";
     case "LOW":      return "bg-muted-foreground";
+    default:         return "bg-muted-foreground";
   }
 }
 
@@ -74,14 +79,17 @@ export function AlarmsPanel() {
 
   // WHY staleTime 30_000: alerts are important but not tick-level urgent in the
   // sidebar. The full /alerts page has its own SSE stream for real-time updates.
-  // WHY retry: false: sidebar alerts should show an empty state on failure (not
-  // retry silently for 30+ seconds making the user think there are no alerts).
+  // WHY retry: 2: changed from retry:false so transient auth failures (cold-start
+  // race, brief 5xx) don't silently show an empty panel. 2 retries with 2s delay
+  // gives the gateway time to recover without hanging the user for 30+ seconds.
   const { data } = useQuery({
     queryKey: ["alarms-panel"],
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 20 }),
     enabled: !!accessToken,
     staleTime: 30_000,
-    retry: false,
+    retry: 2,
+    retryDelay: 2_000,
+    refetchOnMount: true,
   });
 
   const allAlerts = data?.alerts ?? [];
