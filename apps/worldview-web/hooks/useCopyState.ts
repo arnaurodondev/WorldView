@@ -39,10 +39,16 @@ export function useCopyState<K extends string>() {
   // useRef holds the active timer id so we can cancel it on click-during-active
   // and on unmount. window.setTimeout returns number in browser context.
   const timerRef = useRef<number | null>(null);
+  // F-QA2-03 fix: track mounted-ness so the post-`await navigator.clipboard`
+  // synchronous setState cannot run on a dead component (route change during
+  // the in-flight clipboard promise). React 18 silently ignores it but the
+  // closure leak is real and StrictMode dev re-warns.
+  const mountedRef = useRef(true);
 
-  // Cleanup: any pending reset must be cancelled when the component goes away.
+  // Cleanup: cancel pending reset and mark unmounted.
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -50,15 +56,19 @@ export function useCopyState<K extends string>() {
     };
   }, []);
 
+  const safeSetState = useCallback((next: CopyState<K>) => {
+    if (mountedRef.current) setState(next);
+  }, []);
+
   const scheduleReset = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
     }
     timerRef.current = window.setTimeout(() => {
-      setState("idle");
+      safeSetState("idle");
       timerRef.current = null;
     }, RESET_AFTER_MS);
-  }, []);
+  }, [safeSetState]);
 
   const copy = useCallback(
     async (value: string, key: K): Promise<boolean> => {
@@ -66,23 +76,23 @@ export function useCopyState<K extends string>() {
       // jsdom test envs, and on permission-denied. Telling the user the truth
       // is more important than the tiny convenience of pretending it worked.
       if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-        setState("error");
+        safeSetState("error");
         scheduleReset();
         return false;
       }
       try {
         await navigator.clipboard.writeText(value);
-        setState(key);
+        safeSetState(key);
         scheduleReset();
         return true;
       } catch {
         // Permission denied at runtime — same UX as missing API.
-        setState("error");
+        safeSetState("error");
         scheduleReset();
         return false;
       }
     },
-    [scheduleReset],
+    [safeSetState, scheduleReset],
   );
 
   return { state, copy };

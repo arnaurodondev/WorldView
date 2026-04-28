@@ -39,7 +39,7 @@ describe("RefreshAllButton", () => {
     expect(typeof callArg?.predicate).toBe("function");
   });
 
-  it("predicate filters by query-key allowlist (F-QA-04)", () => {
+  it("predicate uses streaming-key denylist (F-QA-04 + F-QA2-01)", () => {
     const client = new QueryClient();
     const spy = vi.spyOn(client, "invalidateQueries");
     render(<RefreshAllButton />, { wrapper: wrapper(client) });
@@ -47,14 +47,25 @@ describe("RefreshAllButton", () => {
 
     const predicate = spy.mock.calls[0]?.[0]?.predicate;
     if (!predicate) throw new Error("predicate missing");
-    // Allowlisted keys → true
+    // Polling keys (default) → true. F-QA2-01 fix: the previous allowlist
+    // was silently dropping these widgets — the inverted denylist now
+    // allows everything that isn't a known streaming observer.
     expect(predicate({ queryKey: ["holdings-quotes", []] } as never)).toBe(true);
     expect(predicate({ queryKey: ["dashboard-prediction-markets"] } as never)).toBe(true);
     expect(predicate({ queryKey: ["portfolios"] } as never)).toBe(true);
-    // Streaming keys → false (the whole point of the fix)
+    expect(predicate({ queryKey: ["sector-heatmap-widget"] } as never)).toBe(true);
+    expect(predicate({ queryKey: ["market-snapshot-quotes"] } as never)).toBe(true);
+    expect(predicate({ queryKey: ["index-tickers"] } as never)).toBe(true);
+    expect(predicate({ queryKey: ["watchlists-sidebar"] } as never)).toBe(true);
+    expect(predicate({ queryKey: ["alarms-panel"] } as never)).toBe(true);
+
+    // Streaming keys → false (the whole point of F-QA-04).
     expect(predicate({ queryKey: ["alert-stream"] } as never)).toBe(false);
     expect(predicate({ queryKey: ["chat-stream"] } as never)).toBe(false);
-    // Unknown shape → false
+    expect(predicate({ queryKey: ["alert-ws-token"] } as never)).toBe(false);
+    expect(predicate({ queryKey: ["chat-ws-thread"] } as never)).toBe(false);
+
+    // Unknown shape → false (defensive).
     expect(predicate({ queryKey: [123] } as never)).toBe(false);
   });
 

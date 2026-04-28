@@ -40,7 +40,7 @@
 // WHY "use client": local open/close state + AskAiPanel (which needs the
 // browser EventSource API).
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import type { Fundamentals, OHLCVBar } from "@/types/api";
@@ -110,6 +110,15 @@ export function InstrumentAskAiButton({
   briefSummary,
 }: InstrumentAskAiButtonProps) {
   const [open, setOpen] = useState(false);
+  // F-QA2-04 fix: mirror the shell-trigger focus-restore pattern so closing
+  // the page-scoped panel (Escape, X, "open full chat") returns focus to
+  // the floating trigger — WCAG 2.4.3.
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    // RAF lets React commit the trigger remount before focus() is attempted.
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
 
   // The greeting is what the panel shows the user the moment they open it
   // — it is NOT a chat message, just a hint that the assistant already
@@ -130,6 +139,7 @@ export function InstrumentAskAiButton({
       */}
       {!open && (
         <button
+          ref={triggerRef}
           type="button"
           onClick={() => setOpen(true)}
           // F-QA-12: bottom-10 (40px) places the button above the 24px
@@ -148,7 +158,7 @@ export function InstrumentAskAiButton({
 
       {open && (
         <AskAiPanel
-          onClose={() => setOpen(false)}
+          onClose={handleClose}
           // The shell AskAiPanel doesn't currently take an initial-prompt
           // prop. We pass the context as a separate first message via the
           // contextHint prop — a non-breaking optional addition handled in
