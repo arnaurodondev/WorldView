@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from knowledge_graph.api.dependencies import EntityGraphReposDep
 from knowledge_graph.api.schemas import (
@@ -80,6 +80,30 @@ def _relation_response(row: dict[str, object]) -> RelationResponse:
 
 
 # ── Entity ticker lookup ──────────────────────────────────────────────────────
+
+
+@router.post("/entities/batch")
+async def get_entities_batch(
+    entity_ids: list[UUID] = Body(..., embed=True),
+    repos: EntityGraphReposDep = ...,  # type: ignore[assignment]
+) -> dict[str, list[dict[str, str | None]]]:
+    """Resolve a batch of entity_ids to their canonical entity data (ticker, name, type).
+
+    Used by the gateway to enrich AI signal responses with ticker symbols.
+    Missing entity_ids are silently omitted from the result.
+    Returns {"entities": [{"entity_id": ..., "ticker": ..., "canonical_name": ...}, ...]}.
+    """
+    rows = await repos.entity_repo.get_batch(entity_ids)
+    return {
+        "entities": [
+            {
+                "entity_id": str(row["entity_id"]),
+                "ticker": str(row["ticker"]) if row.get("ticker") else None,
+                "canonical_name": str(row["canonical_name"]) if row.get("canonical_name") else None,
+            }
+            for row in rows
+        ]
+    }
 
 
 @router.get("/entities/lookup")

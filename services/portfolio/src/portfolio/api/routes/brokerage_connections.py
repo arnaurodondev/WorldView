@@ -146,20 +146,33 @@ async def activate_brokerage_connection(
     connection_id: UUID,
     uow: UoWDep,
     request: Request,
-    authorizationId: str = Query(...),  # noqa: N803 — SnapTrade callback param name
-    userId: str = Query(...),  # noqa: N803 — SnapTrade callback param name
-    sessionId: str = Query(...),  # noqa: N803 — SnapTrade callback param name
+    # WHY optional: SnapTrade Connection Portal v4 sends `connection_id` (their
+    # authorization UUID) instead of `authorizationId`. Accept both; prefer
+    # `authorizationId` if both arrive (v3 compat), else fall back to `connection_id`.
+    authorizationId: str | None = Query(default=None),  # noqa: N803 — v3 param
+    connection_id_snap: str | None = Query(default=None, alias="connection_id"),  # v4 param
+    # WHY optional: v4 portal omits userId/sessionId from the callback redirect.
+    # Ownership is already verified by the JWT (user_id from InternalJWTMiddleware).
+    userId: str | None = Query(default=None),  # noqa: N803 — v3 param, informational
+    sessionId: str | None = Query(default=None),  # noqa: N803 — informational only
 ) -> ActivateBrokerageConnectionResponse:
-    """Activate a PENDING connection after the SnapTrade OAuth callback."""
+    """Activate a PENDING connection after the SnapTrade OAuth callback.
+
+    Supports both Connection Portal v3 (authorizationId + userId + sessionId)
+    and v4 (connection_id + status only). JWT ownership check replaces the
+    userId anti-spoofing check when userId is absent.
+    """
     user_id, tenant_id = _require_user_headers(request)
+    # Resolve authorization ID: v3 uses authorizationId, v4 uses connection_id
+    resolved_authorization_id = authorizationId or connection_id_snap or ""
     uc = ActivateBrokerageConnectionUseCase()
     result = await uc.execute(
         cmd=ActivateBrokerageConnectionCommand(
             connection_id=connection_id,
             user_id=user_id,
             tenant_id=tenant_id,
-            snaptrade_user_id=userId,
-            authorization_id=authorizationId,
+            snaptrade_user_id=userId or "",  # empty → use case skips userId check
+            authorization_id=resolved_authorization_id,
         ),
         uow=uow,
     )

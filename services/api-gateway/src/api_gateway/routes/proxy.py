@@ -1753,17 +1753,36 @@ async def ai_signals(request: Request) -> Any:
 
     try:
         body = json.loads(resp.content)
+        items = body.get("items", [])
+
+        # Batch-resolve entity_ids → tickers from KG to show "AAPL" instead of entity_id prefix.
+        ticker_map: dict[str, str | None] = {}
+        entity_ids = list({str(item.get("entity_id", "")) for item in items if item.get("entity_id")})
+        if entity_ids:
+            try:
+                kg_batch_resp = await clients.knowledge_graph.post(
+                    "/api/v1/entities/batch",
+                    json={"entity_ids": entity_ids},
+                    headers=headers,
+                )
+                if kg_batch_resp.status_code == 200:
+                    kg_body = json.loads(kg_batch_resp.content)
+                    for ent in kg_body.get("entities", []):
+                        ticker_map[str(ent["entity_id"])] = ent.get("ticker")
+            except Exception:  # noqa: S110
+                pass  # ticker enrichment is best-effort
+
         signals = [
             {
                 "signal_id": str(item.get("signal_id", "")),
                 "entity_id": str(item.get("entity_id", "")),
-                "ticker": None,  # S6 does not return ticker; resolved client-side via entity_id
+                "ticker": ticker_map.get(str(item.get("entity_id", ""))),
                 "label": _signal_type_to_label(str(item.get("signal_type", ""))),
                 "score": float(item.get("confidence", 0.0)),
                 "article_title": None,  # evidence_text is a claim UUID, not a title
                 "created_at": str(item.get("detected_at", "")),
             }
-            for item in body.get("items", [])
+            for item in items
         ]
         return {"signals": signals}
     except Exception:
