@@ -111,6 +111,14 @@ class FakePortfolioRepo(PortfolioRepository):
     async def list_non_root_active_ids_by_owner(self, owner_id, tenant_id):
         return []
 
+    # PLAN-0046 Wave 4 / T-46-4-02 — required by abstract base.
+    async def list_all_non_root_active(self):
+        return []
+
+    # PLAN-0046 Wave 4 / T-46-4-03 — required by abstract base.
+    async def list_active_root(self):
+        return []
+
 
 class FakeInstrumentRepo(InstrumentRepository):
     def __init__(self, instrument: InstrumentRef | None = None) -> None:
@@ -294,6 +302,10 @@ class FakeUoW(UnitOfWork):
 
     @property
     def auth_audit_log(self):
+        return None
+
+    @property
+    def portfolio_value_snapshots(self):
         return None
 
     commit_count: int = 0

@@ -20,6 +20,9 @@ from portfolio.infrastructure.db.repositories.idempotency import SqlAlchemyIdemp
 from portfolio.infrastructure.db.repositories.instrument import SqlAlchemyInstrumentRepository
 from portfolio.infrastructure.db.repositories.outbox import SqlAlchemyOutboxRepository
 from portfolio.infrastructure.db.repositories.portfolio import SqlAlchemyPortfolioRepository
+from portfolio.infrastructure.db.repositories.portfolio_value_snapshot import (
+    SqlAlchemyPortfolioValueSnapshotRepository,
+)
 from portfolio.infrastructure.db.repositories.tenant import SqlAlchemyTenantRepository
 from portfolio.infrastructure.db.repositories.transaction import SqlAlchemyTransactionRepository
 from portfolio.infrastructure.db.repositories.user import SqlAlchemyUserRepository
@@ -45,6 +48,7 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OutboxRepository,
         PortfolioRepository,
+        PortfolioValueSnapshotRepository,
         TenantRepository,
         TransactionRepository,
         UserRepository,
@@ -84,6 +88,7 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         self._brokerage_connections: SqlAlchemyBrokerageConnectionRepository | None = None
         self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
         self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
+        self._portfolio_value_snapshots: SqlAlchemyPortfolioValueSnapshotRepository | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -162,6 +167,11 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         assert self._auth_audit_log is not None, "ReadOnlyUnitOfWork not entered"
         return self._auth_audit_log
 
+    @property
+    def portfolio_value_snapshots(self) -> PortfolioValueSnapshotRepository:
+        assert self._portfolio_value_snapshots is not None, "ReadOnlyUnitOfWork not entered"
+        return self._portfolio_value_snapshots
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
@@ -185,6 +195,7 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         )
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
+        self._portfolio_value_snapshots = SqlAlchemyPortfolioValueSnapshotRepository(self._session)
         return self
 
     async def __aexit__(
@@ -233,6 +244,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._brokerage_connections: SqlAlchemyBrokerageConnectionRepository | None = None
         self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
         self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
+        self._portfolio_value_snapshots: SqlAlchemyPortfolioValueSnapshotRepository | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -254,6 +266,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         )
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
+        self._portfolio_value_snapshots = SqlAlchemyPortfolioValueSnapshotRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -352,6 +365,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def auth_audit_log(self) -> AuthAuditLogRepository:
         assert self._auth_audit_log is not None, "UnitOfWork not entered"
         return self._auth_audit_log
+
+    @property
+    def portfolio_value_snapshots(self) -> PortfolioValueSnapshotRepository:
+        assert self._portfolio_value_snapshots is not None, "UnitOfWork not entered"
+        return self._portfolio_value_snapshots
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"

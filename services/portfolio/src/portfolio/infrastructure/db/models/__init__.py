@@ -20,6 +20,7 @@ from portfolio.infrastructure.db.models.instrument import InstrumentModel  # noq
 from portfolio.infrastructure.db.models.invitation import InvitationModel  # noqa: E402
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel  # noqa: E402
 from portfolio.infrastructure.db.models.portfolio import PortfolioModel  # noqa: E402
+from portfolio.infrastructure.db.models.portfolio_value_snapshot import PortfolioValueSnapshotModel  # noqa: E402
 from portfolio.infrastructure.db.models.tenant import TenantModel  # noqa: E402
 from portfolio.infrastructure.db.models.transaction import TransactionModel  # noqa: E402
 from portfolio.infrastructure.db.models.user import UserModel  # noqa: E402
@@ -39,6 +40,7 @@ __all__ = [
     "InvitationModel",
     "OutboxEventModel",
     "PortfolioModel",
+    "PortfolioValueSnapshotModel",
     "TenantModel",
     "TransactionModel",
     "UserModel",

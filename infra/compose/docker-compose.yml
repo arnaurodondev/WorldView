@@ -297,6 +297,32 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── Portfolio daily value snapshot worker ───────────────────────────────────
+  # PLAN-0046 Wave 4 / T-46-4-02 + T-46-4-03.
+  # Same Dockerfile as the API + other workers — only the ``command`` differs.
+  # Wakes up at 21:30 UTC daily, snapshots non-root portfolios, then aggregates
+  # into root portfolios. Idempotent on (portfolio_id, snapshot_date).
+  portfolio-snapshot-worker:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    environment:
+      - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
+    command: ["python", "-m", "portfolio.workers.portfolio_snapshot_worker"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Portfolio brokerage sync worker ─────────────────────────────────────────
   portfolio-brokerage-sync:
     build:

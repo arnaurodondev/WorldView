@@ -126,6 +126,10 @@ class FakeUoW(UnitOfWork):
     def auth_audit_log(self):
         return MagicMock()
 
+    @property
+    def portfolio_value_snapshots(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 
