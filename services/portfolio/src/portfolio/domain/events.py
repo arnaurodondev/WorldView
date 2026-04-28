@@ -254,6 +254,21 @@ class WatchlistItemAdded(DomainEvent):
 
 
 @dataclass
+class WatchlistRenamed(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.renamed"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+    old_name: str = ""
+    new_name: str = ""
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id
+
+
+@dataclass
 class WatchlistItemDeleted(DomainEvent):
     EVENT_TYPE: ClassVar[str] = "watchlist.item_deleted"
     AGGREGATE_TYPE: ClassVar[str] = "watchlist"

@@ -278,6 +278,31 @@ async def test_rename_watchlist_success(
 
 
 @pytest.mark.asyncio
+async def test_rename_watchlist_emits_outbox_event(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    uc = RenameWatchlistUseCase()
+    old_name = watchlist.name
+    cmd = RenameWatchlistCommand(
+        watchlist_id=watchlist.id,
+        owner_id=user.id,
+        tenant_id=tenant.id,
+        new_name="New Name",
+    )
+    await uc.execute(cmd, uow)
+
+    events = uow.outbox.events_by_type("watchlist.renamed")
+    assert len(events) == 1
+    payload = events[0].payload
+    assert payload["watchlist_id"] == str(watchlist.id)
+    assert payload["old_name"] == old_name
+    assert payload["new_name"] == "New Name"
+
+
+@pytest.mark.asyncio
 async def test_rename_watchlist_not_found(
     uow: FakeUnitOfWork,
     tenant: Tenant,

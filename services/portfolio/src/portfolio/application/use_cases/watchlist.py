@@ -15,6 +15,7 @@ from portfolio.application.messaging.mapper import (
     watchlist_deleted_to_dict,
     watchlist_item_added_to_dict,
     watchlist_item_deleted_to_dict,
+    watchlist_renamed_to_dict,
 )
 from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.cache import NoOpWatchlistCache
@@ -35,6 +36,7 @@ from portfolio.domain.events import (
     WatchlistDeleted,
     WatchlistItemAdded,
     WatchlistItemDeleted,
+    WatchlistRenamed,
 )
 
 if TYPE_CHECKING:
@@ -191,7 +193,20 @@ class RenameWatchlistUseCase:
         renamed = dataclasses.replace(watchlist, name=cmd.new_name)
         await uow.watchlists.save(renamed)
 
-        # TODO: emit outbox event for watchlist.renamed — event type not yet in the event mapper
+        event = WatchlistRenamed(
+            tenant_id=cmd.tenant_id,
+            watchlist_id=watchlist.id,
+            user_id=watchlist.user_id,
+            old_name=watchlist.name,
+            new_name=cmd.new_name,
+        )
+        await uow.outbox.save(
+            _make_outbox(
+                WatchlistRenamed.EVENT_TYPE,
+                watchlist_renamed_to_dict(event),
+                cmd.tenant_id,
+            ),
+        )
         await uow.commit()
         logger.info(
             "watchlist_renamed",

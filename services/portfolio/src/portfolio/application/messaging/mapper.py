@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         WatchlistDeleted,
         WatchlistItemAdded,
         WatchlistItemDeleted,
+        WatchlistRenamed,
     )
 
 
@@ -138,6 +139,15 @@ def watchlist_item_added_to_dict(event: WatchlistItemAdded) -> dict[str, Any]:
     return d
 
 
+def watchlist_renamed_to_dict(event: WatchlistRenamed) -> dict[str, Any]:
+    d = event_to_envelope_dict(event)
+    d["watchlist_id"] = str(event.watchlist_id)
+    d["user_id"] = str(event.user_id)
+    d["old_name"] = event.old_name
+    d["new_name"] = event.new_name
+    return d
+
+
 def watchlist_item_deleted_to_dict(event: WatchlistItemDeleted) -> dict[str, Any]:
     d = event_to_envelope_dict(event)
     d["watchlist_id"] = str(event.watchlist_id)
@@ -159,6 +169,7 @@ EVENT_MAPPER_REGISTRY: dict[str, Any] = {
     "instrument_ref.created": instrument_ref_created_to_dict,
     "watchlist.created": watchlist_created_to_dict,
     "watchlist.deleted": watchlist_deleted_to_dict,
+    "watchlist.renamed": watchlist_renamed_to_dict,
     "watchlist.item_added": watchlist_item_added_to_dict,
     "watchlist.item_deleted": watchlist_item_deleted_to_dict,
 }
