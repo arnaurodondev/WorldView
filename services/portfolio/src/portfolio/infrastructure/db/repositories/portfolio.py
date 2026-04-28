@@ -53,6 +53,32 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
+    async def list_all_non_root_active(self) -> list[Portfolio]:
+        """Return every non-root active portfolio across all tenants (worker-scoped).
+
+        PLAN-0046 Wave 4 / T-46-4-02.
+        """
+        result = await self._session.execute(
+            select(PortfolioModel).where(
+                PortfolioModel.kind != str(PortfolioKind.ROOT),
+                PortfolioModel.status == str(PortfolioStatus.ACTIVE),
+            ),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
+    async def list_active_root(self) -> list[Portfolio]:
+        """Return every root active portfolio across all tenants (worker-scoped).
+
+        PLAN-0046 Wave 4 / T-46-4-03.
+        """
+        result = await self._session.execute(
+            select(PortfolioModel).where(
+                PortfolioModel.kind == str(PortfolioKind.ROOT),
+                PortfolioModel.status == str(PortfolioStatus.ACTIVE),
+            ),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
     async def list_non_root_active_ids_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[UUID]:
         """Return ids of all the owner's non-root, active portfolios.
 

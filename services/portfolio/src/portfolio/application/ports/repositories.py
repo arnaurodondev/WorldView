@@ -9,11 +9,14 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from portfolio.application.use_cases.read_models import EnrichedHolding
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
+    from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
     from portfolio.domain.value_objects import AuthAuditEvent
@@ -126,6 +129,28 @@ class PortfolioRepository(ABC):
         PLAN-0046 Wave 3 / T-46-3-02. Used by ``EnsureRootPortfolioUseCase``
         to keep auto-provisioning idempotent — at most one ROOT per owner
         is enforced by a partial unique index.
+        """
+        ...
+
+    @abstractmethod
+    async def list_all_non_root_active(self) -> list[Portfolio]:
+        """Return every non-root, status=active portfolio across all tenants.
+
+        PLAN-0046 Wave 4 / T-46-4-02. Worker-scoped (no tenant filter)
+        — used by ``PortfolioSnapshotWorker`` to iterate every portfolio
+        that needs a daily value snapshot.
+
+        Order is unspecified; callers must not rely on it.
+        """
+        ...
+
+    @abstractmethod
+    async def list_active_root(self) -> list[Portfolio]:
+        """Return every root, status=active portfolio across all tenants.
+
+        PLAN-0046 Wave 4 / T-46-4-03. Used by the root-aggregation pass
+        in ``PortfolioSnapshotWorker``: for each root we sum its owner's
+        non-root snapshots for that date.
         """
         ...
 
@@ -409,4 +434,33 @@ class AuthAuditLogRepository(ABC):
     @abstractmethod
     async def create(self, event: AuthAuditEvent, user_id: UUID | None) -> None:
         """Append an auth audit event to ``auth_audit_log``."""
+        ...
+
+
+class PortfolioValueSnapshotRepository(ABC):
+    """Time-series store for daily portfolio value snapshots (PLAN-0046 Wave 4).
+
+    All writes go through ``upsert`` which is idempotent on
+    ``(portfolio_id, snapshot_date)`` — re-running the snapshot worker
+    for the same date overwrites with the latest computed value.
+    """
+
+    @abstractmethod
+    async def upsert(self, snapshot: PortfolioValueSnapshot) -> None:
+        """Insert or overwrite the snapshot row for ``(portfolio_id, snapshot_date)``."""
+        ...
+
+    @abstractmethod
+    async def list_range(
+        self,
+        portfolio_id: UUID,
+        from_date: date,
+        to_date: date,
+    ) -> list[PortfolioValueSnapshot]:
+        """Return snapshots within ``[from_date, to_date]`` inclusive, oldest first."""
+        ...
+
+    @abstractmethod
+    async def get_latest(self, portfolio_id: UUID) -> PortfolioValueSnapshot | None:
+        """Return the most recent snapshot for the portfolio, or None if none exist."""
         ...

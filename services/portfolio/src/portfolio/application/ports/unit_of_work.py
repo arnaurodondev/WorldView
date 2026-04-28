@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         InstrumentRepository,
         OutboxRepository,
         PortfolioRepository,
+        PortfolioValueSnapshotRepository,
         TenantRepository,
         TransactionRepository,
         UserRepository,
@@ -105,6 +106,10 @@ class ReadOnlyUnitOfWork(ABC):
     @property
     @abstractmethod
     def auth_audit_log(self) -> AuthAuditLogRepository: ...
+
+    @property
+    @abstractmethod
+    def portfolio_value_snapshots(self) -> PortfolioValueSnapshotRepository: ...
 
     async def __aenter__(self) -> ReadOnlyUnitOfWork:
         return self

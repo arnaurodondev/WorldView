@@ -24,6 +24,7 @@ from portfolio.application.ports.repositories import (
     OutboxRecord,
     OutboxRepository,
     PortfolioRepository,
+    PortfolioValueSnapshotRepository,
     TenantRepository,
     TransactionRepository,
     UserRepository,
@@ -35,10 +36,13 @@ from portfolio.application.ports.unit_of_work import UnitOfWork
 from portfolio.application.use_cases.read_models import EnrichedHolding
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
+    from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
     from portfolio.domain.value_objects import AuthAuditEvent
@@ -117,6 +121,40 @@ class FakeAuthAuditLogRepository(AuthAuditLogRepository):
         return [(e, uid) for e, uid in self.events if e.event_type == event_type]
 
 
+class FakePortfolioValueSnapshotRepository(PortfolioValueSnapshotRepository):
+    """In-memory snapshot store keyed on ``(portfolio_id, snapshot_date)``.
+
+    PLAN-0046 Wave 4 / T-46-4-01. Idempotent upsert is faithful to the
+    SQL implementation: a second call for the same key replaces the
+    prior row entirely (latest-wins).
+    """
+
+    def __init__(self) -> None:
+        # WHY a tuple key: emulates the unique constraint exactly so test
+        # assertions for "no duplicate row" mean what they say in SQL.
+        self._store: dict[tuple[UUID, date], PortfolioValueSnapshot] = {}
+
+    async def upsert(self, snapshot: PortfolioValueSnapshot) -> None:
+        self._store[(snapshot.portfolio_id, snapshot.snapshot_date)] = snapshot
+
+    async def list_range(
+        self,
+        portfolio_id: UUID,
+        from_date: date,
+        to_date: date,
+    ) -> list[PortfolioValueSnapshot]:
+        rows = [s for (pid, d), s in self._store.items() if pid == portfolio_id and from_date <= d <= to_date]
+        rows.sort(key=lambda s: s.snapshot_date)
+        return rows
+
+    async def get_latest(self, portfolio_id: UUID) -> PortfolioValueSnapshot | None:
+        rows = [s for (pid, _), s in self._store.items() if pid == portfolio_id]
+        if not rows:
+            return None
+        rows.sort(key=lambda s: s.snapshot_date, reverse=True)
+        return rows[0]
+
+
 class FakePortfolioRepository(PortfolioRepository):
     """In-memory portfolio store with tenant-scoped queries."""
 
@@ -153,6 +191,19 @@ class FakePortfolioRepository(PortfolioRepository):
             if p.owner_id == owner_id and p.tenant_id == tenant_id and p.kind == PortfolioKind.ROOT:
                 return p
         return None
+
+    async def list_all_non_root_active(self) -> list[Portfolio]:
+        # PLAN-0046 Wave 4 / T-46-4-02. Worker-scoped: every non-root active
+        # portfolio across tenants. Mirrors the SQL repo predicate.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [p for p in self._store.values() if p.kind != PortfolioKind.ROOT and p.status == PortfolioStatus.ACTIVE]
+
+    async def list_active_root(self) -> list[Portfolio]:
+        # PLAN-0046 Wave 4 / T-46-4-03.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [p for p in self._store.values() if p.kind == PortfolioKind.ROOT and p.status == PortfolioStatus.ACTIVE]
 
     async def list_non_root_active_ids_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[UUID]:
         # PLAN-0046 Wave 3 / T-46-3-03. Used by holdings/transactions fan-out
@@ -640,6 +691,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._brokerage_connections = FakeBrokerageConnectionRepository()
         self._brokerage_sync_errors = FakeBrokerageTransactionSyncErrorRepository()
         self._auth_audit_log = FakeAuthAuditLogRepository()
+        self._portfolio_value_snapshots = FakePortfolioValueSnapshotRepository()
         self.committed = False
         self.rolled_back = False
         self.commit_count = 0
@@ -703,6 +755,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def auth_audit_log(self) -> FakeAuthAuditLogRepository:
         return self._auth_audit_log
+
+    @property
+    def portfolio_value_snapshots(self) -> FakePortfolioValueSnapshotRepository:
+        return self._portfolio_value_snapshots
 
     async def commit(self) -> None:
         self.committed = True
