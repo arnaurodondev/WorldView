@@ -110,6 +110,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     valkey_client = ValkeyClient(url=settings.valkey_url)
     app.state.valkey_client = valkey_client
 
+    # 7b. PLAN-0046 Wave 5 / T-46-5-02 — current-price REST client.
+    # WHY one shared httpx.AsyncClient on app.state: connection pooling
+    # across requests amortises TCP/TLS setup. The client lifetime is
+    # bound to the FastAPI app lifespan (closed on shutdown below).
+    import httpx as _httpx
+
+    from portfolio.infrastructure.market_data.current_price_client import HttpCurrentPriceClient
+
+    market_data_http = _httpx.AsyncClient(timeout=10.0)
+    app.state.market_data_http = market_data_http
+    app.state.current_price_client = HttpCurrentPriceClient(
+        http=market_data_http,
+        market_data_url=settings.market_data_service_url,
+    )
+
     # 8. Create outbox dispatcher
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
@@ -132,6 +147,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Close Valkey client
     await valkey_client.close()
+
+    # Close shared market-data HTTP client (PLAN-0046 Wave 5)
+    await market_data_http.aclose()
 
     # Dispose engine(s) — read_engine only disposed separately if it is a distinct object
     await engine.dispose()

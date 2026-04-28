@@ -26,6 +26,7 @@ from api_gateway.routes import router as main_router
 from api_gateway.routes.admin_costs import router as admin_costs_router
 from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
+from api_gateway.routes.risk_metrics import router as risk_metrics_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
@@ -212,6 +213,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(internal_router)
     app.include_router(auth_router)
     app.include_router(admin_costs_router)
+    # PLAN-0046 Wave 5 / T-46-5-03: register BEFORE main_router so the
+    # composition route at /v1/portfolios/{id}/risk-metrics is matched
+    # before any catch-all proxy patterns (defensive — main_router has
+    # no overlapping route today, but ordering protects against future
+    # additions).
+    app.include_router(risk_metrics_router)
     app.include_router(main_router)
 
     return app
