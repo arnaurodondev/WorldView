@@ -264,7 +264,7 @@ async def test_quota_ok_proceeds_normally() -> None:
 @pytest.mark.asyncio
 async def test_quota_soft_limit_does_not_block() -> None:
     """When quota returns SOFT_LIMIT_EXCEEDED, the task proceeds (not blocked)."""
-    use_case, quota_service = _make_use_case(quota_result="soft_limit_exceeded")
+    _, quota_service = _make_use_case(quota_result="soft_limit_exceeded")
 
     # Soft limit should NOT raise ProviderRateLimited immediately
     # The task continues into the provider fetch — which may fail on missing watermarks

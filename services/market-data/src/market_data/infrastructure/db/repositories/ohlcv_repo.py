@@ -241,13 +241,17 @@ class PgOHLCVRepository(OHLCVRepository):
         )
         return [self._to_domain(row) for row in result.scalars().all()]
 
-    async def get_sector_period_returns(self, timeframe: str) -> list[dict]:
-        """Compute average period return per GICS sector from OHLCV bars.
+    async def get_sector_period_returns(self, lookback_days: int) -> list[dict]:
+        """Compute average period return per GICS sector from daily OHLCV bars.
 
-        Uses LATERAL JOINs to get latest and previous bars per instrument,
-        then averages the single-period return across all instruments in each sector.
-        WHY LATERAL: we need the last 2 bars per instrument — LATERAL allows
-        per-row subqueries with ORDER BY + LIMIT that a plain JOIN cannot do.
+        WHY daily bars + calendar lookback: derived weekly/monthly bars require at
+        least 2 such bars per instrument to exist, which is rarely the case in
+        production (only the current period's bar is available). Using daily bars
+        with a calendar-based lookback (7 or 30 days) works with any instrument
+        that has ≥2 trading days of history, making 1W and 1M viable.
+
+        Uses LATERAL JOINs: first subquery finds the latest daily bar, second finds
+        the closest daily bar at-or-before the lookback horizon.
         """
         sql = text(
             """
@@ -259,21 +263,22 @@ class PgOHLCVRepository(OHLCVRepository):
                 COUNT(DISTINCT i.id)::int AS instrument_count
             FROM instruments i
             JOIN LATERAL (
-                SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = :tf
+                SELECT close, bar_date FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
                 ORDER BY bar_date DESC LIMIT 1
             ) latest ON true
             JOIN LATERAL (
                 SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = :tf
-                ORDER BY bar_date DESC LIMIT 1 OFFSET 1
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                ORDER BY bar_date DESC LIMIT 1
             ) prev ON true
             WHERE i.sector IS NOT NULL
             GROUP BY i.sector
             ORDER BY change_pct DESC NULLS LAST
             """
         )
-        result = await self._session.execute(sql, {"tf": timeframe})
+        result = await self._session.execute(sql, {"lookback_days": lookback_days})
         rows = result.mappings().all()
         return [
             {
@@ -286,14 +291,13 @@ class PgOHLCVRepository(OHLCVRepository):
 
     async def get_period_movers(
         self,
-        timeframe: str,
+        lookback_days: int,
         mover_type: str,
         limit: int,
     ) -> list[dict]:
-        """Return top gainers or losers by period return from OHLCV bars.
+        """Return top gainers or losers by period return from daily OHLCV bars.
 
-        WHY LATERAL: same reason as get_sector_period_returns — need last 2 bars
-        per instrument for computing the period return.
+        WHY daily bars + calendar lookback: see get_sector_period_returns docstring.
         """
         order = "DESC" if mover_type == "gainers" else "ASC"
         sql = text(
@@ -305,21 +309,22 @@ class PgOHLCVRepository(OHLCVRepository):
                 (latest.close - prev.close) / NULLIF(prev.close, 0) * 100 AS period_return_pct
             FROM instruments i
             JOIN LATERAL (
-                SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = :tf
+                SELECT close, bar_date FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
                 ORDER BY bar_date DESC LIMIT 1
             ) latest ON true
             JOIN LATERAL (
                 SELECT close FROM ohlcv_bars
-                WHERE instrument_id = i.id AND timeframe = :tf
-                ORDER BY bar_date DESC LIMIT 1 OFFSET 1
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                ORDER BY bar_date DESC LIMIT 1
             ) prev ON true
             WHERE i.sector IS NOT NULL
             ORDER BY period_return_pct {order} NULLS LAST
             LIMIT :lim
             """
         )
-        result = await self._session.execute(sql, {"tf": timeframe, "lim": limit})
+        result = await self._session.execute(sql, {"lookback_days": lookback_days, "lim": limit})
         rows = result.mappings().all()
         return [
             {

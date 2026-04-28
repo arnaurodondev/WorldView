@@ -139,7 +139,7 @@ class WorkerProcess:
 
             # Try batch execution first for eligible tasks (same provider+timeframe,
             # OHLCV intraday, adapter supports_batch).
-            batch_executed, remaining = await self._try_batch_execute(claimed)
+            _, remaining = await self._try_batch_execute(claimed)
 
             # Execute remaining tasks individually (as before).
             if remaining:

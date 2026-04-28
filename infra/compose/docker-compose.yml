@@ -311,7 +311,7 @@ services:
     environment:
       - SNAPTRADE_CLIENT_ID=${SNAPTRADE_CLIENT_ID:-}
       - SNAPTRADE_CONSUMER_KEY=${SNAPTRADE_CONSUMER_KEY:-}
-      - SNAPTRADE_REDIRECT_URI=${SNAPTRADE_REDIRECT_URI:-http://localhost:5173/portfolio/brokerage/callback}
+      - SNAPTRADE_REDIRECT_URI=${SNAPTRADE_REDIRECT_URI:-http://localhost:3001/portfolio/brokerage/callback}
       - SNAPTRADE_SECRET_ENCRYPTION_KEY=${SNAPTRADE_SECRET_ENCRYPTION_KEY:-}
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.brokerage_sync_worker"]

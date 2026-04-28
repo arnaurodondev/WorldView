@@ -7,13 +7,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from market_data.application.ports.uow import ReadOnlyUnitOfWork
 
-# Maps frontend period strings to OHLCV timeframe column values in the DB.
-# "1D" is not handled here — for daily returns the caller falls back to the
-# screener approach (see S9 clients.py). "1w" and "1M" match the timeframe
-# values stored in ohlcv_bars by the OHLCV consumer.
-_PERIOD_TO_TIMEFRAME: dict[str, str] = {
-    "1W": "1w",
-    "1M": "1M",
+# Calendar lookback days per period — used against daily bars.
+# WHY not derived 1w/1M bars: see get_period_movers.py for explanation.
+_PERIOD_TO_LOOKBACK_DAYS: dict[str, int] = {
+    "1W": 7,
+    "1M": 30,
 }
 
 
@@ -32,8 +30,8 @@ class GetSectorReturnsUseCase:
 
         Raises ValueError for unsupported periods (1D must be routed elsewhere).
         """
-        if period not in _PERIOD_TO_TIMEFRAME:
+        if period not in _PERIOD_TO_LOOKBACK_DAYS:
             msg = f"Unsupported period '{period}' for sector returns. Use 1W or 1M."
             raise ValueError(msg)
-        timeframe = _PERIOD_TO_TIMEFRAME[period]
-        return await self._uow.ohlcv_read.get_sector_period_returns(timeframe)
+        lookback_days = _PERIOD_TO_LOOKBACK_DAYS[period]
+        return await self._uow.ohlcv_read.get_sector_period_returns(lookback_days)

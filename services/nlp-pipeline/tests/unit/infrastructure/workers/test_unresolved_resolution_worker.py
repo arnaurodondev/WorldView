@@ -592,6 +592,6 @@ class TestDeepInfraProviderPath:
             "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
             return_value=mock_client,
         ):
-            outcome, reason = await worker._phase2_llm_classify(mention)
+            outcome, _ = await worker._phase2_llm_classify(mention)
 
         assert outcome == ResolutionOutcome.UNRESOLVED

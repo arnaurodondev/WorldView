@@ -713,6 +713,6 @@ class TestEventRepositoryBP180:
         """Empty DB result → returns empty list."""
         import asyncio
 
-        repo, session = self._make_repo(fetchall_return=[])
+        repo, _ = self._make_repo(fetchall_return=[])
         result = asyncio.run(repo.search_events(entity_ids=[]))
         assert result == []

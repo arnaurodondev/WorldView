@@ -158,7 +158,7 @@ class TestMacroIndicatorConsumerHappyPath:
     def test_new_indicator_updates_metadata(self) -> None:
         """New indicator data (hash mismatch) → update_metadata called with merged dict."""
         producer = MagicMock()
-        consumer, entity_repo, session = _make_consumer(
+        consumer, entity_repo, _ = _make_consumer(
             old_hash=None,  # No existing hash → always triggers update
             direct_producer=producer,
         )

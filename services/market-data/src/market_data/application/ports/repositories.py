@@ -215,26 +215,30 @@ class OHLCVRepository(ABC):
         """
 
     @abstractmethod
-    async def get_sector_period_returns(self, timeframe: str) -> list[dict]:
-        """Return average period return per sector using OHLCV bars.
+    async def get_sector_period_returns(self, lookback_days: int) -> list[dict]:
+        """Return average period return per sector using daily OHLCV bars.
 
+        Uses calendar-based lookback from the most recent daily bar per instrument
+        rather than derived weekly/monthly bars (which are rarely populated).
+
+        lookback_days: 7 for 1W, 30 for 1M
         Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int}
-        Excludes sectors where fewer than 2 bars exist (can't compute a return).
-        timeframe examples: "1w", "1M"
         """
 
     @abstractmethod
     async def get_period_movers(
         self,
-        timeframe: str,
+        lookback_days: int,
         mover_type: str,
         limit: int,
     ) -> list[dict]:
-        """Return top gainers or losers sorted by period return using OHLCV bars.
+        """Return top gainers or losers sorted by period return using daily OHLCV bars.
 
-        Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
+        Uses calendar-based lookback from the most recent daily bar per instrument.
+
+        lookback_days: 7 for 1W, 30 for 1M
         mover_type: "gainers" (DESC) or "losers" (ASC)
-        timeframe examples: "1w", "1M"
+        Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
         """
 
 

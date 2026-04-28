@@ -306,7 +306,7 @@ async def test_batch_distributes_results_per_symbol() -> None:
     )
     with uow_patch as mock_uow_cls:
         mock_uow_cls.return_value = _make_mock_uow()
-        batch_executed, remaining = await worker._try_batch_execute(tasks)
+        batch_executed, _remaining = await worker._try_batch_execute(tasks)
 
     assert len(batch_executed) == 2
     # SqlaUnitOfWork created once per symbol for Steps 2-5.
