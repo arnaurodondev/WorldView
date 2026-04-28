@@ -16,10 +16,10 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery, useAuth, useState for period selector, and useRouter for nav.
+// WHY "use client": uses useQuery, useQueries, useAuth, useState for period selector + sector pills, and useRouter for nav.
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -27,6 +27,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
 import type { Mover } from "@/types/api";
+// PLAN-0048 Wave F-2: shared sector pill list (re-used by F-1 SectorHeatmap and
+// future Wave E WatchlistMoversWidget) so all three widgets keep identical
+// pill ordering, labels, and matching logic.
+import {
+  SECTOR_PILLS,
+  ALL_SECTORS_VALUE,
+  matchesSectorFilter,
+} from "@/lib/sectors";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +61,12 @@ export function PreMarketMoversWidget() {
   // Default 1D (today's session) is the most relevant view at market open.
   const [period, setPeriod] = useState<MoverPeriod>("1D");
 
+  // PLAN-0048 Wave F-2: sector filter pill state. Default "all" (no filter).
+  // WHY local state: like `period`, this is widget-scoped — no need to share
+  // it across the dashboard. Other movers widgets (e.g. WatchlistMoversWidget)
+  // each maintain their own selection so users can narrow them independently.
+  const [selectedSector, setSelectedSector] = useState<string>(ALL_SECTORS_VALUE);
+
   // WHY fetch gainers and get a combined list: getTopMovers returns one side at
   // a time. For the dashboard we need both — we make two queries (gainers + losers)
   // so each side can be independently cached and refetched.
@@ -77,9 +91,81 @@ export function PreMarketMoversWidget() {
 
   const isLoading = gainersLoading || losersLoading;
 
-  // Take top 5 from each side
-  const gainers = (gainersData?.movers ?? []).slice(0, 5);
-  const losers = (losersData?.movers ?? []).slice(0, 5);
+  // ── Pre-filter raw lists ────────────────────────────────────────────────
+  // WHY overfetch (10 then slice to 5): once the sector filter is active,
+  // many of the 10 candidates may not match. Starting from 10 gives the
+  // filter enough headroom to still show 5 rows post-filter for the most
+  // common cases. If the user picks an obscure sector with <5 names in the
+  // top-10, we render whatever fits (better than blank).
+  // WHY useMemo wrappers: `?? []` would create a fresh array reference on
+  // every render, which would invalidate every downstream useMemo /
+  // useQueries dep. Memoising on the underlying `data?.movers` reference
+  // gives us a stable empty-array fallback.
+  const allGainers = useMemo(() => gainersData?.movers ?? [], [gainersData]);
+  const allLosers = useMemo(() => losersData?.movers ?? [], [losersData]);
+
+  // ── Sector lookup via per-mover company-overview fetches ───────────────
+  // PLAN-0048 F-2: we filter rows client-side by `gics_sector` from the
+  // company overview endpoint. The Mover payload itself does not include
+  // sector, so we fan out one overview query per ticker.
+  // WHY useQueries: hooks can't be called inside `.map()`; useQueries does
+  // the fan-out at the top level and returns an aligned result array.
+  // WHY staleTime 600_000 (10min): a company's GICS sector almost never
+  // changes — caching aggressively avoids a round-trip storm when the user
+  // clicks between sector pills.
+  // WHY combine gainers + losers in one fan-out: keeps a single source of
+  // truth for the "instrument_id → sector" map without two parallel state
+  // structures. We slice the result back into gainer/loser arrays below.
+  // WHY dedupe by instrument_id: a ticker could in theory appear in both
+  // lists (e.g. mid-day swing); duplicate query keys trigger a TanStack
+  // "Duplicate Queries" warning and waste a network call.
+  const allCandidates = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: Mover[] = [];
+    for (const m of [...allGainers, ...allLosers]) {
+      if (seen.has(m.instrument_id)) continue;
+      seen.add(m.instrument_id);
+      merged.push(m);
+    }
+    return merged;
+  }, [allGainers, allLosers]);
+
+  const overviewQueries = useQueries({
+    queries: allCandidates.map((m) => ({
+      queryKey: ["mover-overview-sector", m.instrument_id],
+      queryFn: () => createGateway(accessToken).getCompanyOverview(m.instrument_id),
+      enabled: !!accessToken && !!m.instrument_id,
+      staleTime: 600_000,
+    })),
+  });
+
+  // Build instrument_id → sector map for O(1) lookup during filtering.
+  const sectorByInstrumentId = useMemo(() => {
+    const map = new Map<string, string | null | undefined>();
+    allCandidates.forEach((m, i) => {
+      map.set(m.instrument_id, overviewQueries[i]?.data?.instrument?.gics_sector);
+    });
+    return map;
+  }, [allCandidates, overviewQueries]);
+
+  // ── Filter helper ───────────────────────────────────────────────────────
+  // WHY graceful "still loading" behaviour: if a row's overview hasn't
+  // resolved yet (no entry in the map), we DON'T hide the row — that would
+  // make the list flicker as overviews stream in. Spec: "If overviews are
+  // still loading, show all rows (don't block). When `All`, no filter."
+  function applyFilter(rows: Mover[]): Mover[] {
+    if (selectedSector === ALL_SECTORS_VALUE) return rows;
+    return rows.filter((m) => {
+      const sector = sectorByInstrumentId.get(m.instrument_id);
+      // `undefined` means "overview not loaded yet" → keep the row visible.
+      if (sector === undefined) return true;
+      return matchesSectorFilter(sector, selectedSector);
+    });
+  }
+
+  // Take top 5 from each side after sector filter.
+  const gainers = applyFilter(allGainers).slice(0, 5);
+  const losers = applyFilter(allLosers).slice(0, 5);
 
   return (
     // WHY bg-background: see PortfolioNewsWidget for rationale — consistent with
@@ -118,6 +204,48 @@ export function PreMarketMoversWidget() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Sector filter pills (PLAN-0048 Wave F-2) ─────────────────────── */}
+      {/* WHY this lives between the header and the GAINERS|LOSERS sub-header:
+          it visually scopes the data below it. Putting it inside either
+          column would imply it filters only that column.
+          WHY -mx-2 px-2: bleed the scroll container to the panel edges so
+          horizontally-scrolled pills can extend full width without the
+          parent's padding clipping them visually mid-scroll.
+          WHY overflow-x-auto + flex (not flex-wrap): a single horizontal
+          row keeps vertical real estate dense; users scroll with the
+          trackpad/wheel rather than have pills wrap and steal a second row. */}
+      <div
+        className="-mx-2 flex shrink-0 gap-1 overflow-x-auto border-b border-border/30 px-2 pb-1 pt-1"
+        // role="tablist": pills act like a one-of-many selector — tablist is
+        // the closest ARIA pattern (radio-group implies form semantics we
+        // don't have here).
+        role="tablist"
+        aria-label="Filter movers by sector"
+      >
+        {SECTOR_PILLS.map((pill) => {
+          const isSelected = selectedSector === pill.value;
+          return (
+            <button
+              key={pill.value}
+              role="tab"
+              aria-selected={isSelected}
+              onClick={() => setSelectedSector(pill.value)}
+              className={cn(
+                // Base style — small mono-uppercase text matches the rest of
+                // the terminal's chrome. tracking-wider keeps the letters
+                // legible at 10px.
+                "shrink-0 rounded border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                isSelected
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70",
+              )}
+            >
+              {pill.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Sub-headers: GAINERS | LOSERS ─────────────────────────────────── */}
