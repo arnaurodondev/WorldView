@@ -33,7 +33,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { formatPrice, formatPercent } from "@/lib/utils";
+import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import type { Holding } from "@/types/api";
 
@@ -383,8 +383,12 @@ export function SemanticHoldingsTable({
                       style={{ width: `${Math.min(weight, 100).toFixed(1)}%` }}
                     />
                   </div>
+                  {/* F-502 (iter-2): WEIGHT is allocation share, not directional —
+                      a position cannot have negative weight, so the leading
+                      "+" from formatPercent looks like noise. Use the
+                      unsigned formatter so we render "31.88%" not "+31.88%". */}
                   <span className="font-mono text-[11px] tabular-nums w-[36px] text-right">
-                    {formatPercent(weight / 100)}
+                    {formatPercentUnsigned(weight / 100)}
                   </span>
                 </div>
               </td>
@@ -427,7 +431,10 @@ export function SemanticHoldingsTable({
                 totalPnlPct >= 0 ? "text-positive" : "text-negative",
               )}
             >
-              {totalPnlPct >= 0 ? "+" : ""}{formatPercent(totalPnlPct / 100)}
+              {/* F-501 (iter-2): formatPercent already prefixes "+"/"-" — the
+                  redundant ternary produced "++30.92%". Match the per-row fix
+                  on line 365. */}
+              {formatPercent(totalPnlPct / 100)}
             </td>
 
             {/* Total Value */}
