@@ -80,15 +80,17 @@ def _make_app(
 
 
 def _make_list_uc(
-    pairs: list[tuple[PredictionMarket, dict[str, float]]] | None = None,
+    pairs: list[tuple[PredictionMarket, dict[str, float], Decimal | None]] | None = None,
     total: int = 0,
 ) -> MagicMock:
+    # PLAN-0048 D-1: list use case now returns ``(market, prices, volume_24h)`` triples.
     uc = MagicMock()
     uc.execute = AsyncMock(return_value=(pairs or [], total))
     return uc
 
 
-def _make_detail_uc(result: tuple[PredictionMarket, dict[str, float]] | None) -> MagicMock:
+def _make_detail_uc(result: tuple[PredictionMarket, dict[str, float], Decimal | None] | None) -> MagicMock:
+    # PLAN-0048 D-1: detail use case now returns ``(market, prices, volume_24h)``.
     uc = MagicMock()
     uc.execute = AsyncMock(return_value=result)
     return uc
@@ -113,7 +115,9 @@ def test_list_markets_endpoint_200() -> None:
     """GET /api/v1/prediction-markets returns 200 with PredictionMarketsListResponse."""
     market = _make_market()
     prices = {"Yes": 0.72, "No": 0.28}
-    uc = _make_list_uc(pairs=[(market, prices)], total=1)
+    # PLAN-0048 D-1: include volume_24h in the use case result; the router
+    # forwards it through to the response.
+    uc = _make_list_uc(pairs=[(market, prices, Decimal("1500.50"))], total=1)
     _, client = _make_app(list_uc=uc)
 
     resp = client.get("/api/v1/prediction-markets")
@@ -128,12 +132,26 @@ def test_list_markets_endpoint_200() -> None:
     assert item["market_id"] == "mkt-001"
     assert item["question"] == "Will the Fed cut rates?"
     assert item["resolution_status"] == "open"
+    # PLAN-0048 D-1: list endpoint now surfaces non-null volume_24h.
+    assert item["volume_24h"] == pytest.approx(1500.50)
+
+
+def test_list_markets_endpoint_volume_null_when_no_snapshot() -> None:
+    """List endpoint preserves null volume_24h for markets without snapshots."""
+    market = _make_market()
+    uc = _make_list_uc(pairs=[(market, {}, None)], total=1)
+    _, client = _make_app(list_uc=uc)
+
+    resp = client.get("/api/v1/prediction-markets")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["volume_24h"] is None
 
 
 def test_list_markets_filters_by_status() -> None:
     """?status=resolved passes status='resolved' to the use case."""
     market = _make_market(resolution_status="resolved")
-    uc = _make_list_uc(pairs=[(market, {})], total=1)
+    uc = _make_list_uc(pairs=[(market, {}, None)], total=1)
     _, client = _make_app(list_uc=uc)
 
     resp = client.get("/api/v1/prediction-markets?status=resolved")
@@ -148,7 +166,7 @@ def test_list_markets_filters_by_status() -> None:
 def test_list_markets_query_filter() -> None:
     """?query=fed passes the query through to the use case."""
     market = _make_market()
-    uc = _make_list_uc(pairs=[(market, {})], total=1)
+    uc = _make_list_uc(pairs=[(market, {}, None)], total=1)
     _, client = _make_app(list_uc=uc)
 
     resp = client.get("/api/v1/prediction-markets?query=fed")
@@ -182,7 +200,7 @@ def test_list_markets_outcomes_in_response() -> None:
     """Each item contains an outcomes list with price fields."""
     market = _make_market()
     prices = {"Yes": 0.65, "No": 0.35}
-    uc = _make_list_uc(pairs=[(market, prices)], total=1)
+    uc = _make_list_uc(pairs=[(market, prices, Decimal("250.00"))], total=1)
     _, client = _make_app(list_uc=uc)
 
     resp = client.get("/api/v1/prediction-markets")
@@ -200,7 +218,8 @@ def test_get_market_endpoint_200() -> None:
     """GET /api/v1/prediction-markets/{id} returns PredictionMarketDetailResponse."""
     market = _make_market()
     prices = {"Yes": 0.72, "No": 0.28}
-    uc = _make_detail_uc((market, prices))
+    # PLAN-0048 D-1: detail use case returns (market, prices, volume_24h).
+    uc = _make_detail_uc((market, prices, Decimal("999.99")))
     _, client = _make_app(detail_uc=uc)
 
     resp = client.get("/api/v1/prediction-markets/mkt-001")
@@ -209,6 +228,8 @@ def test_get_market_endpoint_200() -> None:
     data = resp.json()
     assert data["market_id"] == "mkt-001"
     assert "created_at" in data  # detail includes created_at
+    # PLAN-0048 D-1: detail surfaces non-null volume_24h.
+    assert data["volume_24h"] == pytest.approx(999.99)
 
 
 def test_get_market_endpoint_404() -> None:

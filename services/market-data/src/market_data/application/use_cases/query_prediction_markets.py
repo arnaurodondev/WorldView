@@ -9,6 +9,7 @@ use case methods.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,10 +18,12 @@ if TYPE_CHECKING:
 
 
 class ListPredictionMarketsUseCase:
-    """Return a paginated list of prediction markets with current prices.
+    """Return a paginated list of prediction markets with current prices and volume.
 
     Avoids N+1 via a single ``get_latest_prices_batch`` call that returns
-    the latest snapshot prices for all markets at once.
+    the latest snapshot prices for all markets at once. The repo's
+    ``list_markets`` already JOINs the latest snapshot's ``volume_24h``,
+    so no extra round-trip is needed for that field (PLAN-0048 D-1).
     """
 
     def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
@@ -33,25 +36,30 @@ class ListPredictionMarketsUseCase:
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[list[tuple[PredictionMarket, dict[str, float]]], int]:
-        """Return ``([(market, outcomes_prices), ...], total)``."""
+    ) -> tuple[list[tuple[PredictionMarket, dict[str, float], Decimal | None]], int]:
+        """Return ``([(market, outcomes_prices, volume_24h), ...], total)``.
+
+        ``volume_24h`` is the most recent snapshot's volume (or ``None`` when
+        the market has no snapshots / no volume).  Forward-compatible: callers
+        that don't care about volume can ignore the third tuple element.
+        """
         effective_status = None if status == "all" else status
-        markets, total = await self._uow.prediction_markets_read.list_markets(
+        pairs, total = await self._uow.prediction_markets_read.list_markets(
             status=effective_status,
             query=query,
             limit=limit,
             offset=offset,
         )
-        if not markets:
+        if not pairs:
             return [], total
 
-        market_ids = [m.market_id for m in markets]
+        market_ids = [m.market_id for m, _vol in pairs]
         prices_by_market = await self._uow.prediction_market_snapshots_read.get_latest_prices_batch(market_ids)
-        return [(m, prices_by_market.get(m.market_id, {})) for m in markets], total
+        return [(m, prices_by_market.get(m.market_id, {}), vol) for m, vol in pairs], total
 
 
 class GetPredictionMarketUseCase:
-    """Return a single prediction market with its current prices, or ``None``."""
+    """Return a single prediction market with its current prices and volume, or ``None``."""
 
     def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
@@ -59,8 +67,12 @@ class GetPredictionMarketUseCase:
     async def execute(
         self,
         market_id: str,
-    ) -> tuple[PredictionMarket, dict[str, float]] | None:
-        """Return ``(market, outcomes_prices)`` or ``None`` if not found."""
+    ) -> tuple[PredictionMarket, dict[str, float], Decimal | None] | None:
+        """Return ``(market, outcomes_prices, volume_24h)`` or ``None`` if not found.
+
+        ``volume_24h`` comes from the latest snapshot we already fetch for prices,
+        so this is free (no extra query).  PLAN-0048 D-1.
+        """
         market = await self._uow.prediction_markets_read.find_by_market_id(market_id)
         if market is None:
             return None
@@ -71,7 +83,8 @@ class GetPredictionMarketUseCase:
             limit=1,
         )
         prices: dict[str, float] = dict(snapshots[0].outcomes_prices) if snapshots else {}
-        return market, prices
+        volume_24h: Decimal | None = snapshots[0].volume_24h if snapshots else None
+        return market, prices, volume_24h
 
 
 class GetPredictionMarketHistoryUseCase:

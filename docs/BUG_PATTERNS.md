@@ -7363,3 +7363,53 @@ that downstream code accepted as truth.
 **Regression test**:
 - Backend: `services/portfolio/tests/unit/test_use_cases_watchlist.py::test_list_members_returns_members_for_owner`
 - Gateway: `services/api-gateway/tests/test_s9_wave2_proxy.py::test_watchlist_members_list_proxies_to_s1`
+
+## BP-266 — S3 Prediction Market List Returns `volume_24h=None` (Volume Never Displayed)
+
+**Category**: Data pipeline / API design
+**Severity**: MAJOR
+**Affected areas**: Prediction markets widget, S3 market-data service
+**First seen**: 2026-04-28 (PLAN-0045 QA follow-up)
+
+**Symptoms**:
+- `PredictionMarketsWidget` always shows "$0 vol" for all prediction markets
+- `GET /api/v1/prediction-markets` returns `volume_24h: null` for every market
+- The history endpoint (`/history`) returns correct volume per snapshot
+
+**Root Cause**:
+Volume is stored in `prediction_market_snapshots` (hypertable), not on the `prediction_markets` entity. The list and detail endpoints were written to query the markets table only. The comment explicitly says `volume_24h=None, # stored in snapshot, not on market entity` but no follow-up JOIN was implemented.
+
+Gateway maps `null → 0`: `volume_usd: m.volume_24h ?? 0`. Frontend then formats `0 → "$0 vol"`.
+
+**Fix Applied (partial)**:
+Frontend null-guard in `PredictionMarketsWidget.tsx`: only render the volume span when `volume_usd > 0`. This prevents "$0 vol" but doesn't provide real data.
+
+**Full Fix** (PLAN-0048 Wave D-1, 2026-04-28):
+S3 `PgPredictionMarketRepository.list_markets` adds `LEFT JOIN LATERAL (SELECT volume_24h FROM prediction_market_snapshots WHERE market_id = m.market_id ORDER BY snapshot_at DESC LIMIT 1) latest ON TRUE`. The repo signature now returns `tuple[list[tuple[PredictionMarket, Decimal | None]], int]`; the use case forwards volume into `(market, prices, volume_24h)` triples; the router projects `float(volume) if volume is not None else None`. The detail endpoint also surfaces volume from the latest snapshot it already fetches for prices (no extra query). Forward-compatible: callers tolerating `volume_24h = null` continue to work.
+
+**Prevention**:
+- When an API field is intentionally left null with a `# stored elsewhere` comment, always add a TODO or a follow-up task to JOIN it from the correct table
+- Frontend volume/quantity fields that display currency amounts must guard `> 0` (not just `!= null`) to prevent "$0" display
+
+## BP-267 — Screener-Based `getTopMovers()` Hardcodes `price: 0`
+
+**Category**: Frontend / gateway
+**Severity**: MAJOR
+**Affected areas**: PreMarketMoversWidget, getTopMovers gateway function
+**First seen**: 2026-04-28 (PLAN-0045 QA follow-up)
+
+**Symptoms**:
+- TOP MOVERS widget shows "$0.00" for all instrument prices
+- The comment in gateway.ts explicitly states `price: 0, // Not available from screener`
+
+**Root Cause**:
+`getTopMovers()` calls the screener endpoint which returns `daily_return %` but no current price. A separate quote lookup would be needed for each instrument. The gateway transform hardcodes `price: 0` as a known placeholder.
+
+The `MoverRow` component checks `mover.price != null ? ...` which is always truthy (0 is not null), so it renders "$0.00".
+
+**Fix Applied**:
+In `MoverRow`, changed condition to `mover.price != null && mover.price > 0`. Now shows "—" for unavailable prices.
+
+**Prevention**:
+- Numeric fields that represent prices/quantities must be treated as "unavailable" when 0, not just when null
+- Document the `price: 0` placeholder in the type definition with a note that downstream renders must guard `> 0`

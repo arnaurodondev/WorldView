@@ -57,12 +57,18 @@ def _make_uow(
     total: int = 0,
     snapshots: list[PredictionMarketSnapshot] | None = None,
     latest_prices: dict[str, dict[str, float]] | None = None,
+    volumes_by_market: dict[str, Decimal | None] | None = None,
 ) -> MagicMock:
     uow = MagicMock()
 
     markets_repo = MagicMock()
     markets_repo.find_by_market_id = AsyncMock(return_value=market)
-    markets_repo.list_markets = AsyncMock(return_value=(markets or [], total))
+    # PLAN-0048 D-1: ``list_markets`` now returns ``(market, latest_volume_24h)`` pairs.
+    # Tests that don't pass ``volumes_by_market`` default to ``None`` per market
+    # (matches the previous behaviour where volume was always None).
+    volumes = volumes_by_market or {}
+    pairs = [(m, volumes.get(m.market_id)) for m in (markets or [])]
+    markets_repo.list_markets = AsyncMock(return_value=(pairs, total))
     uow.prediction_markets_read = markets_repo
 
     snapshots_repo = MagicMock()
@@ -78,19 +84,39 @@ def _make_uow(
 
 @pytest.mark.asyncio
 async def test_list_markets_returns_tuples() -> None:
-    """Execute returns a list of (market, outcomes_prices) tuples and total count."""
+    """Execute returns a list of (market, outcomes_prices, volume_24h) tuples and total count."""
     market = _make_market()
     prices = {"Yes": 0.72, "No": 0.28}
-    uow = _make_uow(markets=[market], total=1, latest_prices={"mkt-001": prices})
+    uow = _make_uow(
+        markets=[market],
+        total=1,
+        latest_prices={"mkt-001": prices},
+        volumes_by_market={"mkt-001": Decimal("1500.00")},
+    )
 
     uc = ListPredictionMarketsUseCase(uow)
     result, total = await uc.execute(status="open")
 
     assert total == 1
     assert len(result) == 1
-    got_market, got_prices = result[0]
+    got_market, got_prices, got_volume = result[0]
     assert got_market is market
     assert got_prices == prices
+    # PLAN-0048 D-1: volume_24h is now plumbed through from the repo JOIN.
+    assert got_volume == Decimal("1500.00")
+
+
+@pytest.mark.asyncio
+async def test_list_markets_volume_none_when_no_snapshot() -> None:
+    """Markets without snapshots get volume_24h=None (LEFT JOIN behaviour)."""
+    market = _make_market()
+    uow = _make_uow(markets=[market], total=1, latest_prices={"mkt-001": {}})
+
+    uc = ListPredictionMarketsUseCase(uow)
+    result, _ = await uc.execute()
+
+    _, _, volume = result[0]
+    assert volume is None
 
 
 @pytest.mark.asyncio
@@ -127,7 +153,7 @@ async def test_list_markets_missing_price_defaults_to_empty_dict() -> None:
     uc = ListPredictionMarketsUseCase(uow)
     result, _ = await uc.execute()
 
-    _, prices = result[0]
+    _, prices, _vol = result[0]
     assert prices == {}
 
 
@@ -136,7 +162,7 @@ async def test_list_markets_missing_price_defaults_to_empty_dict() -> None:
 
 @pytest.mark.asyncio
 async def test_get_market_found_returns_tuple() -> None:
-    """execute returns (market, outcomes_prices) when market exists."""
+    """execute returns (market, outcomes_prices, volume_24h) when market exists."""
     market = _make_market()
     snapshot = _make_snapshot()
     uow = _make_uow(market=market, snapshots=[snapshot])
@@ -145,9 +171,11 @@ async def test_get_market_found_returns_tuple() -> None:
     result = await uc.execute("mkt-001")
 
     assert result is not None
-    got_market, got_prices = result
+    got_market, got_prices, got_volume = result
     assert got_market is market
     assert got_prices == {"Yes": 0.72, "No": 0.28}
+    # PLAN-0048 D-1: detail also surfaces volume_24h from the latest snapshot.
+    assert got_volume == Decimal("1000.0")
 
 
 @pytest.mark.asyncio
@@ -170,8 +198,9 @@ async def test_get_market_no_snapshots_returns_empty_prices() -> None:
     result = await uc.execute("mkt-001")
 
     assert result is not None
-    _, prices = result
+    _, prices, volume = result
     assert prices == {}
+    assert volume is None
 
 
 # ── GetPredictionMarketHistoryUseCase ─────────────────────────────────────────
