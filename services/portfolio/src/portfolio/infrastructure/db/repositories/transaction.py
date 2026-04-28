@@ -31,6 +31,9 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
             quantity=row.quantity,
             price=row.price,
             fees=row.fees,
+            # ``amount`` may be NULL on historical rows (column added in Alembic 0009
+            # without backfill) or on rows where SnapTrade omitted the field.
+            amount=row.amount,
             currency=row.currency,
             executed_at=row.executed_at,
             external_ref=row.external_ref,
@@ -94,6 +97,7 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
                 quantity=transaction.quantity,
                 price=transaction.price,
                 fees=transaction.fees,
+                amount=transaction.amount,
                 currency=transaction.currency,
                 executed_at=transaction.executed_at,
                 external_ref=transaction.external_ref,

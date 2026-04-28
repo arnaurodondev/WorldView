@@ -29,10 +29,38 @@ from typing import Any
 
 import structlog
 
-from portfolio.application.ports.brokerage_client import SnapTradeActivity, SnapTradeUser
+from portfolio.application.ports.brokerage_client import (
+    SnapTradeActivity,
+    SnapTradePosition,
+    SnapTradeUser,
+)
 from portfolio.domain.errors import BrokerageApiError
 
 logger = structlog.get_logger(__name__)
+
+
+def _parse_optional_decimal(value: Any) -> Decimal | None:
+    """Coerce a SnapTrade scalar to ``Decimal`` or return ``None`` if absent.
+
+    SnapTrade's v11 DictSchema returns either Python primitives (int/float/str)
+    or wrapper objects with ``.value`` semantics. We normalise via ``str()`` to
+    avoid float→Decimal precision drift. Empty string is treated as missing.
+
+    PLAN-0046 / BP-263: used for ``amount`` and ``fee`` in ``UniversalActivity``;
+    both are independently optional.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return Decimal(s)
+    except (ArithmeticError, ValueError):
+        # Defensive: if SnapTrade ever returns a non-numeric string we skip it
+        # rather than crash the whole sync cycle. Log via structlog at the call
+        # site if desired — here we just degrade gracefully to None.
+        return None
 
 
 def _parse_trade_date(trade_date: str | None) -> datetime:
@@ -212,15 +240,17 @@ class SnapTradeClient:
         """
         try:
             return await self._get_activities_legacy(user, start, end)
-        except BrokerageApiError as exc:
-            # 410 Gone or other failure from the legacy endpoint — try per-account
-            if "410" in str(exc) or "Gone" in str(exc) or "deprecated" in str(exc).lower():
-                logger.info(
-                    "snaptrade_activities_legacy_gone_using_per_account",
-                    snaptrade_user_id=user.snaptrade_user_id,
-                )
-                return await self._get_activities_per_account(user, start, end)
-            raise
+        except BrokerageApiError:
+            # Any failure from the legacy endpoint → fall back to per-account.
+            # WHY always fall back: the SDK raises ApiException for both 410 Gone
+            # (endpoint deprecated) and auth/permission errors; the exception
+            # string does not reliably include "410" or "Gone". Per-account is
+            # the correct v11 path for all new users (registered after 2026-04-25).
+            logger.info(
+                "snaptrade_activities_legacy_gone_using_per_account",
+                snaptrade_user_id=user.snaptrade_user_id,
+            )
+            return await self._get_activities_per_account(user, start, end)
 
     async def _get_activities_legacy(
         self,
@@ -336,6 +366,15 @@ class SnapTradeClient:
             item_price = item.get("price") if hasattr(item, "get") else getattr(item, "price", None)
             item_trade_date = item.get("trade_date") if hasattr(item, "get") else getattr(item, "trade_date", None)
             item_institution = item.get("institution") if hasattr(item, "get") else getattr(item, "institution", None)
+            # ── BP-263 (PLAN-0046 T-46-1-01) ─────────────────────────────────
+            # SnapTrade's UniversalActivity carries dividend cash in ``amount``
+            # and trade commissions in ``fee``. The pre-PLAN-0046 adapter only
+            # read units/price and silently dropped both fields, which made
+            # every DIVIDEND row land as $0 in the UI (units≈0, price≈0). We
+            # now capture both end-to-end and persist them on the Transaction
+            # entity (``amount`` column added in Alembic 0009).
+            item_amount = item.get("amount") if hasattr(item, "get") else getattr(item, "amount", None)
+            item_fee = item.get("fee") if hasattr(item, "get") else getattr(item, "fee", None)
 
             activities.append(
                 SnapTradeActivity(
@@ -347,7 +386,134 @@ class SnapTradeClient:
                     currency=currency_str,
                     executed_at=_parse_trade_date(str(item_trade_date) if item_trade_date else None),
                     brokerage_name=str(item_institution) if item_institution else None,
+                    amount=_parse_optional_decimal(item_amount),
+                    fee=_parse_optional_decimal(item_fee),
                 ),
             )
 
         return activities
+
+    # ── Position snapshot (PLAN-0046 T-46-1-02 / BP-264) ─────────────────────
+
+    async def list_account_ids(self, user: SnapTradeUser) -> list[str]:
+        """List SnapTrade account UUIDs for this user.
+
+        Mirrors the start of ``_get_activities_per_account`` but exposed as a
+        first-class operation so the snapshot path can iterate accounts without
+        round-tripping through the activity feed.
+        """
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._account_info.list_user_accounts(
+                    user_id=user.snaptrade_user_id,
+                    user_secret=user.snaptrade_user_secret,  # NEVER logged
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "snaptrade_list_accounts_failed",
+                snaptrade_user_id=user.snaptrade_user_id,
+                error=type(exc).__name__,
+            )
+            raise BrokerageApiError(
+                f"SnapTrade list_user_accounts failed: {type(exc).__name__}",
+                details={"snaptrade_user_id": user.snaptrade_user_id},
+            ) from exc
+
+        accounts = result.body if result else []
+        ids: list[str] = []
+        for account in accounts:
+            account_id = str(account.get("id", "")) if hasattr(account, "get") else str(getattr(account, "id", ""))
+            if account_id:
+                ids.append(account_id)
+        return ids
+
+    async def get_account_positions(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> list[SnapTradePosition]:
+        """Return current positions for a single SnapTrade account.
+
+        Calls ``account_information.get_user_account_positions``. The response is
+        a list of position objects, each carrying a ``symbol`` envelope and a
+        ``units`` quantity. We normalise this to ``SnapTradePosition`` VOs.
+
+        Skip rules:
+        - Missing/empty symbol → skip (cannot resolve to an instrument).
+        - Zero quantity → INCLUDE (a closed position; the upsert use case will
+          delete the matching ``holdings`` row so the UI no longer shows it).
+        """
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._account_info.get_user_account_positions(
+                    account_id=account_id,
+                    user_id=user.snaptrade_user_id,
+                    user_secret=user.snaptrade_user_secret,  # NEVER logged
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "snaptrade_get_account_positions_failed",
+                snaptrade_user_id=user.snaptrade_user_id,
+                account_id=account_id,
+                error=type(exc).__name__,
+            )
+            raise BrokerageApiError(
+                f"SnapTrade get_account_positions failed: {type(exc).__name__}",
+                details={"account_id": account_id},
+            ) from exc
+
+        items = result.body if result else []
+        positions: list[SnapTradePosition] = []
+        if not items:
+            return positions
+
+        for item in items:  # type: ignore[union-attr]
+            # SnapTrade nests the ticker under symbol.symbol (the inner symbol is the
+            # universal-symbol object). Mirror the parsing logic from _parse_activity_list.
+            symbol_envelope = item.get("symbol") if hasattr(item, "get") else getattr(item, "symbol", None)
+            symbol_str = ""
+            currency_str = ""
+            if symbol_envelope is not None:
+                # The position's symbol envelope nests the universal symbol one level deeper:
+                # position.symbol -> { symbol: { symbol: "AAPL", currency: { code: "USD" } } }
+                inner = (
+                    symbol_envelope.get("symbol")
+                    if hasattr(symbol_envelope, "get")
+                    else getattr(symbol_envelope, "symbol", None)
+                )
+                if inner is not None:
+                    raw_sym = inner.get("symbol") if hasattr(inner, "get") else getattr(inner, "symbol", None)
+                    symbol_str = str(raw_sym or "")
+                    currency = inner.get("currency") if hasattr(inner, "get") else getattr(inner, "currency", None)
+                    if currency is not None:
+                        code = currency.get("code") if hasattr(currency, "get") else getattr(currency, "code", None)
+                        currency_str = str(code or "")
+
+            if not symbol_str:
+                # No usable ticker — cannot resolve the instrument so skip.
+                continue
+
+            units_raw = item.get("units") if hasattr(item, "get") else getattr(item, "units", None)
+            avg_raw = (
+                item.get("average_purchase_price")
+                if hasattr(item, "get")
+                else getattr(item, "average_purchase_price", None)
+            )
+            quantity = _parse_optional_decimal(units_raw) or Decimal(0)
+            avg_price = _parse_optional_decimal(avg_raw)
+
+            positions.append(
+                SnapTradePosition(
+                    account_id=account_id,
+                    symbol=symbol_str,
+                    quantity=quantity,
+                    average_purchase_price=avg_price,
+                    currency=currency_str,
+                ),
+            )
+
+        return positions

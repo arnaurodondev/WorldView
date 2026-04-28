@@ -30,7 +30,13 @@ class SnapTradeUser:
 
 @dataclass(frozen=True)
 class SnapTradeActivity:
-    """Value object representing a single SnapTrade brokerage activity."""
+    """Value object representing a single SnapTrade brokerage activity.
+
+    PLAN-0046 / BP-263: ``amount`` and ``fee`` were previously dropped by the
+    adapter, causing DIVIDEND rows to render as $0 (units≈0, price≈0). They are
+    now captured end-to-end. Both are optional because not every activity type
+    populates them.
+    """
 
     snaptrade_transaction_id: str  # SnapTrade's unique ID for this activity
     activity_type: str  # Raw type string from SnapTrade (e.g. "BUY", "SELL", "DIV")
@@ -40,6 +46,30 @@ class SnapTradeActivity:
     currency: str  # ISO-4217 currency code (e.g. "USD")
     executed_at: datetime  # UTC-aware execution timestamp
     brokerage_name: str | None = None  # Human-readable brokerage name if available
+    # Broker-reported cash amount. For DIVIDEND this is the cash payment; for
+    # BUY/SELL it is approximately quantity*price (broker-rounded) and is
+    # informational. NULL when SnapTrade omits the field.
+    amount: Decimal | None = None
+    # Broker fee charged on the activity (commission, regulatory fees, etc.).
+    # Always None for DIVIDEND. None when SnapTrade omits the field.
+    fee: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class SnapTradePosition:
+    """Value object representing a single current position from SnapTrade.
+
+    Returned by ``IBrokerageClient.get_account_positions``. This is the broker's
+    *snapshot* of what the account holds right now and is used to overwrite the
+    ``holdings`` table after each sync (PLAN-0046 / BP-264 — never replay
+    activities to derive cumulative state).
+    """
+
+    account_id: str
+    symbol: str  # Ticker symbol
+    quantity: Decimal
+    average_purchase_price: Decimal | None  # Some brokers omit cost basis
+    currency: str  # ISO-4217 currency code (e.g. "USD")
 
 
 @runtime_checkable
@@ -115,5 +145,36 @@ class IBrokerageClient(Protocol):
 
         Returns:
             A list of ``SnapTradeActivity`` objects.  May be empty.
+        """
+        ...
+
+    async def list_account_ids(self, user: SnapTradeUser) -> list[str]:
+        """Return the list of SnapTrade account UUIDs linked to this user.
+
+        Used by the snapshot path (PLAN-0046 T-46-1-03) to iterate accounts and
+        fetch positions. Implementations should swallow per-account errors and
+        return whatever they can.
+        """
+        ...
+
+    async def get_account_positions(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> list[SnapTradePosition]:
+        """Fetch the broker's current position snapshot for one account.
+
+        PLAN-0046 T-46-1-02 / BP-264: holdings must be derived from this snapshot,
+        NOT from cumulative activity replay. Activity feeds can return duplicates
+        across endpoint families (legacy vs per-account) and across linked sub
+        accounts; the snapshot is the only authoritative source for "what the user
+        holds right now".
+
+        Args:
+            user: SnapTrade credentials for this Worldview user.
+            account_id: SnapTrade account UUID (string).
+
+        Returns:
+            A list of ``SnapTradePosition`` objects. May be empty.
         """
         ...

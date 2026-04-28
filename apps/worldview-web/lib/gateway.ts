@@ -407,6 +407,10 @@ export function createGateway(token?: string | null) {
         end_date?: string;
         period_type?: string;
         limit?: number;
+        // order: 'asc' returns the oldest N rows, 'desc' returns the most recent N
+        // (DESC is what UI charts almost always want — see audit 2026-04-28 / BP-261).
+        // Returned data is always chronologically ascending regardless of order.
+        order?: "asc" | "desc";
       },
     ): Promise<FundamentalsTimeseriesResponse> {
       // WHY URLSearchParams with conditional spread: filters out undefined values so
@@ -418,6 +422,7 @@ export function createGateway(token?: string | null) {
         ...(params?.end_date ? { end_date: params.end_date } : {}),
         ...(params?.period_type ? { period_type: params.period_type } : {}),
         ...(params?.limit != null ? { limit: String(params.limit) } : {}),
+        ...(params?.order ? { order: params.order } : {}),
       });
       return apiFetch<FundamentalsTimeseriesResponse>(
         `/v1/fundamentals/timeseries?${qs.toString()}`,
@@ -805,6 +810,11 @@ export function createGateway(token?: string | null) {
           quantity: string; // Decimal serialised as string
           price: string;
           fees: string;
+          // PLAN-0046 / BP-263: S1 now returns the broker-reported cash amount
+          // for transactions. It is a string (Decimal serialized) when present
+          // and null when the broker omitted it or the row pre-dates Alembic
+          // migration 0009. The DIVIDEND row total comes from this field.
+          amount: string | null;
           currency: string;
           executed_at: string;
           external_ref: string | null;
@@ -816,24 +826,50 @@ export function createGateway(token?: string | null) {
       }>(`/v1/transactions?${qs}`, { token: t });
 
       // Transform S1 TransactionListItem into frontend Transaction type
-      const transactions: Transaction[] = (raw.items ?? []).map((tx) => ({
+      const transactions: Transaction[] = (raw.items ?? []).map((tx) => {
+        // WHY two fields exist: S1's TransactionType is the "what" (BUY / SELL /
+        // DIVIDEND / DEPOSIT / WITHDRAWAL / FEE) and TransactionDirection is the
+        // "asset flow" (INFLOW = position increased, OUTFLOW = position decreased).
+        // The frontend Transaction.type union is the user-facing label: BUY | SELL | DIVIDEND.
+        // BP-261 (2026-04-28): the previous mapping read tx.direction.toUpperCase() and
+        // produced literal "INFLOW"/"OUTFLOW" strings — never matching the BUY/SELL filter
+        // buttons and breaking the DIVIDEND code-path entirely.
+        const txType = (tx.transaction_type ?? "").toUpperCase();
+        const txDir = (tx.direction ?? "").toUpperCase();
+        // Resolution order, defensive across adapter variants:
+        // 1. transaction_type === DIVIDEND → DIVIDEND (income event)
+        // 2. transaction_type or direction in {BUY, SELL} → use it directly
+        //    (some payloads label direction as BUY/SELL rather than INFLOW/OUTFLOW)
+        // 3. direction === INFLOW → BUY; OUTFLOW → SELL (canonical S1 enum)
+        // 4. fallback SELL — never emit raw INFLOW/OUTFLOW literals
+        const mappedType: Transaction["type"] =
+          txType === "DIVIDEND"
+            ? "DIVIDEND"
+            : txType === "BUY" || txDir === "BUY" || txDir === "INFLOW"
+              ? "BUY"
+              : txType === "SELL" || txDir === "SELL" || txDir === "OUTFLOW"
+                ? "SELL"
+                : "SELL";
+        return ({
         transaction_id: tx.id,
         portfolio_id: tx.portfolio_id,
         instrument_id: tx.instrument_id,
         // WHY empty ticker: S1 does not include ticker on TransactionListItem.
-        // The component can look it up from the instrument cache if needed.
+        // TransactionsTable enriches via the holdingOverviews map keyed by instrument_id.
         ticker: "",
-        // WHY map direction to type: S1 uses separate transaction_type (TRADE, DIVIDEND, etc.)
-        // and direction (BUY, SELL) fields. The frontend simplifies this to a single "BUY" | "SELL" type.
-        // We use the direction field which maps directly to the frontend's BUY/SELL enum.
-        type: tx.direction.toUpperCase() as "BUY" | "SELL",
+        type: mappedType,
         quantity: parseFloat(tx.quantity) || 0,
         price: parseFloat(tx.price) || 0,
         fee: parseFloat(tx.fees) || 0,
+        // PLAN-0046 / BP-263: map broker-reported amount through to the UI.
+        // Strict null preservation — null on the wire stays null, not 0 — so the
+        // table can distinguish "broker didn't tell us" from "amount is $0".
+        amount: tx.amount != null ? Number(tx.amount) : null,
         currency: tx.currency,
         executed_at: tx.executed_at,
         notes: tx.external_ref,
-      }));
+      });
+      });
 
       return {
         transactions,
@@ -953,6 +989,9 @@ export function createGateway(token?: string | null) {
         quantity: parseFloat(raw.quantity) || 0,
         price: parseFloat(raw.price) || 0,
         fee: parseFloat(raw.fees) || 0,
+        // PLAN-0046 / BP-263: manual entries don't carry a broker amount —
+        // the table will fall back to quantity * price for the total.
+        amount: null,
         currency: raw.currency,
         executed_at: raw.executed_at,
         notes: null,
@@ -1011,6 +1050,9 @@ export function createGateway(token?: string | null) {
         quantity: parseFloat(raw.quantity) || 0,
         price: parseFloat(raw.price) || 0,
         fee: parseFloat(raw.fees) || 0,
+        // PLAN-0046 / BP-263: manual addTransaction calls do not record an
+        // explicit broker `amount`. Stay null to mark "no broker truth".
+        amount: null,
         currency: raw.currency,
         executed_at: raw.executed_at,
         notes: null,
@@ -1671,6 +1713,57 @@ export function createGateway(token?: string | null) {
         type: "equity",
       }));
 
+      return { results, query: q };
+    },
+
+    /**
+     * searchFundamentals — entity-aware instrument search.
+     *
+     * WHY this exists (BUG-7 / B-3): `searchInstruments` queries S3 which has no
+     * concept of `entity_id` — it falls back to `entity_id = instrument_id`. The
+     * watchlist add-member endpoint requires the REAL KG entity_id from S7. Posting
+     * an instrument_id silently fails or produces an orphaned member.
+     *
+     * Live-stack reality (verified 2026-04-28): the fundamentals screener does NOT
+     * support text search (only numeric metric filters), and S3's
+     * /v1/search/instruments returns no entity_id. The reliable path is:
+     *  1) S3 search to find candidate instrument_ids matching the query,
+     *  2) /v1/companies/{id}/overview per candidate to get the real entity_id +
+     *     authoritative ticker/name from the KG-joined view.
+     *
+     * WHY parallelised overviews: the search returns at most `limit` candidates
+     * (usually ≤8). Promise.all on a handful of GETs is cheaper than sequential.
+     * WHY catch+filter: a missing overview shouldn't abort the entire dropdown —
+     * we just drop that row and surface the rest.
+     */
+    async searchFundamentals(q: string, limit = 8): Promise<SearchResponse> {
+      const trimmed = q.trim();
+      if (!trimmed) return { results: [], query: q };
+      // Step 1: candidate instruments from S3 search
+      const candidates = await this.searchInstruments(trimmed, limit);
+      if (candidates.results.length === 0) return { results: [], query: q };
+      // Step 2: enrich each candidate with the real entity_id via the overview endpoint
+      const enriched = await Promise.all(
+        candidates.results.map(async (cand) => {
+          try {
+            const ov = await this.getCompanyOverview(cand.instrument_id);
+            // WHY guard against missing entity_id: stale or unsynced instruments
+            // may have null entity_id — those cannot be added to a watchlist.
+            if (!ov.instrument?.entity_id) return null;
+            return {
+              instrument_id: cand.instrument_id,
+              entity_id: ov.instrument.entity_id,
+              ticker: ov.instrument.ticker ?? cand.ticker,
+              name: ov.instrument.name ?? cand.name,
+              exchange: ov.instrument.exchange ?? cand.exchange ?? "—",
+              type: cand.type,
+            } satisfies SearchResult;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const results = enriched.filter((r): r is SearchResult => r !== null);
       return { results, query: q };
     },
   };
