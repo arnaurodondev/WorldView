@@ -63,12 +63,16 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
  * ``from`` would let the server's 90-day default kick in, defeating
  * the purpose of "All".
  */
+// F-022: "All" is now an open-ended sentinel. The server treats a missing
+// ``from`` query param as "every snapshot since the earliest one", so a
+// 10-year clamp is no longer required. ``days: null`` is the marker for
+// the gateway call below.
 const PERIODS = [
   { label: "1M", days: 30 },
   { label: "3M", days: 90 },
   { label: "6M", days: 180 },
   { label: "1Y", days: 365 },
-  { label: "All", days: 365 * 10 },
+  { label: "All", days: null },
 ] as const;
 
 type PeriodLabel = (typeof PERIODS)[number]["label"];
@@ -161,8 +165,13 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
   const [period, setPeriod] = useState<PeriodLabel>("3M");
 
   // Compute `from` date from the period — server applies `to = today` default.
-  const fromDate = useMemo(() => {
+  // F-022: when the user picks "All" we send NO ``from`` and let the server
+  // return every snapshot back to the earliest one. ``null`` here is the
+  // sentinel that means "omit the param entirely" (vs ``undefined`` which
+  // would also work but is less explicit).
+  const fromDate = useMemo<string | null>(() => {
     const days = PERIODS.find((p) => p.label === period)!.days;
+    if (days == null) return null;
     const d = new Date();
     d.setDate(d.getDate() - days);
     // YYYY-MM-DD — matches the API's ISO-date contract.
@@ -176,7 +185,10 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
     queryKey: ["value-history", portfolioId, period],
     queryFn: () =>
       createGateway(accessToken).getValueHistory(portfolioId, {
-        from: fromDate,
+        // F-022: only include ``from`` when we actually have a bounded
+        // window. Spread guards against passing ``from: null`` to the
+        // gateway helper which would coerce it back to a string.
+        ...(fromDate ? { from: fromDate } : {}),
         granularity: "1d",
       }),
     enabled: !!accessToken && !!portfolioId,
@@ -275,7 +287,13 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
             <Line
               type="monotone"
               dataKey="value"
-              stroke={isUp ? "var(--color-positive, #22d3aa)" : "var(--color-negative, #ef4444)"}
+              // F-008: use the canonical Midnight Pro design tokens
+              // (`--positive` / `--negative`, raw HSL triplets in globals.css)
+              // wrapped in `hsl(...)` — matches every other coloured cell in
+              // the app and respects future theme switches. The previous
+              // `--color-positive`/`--color-negative` names did not exist in
+              // the stylesheet and silently fell through to the hex fallback.
+              stroke={isUp ? "hsl(var(--positive))" : "hsl(var(--negative))"}
               strokeWidth={1.5}
               dot={false}
               isAnimationActive={false}

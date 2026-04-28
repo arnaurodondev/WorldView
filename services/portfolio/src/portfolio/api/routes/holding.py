@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from portfolio.api.dependencies import ReadUoWDep
-from portfolio.api.schemas import HoldingResponse
+from portfolio.api.schemas import HoldingResponse, PaginatedResponse
 from portfolio.application.use_cases.read_models import GetHoldingsUseCase
 
 router = APIRouter(tags=["holdings"])
@@ -33,17 +33,33 @@ def _extract_owner_id(request: Request) -> UUID:
     return UUID(str(raw))
 
 
-@router.get("/holdings/{portfolio_id}", response_model=list[HoldingResponse])
+@router.get(
+    "/holdings/{portfolio_id}",
+    response_model=PaginatedResponse[HoldingResponse],
+)
 async def get_holdings(
     portfolio_id: UUID,
     uow: ReadUoWDep,
     request: Request,
-) -> list[HoldingResponse]:
+) -> PaginatedResponse[HoldingResponse]:
+    """List holdings for a portfolio.
+
+    F-011 (QA 2026-04-28): the response now uses the same paginated
+    envelope as the rest of the portfolio domain (``items`` / ``total``
+    / ``limit`` / ``offset``). Previously this endpoint returned a bare
+    array, forcing the gateway to special-case it. The gateway now
+    tolerates both shapes during the transition window.
+
+    There's no built-in pagination on holdings (a portfolio rarely has
+    more than ~50 positions), so the envelope reports ``total ==
+    len(items)`` and a fixed ``limit`` of 1000 — meaning the response is
+    always complete even when the envelope is in use.
+    """
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
     uc = GetHoldingsUseCase()
     enriched_holdings = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
-    return [
+    items = [
         HoldingResponse(
             id=eh.holding.id,
             portfolio_id=eh.holding.portfolio_id,
@@ -57,3 +73,4 @@ async def get_holdings(
         )
         for eh in enriched_holdings
     ]
+    return PaginatedResponse(items=items, total=len(items), limit=1000, offset=0)

@@ -578,3 +578,74 @@ python -m portfolio.scripts.repair_holdings_after_replay_drift
 The script is idempotent: re-running on already-clean state is a no-op apart
 from one extra sync round-trip. Duplicate-transaction detection is read-only
 and always safe.
+
+---
+
+## Operational Recovery
+
+PLAN-0046 added five operator scripts, all under `services/portfolio/scripts/`.
+This section is the canonical reference. Every script supports `--dry-run`
+and is idempotent — re-running is safe.
+
+### `repair_holdings_after_replay_drift.py`
+- **When**: holdings quantities are inflated because the brokerage adapter
+  replayed activities multiple times (BP-264). Symptom: SnapTrade reports
+  100 AAPL but the user sees 800.
+- **What it mutates**: zeroes `holdings.quantity` and `holdings.average_cost`
+  for every portfolio with at least one `brokerage_connection`. Subsequent
+  sync cycles repopulate the rows from the broker's snapshot.
+- **Read-only side**: also reports duplicate transaction groups (same
+  `instrument_id, executed_at, quantity, price`) for operator review.
+- **Run**: `python -m portfolio.scripts.repair_holdings_after_replay_drift [--dry-run]`
+
+### `backfill_root_portfolios.py`
+- **When**: PLAN-0046 Wave 3 introduced the ROOT portfolio. Existing users
+  predate the auto-provisioning hook and need a one-shot backfill.
+- **What it mutates**: creates one `kind='root'` portfolio per user that
+  doesn't already have one. Idempotent — skips users that do.
+- **Run**: `python -m portfolio.scripts.backfill_root_portfolios [--dry-run]`
+
+### `backfill_portfolio_value_snapshots.py`
+- **When**: bringing up a fresh environment, or after a long worker outage.
+  Recovers historical equity-curve rows by replaying transactions backward
+  and multiplying by close prices.
+- **What it mutates**: writes rows into `portfolio_value_snapshots` (idempotent
+  upsert on `(portfolio_id, snapshot_date)`).
+- **Caveats**: replays at most 365 calendar days. The live snapshot worker
+  uses authoritative current `Holding` rows for "today"; this script must
+  NOT overwrite today's row.
+- **Run**: `python -m portfolio.scripts.backfill_portfolio_value_snapshots [--dry-run] [--lookback-days N]`
+
+### `backfill_watchlist_member_denorm.py`
+- **When**: existing `watchlist_members` rows have `NULL ticker/name/instrument_id`
+  (the denormalised columns added in Alembic 0010 are populated only at
+  add-time, so legacy rows need a one-shot fill).
+- **What it mutates**: a single UPDATE-FROM that copies
+  `instruments.symbol/name/id` into the matching `watchlist_members` row
+  by `entity_id`. Rows with no matching local instrument are left untouched
+  (still NULL). Frontend renders a "resolving…" badge for those.
+- **Run**: `python -m portfolio.scripts.backfill_watchlist_member_denorm [--dry-run]`
+
+### `trigger_brokerage_resync.py`
+- **When**: after deploying the `transactions.amount` column (Alembic 0009)
+  to make every active brokerage connection re-fetch activities so historical
+  dividend rows pick up the cash amount they were missing.
+- **What it mutates**: zeroes `last_synced_at` and `last_sync_cursor` on
+  every connection with `status IN ('active', 'error')`. The
+  `BrokerageTransactionSyncWorker` picks the connection up on its next
+  cycle and re-fetches the full activity window. Does NOT make any network
+  calls itself.
+- **Caveats**: duplicates are de-duplicated by SnapTrade activity id, so
+  re-syncing produces zero new rows for already-synced activities. The
+  only material effect is on rows that previously had `amount=NULL`.
+- **Run**: `python -m portfolio.scripts.trigger_brokerage_resync [--dry-run]`
+
+### Recovery flow checklist (typical day-1 deploy)
+1. Apply migrations (Alembic head must be `0012` for PLAN-0046).
+2. `repair_holdings_after_replay_drift --dry-run` → review duplicate report.
+3. `repair_holdings_after_replay_drift` (live) → zero out drifted holdings.
+4. `backfill_root_portfolios` → ensure every user has an aggregate.
+5. `backfill_watchlist_member_denorm` → resolve legacy watchlist rows.
+6. `backfill_portfolio_value_snapshots` → seed the equity curve.
+7. `trigger_brokerage_resync` → kick the sync worker (optional; the
+   regular 4-hour cycle will catch up otherwise).

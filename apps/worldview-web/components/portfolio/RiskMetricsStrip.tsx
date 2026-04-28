@@ -64,8 +64,12 @@ interface TileProps {
  * "five tiles of varying width depending on number length".
  */
 function Tile({ label, display, valueClassName, hint }: TileProps) {
+  // F-023 (QA 2026-04-28): the strip's parent now uses
+  // ``divide-x divide-border`` (matching PortfolioKPIStrip:117), so the
+  // per-tile ``border-r`` was redundant and inconsistent with the rest of
+  // the codebase. Removed from the className here.
   return (
-    <div className="flex flex-col gap-0.5 px-3 py-1.5 border-r border-border last:border-r-0">
+    <div className="flex flex-col gap-0.5 px-3 py-1.5">
       <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </div>
@@ -162,42 +166,88 @@ export function RiskMetricsStrip({
   // layout stays stable instead of collapsing the row entirely.
   const safe = isError || !data ? null : data;
 
+  // F-015 (QA 2026-04-28): when the gateway reports ``data_quality.status
+  // !== "ok"``, render a single explanatory caption row above the strip
+  // and grey out the tiles so the user understands why every value is
+  // "—". The previous behaviour rendered the strip with five "—" cells
+  // and no explanation.
+  const dq = safe?.data_quality;
+  const insufficient =
+    dq?.status === "insufficient_data";
+  const benchmarkUnavailable =
+    dq?.status === "benchmark_unavailable";
+
+  // Build the caption text from the actual numbers the gateway reports
+  // — never hardcode "0/10". When ``data_quality`` is missing entirely
+  // (older gateway) we fall back to a generic message but skip the row
+  // so the UI doesn't lie.
+  let caption: string | null = null;
+  if (insufficient) {
+    const have = dq?.n_returns ?? 0;
+    const need = 10; // matches gateway _MIN_RETURNS
+    caption = `Risk metrics will appear after ~${need} trading days of snapshots — currently ${have}/${need}.`;
+  } else if (benchmarkUnavailable) {
+    caption = "Beta vs SPY is unavailable while the benchmark series is being ingested.";
+  }
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px]">
-      <Tile
-        label="Max Drawdown"
-        display={fmtPct(safe?.drawdown_max ?? null)}
-        valueClassName={drawdownQualityClass(safe?.drawdown_max ?? null)}
-      />
-      <Tile
-        label="Vol (Ann.)"
-        display={fmtPct(safe?.volatility_annualized ?? null)}
-        hint="ann."
-        // Volatility colour: high vol → muted warning. We don't render
-        // "vol = good" in either direction — it's a context number.
-        valueClassName={
-          safe?.volatility_annualized != null && safe.volatility_annualized > 0.30
-            ? "text-negative"
-            : "text-foreground"
-        }
-      />
-      <Tile
-        label="Sharpe"
-        display={fmtRatio(safe?.sharpe ?? null)}
-        valueClassName={ratioQualityClass(safe?.sharpe ?? null)}
-      />
-      <Tile
-        label="Sortino"
-        display={fmtRatio(safe?.sortino ?? null)}
-        valueClassName={ratioQualityClass(safe?.sortino ?? null)}
-      />
-      <Tile
-        label="Beta vs SPY"
-        display={fmtRatio(safe?.beta_vs_spy ?? null)}
-        // Beta is a factor exposure number, not a "good/bad" score —
-        // render in the default foreground colour regardless of value.
-        valueClassName="text-foreground"
-      />
+    <div className="flex flex-col">
+      {caption && (
+        // WHY full-width caption row above the strip: a per-tile tooltip
+        // wouldn't surface the reason without hover, and a footnote below
+        // the strip is too easy to miss. The caption sits in the user's
+        // eye-line directly above the empty values.
+        <div className="px-3 py-1 text-[10px] text-muted-foreground border border-b-0 border-border rounded-t-[2px] bg-muted/20">
+          {caption}
+        </div>
+      )}
+      <div
+        className={cn(
+          // F-023: use the project's divider convention ``divide-x divide-border``
+          // identical to PortfolioKPIStrip — replaces the manual per-tile
+          // ``border-r border-border last:border-r-0`` pattern in Tile.
+          "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-x divide-border",
+          // Grey out tiles when there's no usable data so the user reads
+          // them as "absent on purpose" not "still loading".
+          insufficient && "opacity-60",
+          caption && "rounded-t-none",
+        )}
+      >
+        <Tile
+          label="Max Drawdown"
+          display={fmtPct(safe?.drawdown_max ?? null)}
+          valueClassName={drawdownQualityClass(safe?.drawdown_max ?? null)}
+        />
+        <Tile
+          label="Vol (Ann.)"
+          display={fmtPct(safe?.volatility_annualized ?? null)}
+          hint="ann."
+          // Volatility colour: high vol → muted warning. We don't render
+          // "vol = good" in either direction — it's a context number.
+          valueClassName={
+            safe?.volatility_annualized != null && safe.volatility_annualized > 0.30
+              ? "text-negative"
+              : "text-foreground"
+          }
+        />
+        <Tile
+          label="Sharpe"
+          display={fmtRatio(safe?.sharpe ?? null)}
+          valueClassName={ratioQualityClass(safe?.sharpe ?? null)}
+        />
+        <Tile
+          label="Sortino"
+          display={fmtRatio(safe?.sortino ?? null)}
+          valueClassName={ratioQualityClass(safe?.sortino ?? null)}
+        />
+        <Tile
+          label="Beta vs SPY"
+          display={fmtRatio(safe?.beta_vs_spy ?? null)}
+          // Beta is a factor exposure number, not a "good/bad" score —
+          // render in the default foreground colour regardless of value.
+          valueClassName="text-foreground"
+        />
+      </div>
     </div>
   );
 }

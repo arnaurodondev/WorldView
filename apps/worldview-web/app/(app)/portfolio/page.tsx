@@ -35,8 +35,8 @@
 // dialog open/close), next/navigation router (row-click navigation).
 
 import { useState, useMemo, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Plus, ChevronRight } from "lucide-react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { ChevronDown, Plus, ChevronRight, Trash2 } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -580,6 +580,12 @@ export default function PortfolioPage() {
   // ["holdings", activePortfolioId] when a position is successfully added.
   const [addPositionOpen, setAddPositionOpen] = useState(false);
 
+  // ── F-013: Delete portfolio dialog state ────────────────────────────────
+  // WHY a separate dialog (not a window.confirm): the destructive action
+  // benefits from a styled shadcn Dialog so the confirmation matches the
+  // rest of the terminal UI. Tracks pending state for an in-flight delete.
+  const [deletePortfolioOpen, setDeletePortfolioOpen] = useState(false);
+
   // ── Query 1: portfolio list ──────────────────────────────────────────────
   const {
     data: portfolios,
@@ -694,6 +700,26 @@ export default function PortfolioPage() {
     // Refetch transactions (the BUY transaction we just created should appear)
     void queryClient.invalidateQueries({ queryKey: ["transactions", activePortfolioId] });
   }, [queryClient, activePortfolioId]);
+
+  // ── F-013: Delete portfolio mutation ────────────────────────────────────
+  // WHY here (not inside the Delete dialog component): the mutation needs
+  // to invalidate the ["portfolios"] cache and potentially clear the
+  // selected portfolio id, both of which live in this parent component.
+  const deletePortfolioMutation = useMutation({
+    mutationFn: (portfolioId: string) =>
+      createGateway(accessToken).deletePortfolio(portfolioId),
+    onSuccess: (_, deletedId) => {
+      // Refresh the portfolios list so the deleted entry disappears.
+      void queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      // If we just deleted the active one, fall back to the first remaining
+      // portfolio (typically the root). Setting to null lets the next render
+      // re-derive from sortedPortfolios?.[0].
+      if (activePortfolioId === deletedId) {
+        setSelectedPortfolioId(null);
+      }
+      setDeletePortfolioOpen(false);
+    },
+  });
 
   // ── Query 2: holdings ────────────────────────────────────────────────────
   const {
@@ -977,6 +1003,35 @@ export default function PortfolioPage() {
     return { bySector, byType };
   }, [enrichedHoldings, holdingOverviews, holdingsQuotes]); // enrichedHoldings already merges holding+overview
 
+  // ── F-021: scope hint for the active portfolio ─────────────────────────
+  // WHY a separate memo: the hint depends on (a) whether the active
+  // portfolio is the root aggregate, (b) the count of non-root active
+  // portfolios, and (c) the count of unique positions in the enriched
+  // holdings list. Computing inline in JSX would re-evaluate on every
+  // render — useMemo keeps it stable across unrelated re-renders.
+  // WHY before the early returns: rules-of-hooks requires every hook
+  // to run on every render. Hoisting this above the conditional render
+  // branches keeps the hook order stable.
+  const scopeHint = useMemo<string | null>(() => {
+    if (!activePortfolio) return null;
+    if (activeIsRoot) {
+      const subCount =
+        sortedPortfolios?.filter((p) => p.kind !== "root").length ?? 0;
+      // Use enrichedHoldings.length — already de-duplicated by instrument
+      // when fanning out across sub-portfolios in the root branch.
+      const positionCount = enrichedHoldings.length;
+      return `Viewing All Accounts — ${subCount} portfolio${subCount === 1 ? "" : "s"}, ${positionCount} unique position${positionCount === 1 ? "" : "s"}`;
+    }
+    if (activePortfolio.kind === "brokerage") {
+      // We don't surface the brokerage name here (that lives on the
+      // Brokerages tab); the kind label is enough for at-a-glance scope.
+      return "Brokerage portfolio";
+    }
+    // For "manual" we render no sub-line — the portfolio name in the
+    // selector is the only context the user needs.
+    return null;
+  }, [activePortfolio, activeIsRoot, sortedPortfolios, enrichedHoldings.length]);
+
   // ── Loading state ────────────────────────────────────────────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
     return (
@@ -1143,8 +1198,55 @@ export default function PortfolioPage() {
             <Plus className="h-3 w-3" />
             New Portfolio
           </button>
+
+          {/* F-013 (QA 2026-04-28): Delete button.
+              WHY only render with an active portfolio: nothing to delete
+              otherwise. WHY disabled for ROOT: the S1 backend rejects
+              archive on the aggregate (RootPortfolioNotArchivableError).
+              The tooltip explains why so the affordance is honest about
+              the constraint instead of showing a useless control. */}
+          {activePortfolioId && (
+            <button
+              aria-label={
+                activeIsRoot
+                  ? "Cannot delete the aggregate portfolio"
+                  : "Delete this portfolio"
+              }
+              title={
+                activeIsRoot
+                  ? "Cannot delete the aggregate portfolio"
+                  : undefined
+              }
+              onClick={() => {
+                if (!activeIsRoot) setDeletePortfolioOpen(true);
+              }}
+              disabled={activeIsRoot}
+              className={cn(
+                "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
+                activeIsRoot
+                  ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
+                  : "border-border text-muted-foreground hover:border-negative/60 hover:text-negative",
+              )}
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete
+            </button>
+          )}
         </div>
       </div>
+
+      {/* ── F-021: scope hint sub-line ───────────────────────────────────── */}
+      {/* WHY h-6 (24px): a thin secondary row below the main header keeps
+          context in the user's eye-line without taking visual weight away
+          from the primary actions above. Hidden when the hint is null
+          (manual portfolios) so we don't introduce a phantom empty bar. */}
+      {scopeHint && (
+        <div className="h-6 shrink-0 px-3 flex items-center border-b border-border/60 bg-muted/10">
+          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+            {scopeHint}
+          </span>
+        </div>
+      )}
 
       {/* ── Period selector + performance strip ──────────────────────────── */}
       {/* WHY period selector at page level (not inside KPIStrip): the period
@@ -1417,6 +1519,58 @@ export default function PortfolioPage() {
         onSuccess={handlePortfolioCreated}
         accessToken={accessToken}
       />
+
+      {/* ── F-013: Delete Portfolio confirmation Dialog ──────────────────── */}
+      {/* Render only when there's something to delete; the underlying
+          shadcn Dialog already short-circuits on ``open=false`` but
+          guarding with activePortfolioId avoids reading stale state if
+          the active portfolio was just removed. */}
+      {activePortfolioId && activePortfolio && (
+        <Dialog
+          open={deletePortfolioOpen}
+          onOpenChange={(o) => {
+            // Block the user from dismissing the dialog while a delete is in flight.
+            if (!deletePortfolioMutation.isPending) setDeletePortfolioOpen(o);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete portfolio?</DialogTitle>
+            </DialogHeader>
+            <p className="text-[12px] text-muted-foreground font-sans">
+              {/* Quoted name guards against weird display in mixed-charset
+                  portfolios. The "Holdings will be unaffected" line is an
+                  important reassurance — S1 archives the portfolio (soft
+                  delete) and existing holdings rows remain attached but
+                  no longer surface in queries. */}
+              Delete portfolio &quot;{activePortfolio.name}&quot;? Holdings will be unaffected.
+            </p>
+            {deletePortfolioMutation.isError && (
+              <p className="text-[11px] text-negative font-mono">
+                Failed to delete. Try again or check the server logs.
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDeletePortfolioOpen(false)}
+                disabled={deletePortfolioMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => deletePortfolioMutation.mutate(activePortfolioId)}
+                disabled={deletePortfolioMutation.isPending}
+              >
+                {deletePortfolioMutation.isPending ? "Deleting…" : "Delete"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* ── Add Position Dialog ──────────────────────────────────────────── */}
       {/* WHY conditional on activePortfolioId: without a portfolio, the Add Position

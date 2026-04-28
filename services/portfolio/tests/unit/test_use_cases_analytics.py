@@ -285,6 +285,8 @@ class TestGetExposureUseCase:
             gross_exposure_pct=Decimal(0),
             net_exposure_pct=Decimal(0),
             leverage=Decimal(0),
+            prices_stale=False,
+            prices_as_of=None,
         )
 
     async def test_full_price_coverage(self) -> None:
@@ -338,6 +340,34 @@ class TestGetExposureUseCase:
         assert result.invested == Decimal("1000")
         # leverage = 1000 / 1000 = 1.0 (cost basis exposure equals cost basis itself)
         assert result.leverage == Decimal(1)
+        # F-016 (QA 2026-04-28): missing price → prices_stale must be True so
+        # the frontend can render a "Prices stale" badge over the headline.
+        assert result.prices_stale is True
+        # ``prices_as_of`` is reserved for v2 — currently always None.
+        assert result.prices_as_of is None
+
+    async def test_full_price_coverage_is_not_stale(self) -> None:
+        """F-016: when every holding has a quote, prices_stale stays False."""
+        uow = FakeUnitOfWork()
+        owner = uuid4()
+        tenant = uuid4()
+        p = _make_portfolio(owner_id=owner, tenant_id=tenant)
+        await uow.portfolios.save(p)
+        h1 = _make_holding(p.id, tenant, qty="10", cost="100")
+        h2 = _make_holding(p.id, tenant, qty="5", cost="200")
+        await uow.holdings.save(h1)
+        await uow.holdings.save(h2)
+
+        # Both instruments quoted — fully covered → not stale.
+        prices = _FakeCurrentPriceClient(
+            {h1.instrument_id: Decimal("150"), h2.instrument_id: Decimal("220")},
+        )
+        uc = GetExposureUseCase(prices)
+        result = await uc.execute(
+            GetExposureQuery(portfolio_id=p.id, owner_id=owner, tenant_id=tenant),
+            uow,
+        )
+        assert result.prices_stale is False
 
     async def test_root_portfolio_aggregates_subportfolios(self) -> None:
         uow = FakeUnitOfWork()

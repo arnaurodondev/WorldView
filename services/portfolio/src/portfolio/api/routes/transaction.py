@@ -89,18 +89,17 @@ async def record_transaction(
     )
 
 
-@router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
-async def list_transactions(
-    uow: ReadUoWDep,
-    request: Request,
-    portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+def _build_transaction_response(
+    transactions: list,  # type: ignore[type-arg]
+    total: int,
+    limit: int,
+    offset: int,
 ) -> PaginatedResponse[TransactionListItem]:
-    x_owner_id = _extract_owner_id(request)
-    x_tenant_id = _extract_tenant_id(request)
-    uc = ListTransactionsUseCase()
-    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    """Shared serialisation for the flat and nested transaction endpoints.
+
+    F-012: extracted so both ``GET /transactions`` (flat) and
+    ``GET /portfolios/{id}/transactions`` (nested) emit identical bodies.
+    """
     return PaginatedResponse(
         items=[
             TransactionListItem(
@@ -124,3 +123,48 @@ async def list_transactions(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
+async def list_transactions(
+    uow: ReadUoWDep,
+    request: Request,
+    portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[TransactionListItem]:
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    uc = ListTransactionsUseCase()
+    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return _build_transaction_response(transactions, total, limit, offset)
+
+
+# F-012 (QA 2026-04-28): canonical REST-nested form. The flat
+# ``/v1/transactions?portfolio_id=...`` path stays for backward compat
+# (the dashboard / older clients still hit it), but the nested form
+# matches the rest of the analytics surface (``/portfolios/{id}/exposure``,
+# ``/value-history``, ``/risk-metrics``) so a strict OpenAPI consumer
+# isn't forced to special-case transactions.
+@router.get(
+    "/portfolios/{portfolio_id}/transactions",
+    response_model=PaginatedResponse[TransactionListItem],
+)
+async def list_transactions_nested(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[TransactionListItem]:
+    """Nested alias for ``GET /transactions?portfolio_id=...``.
+
+    Keeps the API surface uniform across the portfolio analytics endpoints
+    that already use the nested form. The flat endpoint remains as the
+    canonical path during the transition.
+    """
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    uc = ListTransactionsUseCase()
+    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return _build_transaction_response(transactions, total, limit, offset)

@@ -80,9 +80,27 @@ function WatchlistMemberRow({
         }
       }}
     >
-      {/* Ticker */}
+      {/* Ticker — F-010 (QA 2026-04-28): when the local instrument cache
+          had no match at add-time the backend reports resolution=pending.
+          We show the dash placeholder PLUS a small "resolving…" badge so
+          the user understands the row will auto-fill once the instrument
+          syncs. WHY badge inline (not separate cell): keeps the table
+          density tight; the badge sits in the otherwise-empty ticker
+          column. */}
       <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
-        {member.ticker ?? "—"}
+        {member.ticker ?? (
+          <span className="inline-flex items-center gap-1">
+            <span className="text-muted-foreground">—</span>
+            {member.resolution === "pending" && (
+              <span
+                className="rounded-[2px] border border-warning/60 bg-warning/10 px-1 py-px text-[8px] uppercase tracking-[0.06em] text-warning"
+                aria-label="Resolving instrument metadata"
+              >
+                resolving…
+              </span>
+            )}
+          </span>
+        )}
       </td>
 
       {/* Name */}

@@ -252,6 +252,11 @@ class WatchlistMemberListItem(BaseModel):
 
     Carries the denormalised ``ticker``/``name``/``instrument_id`` resolved
     at add-time (see Alembic 0010). All three are nullable for historical rows.
+
+    F-010: ``resolution`` is a derived flag — "resolved" when ``ticker`` is
+    populated, "pending" when the local instrument cache miss left the row
+    with NULL ticker. The frontend renders a small "resolving…" badge for
+    pending rows so the user understands why the ticker shows "—".
     """
 
     entity_id: UUID
@@ -260,6 +265,7 @@ class WatchlistMemberListItem(BaseModel):
     name: str | None = None
     instrument_id: UUID | None = None
     added_at: datetime
+    resolution: str = "resolved"
 
 
 class WatchlistMemberListResponse(BaseModel):
@@ -446,6 +452,12 @@ class ExposureResponse(BaseModel):
     (not percent-formatted) to keep parity with every other "_pct"
     field in the codebase. The frontend multiplies by 100 for display.
     ``leverage`` is a multiplier (1.0 = no leverage, 2.0 = 2x).
+
+    F-016: ``prices_stale`` flips True when one or more holdings fell
+    back to cost basis because no live quote was available. The frontend
+    renders a yellow "Prices stale" badge above the gross-exposure number
+    so the user understands the figure may not reflect today's market.
+    ``prices_as_of`` is reserved for v2 (see ExposureResult docstring).
     """
 
     invested: Decimal
@@ -453,6 +465,8 @@ class ExposureResponse(BaseModel):
     gross_exposure_pct: Decimal
     net_exposure_pct: Decimal
     leverage: Decimal
+    prices_stale: bool = False
+    prices_as_of: datetime | None = None
 
     @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage")
     def serialize_decimal(self, v: Decimal) -> str:

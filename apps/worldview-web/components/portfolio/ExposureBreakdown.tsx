@@ -80,7 +80,7 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
     );
   }
 
-  const { invested, cash, gross_exposure_pct } = data;
+  const { invested, cash, gross_exposure_pct, prices_stale } = data;
   const total = invested + cash;
 
   // Empty portfolio → show empty state, not a 0-width bar.
@@ -104,6 +104,24 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
   return (
     <div className="flex flex-col gap-2 h-full">
       <Header />
+
+      {/* F-016 (QA 2026-04-28): when one or more holdings fell back to
+          cost basis (because live quotes were missing), surface a yellow
+          "Prices stale" badge above the headline number. WHY a separate
+          row (not inline next to "gross"): keeps the headline visual
+          rhythm stable so users always read the percentage in the same
+          place. The badge uses the canonical Midnight Pro warning palette. */}
+      {prices_stale && (
+        <div
+          role="status"
+          aria-label="Some current prices are unavailable; showing cost basis"
+          className="inline-flex items-center gap-1 self-start rounded-[2px] border border-warning/60 bg-warning/10 px-1.5 py-px text-[10px] uppercase tracking-[0.06em] text-warning font-mono"
+        >
+          {/* WHY uppercase + small caps: matches every other status pill in
+              the app (badges in alerts, freshness dots in fundamentals). */}
+          Prices stale
+        </div>
+      )}
 
       {/* Headline number — large, monospace, tabular-nums for stable layout */}
       <div className="font-mono tabular-nums text-[20px] leading-none text-foreground">

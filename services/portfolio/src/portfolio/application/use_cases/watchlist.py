@@ -288,6 +288,19 @@ class AddWatchlistMemberUseCase:
                 error=str(resolve_exc),
             )
 
+        # F-010: emit a structured-warning breadcrumb when the local cache
+        # had no matching instrument. The row is still saved with NULL
+        # ticker/name so the frontend can render a "resolving…" badge —
+        # this log line is purely operational so SRE can trend "how often
+        # do users add unresolvable entities".
+        if ticker is None:
+            logger.warning(
+                "watchlist_member_unresolved",
+                watchlist_id=str(cmd.watchlist_id),
+                entity_id=str(cmd.entity_id),
+                entity_type=cmd.entity_type,
+            )
+
         member = WatchlistMember(
             id=new_uuid(),
             watchlist_id=cmd.watchlist_id,
