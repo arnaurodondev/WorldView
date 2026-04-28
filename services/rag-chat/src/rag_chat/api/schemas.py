@@ -96,12 +96,22 @@ class BriefingRequest(BaseModel):
 
 
 class BriefingResponse(BaseModel):
-    """Response from POST /internal/v1/briefings."""
+    """Response from POST /internal/v1/briefings.
+
+    PLAN-0048 Wave A added the optional ``summary`` field — a 1-2 sentence
+    headline produced by the v2.2 prompt's ``## SUMMARY`` block. Older
+    callers that don't populate it default to ``None`` for forward
+    compatibility (R11: never break wire format).
+    """
 
     narrative: str
     risk_summary: dict[str, Any]
     citations: list[dict[str, Any]] = []
     generated_at: str
+    # WHY optional with None default: legacy briefings (pre-v2.2 prompt) had no
+    # summary block. The frontend handles `summary == null` by falling back to
+    # showing a clamp-3 of the narrative — safe degradation across rollouts.
+    summary: str | None = None
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
@@ -112,6 +122,11 @@ class PublicBriefingResponse(BaseModel):
 
     Extends BriefingResponse with ``cached`` flag and optional ``entity_id``
     to indicate cache hits and instrument-specific briefings.
+
+    PLAN-0048 Wave A added ``summary`` (1-2 sentence headline) — emitted by the
+    v2.2 MORNING_BRIEFING prompt's ``## SUMMARY`` block and consumed by the
+    frontend MorningBriefCard collapsed view. ``None`` on legacy/instrument
+    briefs (forward-compatible).
     """
 
     narrative: str
@@ -120,3 +135,7 @@ class PublicBriefingResponse(BaseModel):
     generated_at: str
     cached: bool = False
     entity_id: str | None = None
+    # WHY default None: instrument briefs and any cached responses generated
+    # before v2.2 will lack this field. The frontend treats None as "no two-tier
+    # output available — render clamp-3 of narrative as before".
+    summary: str | None = None

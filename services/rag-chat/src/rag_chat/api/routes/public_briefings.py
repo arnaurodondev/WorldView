@@ -128,6 +128,12 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         "generated_at": result["generated_at"],
         "cached": False,
         "entity_id": None,
+        # PLAN-0048 Wave A: the use case splits the v2.2 prompt output into a
+        # 1-2 sentence ``summary`` and a structured ``narrative``. Passing
+        # ``summary`` through here lets the frontend render the compact summary
+        # in the collapsed card view and the full narrative when expanded.
+        # ``None`` when the LLM didn't emit the two-tier divider (legacy fallback).
+        "summary": result.get("summary"),
     }
 
     # ── Write to cache ────────────────────────────────────────────────────────
