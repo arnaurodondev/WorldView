@@ -856,6 +856,9 @@ export function createGateway(token?: string | null) {
           value: string;
           cost_basis: string;
           cash: string;
+          // F-501 (QA iter-5): per-point data-quality flag. Optional on the
+          // wire for forward-compat — older S1 builds omit it.
+          data_quality?: string;
         }>;
         // F-009 (QA iter-2): empty-state hint metadata. Optional on the wire
         // for forward compat — older S1 builds don't emit it.
@@ -872,6 +875,10 @@ export function createGateway(token?: string | null) {
         value: parseFloat(p.value),
         cost_basis: parseFloat(p.cost_basis),
         cash: parseFloat(p.cash),
+        // F-501: default to "ok" when the server didn't emit the field so
+        // downstream consumers (EquityCurveChart tooltip) can do strict
+        // string comparisons without null-checking everywhere.
+        data_quality: p.data_quality ?? "ok",
       }));
       // Map metadata through unchanged — undefined defaults survive so the
       // chart's empty-state code can null-check the field directly.

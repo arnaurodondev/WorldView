@@ -31,6 +31,11 @@
 !services/*/alembic/
 !services/*/alembic.ini
 !services/*/Dockerfile
+# F-502 (QA iter-5): ship operator one-shots (backfills, repairs) into the
+# image so SREs can run them via `docker compose exec` rather than `docker cp`.
+# Whitelisted at the service level — any service that has a scripts/ directory
+# gets it baked into its image automatically.
+!services/*/scripts/
 
 # ── Kafka Avro schemas (needed by consumers at runtime) ──────────────────────
 !infra/kafka/schemas/

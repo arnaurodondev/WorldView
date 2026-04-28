@@ -557,6 +557,20 @@ export interface ValueHistoryPoint {
   value: number;
   cost_basis: number;
   cash: number;
+  /**
+   * F-501 (QA iter-5): per-snapshot data-quality flag mirrored from the S1
+   * ``portfolio_value_snapshots.data_quality`` column.
+   *
+   * - ``"ok"``: every holding had a fresh close on this snapshot's date.
+   * - ``"partial_prices"``: at least one holding fell back to a stale close
+   *   (lookback) or to cost basis. The equity-curve tooltip renders a small
+   *   "Partial prices" caption on those points so the user understands this
+   *   point is an honest estimate, not a clean-room valuation.
+   *
+   * Optional in the type because older S1 builds may omit it; the gateway
+   * defaults to ``"ok"`` so consumers can compare strictly.
+   */
+  data_quality?: string;
 }
 
 /**

@@ -562,17 +562,21 @@ trade twice with different IDs, holdings inflated by 8-10x over time.
 **To recover affected portfolios** (one-time per environment):
 
 ```bash
+# F-502 (QA iter-5): scripts now ship inside the portfolio image at
+# /app/scripts/. Invoke via `docker compose exec` — no `docker cp` needed.
+
 # 1) Dry-run — print affected portfolios + duplicate transaction groups.
-cd services/portfolio
-python -m portfolio.scripts.repair_holdings_after_replay_drift --dry-run
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py --dry-run
 
 # 2) Live run — zero out holdings on portfolios that have a brokerage
 #    connection. The next BrokerageTransactionSyncWorker cycle will repopulate
 #    them from the broker's snapshot.
-python -m portfolio.scripts.repair_holdings_after_replay_drift
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py
 
 # 3) Trigger the sync worker (or wait for the 4-hour cycle).
-#    See ``trigger_brokerage_sync.py`` for the on-demand path.
+#    See ``trigger_brokerage_resync.py`` for the on-demand path.
 ```
 
 The script is idempotent: re-running on already-clean state is a no-op apart
@@ -587,6 +591,20 @@ PLAN-0046 added five operator scripts, all under `services/portfolio/scripts/`.
 This section is the canonical reference. Every script supports `--dry-run`
 and is idempotent — re-running is safe.
 
+**F-502 (QA iter-5)**: the scripts are now baked into the portfolio container
+image at `/app/scripts/`. Operators no longer need `docker cp` — invoke them
+directly via `docker compose exec`. The patterns below show the in-container
+form; the older `python -m portfolio.scripts.X` host form has been removed
+(`portfolio.scripts` is not an importable package — the scripts are
+standalone files that import `portfolio.*` modules via `PYTHONPATH=/app/src`,
+which the runtime image already sets).
+
+```bash
+# Generic invocation pattern from the host:
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/<script_name>.py [--dry-run]
+```
+
 ### `repair_holdings_after_replay_drift.py`
 - **When**: holdings quantities are inflated because the brokerage adapter
   replayed activities multiple times (BP-264). Symptom: SnapTrade reports
@@ -596,14 +614,14 @@ and is idempotent — re-running is safe.
   sync cycles repopulate the rows from the broker's snapshot.
 - **Read-only side**: also reports duplicate transaction groups (same
   `instrument_id, executed_at, quantity, price`) for operator review.
-- **Run**: `python -m portfolio.scripts.repair_holdings_after_replay_drift [--dry-run]`
+- **Run**: `docker compose exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py [--dry-run]`
 
 ### `backfill_root_portfolios.py`
 - **When**: PLAN-0046 Wave 3 introduced the ROOT portfolio. Existing users
   predate the auto-provisioning hook and need a one-shot backfill.
 - **What it mutates**: creates one `kind='root'` portfolio per user that
   doesn't already have one. Idempotent — skips users that do.
-- **Run**: `python -m portfolio.scripts.backfill_root_portfolios [--dry-run]`
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_root_portfolios.py [--dry-run]`
 
 ### `backfill_portfolio_value_snapshots.py`
 - **When**: bringing up a fresh environment, or after a long worker outage.
@@ -614,7 +632,7 @@ and is idempotent — re-running is safe.
 - **Caveats**: replays at most 365 calendar days. The live snapshot worker
   uses authoritative current `Holding` rows for "today"; this script must
   NOT overwrite today's row.
-- **Run**: `python -m portfolio.scripts.backfill_portfolio_value_snapshots [--dry-run] [--lookback-days N]`
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_portfolio_value_snapshots.py [--dry-run] [--lookback-days N]`
 
 ### `backfill_watchlist_member_denorm.py`
 - **When**: existing `watchlist_members` rows have `NULL ticker/name/instrument_id`
@@ -624,7 +642,7 @@ and is idempotent — re-running is safe.
   `instruments.symbol/name/id` into the matching `watchlist_members` row
   by `entity_id`. Rows with no matching local instrument are left untouched
   (still NULL). Frontend renders a "resolving…" badge for those.
-- **Run**: `python -m portfolio.scripts.backfill_watchlist_member_denorm [--dry-run]`
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_watchlist_member_denorm.py [--dry-run]`
 
 ### `trigger_brokerage_resync.py`
 - **When**: after deploying the `transactions.amount` column (Alembic 0009)
@@ -638,7 +656,7 @@ and is idempotent — re-running is safe.
 - **Caveats**: duplicates are de-duplicated by SnapTrade activity id, so
   re-syncing produces zero new rows for already-synced activities. The
   only material effect is on rows that previously had `amount=NULL`.
-- **Run**: `python -m portfolio.scripts.trigger_brokerage_resync [--dry-run]`
+- **Run**: `docker compose exec portfolio python /app/scripts/trigger_brokerage_resync.py [--dry-run]`
 
 ### Recovery flow checklist (typical day-1 deploy)
 1. Apply migrations (Alembic head must be `0012` for PLAN-0046).

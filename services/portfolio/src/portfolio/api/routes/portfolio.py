@@ -239,6 +239,13 @@ async def get_value_history(
             value=s.total_value,
             cost_basis=s.total_cost,
             cash=s.cash_value,
+            # F-501 (QA iter-5): propagate the per-snapshot data-quality flag.
+            # ``s.data_quality`` is "ok" for fully-priced rows and
+            # "partial_prices" when the F-401 fallback engaged (stale
+            # close or cost-basis substitution). The frontend renders a
+            # small "Partial prices" caption inside the tooltip on those
+            # points so the user knows this point is an honest estimate.
+            data_quality=s.data_quality or "ok",
         )
         for s in snapshots
     ]

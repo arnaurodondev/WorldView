@@ -44,6 +44,13 @@ COPY --from=builder /build/services/portfolio/src /app/src
 COPY services/portfolio/alembic /app/alembic
 COPY services/portfolio/alembic.ini /app/alembic.ini
 COPY infra/kafka/schemas /app/infra/kafka/schemas
+# F-502 (QA iter-5): ship operational one-shots (backfills, re-syncs,
+# repairs) into the image so SREs can run them via
+# ``docker compose exec portfolio python /app/scripts/<name>.py`` rather
+# than ``docker cp``-ing them onto every node every deploy. The scripts
+# import ``portfolio.*`` modules directly — PYTHONPATH=/app/src below
+# resolves them without further plumbing.
+COPY services/portfolio/scripts /app/scripts
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src"
