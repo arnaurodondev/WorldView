@@ -233,6 +233,82 @@ async def test_add_member_duplicate_raises(
 
 
 @pytest.mark.asyncio
+async def test_add_member_rejects_duplicate_resolved_instrument(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """F-404 (QA iter-4): two different entity_ids that resolve to the same
+    ``instrument_id`` MUST be rejected with ``WatchlistMemberAlreadyExistsError``.
+
+    The seed bug had AAPL appearing twice on the Tech watchlist — once via
+    the seed-style entity_id ``01900000-...-1001`` and once via the KG-style
+    entity_id ``11111111-0001-...`` — both resolving to the same
+    ``instrument_id``. The use case now scans existing members and rejects
+    the second add at the application layer (the SQL partial unique index in
+    migration 0014 is the belt-and-braces backstop).
+    """
+    # Pre-seed an instrument so the resolution loop in the use case finds
+    # a non-NULL ``instrument_id`` for entity_id_a.
+    instrument_id = uuid4()
+    entity_id_a = uuid4()
+    entity_id_b = uuid4()
+    instrument = InstrumentRef(
+        id=instrument_id,
+        symbol="AAPL",
+        exchange="US",
+        source_event_id=uuid4(),
+        name="Apple Inc.",
+        currency="USD",
+        asset_class="equity",
+        # Both seed and KG-style entity ids resolve to the same instrument id
+        # at the data layer; the use case picks whichever one's ``entity_id``
+        # column matches the incoming ``cmd.entity_id``.
+        entity_id=entity_id_a,
+    )
+    uow.seed_instrument(instrument)
+
+    uc = AddWatchlistMemberUseCase()
+    # First add via entity_id_a — resolves to instrument_id.
+    await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id_a,
+        ),
+        uow,
+    )
+
+    # Now flip the instrument's entity_id to the KG-style one so the second
+    # add resolves the SAME instrument from a DIFFERENT entity_id.
+    instrument_after = InstrumentRef(
+        id=instrument_id,
+        symbol="AAPL",
+        exchange="US",
+        source_event_id=uuid4(),
+        name="Apple Inc.",
+        currency="USD",
+        asset_class="equity",
+        entity_id=entity_id_b,
+    )
+    uow.seed_instrument(instrument_after)
+
+    # The second add must be rejected — same instrument, different entity_id.
+    with pytest.raises(WatchlistMemberAlreadyExistsError):
+        await uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=entity_id_b,
+            ),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
 async def test_add_member_calls_cache_invalidation(
     uow: FakeUnitOfWork,
     tenant: Tenant,

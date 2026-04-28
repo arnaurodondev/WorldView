@@ -29,7 +29,7 @@ from portfolio.application.use_cases.compute_portfolio_value import (
     ComputePortfolioValueCommand,
     ComputePortfolioValueUseCase,
 )
-from portfolio.workers.portfolio_snapshot_worker import HttpOHLCVPriceClient
+from portfolio.workers.portfolio_snapshot_worker import HttpOHLCVPriceClient, _system_jwt_headers
 
 router = APIRouter(tags=["admin"], prefix="/admin")
 
@@ -93,7 +93,14 @@ async def recompute_snapshot(
     settings = request.app.state.settings
     today = datetime.now(tz=UTC).date()
 
-    async with httpx.AsyncClient(timeout=10.0) as http:
+    # F-401 (iter-4): the snapshot worker authenticates to S3 (market-data) via
+    # an ``X-Internal-JWT`` header so the InternalJWTMiddleware accepts the call.
+    # The admin recompute path was previously missing those headers, so every
+    # OHLCV fetch returned 401, the price client treated it as "no bar", the
+    # lookback exhausted, and every holding fell back to cost basis — making
+    # the manually-recomputed snapshot identical to total_cost. Reuse the
+    # worker's helper so the auth contract stays in lockstep.
+    async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http:
         price_client = HttpOHLCVPriceClient(
             http=http,
             market_data_url=settings.market_data_service_url,

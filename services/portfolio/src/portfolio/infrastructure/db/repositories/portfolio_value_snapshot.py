@@ -42,6 +42,9 @@ class SqlAlchemyPortfolioValueSnapshotRepository(PortfolioValueSnapshotRepositor
             total_value=row.total_value,
             total_cost=row.total_cost,
             cash_value=row.cash_value,
+            # F-401: surface the persisted data-quality flag back to callers
+            # so analytics endpoints can include it in their responses.
+            data_quality=row.data_quality,
             created_at=row.created_at,
         )
 
@@ -63,6 +66,9 @@ class SqlAlchemyPortfolioValueSnapshotRepository(PortfolioValueSnapshotRepositor
             total_value=snapshot.total_value,
             total_cost=snapshot.total_cost,
             cash_value=snapshot.cash_value,
+            # F-401: persist the data-quality flag alongside the totals so
+            # the read path can render a "partial data" caveat to users.
+            data_quality=snapshot.data_quality,
             created_at=snapshot.created_at,
         )
         stmt = stmt.on_conflict_do_update(
@@ -71,6 +77,10 @@ class SqlAlchemyPortfolioValueSnapshotRepository(PortfolioValueSnapshotRepositor
                 "total_value": stmt.excluded.total_value,
                 "total_cost": stmt.excluded.total_cost,
                 "cash_value": stmt.excluded.cash_value,
+                # F-401: re-runs may IMPROVE the data-quality (e.g. an OHLCV
+                # backfill landed since the previous pass), so we overwrite
+                # this column on conflict — the latest pass is most accurate.
+                "data_quality": stmt.excluded.data_quality,
                 # tenant_id is technically immutable per portfolio but we
                 # include it so the row stays consistent if it was ever
                 # written with a wrong tenant_id (defensive).

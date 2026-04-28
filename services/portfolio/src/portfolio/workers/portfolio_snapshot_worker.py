@@ -52,7 +52,11 @@ from portfolio.application.use_cases.compute_portfolio_value import (
     ComputePortfolioValueUseCase,
     OHLCVPriceClient,
 )
-from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
+from portfolio.domain.entities.portfolio_value_snapshot import (
+    DATA_QUALITY_OK,
+    DATA_QUALITY_PARTIAL_PRICES,
+    PortfolioValueSnapshot,
+)
 from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
 if TYPE_CHECKING:
@@ -571,6 +575,12 @@ class PortfolioSnapshotWorker:
                     total_value = Decimal(0)
                     total_cost = Decimal(0)
                     cash_value = Decimal(0)
+                    # F-401: propagate ``partial_prices`` upward — if any
+                    # sub-portfolio used a stale-price or cost-basis fallback,
+                    # the aggregated root row inherits that flag so the user
+                    # sees the caveat even when looking at the "All Accounts"
+                    # view rather than the individual account.
+                    aggregated_data_quality = DATA_QUALITY_OK
                     for sub_id in sub_ids:
                         # We pull just the one row matching today's date.
                         rows = await uow.portfolio_value_snapshots.list_range(
@@ -583,6 +593,8 @@ class PortfolioSnapshotWorker:
                             total_value += row.total_value
                             total_cost += row.total_cost
                             cash_value += row.cash_value
+                            if row.data_quality != DATA_QUALITY_OK:
+                                aggregated_data_quality = DATA_QUALITY_PARTIAL_PRICES
 
                     aggregated = PortfolioValueSnapshot(
                         portfolio_id=root.id,
@@ -591,6 +603,7 @@ class PortfolioSnapshotWorker:
                         total_value=total_value,
                         total_cost=total_cost,
                         cash_value=cash_value,
+                        data_quality=aggregated_data_quality,
                     )
                     await uow.portfolio_value_snapshots.upsert(aggregated)
                     await uow.commit()

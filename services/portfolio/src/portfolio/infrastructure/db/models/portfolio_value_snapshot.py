@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Date as SADate
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, UniqueConstraint, func, text
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,6 +50,16 @@ class PortfolioValueSnapshotModel(Base):
         nullable=False,
         server_default="0",
         default=Decimal(0),
+    )
+    # F-401 / migration 0013: ``"ok"`` (default) or ``"partial_prices"``.
+    # The column carries a server_default so existing rows automatically
+    # become ``"ok"`` after the migration runs (BP-126 — NOT NULL Alembic
+    # column needs server_default in BOTH migration AND mapped_column).
+    data_quality: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default="ok",
+        default="ok",
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
