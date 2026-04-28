@@ -62,11 +62,18 @@ export default function BrokerageCallbackPage() {
   // at the top level of the component, not inside useEffect.
   const queryClient = useQueryClient();
 
-  // Read all four required params from the URL
-  // WHY ?? "": useSearchParams().get() returns null for missing params;
-  // empty string allows the type to be string (easier to work with than string | null)
+  // Read params from the URL.
+  // WHY fallback chain for authorizationId: SnapTrade Connection Portal v4 renamed
+  // the field from "authorizationId" to "connection_id" in the callback redirect.
+  // Check both so the page works with both v3 and v4 portal versions.
   const connectionId = searchParams.get("connectionId") ?? "";
-  const authorizationId = searchParams.get("authorizationId") ?? "";
+  const authorizationId =
+    searchParams.get("authorizationId") ??
+    searchParams.get("connection_id") ??
+    "";
+  // WHY ?? "": userId and sessionId are absent in Connection Portal v4.
+  // The backend treats empty string as "not provided" and skips the userId
+  // anti-spoofing check (JWT ownership verification is sufficient without it).
   const userId = searchParams.get("userId") ?? "";
   const sessionId = searchParams.get("sessionId") ?? "";
 

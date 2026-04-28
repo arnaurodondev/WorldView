@@ -189,8 +189,11 @@ class ActivateBrokerageConnectionUseCase:
                 details={"connection_id": str(cmd.connection_id)},
             )
 
-        # Anti-spoofing: validate callback userId matches stored snaptrade_user_id
-        if cmd.snaptrade_user_id != connection.snaptrade_user_id:
+        # Anti-spoofing: validate callback userId matches stored snaptrade_user_id.
+        # WHY only when provided: SnapTrade Connection Portal v4 omits userId from
+        # the callback redirect. When absent (empty string), JWT-based ownership
+        # (get_by_user above) is sufficient — no need for the secondary check.
+        if cmd.snaptrade_user_id and cmd.snaptrade_user_id != connection.snaptrade_user_id:
             raise BrokerageConnectionForbiddenError(
                 "SnapTrade userId in callback does not match stored connection",
                 details={"connection_id": str(cmd.connection_id)},
