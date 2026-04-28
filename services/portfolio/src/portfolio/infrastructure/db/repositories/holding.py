@@ -91,3 +91,23 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             row.quantity = holding.quantity
             row.average_cost = holding.average_cost
             row.updated_at = holding.updated_at
+
+    async def delete(self, portfolio_id: UUID, instrument_id: UUID) -> None:
+        """Delete one holding row by composite key.
+
+        PLAN-0046 / BP-264: used by UpsertHoldingsFromSnapshotUseCase to remove
+        positions that are no longer present in the broker's snapshot.
+        """
+        # Use ORM delete via fetched row to keep behaviour identical to save():
+        # if the row is missing this is a no-op (idempotent) — desirable since
+        # the caller may pass an instrument_id that was never persisted (e.g. a
+        # closed position from a previous sync).
+        result = await self._session.execute(
+            select(HoldingModel).where(
+                HoldingModel.portfolio_id == portfolio_id,
+                HoldingModel.instrument_id == instrument_id,
+            ),
+        )
+        row = result.scalar_one_or_none()
+        if row is not None:
+            await self._session.delete(row)

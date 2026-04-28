@@ -23,6 +23,7 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-261](#bp-261) | Config / GitOps drift | `docker.env` files in the worldview repo are COPIES of `worldview-gitops/env/dev/*.env`; changes made only to the local copy drift from the source of truth and are lost on next `setup-dev.sh` run | All services; `scripts/setup-dev.sh`; `worldview-gitops/env/dev/` |
 | [BP-241](#bp-241) | Alert / Valkey dedup | Resetting Kafka offsets for replay doesn't clear Valkey dedup keys — all events silently deduplicated; `alert_db.alerts` stays empty | `services/alert/src/alert/infrastructure/messaging/consumers/intelligence_consumer.py`; any consumer with Valkey-backed dedup |
 | [BP-240](#bp-240) | Alert / inter-service auth | `S1Client._headers()` sends `X-Internal-Token` after PRD-0025 migrated S1 to `X-Internal-JWT` — every watchlist call returns 401; no alert ever created; best-effort client silently swallows error | `services/alert/src/alert/infrastructure/clients/s1_client.py`; any service client not updated when upstream migrates to RS256 JWT |
 | [BP-239](#bp-239) | Market-data / fundamentals router | S3 router missing section endpoints for sections that exist in FundamentalsSection enum + use case — 404 on section-specific paths | `services/market-data/src/market_data/api/routers/fundamentals.py`; any service with enum-backed section dispatch |
@@ -7221,3 +7222,98 @@ Each symbol's 1m bars are fetched once per day. US equities fetch during market 
 - Clarify in `schedule_tasks.py` whether `is_due` should use `current_bar_ts` or `last_success_at`.
 - Add a comment documenting that day-truncated `range_end` sets `current_bar_ts` to a future date.
 - If true intraday re-polling is needed, switch to `last_success_at` and minute-granular ranges.
+
+---
+
+## BP-261 — GitOps Env Drift: Local `docker.env` Changes Not Propagated to worldview-gitops
+
+**Category**: Config
+**Severity**: HIGH
+**First seen**: 2026-04-28
+**Services**: All services
+
+**Symptoms**:
+- Env var changes made during a debugging session only apply to the local `services/<svc>/configs/docker.env` copy
+- After running `scripts/setup-dev.sh` the changes are overwritten from `worldview-gitops/env/dev/<svc>.env`
+- Another developer (or a fresh checkout) never gets the change
+
+**Root cause**:
+`services/<svc>/configs/docker.env` files are generated copies of `worldview-gitops/env/dev/<svc>.env`.
+The gitops repo is the authoritative source of truth. Any env var change made only to the local copy is ephemeral.
+
+**Fix**:
+After any env var change in a `docker.env` file, **always** mirror the change to the corresponding file in `worldview-gitops/env/dev/<svc>.env` and commit it.
+
+**Prevention**:
+- Treat `services/*/configs/docker.env` as read-only artifacts — never the canonical source.
+- When a debugging session adds or changes an env var, immediately update `worldview-gitops/env/dev/` before closing the session.
+- Add a reminder comment to the top of each `docker.env`: "Copy to ../worldview/... via setup-dev.sh — edit worldview-gitops, not this file."
+
+**Regression test**: N/A (process rule, not a code bug)
+
+
+---
+
+## BP-263 — SnapTrade Adapter Dropped `amount` and `fee`, Causing $0 Dividends
+
+**Category**: Integration / Data correctness
+**Severity**: CRITICAL
+**First seen**: 2026-04-28 (PLAN-0046 Wave 1)
+**Services**: portfolio (S1)
+
+**Symptoms**:
+- All DIVIDEND rows in the Transactions tab show `$0` total.
+- Cost-basis / fee-aware P&L is silently inaccurate for BUY/SELL because broker commissions never reach the database.
+
+**Root cause**:
+`SnapTradeClient._parse_activity_list` only read `id, type, symbol, units, price, currency, trade_date, institution` from `UniversalActivity` and discarded `amount` and `fee`. SnapTrade encodes dividends as `units≈0, price≈0, amount=<cash_paid>` — without `amount` the row reaches the UI as zero. Trade fees were similarly lost.
+
+**Fix**:
+Capture both fields end-to-end:
+1. Add `amount Numeric(18,8) NULL` to `transactions` (Alembic 0009; nullable, no backfill).
+2. Add `amount` / `fee` to `SnapTradeActivity` VO and `RecordTransactionCommand`.
+3. Adapter `_parse_activity_list` parses both via `_parse_optional_decimal` (handles None/empty/non-numeric).
+4. Worker passes `fees=activity.fee or 0` and `amount=activity.amount` to the use case.
+5. API schema and frontend `Transaction` type both expose `amount: Decimal | null`; `TransactionsTable` reads `tx.amount` for DIVIDEND total.
+
+**Prevention**:
+- When wrapping a third-party SDK, write a mapping table in the adapter docstring listing every source field consumed AND every documented field deliberately ignored. Reviewers catch omissions.
+- Recorded-fixture unit tests for adapter parsing (see `tests/unit/test_snaptrade_parsing.py`).
+
+**Regression test**: `services/portfolio/tests/unit/test_snaptrade_parsing.py::TestParseActivityList`
+
+---
+
+## BP-264 — Holdings Drift from Cumulative Activity Replay
+
+**Category**: Integration / Data correctness
+**Severity**: CRITICAL
+**First seen**: 2026-04-28 (PLAN-0046 Wave 1)
+**Services**: portfolio (S1)
+
+**Symptoms**:
+- `holdings.quantity` is inflated 8-10x relative to the broker UI (e.g. 800 shares stored vs <100 in TastyTrade).
+- Inflation accumulates over many sync cycles; new portfolios appear correct initially.
+
+**Root cause**:
+`RecordTransactionUseCase` called `Holding.apply_delta` on every transaction, so holdings were a running sum derived from the activity feed. Two interacting feed flaws compounded this into permanent drift:
+1. `SnapTradeClient.get_activities` falls back from a legacy endpoint to `_get_activities_per_account` on any error; the two endpoint families assign DIFFERENT activity IDs to the same trade. `transactions.external_ref` dedup never fires.
+2. The per-account path concatenates results across linked sub-accounts with no in-memory dedup; joint/individual mirrors emit the same trade twice.
+
+The SAME trade therefore lands in `transactions` multiple times with different IDs, and `apply_delta` adds the quantity each time.
+
+**Fix**:
+Snapshot is the only authoritative source of "what the user holds right now":
+1. New port method `IBrokerageClient.get_account_positions(user, account_id)` + `SnapTradePosition` VO.
+2. New `UpsertHoldingsFromSnapshotUseCase`: aggregates positions by `instrument_id`, upserts to broker truth, deletes holdings absent from the snapshot.
+3. `BrokerageTransactionSyncWorker` calls the snapshot path AFTER the activity loop.
+4. `RecordTransactionUseCase` no longer mutates holdings; transactions are history-only.
+5. `HoldingChanged` event ownership moved to the snapshot use case so consumers see broker-truth quantities.
+6. One-shot recovery script `services/portfolio/scripts/repair_holdings_after_replay_drift.py` zeroes affected holdings; the next sync repopulates them. `--dry-run` reports without mutating.
+
+**Prevention**:
+- Never derive cumulative state purely from a paginated/multi-endpoint third-party feed. Always reconcile against a snapshot.
+- Activity feeds are append-only HISTORY; positions are CURRENT STATE. Treat them differently.
+- New ground-truth comparison check in `/qa` for brokerage integrations.
+
+**Regression test**: `services/portfolio/tests/unit/test_use_cases_upsert_holdings_from_snapshot.py`

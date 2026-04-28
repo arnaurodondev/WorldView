@@ -496,6 +496,13 @@ export interface Transaction {
   quantity: number;
   price: number;
   fee: number;
+  // PLAN-0046 / BP-263: broker-reported cash amount, primarily used to surface
+  // DIVIDEND values. SnapTrade reports dividends as units≈0, price≈0, with the
+  // payment in `amount`. For BUY/SELL `amount` is informational; the table
+  // computes total = quantity * price for those types.
+  // null = historical row pre-dating the column, OR a row where the broker
+  // didn't supply this field (legitimately absent — render gracefully).
+  amount: number | null;
   currency: string;
   executed_at: string; // ISO 8601 UTC
   notes: string | null;

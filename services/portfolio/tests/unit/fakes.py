@@ -6,7 +6,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradeUser
+from portfolio.application.ports.brokerage_client import (
+    IBrokerageClient,
+    SnapTradeActivity,
+    SnapTradePosition,
+    SnapTradeUser,
+)
 from portfolio.application.ports.repositories import (
     AlertPreferenceRepository,
     AuthAuditLogRepository,
@@ -235,6 +240,12 @@ class FakeHoldingRepository(HoldingRepository):
 
     async def save(self, holding: Holding) -> None:
         self._store[(holding.portfolio_id, holding.instrument_id)] = holding
+
+    async def delete(self, portfolio_id: UUID, instrument_id: UUID) -> None:
+        # PLAN-0046 / BP-264: snapshot-based holdings need a delete path so
+        # closed positions disappear from the local DB. No-op when the key is
+        # absent (the production repo behaves identically — see SqlAlchemy impl).
+        self._store.pop((portfolio_id, instrument_id), None)
 
 
 class FakeOutboxRepository(OutboxRepository):
@@ -494,6 +505,22 @@ class FakeBrokerageClient:
 
             raise BrokerageApiError("fake activities failure")
         return list(self.activities)
+
+    # ── Snapshot path (PLAN-0046 T-46-1-02 / BP-264) ─────────────────────────
+    # The new methods are defined as no-ops by default (no accounts, no
+    # positions). Tests that exercise the snapshot path inject ``account_ids``
+    # and ``positions_by_account`` directly.
+
+    async def list_account_ids(self, user: SnapTradeUser) -> list[str]:
+        return list(getattr(self, "account_ids", []))
+
+    async def get_account_positions(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> list[SnapTradePosition]:
+        positions_by_account: dict[str, list[SnapTradePosition]] = getattr(self, "positions_by_account", {})
+        return list(positions_by_account.get(account_id, []))
 
 
 # Runtime Protocol check — asserts FakeBrokerageClient satisfies IBrokerageClient

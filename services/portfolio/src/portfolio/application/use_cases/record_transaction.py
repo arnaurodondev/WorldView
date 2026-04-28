@@ -10,12 +10,10 @@ from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
-from portfolio.application.messaging.mapper import holding_changed_to_dict, transaction_recorded_to_dict
+from portfolio.application.messaging.mapper import transaction_recorded_to_dict
 from portfolio.application.messaging.topics import EVENT_TOPIC_MAP
 from portfolio.application.ports.repositories import OutboxRecord
-from portfolio.domain.entities.holding import Holding
 from portfolio.domain.entities.transaction import Transaction
-from portfolio.domain.enums import TransactionDirection, TransactionType
 from portfolio.domain.errors import (
     AuthorizationError,
     CurrencyMismatchError,
@@ -26,10 +24,11 @@ from portfolio.domain.errors import (
     TenantInactiveError,
     UserInactiveError,
 )
-from portfolio.domain.events import HoldingChanged, TransactionRecorded
+from portfolio.domain.events import TransactionRecorded
 
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.domain.enums import TransactionDirection, TransactionType
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -47,6 +46,10 @@ class RecordTransactionCommand:
     currency: str
     executed_at: datetime
     fees: Decimal = field(default_factory=lambda: Decimal(0))
+    # ``amount`` is the broker-reported cash amount. PLAN-0046 / BP-263:
+    # required to surface DIVIDEND values correctly (units≈0, price≈0,
+    # amount=<cash>). Optional for BUY/SELL where it is informational.
+    amount: Decimal | None = None
     external_ref: str | None = None
     idempotency_key: str | None = None
     correlation_id: str | None = None
@@ -112,6 +115,15 @@ class RecordTransactionUseCase:
         if portfolio.owner_id != cmd.owner_id:
             raise AuthorizationError("Not authorized to record transactions for this portfolio")
 
+        # PLAN-0046 Wave 3 (T-46-1-03 defensive marker): when the ``kind`` enum
+        # ships in Wave 3 we must reject root portfolios here — they aggregate
+        # other portfolios and have no transactions of their own. The actual
+        # ``portfolio.kind == PortfolioKind.ROOT`` check lives in Wave 3; until
+        # then this comment marks the line where it will be added so reviewers
+        # can find the insertion point at a glance.
+        # TODO(PLAN-0046 Wave 3): if portfolio.kind == PortfolioKind.ROOT: raise
+        #     PortfolioKindNotAllowedError("Root portfolios cannot record transactions")
+
         # Validate currency matches portfolio
         if cmd.currency != portfolio.currency:
             raise CurrencyMismatchError(
@@ -138,28 +150,29 @@ class RecordTransactionUseCase:
             quantity=cmd.quantity,
             price=cmd.price,
             fees=cmd.fees,
+            amount=cmd.amount,
             currency=cmd.currency,
             executed_at=cmd.executed_at,
             external_ref=cmd.external_ref or cmd.idempotency_key,
         )
 
-        # Update or create holding (in memory)
-        holding = await uow.holdings.get(cmd.portfolio_id, cmd.instrument_id)
-        if holding is None:
-            holding = Holding(
-                id=new_uuid(),
-                portfolio_id=cmd.portfolio_id,
-                instrument_id=cmd.instrument_id,
-                tenant_id=cmd.tenant_id,
-                currency=cmd.currency,
-            )
+        # ── BP-264 (PLAN-0046 T-46-1-03) ─────────────────────────────────────
+        # Holdings are NO LONGER mutated here. Previously this use case called
+        # ``Holding.apply_delta`` per transaction, which compounded duplicates
+        # whenever the SnapTrade adapter emitted the same activity twice (e.g.
+        # legacy + per-account fallback paths returning different IDs for the
+        # same trade). The fix is to derive holdings from the broker's position
+        # snapshot (``UpsertHoldingsFromSnapshotUseCase``) which is authoritative.
+        # Transactions are now history-only: they record what happened but do
+        # NOT mutate cumulative state. Manual transaction APIs that previously
+        # relied on apply_delta would need a separate "manual holding adjust"
+        # path; that is deferred and out of scope for Wave 1.
+        # NOTE: ``HoldingChanged`` is no longer emitted here either — the
+        # snapshot upsert use case is the new owner of that event so consumers
+        # observe broker-truth quantities only.
 
-        # Compute quantity delta: positive for inflow, negative for outflow
-        qty_delta = cmd.quantity if cmd.direction == TransactionDirection.INFLOW else -cmd.quantity
-        holding.apply_delta(qty_delta, cmd.price)
-
-        # Pre-validate: build outbox event dicts BEFORE any DB writes (M-009).
-        # Serialization errors surface here, not after partial DB writes.
+        # Pre-validate: build outbox event dict BEFORE the DB write (M-009).
+        # Serialization errors surface here, not after a partial DB write.
         tx_event = TransactionRecorded(
             tenant_id=cmd.tenant_id,
             transaction_id=transaction.id,
@@ -174,21 +187,10 @@ class RecordTransactionUseCase:
             executed_at=cmd.executed_at.isoformat(),
             correlation_id=cmd.correlation_id,
         )
-        holding_event = HoldingChanged(
-            tenant_id=cmd.tenant_id,
-            holding_id=holding.id,
-            portfolio_id=cmd.portfolio_id,
-            instrument_id=cmd.instrument_id,
-            quantity=str(holding.quantity),
-            average_cost=str(holding.average_cost),
-            currency=holding.currency,
-        )
         tx_event_dict = transaction_recorded_to_dict(tx_event)
-        holding_event_dict = holding_changed_to_dict(holding_event)
 
-        # All DB writes together — atomic within the UoW transaction
+        # Single DB write (transaction + outbox event), atomic within the UoW.
         await uow.transactions.save(transaction)
-        await uow.holdings.save(holding)
         await uow.outbox.save(
             OutboxRecord(
                 id=new_uuid(),
@@ -196,19 +198,6 @@ class RecordTransactionUseCase:
                 event_type=TransactionRecorded.EVENT_TYPE,
                 topic=EVENT_TOPIC_MAP[TransactionRecorded.EVENT_TYPE],
                 payload=tx_event_dict,
-                status="pending",
-                attempt_count=0,
-                lease_owner=None,
-                lease_expires=None,
-            ),
-        )
-        await uow.outbox.save(
-            OutboxRecord(
-                id=new_uuid(),
-                tenant_id=cmd.tenant_id,
-                event_type=HoldingChanged.EVENT_TYPE,
-                topic=EVENT_TOPIC_MAP[HoldingChanged.EVENT_TYPE],
-                payload=holding_event_dict,
                 status="pending",
                 attempt_count=0,
                 lease_owner=None,

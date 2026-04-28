@@ -17,16 +17,23 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import time
 import urllib.parse
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import httpx
+import jwt as pyjwt
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
+from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
+    ResolvedSnapshotPosition,
+    UpsertHoldingsFromSnapshotCommand,
+    UpsertHoldingsFromSnapshotUseCase,
+)
 from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
 from portfolio.domain.enums import SyncErrorType, TransactionDirection, TransactionType
 from portfolio.domain.errors import BrokerageApiError, IdempotencyConflictError, InstrumentResolutionTransientError
@@ -40,7 +47,7 @@ if TYPE_CHECKING:
     from cryptography.fernet import Fernet
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity
+    from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradePosition
     from portfolio.config import Settings
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.instrument import InstrumentRef
@@ -61,6 +68,33 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
     "DIV": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
     "DIVIDEND": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
 }
+
+
+def _system_jwt_headers() -> dict[str, str]:
+    """Generate X-Internal-JWT for service-to-service calls to market-data.
+
+    WHY: Market-data uses InternalJWTMiddleware which requires X-Internal-JWT on
+    every request. The brokerage-sync worker calls market-data directly (not via
+    S9), so it cannot obtain an RS256-signed JWT from the gateway. In dev,
+    market-data is configured with skip_verification=True which accepts any
+    decodable JWT. The HS256 token here is only for dev — production would
+    require a proper service account token from S9.
+    """
+    now = int(time.time())
+    token = pyjwt.encode(
+        {
+            "iss": "worldview-gateway",
+            "sub": "system:brokerage-sync",
+            "user_id": "00000000-0000-0000-0000-000000000000",
+            "tenant_id": "00000000-0000-0000-0000-000000000000",
+            "role": "system",
+            "iat": now,
+            "exp": now + 86400,
+        },
+        "dev-skip-verification-key-for-brokerage-sync-worker",
+        algorithm="HS256",
+    )
+    return {"X-Internal-JWT": token}
 
 
 class BrokerageTransactionSyncWorker:
@@ -91,7 +125,7 @@ class BrokerageTransactionSyncWorker:
             "brokerage_sync_worker_started",
             cycle_seconds=self._settings.brokerage_sync_cycle_seconds,
         )
-        async with httpx.AsyncClient(timeout=10.0) as http_client:
+        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
             self._http_client = http_client
             while True:
                 try:
@@ -178,11 +212,91 @@ class BrokerageTransactionSyncWorker:
             await uow.brokerage_connections.save(connection)
             await uow.commit()
 
+        # ── BP-264 (PLAN-0046 T-46-1-03) ─────────────────────────────────────
+        # AFTER the activity sync, fetch the broker's authoritative position
+        # snapshot and overwrite the holdings table for this portfolio. This is
+        # what stops the cumulative-replay drift that produced 8-10x inflated
+        # quantities. Snapshot fetch is best-effort: on failure we log and
+        # continue so transient SnapTrade errors don't hold up other connections.
+        try:
+            await self._sync_holdings_from_snapshot(connection, snap_user)
+        except BrokerageApiError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "brokerage_sync_snapshot_failed",
+                connection_id=str(connection.id),
+                error=type(exc).__name__,
+            )
+
         logger.info(  # type: ignore[no-any-return]
             "brokerage_sync_connection_done",
             connection_id=str(connection.id),
             activity_count=len(activities),
         )
+
+    async def _sync_holdings_from_snapshot(
+        self,
+        connection: BrokerageConnection,
+        snap_user: SnapTradeUser,
+    ) -> None:
+        """Fetch broker-truth positions and overwrite local holdings.
+
+        PLAN-0046 / BP-264: positions across all linked accounts for this user
+        are aggregated by symbol, resolved to ``instrument_id`` via the same
+        path activities use (DB-first, S3 fallback), and handed to
+        ``UpsertHoldingsFromSnapshotUseCase`` which performs the diff and
+        emits HoldingChanged events for every change.
+        """
+        # 1. Get account ids
+        account_ids = await self._brokerage_client.list_account_ids(snap_user)
+
+        # 2. Fetch positions per account, concatenate
+        all_positions: list[SnapTradePosition] = []
+        for account_id in account_ids:
+            try:
+                positions = await self._brokerage_client.get_account_positions(snap_user, account_id)
+                all_positions.extend(positions)
+            except BrokerageApiError as exc:
+                # One bad account shouldn't kill the whole sync.
+                logger.warning(  # type: ignore[no-any-return]
+                    "brokerage_sync_account_positions_failed",
+                    account_id=account_id,
+                    error=type(exc).__name__,
+                )
+
+        # 3. Resolve symbols → instrument_ids inside a fresh UoW (write-capable
+        #    so we can upsert instrument refs that come from the S3 fallback).
+        async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
+            self._session_factory,
+            snaptrade_cipher=self._cipher,
+        ) as uow:
+            resolved: list[ResolvedSnapshotPosition] = []
+            for pos in all_positions:
+                try:
+                    instrument = await self._resolve_instrument(pos.symbol, uow)
+                except InstrumentResolutionTransientError:
+                    # Skip transient resolution failures — next sync will retry.
+                    continue
+                if instrument is None:
+                    # Unknown symbol — skip; we don't error-record positions
+                    # the same way we do activities (positions are an overview).
+                    continue
+                resolved.append(
+                    ResolvedSnapshotPosition(
+                        instrument_id=instrument.id,
+                        quantity=pos.quantity,
+                        average_cost=pos.average_purchase_price,
+                        currency=pos.currency or "USD",
+                    ),
+                )
+
+            await UpsertHoldingsFromSnapshotUseCase().execute(
+                UpsertHoldingsFromSnapshotCommand(
+                    tenant_id=connection.tenant_id,
+                    portfolio_id=connection.portfolio_id,
+                    positions=resolved,
+                ),
+                uow,
+            )
 
     async def _process_activity(
         self,
@@ -259,6 +373,11 @@ class BrokerageTransactionSyncWorker:
             return
 
         # 4. Record transaction via use case
+        # PLAN-0046 / BP-263: pass through SnapTrade ``amount`` and ``fee``.
+        # ``amount`` is required for DIVIDEND rows (SnapTrade encodes the cash
+        # payment in this field — units≈0, price≈0). ``fee`` is the broker
+        # commission for BUY/SELL. Both default to None / Decimal(0) when
+        # SnapTrade omits them.
         cmd = RecordTransactionCommand(
             tenant_id=connection.tenant_id,
             portfolio_id=connection.portfolio_id,
@@ -268,6 +387,8 @@ class BrokerageTransactionSyncWorker:
             direction=direction,
             quantity=Decimal(str(activity.quantity)),
             price=Decimal(str(activity.price)),
+            fees=activity.fee if activity.fee is not None else Decimal(0),
+            amount=activity.amount,
             currency=activity.currency,
             executed_at=activity.executed_at,
             external_ref=activity.snaptrade_transaction_id,
@@ -312,7 +433,7 @@ class BrokerageTransactionSyncWorker:
         encoded_symbol = urllib.parse.quote(symbol, safe="")
         try:
             response = await self._http_client.get(
-                f"{self._settings.market_data_service_url}/api/v1/instruments/{encoded_symbol}",
+                f"{self._settings.market_data_service_url}/api/v1/instruments/symbol/{encoded_symbol}",
             )
         except Exception as exc:
             # Network error (timeout, DNS failure, connection refused, etc.) —

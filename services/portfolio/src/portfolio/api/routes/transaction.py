@@ -112,6 +112,7 @@ async def list_transactions(
                 quantity=t.quantity,
                 price=t.price,
                 fees=t.fees,
+                amount=t.amount,  # PLAN-0046 / BP-263 — surface SnapTrade cash amount
                 currency=t.currency,
                 executed_at=t.executed_at,
                 external_ref=t.external_ref,

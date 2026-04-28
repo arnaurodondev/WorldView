@@ -30,6 +30,12 @@ class TransactionModel(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 8))
     price: Mapped[Decimal] = mapped_column(Numeric(18, 8))
     fees: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
+    # ``amount`` is broker-reported cash flow, populated by SnapTrade ingest only.
+    # NULLABLE because historical rows pre-date the column (Alembic 0009 added it
+    # without a backfill — see PLAN-0046 T-46-1-01 / BP-263). For DIVIDEND rows
+    # this carries the cash amount paid; for BUY/SELL it is informational and
+    # may be NULL even on new rows when SnapTrade omits the field.
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True, default=None)
     currency: Mapped[str]
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     external_ref: Mapped[str | None] = mapped_column(default=None)

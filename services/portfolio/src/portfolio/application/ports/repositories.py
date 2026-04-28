@@ -182,6 +182,17 @@ class HoldingRepository(ABC):
     @abstractmethod
     async def save(self, holding: Holding) -> None: ...
 
+    @abstractmethod
+    async def delete(self, portfolio_id: UUID, instrument_id: UUID) -> None:
+        """Delete the holding row matching ``(portfolio_id, instrument_id)``.
+
+        Used by ``UpsertHoldingsFromSnapshotUseCase`` (PLAN-0046 / BP-264) to
+        remove rows that are present in the local DB but absent from the
+        broker's current position snapshot — i.e. closed positions.
+        No-op if the row does not exist.
+        """
+        ...
+
 
 class OutboxRepository(ABC):
     @abstractmethod

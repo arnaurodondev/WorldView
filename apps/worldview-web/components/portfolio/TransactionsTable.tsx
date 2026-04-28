@@ -38,6 +38,15 @@ import type { Transaction } from "@/types/api";
 
 export interface TransactionsTableProps {
   transactions: Transaction[];
+  /**
+   * Optional map of instrument_id → ticker. The S1 transaction list does not
+   * include the ticker (it only knows the instrument_id UUID). The portfolio
+   * page already loads holdingOverviews keyed by instrument_id; passing that
+   * map here lets us render the real ticker (e.g. "AAPL") instead of "—".
+   * BP-262 (2026-04-28): unenriched transactions previously displayed dashes
+   * for every TICKER cell, making the blotter unreadable.
+   */
+  tickerByInstrumentId?: Record<string, string | null | undefined>;
 }
 
 // WHY all four filter values: "ALL" avoids special-casing null in filter logic —
@@ -69,7 +78,7 @@ function typeBadgeClass(type: Transaction["type"]): string {
 
 // ── TransactionsTable ─────────────────────────────────────────────────────────
 
-export function TransactionsTable({ transactions }: TransactionsTableProps) {
+export function TransactionsTable({ transactions, tickerByInstrumentId }: TransactionsTableProps) {
   // WHY local state: filter is ephemeral UI state, not part of the API query.
   // We filter client-side on the already-loaded transaction list (max 100 items).
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
@@ -168,13 +177,35 @@ export function TransactionsTable({ transactions }: TransactionsTableProps) {
             ) : (
               filtered.map((tx) => {
                 const isDividend = tx.type === "DIVIDEND";
-                // WHY quantity: for dividends, qty and price are meaningless (income event)
-                const total = isDividend ? tx.fee : tx.quantity * tx.price;
+                // WHY this branch:
+                //   * BUY / SELL → total = quantity * price (cost / proceeds before fees)
+                //   * DIVIDEND   → quantity≈0 and price≈0; the cash payment lives in
+                //                  `tx.amount` (PLAN-0046 / BP-263).
+                // Pre-fix this read `tx.fee` for dividends, which was always 0
+                // because the SnapTrade adapter dropped the amount field. Now that
+                // the adapter persists it through Alembic 0009, we read tx.amount.
+                // Fallback to 0 keeps the cell rendering even if the broker omits
+                // amount or the row pre-dates the migration.
+                const total = isDividend ? tx.amount ?? 0 : tx.quantity * tx.price;
+                // WHY enrichment lookup: tx.ticker is empty from the gateway because
+                // S1's TransactionListItem omits ticker. The parent page loads holding
+                // overviews keyed by instrument_id and passes them here as a lookup.
+                const enrichedTicker =
+                  tx.ticker || tickerByInstrumentId?.[tx.instrument_id] || "";
+                // WHY zero-qty/zero-price guard (B-6): brokerage imports occasionally
+                // include sentinel rows (corporate actions, fee-only adjustments) with
+                // qty=0 AND price=0. These are not user-actionable trades — render the
+                // row in a muted style so it visually de-emphasises against real fills.
+                const isPlaceholder =
+                  !isDividend && tx.quantity === 0 && tx.price === 0;
 
                 return (
                   <tr
                     key={tx.transaction_id}
-                    className="h-[22px] hover:bg-muted/40 transition-colors"
+                    className={cn(
+                      "h-[22px] hover:bg-muted/40 transition-colors",
+                      isPlaceholder && "text-muted-foreground/50",
+                    )}
                   >
                     {/* Date */}
                     <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
@@ -197,9 +228,10 @@ export function TransactionsTable({ transactions }: TransactionsTableProps) {
                       </span>
                     </td>
 
-                    {/* Ticker */}
+                    {/* Ticker — enrichedTicker uses the parent-supplied lookup map
+                        because the gateway returns "" for tx.ticker (BP-262). */}
                     <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
-                      {tx.ticker || "—"}
+                      {enrichedTicker || "—"}
                     </td>
 
                     {/* Qty — "—" for DIVIDEND (not applicable) */}
@@ -212,9 +244,11 @@ export function TransactionsTable({ transactions }: TransactionsTableProps) {
                       {isDividend ? "—" : formatPrice(tx.price)}
                     </td>
 
-                    {/* Total — for DIVIDEND this is the income amount (fee field) */}
+                    {/* Total — for DIVIDEND this is the income amount (fee field).
+                        Placeholder rows render "n/a" so they don't visually masquerade
+                        as real $0 trades. */}
                     <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                      {total > 0 ? formatPrice(total) : "—"}
+                      {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
                     </td>
 
                     {/* Fee — "—" for DIVIDEND (fee field repurposed as amount above) */}

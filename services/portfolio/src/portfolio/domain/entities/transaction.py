@@ -24,6 +24,12 @@ class Transaction:
     currency: str
     executed_at: datetime
     fees: Decimal = Decimal(0)
+    # ``amount`` is the broker-reported cash amount for the transaction. It is
+    # OPTIONAL and only populated by SnapTrade-sourced rows (PLAN-0046 Wave 1,
+    # BP-263). For DIVIDEND activities SnapTrade reports ``units≈0, price≈0,
+    # amount=<cash_paid>``; dropping this field made dividends appear as $0.
+    # For BUY/SELL it usually equals ``quantity * price`` and is informational.
+    amount: Decimal | None = None
     external_ref: str | None = None
     id: UUID = field(default_factory=new_uuid)
     created_at: datetime = field(default_factory=utc_now)

@@ -536,3 +536,45 @@ make migrate-new MSG="add_column_foo"  # generate new migration
 - **Watchlist soft-delete does not prevent GET** — `DeleteWatchlistUseCase` saves the watchlist
   with `status=deleted` but does not remove it from the DB. `GetWatchlistUseCase` will still
   return it. Consumers must check `status` if they need to filter deleted watchlists.
+
+
+---
+
+## Operational Recovery
+
+### Holdings drift from transaction-replay (BP-264)
+
+Before PLAN-0046, `RecordTransactionUseCase` mutated `holdings.quantity` via
+`Holding.apply_delta` on every transaction. Because the SnapTrade adapter's
+dual-path activity feed (legacy → per-account fallback) could return the same
+trade twice with different IDs, holdings inflated by 8-10x over time.
+
+**Fix landed in PLAN-0046 Wave 1:**
+
+- `RecordTransactionUseCase` no longer touches the `holdings` table; transactions
+  are now history-only.
+- `UpsertHoldingsFromSnapshotUseCase` overwrites the table after every brokerage
+  sync from the broker's authoritative position snapshot
+  (`SnapTradeClient.get_account_positions`).
+- The `HoldingChanged` event is now emitted by the snapshot use case, not by
+  `RecordTransactionUseCase`.
+
+**To recover affected portfolios** (one-time per environment):
+
+```bash
+# 1) Dry-run — print affected portfolios + duplicate transaction groups.
+cd services/portfolio
+python -m portfolio.scripts.repair_holdings_after_replay_drift --dry-run
+
+# 2) Live run — zero out holdings on portfolios that have a brokerage
+#    connection. The next BrokerageTransactionSyncWorker cycle will repopulate
+#    them from the broker's snapshot.
+python -m portfolio.scripts.repair_holdings_after_replay_drift
+
+# 3) Trigger the sync worker (or wait for the 4-hour cycle).
+#    See ``trigger_brokerage_sync.py`` for the on-demand path.
+```
+
+The script is idempotent: re-running on already-clean state is a no-op apart
+from one extra sync round-trip. Duplicate-transaction detection is read-only
+and always safe.

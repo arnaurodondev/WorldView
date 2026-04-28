@@ -44,7 +44,6 @@ from portfolio.domain.errors import (
     CurrencyMismatchError,
     IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
-    InsufficientHoldingsError,
 )
 
 pytestmark = pytest.mark.unit
@@ -165,6 +164,11 @@ class FakeHoldingRepo(HoldingRepository):
 
     async def save(self, holding):
         self._holdings[(holding.portfolio_id, holding.instrument_id)] = holding
+
+    async def delete(self, portfolio_id, instrument_id):
+        # PLAN-0046 / BP-264: parity with the production repo; required to
+        # satisfy the new HoldingRepository.delete abstract method.
+        self._holdings.pop((portfolio_id, instrument_id), None)
 
 
 class FakeOutboxRepo(OutboxRepository):
@@ -367,13 +371,17 @@ def cmd(tenant_id, owner_id, portfolio_id, instrument_id):
 
 @pytest.mark.asyncio
 async def test_buy_creates_transaction_and_holding(uow, cmd) -> None:
+    # PLAN-0046 / BP-264: this test now verifies that recording a transaction
+    # is HISTORY-ONLY — the holdings table is no longer mutated. Holdings are
+    # derived from the broker's position snapshot via UpsertHoldingsFromSnapshot.
+    # The transaction itself is still persisted with quantity/price/etc.
     uc = RecordTransactionUseCase()
     result = await uc.execute(cmd, uow)
     assert result.transaction.quantity == Decimal(10)
     assert len(uow._transactions.saved) == 1
     holdings = await uow._holdings.list_by_portfolio(cmd.portfolio_id)
-    assert len(holdings) == 1
-    assert holdings[0].quantity == Decimal(10)
+    # Holdings are NOT created by record_transaction anymore — snapshot owns this.
+    assert len(holdings) == 0
     # T-G-1-01: verify commit was called exactly once (not zero, not two)
     assert uow.commit_count == 1
 
@@ -406,8 +414,12 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
     uc = RecordTransactionUseCase()
     await uc.execute(sell_cmd, uow)
 
+    # PLAN-0046 / BP-264: SELL no longer mutates holdings. The pre-seeded holding
+    # is left untouched — broker snapshots are now the source of truth and will
+    # update it on the next sync. Verify the transaction was still recorded.
     holdings = await uow._holdings.list_by_portfolio(portfolio_id)
-    assert holdings[0].quantity == Decimal(15)
+    assert holdings[0].quantity == Decimal(20)
+    assert len(uow._transactions.saved) == 1
 
 
 @pytest.mark.asyncio
@@ -463,9 +475,17 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
         currency="USD",
         executed_at=_NOW,
     )
+    # PLAN-0046 / BP-264: insufficient-holdings is no longer enforced inside
+    # RecordTransactionUseCase. Recording a SELL transaction is now history-only
+    # and does NOT mutate or validate the holding row. The broker is the source
+    # of truth — if a sell is reported for an unheld position the next snapshot
+    # will simply show the corrected quantity. The test now asserts the use case
+    # succeeds (transaction is recorded) and the pre-seeded holding is unchanged.
     uc = RecordTransactionUseCase()
-    with pytest.raises(InsufficientHoldingsError):
-        await uc.execute(sell_cmd, uow)
+    result = await uc.execute(sell_cmd, uow)
+    assert result.transaction.quantity == Decimal(999)
+    holdings = await uow._holdings.list_by_portfolio(portfolio_id)
+    assert holdings[0].quantity == Decimal(1)  # untouched
 
 
 @pytest.mark.asyncio
@@ -484,12 +504,13 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
     assert len(uow._transactions.saved) == 1
-    # T-G-1-02: outbox must have exactly 2 records (1x TransactionRecorded + 1x HoldingChanged from
-    # first call only; the duplicate second call must not add more)
-    assert len(uow._outbox.saved) == 2, "outbox must not be doubled by a duplicate idempotent call"
-    # T-G-1-02: holdings must be unchanged (same quantity as after first call)
+    # T-G-1-02 (PLAN-0046 update): outbox must have exactly 1 record now —
+    # only TransactionRecorded. HoldingChanged is no longer emitted by this
+    # use case (BP-264; ownership moved to UpsertHoldingsFromSnapshotUseCase).
+    assert len(uow._outbox.saved) == 1, "outbox must not be doubled by a duplicate idempotent call"
+    # PLAN-0046 / BP-264: holdings table is no longer touched here.
     holdings = await uow._holdings.list_by_portfolio(cmd_with_key.portfolio_id)
-    assert holdings[0].quantity == result1.transaction.quantity
+    assert len(holdings) == 0
 
 
 @pytest.mark.asyncio

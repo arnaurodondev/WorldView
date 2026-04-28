@@ -167,6 +167,10 @@ class TransactionListItem(BaseModel):
     quantity: Decimal
     price: Decimal
     fees: Decimal
+    # PLAN-0046 / BP-263: broker-reported cash amount. Required for DIVIDEND
+    # rows (units≈0, price≈0, amount=<cash>). NULL for historical rows that
+    # pre-date Alembic 0009 and for activity types where the broker omits it.
+    amount: Decimal | None = None
     currency: str
     executed_at: datetime
     external_ref: str | None = None
@@ -175,6 +179,11 @@ class TransactionListItem(BaseModel):
     @field_serializer("quantity", "price", "fees")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+    @field_serializer("amount")
+    def serialize_amount(self, v: Decimal | None) -> str | None:
+        # NULL → null in JSON; non-null → 8-dp string for parity with quantity/price.
+        return _fmt_decimal(v) if v is not None else None
 
 
 class InstrumentResponse(BaseModel):
