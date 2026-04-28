@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from ml_clients.dataclasses import EntityMention, NERInput, NEROutput
 from ml_clients.errors import FatalError, RetryableError
+
+if TYPE_CHECKING:
+    from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
 
@@ -47,11 +51,18 @@ class GLiNERLocalAdapter:
     blocking the event loop.
     """
 
-    def __init__(self, model_path: str, semaphore: asyncio.Semaphore) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        semaphore: asyncio.Semaphore,
+        *,
+        metrics: MLMetrics | None = None,
+    ) -> None:
         self._model_path = model_path
         self._semaphore = semaphore
         self._model: Any = None
         self._model_lock = asyncio.Lock()
+        self._metrics = metrics
 
     async def _get_model(self) -> Any:
         if self._model is None:
@@ -65,8 +76,26 @@ class GLiNERLocalAdapter:
         return self._model
 
     async def extract_entities(self, inp: NERInput) -> NEROutput:
-        results = await self.batch_extract_entities([inp])
-        return results[0]
+        start = time.perf_counter()
+        status = "success"
+        try:
+            results = await self.batch_extract_entities([inp])
+            return results[0]
+        except (RetryableError, FatalError):
+            status = "error"
+            raise
+        finally:
+            if self._metrics:
+                latency = time.perf_counter() - start
+                self._metrics.ml_api_requests_total.labels(
+                    model_id=self._model_path, operation="ner", status=status
+                ).inc()
+                self._metrics.ml_api_latency_seconds.labels(model_id=self._model_path, operation="ner").observe(latency)
+                # Word-count approximation for token counts (GLiNER local — zero cost)
+                token_count = len(inp.text.split())
+                self._metrics.ml_api_tokens_in_total.labels(model_id=self._model_path).inc(token_count)
+                # GLiNER is local — no cost per token
+                self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model_path).inc(0.0)
 
     async def batch_extract_entities(self, inputs: list[NERInput]) -> list[NEROutput]:
         """Run GLiNER on a batch of texts in a single model forward pass.

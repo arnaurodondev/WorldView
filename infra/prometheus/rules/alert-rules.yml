@@ -46,8 +46,9 @@ groups:
       # ── Latency ───────────────────────────────────────────────────────────
       # Threshold lowered from 2s → 500ms. Financial data APIs must respond
       # in sub-second time; 2s is grotesquely permissive. (audit finding)
+      # rag-chat excluded: DeepSeek R1 32B LLM calls legitimately take 5-30s.
       - alert: HighP95Latency
-        expr: job:http_duration_p95:rate5m > 0.5
+        expr: job:http_duration_p95:rate5m{job!="rag-chat"} > 0.5
         for: 5m
         labels:
           severity: warning
@@ -58,11 +59,25 @@ groups:
             {{ $value | humanizeDuration }} (threshold: 500ms) for >5 minutes.
           runbook_url: "https://github.com/worldview/runbooks/blob/main/HighLatency.md"
 
+      # rag-chat has a separate threshold: LLM calls are expected to take up to 30s.
+      # Alert only if p95 exceeds 30s (indicating LLM timeout / provider down).
+      - alert: RagChatHighP95Latency
+        expr: job:http_duration_p95:rate5m{job="rag-chat"} > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG-chat p95 latency >30s — LLM call may be timing out"
+          description: >
+            rag-chat p95 latency is {{ $value | humanizeDuration }} (threshold: 30s).
+            Likely cause: DeepSeek/DeepInfra provider unavailable or overloaded.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/RagChatHighLatency.md"
+
       # ── Outbox backlog ─────────────────────────────────────────────────────
-      # Expanded scope from s[45] to all services (s[1-9]).
-      # S1–S3 and S6–S9 all use the shared outbox pattern. (audit finding)
+      # Expanded scope from s[45] to all services (s[0-9]+).
+      # s[1-9] pattern was a bug — it excluded S10. (F-017, audit finding)
       - alert: OutboxBacklog
-        expr: '{__name__=~"s[1-9]_outbox_pending_total"} > 100'
+        expr: '{__name__=~"s[0-9]+_outbox_pending_total"} > 100'
         for: 5m
         labels:
           severity: warning
@@ -74,9 +89,9 @@ groups:
           runbook_url: "https://github.com/worldview/runbooks/blob/main/OutboxBacklog.md"
 
       # ── Dead letter queue ──────────────────────────────────────────────────
-      # Expanded scope from s[45] to all services. (audit finding)
+      # Expanded scope to s[0-9]+ — s[1-9] excluded S10. (F-017, audit finding)
       - alert: DeadLetterQueueNonEmpty
-        expr: '{__name__=~"s[1-9]_dlq_total"} > 0'
+        expr: '{__name__=~"s[0-9]+_dlq_total"} > 0'
         for: 2m
         labels:
           severity: critical
@@ -146,3 +161,79 @@ groups:
             Content Ingestion fetch failure rate is {{ $value }}/sec
             (threshold: 0.5/sec) sustained for >5 minutes.
           runbook_url: "https://github.com/worldview/runbooks/blob/main/ContentFetchErrors.md"
+
+      # ── S7 Knowledge Graph — worker crashes ──────────────────────────────
+      # s7_worker_crash_total metric existed but had no alert wired. (F-021)
+      - alert: KGWorkerCrash
+        expr: rate(s7_worker_crash_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Knowledge graph worker {{ $labels.worker }} is crashing"
+          description: >
+            Worker {{ $labels.worker }} has had {{ $value | humanize }} crashes/sec
+            for >1 minute. Knowledge graph enrichment is degraded.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KGWorkerCrash.md"
+
+      # ── S10 Alert service — fan-out stopped ──────────────────────────────
+      - alert: AlertFanoutStopped
+        expr: >
+          s10_alerts_pending_total > 0
+          AND rate(s10_websocket_pushes_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "S10 alert fan-out stopped despite pending alerts"
+          description: >
+            There are {{ $value }} pending alerts but WebSocket push rate is zero
+            for >5 minutes. Users are not receiving real-time alerts.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/AlertFanoutStopped.md"
+
+      # ── Kafka consumer silence (no lag exporter) ──────────────────────────
+      # Fires when a consumer topic's rate drops to zero while the service is up.
+      # Indicates a stalled consumer that has not crashed (no process exit).
+      - alert: KafkaConsumerSilent
+        expr: >
+          job_topic:kafka_consumed:rate5m == 0
+          and on(job) up == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} consumer {{ $labels.topic }} has consumed 0 messages for 10m"
+          description: >
+            Consumer in {{ $labels.job }} for topic {{ $labels.topic }} has
+            consumed zero messages for >10 minutes but the service is up.
+            The consumer may be stalled or the topic may have no producers.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KafkaConsumerSilent.md"
+
+      # ── Auth failure rate ─────────────────────────────────────────────────
+      - alert: HighAuthFailureRate
+        expr: >
+          sum(rate(api_gateway_requests_total{status=~"401|403"}[5m]))
+          / sum(rate(api_gateway_requests_total[5m])) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API Gateway auth failure rate >5%"
+          description: >
+            {{ $value | humanizePercentage }} of API Gateway requests are
+            returning 401/403 for >3 minutes. May indicate broken client
+            configuration or active credential attack.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/HighAuthFailureRate.md"
+
+      # ── Synthetic probes — end-to-end user journey health ────────────────
+      # Fires when a synthetic probe pushed by synthetic_monitor.py records
+      # success=0 for >5 minutes. probe_name label maps to the Python function
+      # name (e.g. probe_api_gateway_health, probe_market_data_quote).
+      - alert: SyntheticProbeDown
+        expr: synthetic_probe_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synthetic probe {{ $labels.probe_name }} failing for 5m"
+          runbook: "Check synthetic monitor logs: docker compose logs synthetic-monitor"

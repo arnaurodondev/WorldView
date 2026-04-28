@@ -23,8 +23,12 @@ from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfW
 from content_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
-from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability.metrics import (  # type: ignore[import-untyped]
+    add_prometheus_middleware,
+    create_metrics,
+    create_ml_metrics,
+)
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
 from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -193,6 +197,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     app.state.settings = settings
 
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
@@ -201,9 +209,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         skip_verification=settings.internal_jwt_skip_verification,
     )
     metrics = create_metrics(service_name=settings.service_name)
+    ml_metrics = create_ml_metrics(settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics
+    app.state.ml_metrics = ml_metrics
 
     # Domain exception handlers
     _register_exception_handlers(app)

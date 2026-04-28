@@ -19,8 +19,12 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
-from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability.metrics import (  # type: ignore[import-untyped]
+    add_prometheus_middleware,
+    create_metrics,
+    create_ml_metrics,
+)
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
@@ -366,6 +370,10 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     )
     app.state.settings = resolved
 
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
     # Middleware (must be registered before startup)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
@@ -374,9 +382,11 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
         skip_verification=resolved.internal_jwt_skip_verification,
     )
     metrics: Any = create_metrics(service_name=resolved.service_name)
+    ml_metrics = create_ml_metrics(resolved.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics
+    app.state.ml_metrics = ml_metrics
 
     # Routers
     app.include_router(health_router.router)

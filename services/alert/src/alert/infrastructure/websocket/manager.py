@@ -20,6 +20,8 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
+    from observability.metrics import ServiceMetrics  # type: ignore[import-untyped]
+
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
@@ -28,10 +30,19 @@ class ConnectionManager:
 
     Thread-safety: designed for single-threaded asyncio; do NOT call from
     multiple threads without external locking.
+
+    Args:
+        metrics: Optional :class:`~observability.metrics.ServiceMetrics` instance.
+            When provided (and created with ``include_websocket=True``),
+            ``connect()`` / ``disconnect()`` update the
+            ``websocket_active_connections`` Gauge so Prometheus tracks
+            real-time connection counts.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, metrics: ServiceMetrics | None = None) -> None:
         self._connections: dict[UUID, WebSocket] = {}
+        # Gauge is None when metrics=None or when include_websocket=False.
+        self._ws_gauge = getattr(metrics, "websocket_active_connections", None)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -43,12 +54,18 @@ class ConnectionManager:
         """
         await websocket.accept()
         self._connections[user_id] = websocket
+        # Increment the Prometheus gauge if metrics wiring is active.
+        if self._ws_gauge is not None:
+            self._ws_gauge.inc()
         logger.info("websocket_connected", user_id=str(user_id))  # type: ignore[no-any-return]
 
     def disconnect(self, user_id: UUID) -> None:
         """Deregister the connection for *user_id*.  No-op if not connected."""
         removed = self._connections.pop(user_id, None)
         if removed is not None:
+            # Decrement the Prometheus gauge if metrics wiring is active.
+            if self._ws_gauge is not None:
+                self._ws_gauge.dec()
             logger.info("websocket_disconnected", user_id=str(user_id))  # type: ignore[no-any-return]
 
     # ── Queries ───────────────────────────────────────────────────────────────

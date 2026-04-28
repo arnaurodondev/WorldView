@@ -49,8 +49,12 @@ from knowledge_graph.infrastructure.intelligence_db.session import (
     _build_factories as _build_intel_factories,
 )
 from knowledge_graph.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
-from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability.metrics import (  # type: ignore[import-untyped]
+    add_prometheus_middleware,
+    create_metrics,
+    create_ml_metrics,
+)
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -144,6 +148,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
     # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave D)
     # We store the instance on app.state so lifespan can call startup() on it.
     jwks_url = f"{settings.api_gateway_url}/internal/jwks"
@@ -169,9 +177,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Middleware (must be registered before app starts)
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
+    ml_metrics = create_ml_metrics(settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics
+    app.state.ml_metrics = ml_metrics
 
     _register_exception_handlers(app)
 

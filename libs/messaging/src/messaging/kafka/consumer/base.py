@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import random
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Generic, TypeVar
 
@@ -439,6 +440,37 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             failure: The :class:`FailureInfo` to re-process.
         """
 
+    def _record_consumer_lag(self) -> None:
+        """Poll Kafka watermark offsets and update the consumer lag gauge.
+
+        Called after each successfully committed message.  Errors are swallowed
+        so that a transient Kafka metadata timeout never breaks the consumer loop.
+        Non-critical: a missing data point is far better than a dead consumer.
+        """
+        if self._metrics is None or self._consumer is None:
+            # Metrics or consumer not initialised yet — nothing to record.
+            return
+        try:
+            assignment = self._consumer.assignment()
+            for tp in assignment:
+                # get_watermark_offsets returns (low, high) — the high watermark
+                # is the offset of the next message to be produced, so the lag
+                # is high - current_position.
+                low, high = self._consumer.get_watermark_offsets(tp, timeout=1.0)
+                position_list = self._consumer.position([tp])
+                if position_list:
+                    position = position_list[0].offset
+                    if position >= 0:  # -1001 == OFFSET_BEGINNING (no committed offset yet)
+                        lag = max(0, high - position)
+                        self._metrics.kafka_consumer_lag.labels(
+                            topic=tp.topic,
+                            partition=str(tp.partition),
+                            consumer_group=self._config.group_id,
+                        ).set(lag)
+        except Exception:  # noqa: S110
+            # Non-critical — don't break the consumer loop on lag polling failure.
+            pass
+
     async def _process_retry_batch(self) -> None:
         """Fetch and retry all pending failures once per poll cycle."""
         pending = await self.get_pending_retries()
@@ -462,6 +494,23 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         self._init_kafka()
         retry_task = asyncio.create_task(self._retry_loop())
+
+        # BP-268 fix: asyncio.create_task without a done_callback means a crash
+        # in the retry loop is silently swallowed — the task becomes a failed
+        # Future that nobody awaits.  The callback forces sys.exit(1) so the
+        # container orchestrator (Docker/k3s) restarts the service immediately
+        # instead of letting it limp along with a dead retry loop.
+        def _on_retry_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            if task.cancelled():
+                # Normal shutdown path — the retry loop is cancelled in `finally`.
+                return
+            exc = task.exception()
+            if exc is not None:
+                # Log and force a container restart so the crash is visible.
+                logger.critical("retry_task_crashed", exc_info=exc)
+                sys.exit(1)
+
+        retry_task.add_done_callback(_on_retry_task_done)
 
         try:
             loop = asyncio.get_event_loop()
@@ -487,6 +536,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     # Commit after successful processing (manual offset management)
                     if not self._config.enable_auto_commit:
                         await loop.run_in_executor(None, self._consumer.commit, msg)
+                    # Record consumer lag after each successful commit so Prometheus
+                    # reflects the latest position.  Failures are swallowed inside
+                    # _record_consumer_lag to keep this non-critical.
+                    self._record_consumer_lag()
                 except ConsumerError as exc:
                     await self._handle_failure(msg, exc)
                 except Exception as exc:

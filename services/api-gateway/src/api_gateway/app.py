@@ -28,7 +28,7 @@ from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
 from api_gateway.routes.risk_metrics import router as risk_metrics_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
@@ -176,6 +176,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
 
     # Middleware registration order (Starlette: last added = outermost for requests)
     # Request order: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT

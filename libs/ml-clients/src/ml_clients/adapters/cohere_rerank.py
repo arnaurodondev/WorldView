@@ -14,12 +14,16 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
 
 from ml_clients.errors import FatalError, RetryableError
+
+if TYPE_CHECKING:
+    from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
 
@@ -42,10 +46,12 @@ class CohereRerankAdapter:
         model: str = _DEFAULT_MODEL,
         *,
         timeout: float = 15.0,
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._metrics = metrics
 
     async def rerank(
         self,
@@ -65,48 +71,66 @@ class CohereRerankAdapter:
         if not documents:
             return []
 
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "query": query,
-            "documents": documents,
-        }
-        if top_n is not None:
-            payload["top_n"] = top_n
-
+        start = time.perf_counter()
+        status = "success"
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    _RERANK_URL,
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "query": query,
+                "documents": documents,
+            }
+            if top_n is not None:
+                payload["top_n"] = top_n
+
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    resp = await client.post(
+                        _RERANK_URL,
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+            except httpx.TimeoutException as exc:
+                raise RetryableError(f"Cohere Rerank timeout: {exc}") from exc
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code >= 500:
+                    raise RetryableError(f"Cohere Rerank 5xx: {exc}") from exc
+                raise FatalError(f"Cohere Rerank 4xx: {exc}") from exc
+            except (httpx.RequestError, Exception) as exc:
+                raise RetryableError(f"Cohere Rerank network error: {exc}") from exc
+
+            results: list[dict[str, Any]] = []
+            for item in data.get("results", []):
+                results.append(
+                    {
+                        "index": int(item["index"]),
+                        "relevance_score": float(item.get("relevance_score", 0.0)),
+                    }
                 )
-                resp.raise_for_status()
-                data = resp.json()
-
-        except httpx.TimeoutException as exc:
-            raise RetryableError(f"Cohere Rerank timeout: {exc}") from exc
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code >= 500:
-                raise RetryableError(f"Cohere Rerank 5xx: {exc}") from exc
-            raise FatalError(f"Cohere Rerank 4xx: {exc}") from exc
-        except (httpx.RequestError, Exception) as exc:
-            raise RetryableError(f"Cohere Rerank network error: {exc}") from exc
-
-        results: list[dict[str, Any]] = []
-        for item in data.get("results", []):
-            results.append(
-                {
-                    "index": int(item["index"]),
-                    "relevance_score": float(item.get("relevance_score", 0.0)),
-                }
+            logger.debug(
+                "cohere_rerank_done",
+                model=self._model,
+                input_count=len(documents),
+                output_count=len(results),
             )
-        logger.debug(
-            "cohere_rerank_done",
-            model=self._model,
-            input_count=len(documents),
-            output_count=len(results),
-        )
-        return results
+            return results
+        except (RetryableError, FatalError):
+            status = "error"
+            raise
+        finally:
+            if self._metrics:
+                latency = time.perf_counter() - start
+                self._metrics.ml_api_requests_total.labels(
+                    model_id=self._model, operation="rerank", status=status
+                ).inc()
+                self._metrics.ml_api_latency_seconds.labels(model_id=self._model, operation="rerank").observe(latency)
+                # Word-count approximation for token counts (query + all documents)
+                token_count = len(query.split()) + sum(len(d.split()) for d in documents)
+                self._metrics.ml_api_tokens_in_total.labels(model_id=self._model).inc(token_count)
+                # Cohere rerank-english-v3.0: $0.002 per 1K searches = $0.000002 per call
+                self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model).inc(0.000002)

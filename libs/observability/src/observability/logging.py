@@ -4,8 +4,35 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any
 
 import structlog
+
+
+def _inject_otel_trace_context(
+    logger: Any,
+    method: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Inject OpenTelemetry trace_id and span_id into every log event.
+
+    This is the link between Loki logs and Tempo traces. Without it, the
+    Grafana "Logs from trace" drilldown returns zero results despite the
+    derivedFields config. Called as a structlog processor on every log event.
+
+    The import is deferred so services without OTel configured do not fail.
+    """
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            event_dict["trace_id"] = format(ctx.trace_id, "032x")
+            event_dict["span_id"] = format(ctx.span_id, "016x")
+    except Exception:  # noqa: S110
+        pass
+    return event_dict
 
 
 def configure_logging(
@@ -24,6 +51,7 @@ def configure_logging(
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        _inject_otel_trace_context,  # injects trace_id + span_id from active OTel span
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),

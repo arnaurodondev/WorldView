@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
@@ -337,6 +337,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(
