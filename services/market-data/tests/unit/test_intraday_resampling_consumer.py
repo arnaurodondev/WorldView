@@ -142,6 +142,34 @@ def test_worker_event_id_extracted() -> None:
     assert consumer.extract_event_id(msg) == "evt-resampling-001"
 
 
+@pytest.mark.asyncio
+async def test_worker_dedup_key_namespaced() -> None:
+    """create_if_not_exists is called with '<event_id>:intraday_resampling' key.
+
+    This prevents the ohlcv_consumer's bare event_id entries from causing false
+    duplicate detection in the intraday resampling consumer (both consumers
+    subscribe to market.dataset.fetched and share event IDs).
+    """
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(1))
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    msg = _make_message()
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer.ResampledOHLCVUseCase"
+    ) as mock_use_case_cls:
+        mock_instance = AsyncMock()
+        mock_instance.execute = AsyncMock(return_value=[])
+        mock_use_case_cls.return_value = mock_instance
+        await consumer.process_message(key=None, value=msg, headers={})
+
+    expected_key = "evt-resampling-001:intraday_resampling"
+    mock_uow.ingestion_events.create_if_not_exists.assert_called_once_with(expected_key, "intraday_resampling", None)
+
+
 def test_worker_consumer_group_id() -> None:
     """Consumer group is market-data-intraday-resampling."""
     mock_uow = AsyncMock()
@@ -151,3 +179,52 @@ def test_worker_consumer_group_id() -> None:
         object_storage=mock_storage,
     )
     assert consumer._config.group_id == "market-data-intraday-resampling"
+
+
+@pytest.mark.asyncio
+async def test_worker_source_timeframe_5m_skips_1m_event() -> None:
+    """Consumer configured with source_timeframe='5m' skips timeframe='1m' events."""
+    mock_uow = AsyncMock()
+    mock_storage = AsyncMock()
+    consumer = IntradayResamplingConsumer(
+        uow_factory=lambda: mock_uow,
+        object_storage=mock_storage,
+        source_timeframe="5m",
+    )
+    consumer._current_uow = mock_uow
+
+    msg = _make_message(timeframe="1m")
+    await consumer.process_message(key=None, value=msg, headers={})
+
+    mock_storage.get_bytes.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_source_timeframe_5m_processes_5m_event() -> None:
+    """Consumer configured with source_timeframe='5m' processes timeframe='5m' events."""
+    mock_uow = AsyncMock()
+    mock_uow.ingestion_events.create_if_not_exists = AsyncMock(return_value=True)
+    mock_uow.ohlcv.find_by_instrument_timeframe_datetime_range = AsyncMock(return_value=[])
+    mock_uow.ohlcv.bulk_upsert_derived = AsyncMock()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(1))
+
+    consumer = IntradayResamplingConsumer(
+        uow_factory=lambda: mock_uow,
+        object_storage=mock_storage,
+        source_timeframe="5m",
+    )
+    consumer._current_uow = mock_uow
+
+    msg = _make_message(timeframe="5m")
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer.ResampledOHLCVUseCase"
+    ) as mock_use_case_cls:
+        mock_instance = AsyncMock()
+        mock_instance.execute = AsyncMock(return_value=[])
+        mock_use_case_cls.return_value = mock_instance
+
+        await consumer.process_message(key=None, value=msg, headers={})
+
+        assert mock_instance.execute.call_count == 1

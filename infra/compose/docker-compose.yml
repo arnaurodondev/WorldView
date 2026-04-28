@@ -840,6 +840,29 @@ services:
       retries: 3
       start_period: 30s
 
+  market-data-intraday-resampling-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Content Store (S5) — migrate + API + dispatcher + consumer ──────────────
   content-store-migrate:
     build:

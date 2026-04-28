@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # triggering replay rejection. Keep True in production with proper JWT rotation.
     internal_jwt_jti_check_enabled: bool = False
 
+    # Intraday resampling source timeframe (BP-254 — must be config-driven, not hardcoded).
+    # Valid values: "1m", "5m", "15m", "1h". Changing this migrates the entire
+    # ResampledOHLCVUseCase + IntradayResamplingConsumer pipeline to the new finest
+    # granularity without any code change.
+    intraday_source_tf: str = "1m"
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"
     log_level: str = "INFO"

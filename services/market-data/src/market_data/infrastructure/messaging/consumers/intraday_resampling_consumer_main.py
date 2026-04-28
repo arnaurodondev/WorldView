@@ -1,7 +1,8 @@
 """Entry point for the IntradayResamplingWorker process.
 
-Resamples 1-minute OHLCV bars from object storage into coarser
-intraday timeframes (5m, 15m, 30m, 1h, 4h).
+Resamples finest-granularity OHLCV bars (default: 1m, driven by
+MARKET_DATA_INTRADAY_SOURCE_TF) from object storage into all coarser
+timeframes (5m, 15m, 30m, 1h, 4h, 1d).
 Intended to run as a separate container/process.
 
 Usage (standalone)::
@@ -78,6 +79,7 @@ async def main() -> None:
             group_id="market-data-intraday-resampling",
             topics=["market.dataset.fetched"],
         ),
+        source_timeframe=settings.intraday_source_tf,
     )
 
     try:
