@@ -135,6 +135,76 @@ def _split_summary_and_details(content: str) -> tuple[str | None, str]:
     return summary_block, details_block or content
 
 
+def _parse_sections_from_markdown(markdown: str) -> list[dict[str, Any]]:
+    """Parse a markdown narrative into structured ``[{title, bullets[]}]`` sections.
+
+    Recognised section headings: ``## Heading``, ``### Heading``, or bold-only lines
+    (``**Heading**``). Bullets: lines starting with ``- ``, ``* `` or ``• ``.
+
+    PLAN-0049 T-A-1-04: when the LLM honours the v2.2 prompt and emits a clean
+    ``## DETAILS`` block split into ``### Drivers`` / ``### Implications`` /
+    ``### Risks``, this parser produces a structured ``BriefSection[]`` payload
+    that the frontend renders as polished cards. When parsing fails (no
+    headings, no bullets, malformed markdown) we return ``[]`` and the
+    frontend falls back to ``<MarkdownContent>`` over the raw narrative —
+    no UI breakage either way.
+
+    Hard caps: ≤8 bullets per section, ≤120 chars per section title — matches
+    the ``BriefSection`` Pydantic constraints so callers can hand the result
+    straight to ``BriefSection(**...)`` without further validation.
+    """
+    if not markdown or not markdown.strip():
+        return []
+
+    sections: list[dict[str, Any]] = []
+    current_title: str | None = None
+    current_bullets: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_title, current_bullets
+        if current_title and current_bullets:
+            # Cap bullets to 8 (matches Pydantic `max_length=8`); cap title to 120.
+            sections.append(
+                {
+                    "title": current_title[:120],
+                    "bullets": current_bullets[:8],
+                }
+            )
+        current_title = None
+        current_bullets = []
+
+    heading_re = re.compile(r"^\s{0,3}(#{2,3})\s+(.+?)\s*$")
+    bold_only_re = re.compile(r"^\s*\*\*(.+?)\*\*\s*:?\s*$")
+    bullet_re = re.compile(r"^\s*(?:[-*•])\s+(.+)$")
+
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        m_h = heading_re.match(line)
+        m_b = bold_only_re.match(line) if not m_h else None
+        if m_h:
+            flush()
+            current_title = m_h.group(2).strip()
+            continue
+        if m_b:
+            flush()
+            current_title = m_b.group(1).strip()
+            continue
+        m_bullet = bullet_re.match(line)
+        if m_bullet and current_title:
+            bullet_text = m_bullet.group(1).strip()
+            if bullet_text:
+                current_bullets.append(bullet_text)
+    flush()
+
+    # Discard the result if it's a single section with one bullet — that means
+    # we mis-parsed prose as a section. Frontend renders narrative instead.
+    if len(sections) == 1 and len(sections[0]["bullets"]) <= 1:
+        return []
+    return sections
+
+
 def _strip_block_header(block: str, expected: str) -> str:
     """Remove a leading ``## SUMMARY`` / ``## DETAILS`` header from ``block``.
 
@@ -480,6 +550,11 @@ class GenerateBriefingUseCase:
             has_summary=summary is not None,
         )
 
+        # PLAN-0049 T-A-1-04: parse narrative into structured sections so the
+        # frontend can render polished cards instead of raw markdown. Returns []
+        # when parsing fails — frontend falls back to MarkdownContent on narrative.
+        structured_sections = _parse_sections_from_markdown(narrative)
+
         return {
             # ``content`` keeps the field name expected by the route layer (which
             # maps result["content"] → response.narrative). The narrative half of
@@ -489,6 +564,11 @@ class GenerateBriefingUseCase:
             # ``summary`` is the new field — None when the LLM didn't emit the
             # v2.2 two-tier format (legacy fallback path).
             "summary": summary,
+            # PLAN-0049 additive structured fields. ``headline`` mirrors summary
+            # (the 1-2 sentence top-of-card line); ``sections`` is the parsed
+            # narrative — empty list on parse failure (graceful fallback).
+            "headline": summary,
+            "sections": structured_sections,
             "risk_summary": risk_summary,
             "entity_mentions": entity_mentions,
             "citations": citations,
@@ -561,12 +641,19 @@ class GenerateBriefingUseCase:
             chars=len(content),
         )
 
+        # PLAN-0049 T-A-1-04: parse instrument brief into structured sections.
+        # Empty list when parse fails — frontend falls back to MarkdownContent.
+        instrument_sections = _parse_sections_from_markdown(content)
+
         return {
             "content": content,
             "risk_summary": None,  # instrument brief has no portfolio — risk_summary is None
             "entity_mentions": entity_mentions,
             "citations": citations,
             "generated_at": generated_at,
+            # Instrument briefs do not yet emit a top-line summary; leave None.
+            "headline": None,
+            "sections": instrument_sections,
         }
 
 

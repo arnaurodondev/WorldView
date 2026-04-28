@@ -26,15 +26,15 @@ from uuid import UUID
 
 import structlog
 
-from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
-from rag_chat.domain.entities.context import ConversationContext
-from rag_chat.domain.enums import ItemType, QueryIntent
-from rag_chat.infrastructure.metrics.prometheus import (
+from rag_chat.application.metrics.prometheus import (
     rag_chunk_cache_hits,
     rag_chunk_cache_misses,
     rag_context_token_estimate,
     rag_turn_summary_duration,
 )
+from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
+from rag_chat.domain.entities.context import ConversationContext
+from rag_chat.domain.enums import ItemType, QueryIntent
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.chunk_cache import ChunkCachePort

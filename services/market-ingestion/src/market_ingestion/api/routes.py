@@ -39,12 +39,12 @@ from market_ingestion.api.schemas import (
     TriggerRequest,
     TriggerResponse,
 )
+from market_ingestion.application.metrics.eodhd import eodhd_daily_budget_headroom, set_monthly_credits
 from market_ingestion.application.use_cases.backfill import BackfillUseCase
 from market_ingestion.application.use_cases.daily_budget_tracker import DailyBudgetTracker
 from market_ingestion.application.use_cases.snapshot_quota import SnapshotEodhdQuotaUseCase
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
 from market_ingestion.domain.enums import DatasetType, Provider
-from market_ingestion.infrastructure.metrics.eodhd import eodhd_daily_budget_headroom, set_monthly_credits
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:

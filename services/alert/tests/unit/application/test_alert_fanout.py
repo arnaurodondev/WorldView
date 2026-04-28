@@ -698,7 +698,14 @@ class TestAlertFanoutSeverity:
         ]
         for ct, pol, expected in cases:
             event = {"claim_type": ct.upper(), "polarity": pol.upper()}  # case-insensitive
-            assert _derive_signal_label(event, AlertSeverity.LOW) == expected, f"failed for ({ct}, {pol})"
+            label, is_fallback = _derive_signal_label(event, AlertSeverity.LOW)
+            assert label == expected, f"failed for ({ct}, {pol})"
+            assert is_fallback is False, f"unexpected fallback for ({ct}, {pol})"
+
+        # Fallback case: missing claim_type → bare-severity string + is_fallback=True
+        fb_label, fb_flag = _derive_signal_label({"polarity": "positive"}, AlertSeverity.HIGH)
+        assert fb_label == "HIGH signal"
+        assert fb_flag is True
 
     @pytest.mark.unit
     def test_alert_fanout_avro_schema_loads_from_file(self) -> None:

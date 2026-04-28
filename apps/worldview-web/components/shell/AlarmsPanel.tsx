@@ -26,6 +26,7 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import type { Alert } from "@/types/api";
+import { formatAlertTitle } from "@/lib/alerts/format";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -126,40 +127,36 @@ export function AlarmsPanel() {
             No pending alerts
           </p>
         ) : (
-          displayAlerts.map((alert) => (
-            // WHY h-[22px]: §0.2 data table row height standard
-            // WHY cursor-pointer → /alerts: sidebar rows are drill-down triggers,
-            // not the primary alert surface — full detail is on /alerts
-            <div
-              key={alert.alert_id}
-              className="flex h-[22px] items-center gap-1.5 cursor-pointer px-2 hover:bg-muted/40"
-              onClick={() => router.push("/alerts")}
-              aria-label={alert.title}
-            >
-              {/* Severity dot — 6px per PRD spec */}
-              <span
-                className={`h-[6px] w-[6px] shrink-0 rounded-full ${severityDotClass(alert.severity)}`}
-                aria-label={`${alert.severity} severity`}
-              />
-
-              {/* Alert title — truncated to 1 line (sidebar is narrow).
-                  WHY fallback chain: S10 PendingAlertResponse populates payload.message
-                  rather than the legacy title/body fields (see types/api.ts Alert comment).
-                  We try title first (may be populated), then payload.message, then
-                  alert_type as a last resort so the row is never blank. */}
-              <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
-                {alert.title ||
-                 String((alert.payload as { message?: string } | undefined)?.message ?? "") ||
-                 alert.alert_type ||
-                 "Alert"}
-              </span>
-
-              {/* Relative time — compact, monospace for alignment */}
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                {timeAgo(alert.created_at)}
-              </span>
-            </div>
-          ))
+          displayAlerts.map((alert) => {
+            // PLAN-0049 T-D-4-04: shared formatter from lib/alerts/format —
+            // RecentAlerts uses the same function so the two surfaces never drift.
+            // Guarantees no bare "<SEVERITY> signal" string ever reaches the UI.
+            const displayTitle = formatAlertTitle(alert);
+            // PLAN-0049 T-D-4-04: deep-link to the specific alert (parity with
+            // RecentAlerts on dashboard) so clicking opens AlertDetailSheet.
+            const alertHref = `/alerts?selected=${encodeURIComponent(alert.alert_id)}`;
+            return (
+              <div
+                key={alert.alert_id}
+                className="flex h-[22px] items-center gap-1.5 cursor-pointer px-2 hover:bg-muted/40"
+                onClick={() => router.push(alertHref)}
+                aria-label={displayTitle}
+              >
+                {/* Severity dot — 6px per PRD spec */}
+                <span
+                  className={`h-[6px] w-[6px] shrink-0 rounded-full ${severityDotClass(alert.severity)}`}
+                  aria-label={`${alert.severity} severity`}
+                />
+                <span className="flex-1 min-w-0 truncate text-[11px] text-foreground">
+                  {displayTitle}
+                </span>
+                {/* Relative time — compact, monospace for alignment */}
+                <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {timeAgo(alert.created_at)}
+                </span>
+              </div>
+            );
+          })
         )}
 
         {/* ── Overflow link ──────────────────────────────────────────────── */}

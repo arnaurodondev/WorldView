@@ -102,16 +102,16 @@ _SIGNAL_LABEL_TABLE: dict[tuple[str, str], str] = {
 }
 
 
-def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> str:
+def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> tuple[str, bool]:
     """Compute a human-readable signal label from the event payload.
 
-    Reads ``claim_type`` + ``polarity`` (case-insensitive) from the signal
-    event. Falls back to ``"<SEVERITY> signal"`` (e.g. ``"HIGH signal"``)
-    when either field is missing or the combination is unknown.
+    Returns ``(label, is_fallback)``. ``is_fallback`` is True when the
+    (claim_type, polarity) lookup missed and we degraded to ``"<SEVERITY> signal"``.
 
-    WHY case-insensitive: upstream NLP producers may emit ``"FORWARD_GUIDANCE"``
-    or ``"forward_guidance"`` depending on enum serialisation. Normalising to
-    lowercase here is the cheapest correctness fix.
+    Callers use the flag to (a) compose a friendlier alert title from
+    entity_name / ticker rather than emitting ``"LOW signal"``-style labels
+    in the UI, and (b) emit a structured warning so we can quantify how
+    often upstream events lack the fields we need.
     """
     claim_type_raw = event.get("claim_type")
     polarity_raw = event.get("polarity")
@@ -120,9 +120,44 @@ def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> str:
     polarity = str(polarity_raw).lower() if polarity_raw else ""
     label = _SIGNAL_LABEL_TABLE.get((claim_type, polarity))
     if label:
-        return label
+        return label, False
     # Fallback: severity.upper() always yields LOW/MEDIUM/HIGH/CRITICAL.
-    return f"{str(severity).upper()} signal"
+    return f"{str(severity).upper()} signal", True
+
+
+def _compose_alert_title(
+    *,
+    signal_label: str,
+    entity_name: str | None,
+    ticker: str | None,
+    alert_type: AlertType,
+    is_signal_label_fallback: bool,
+) -> str:
+    """Compose a user-friendly alert subject (PLAN-0049 T-A-1-03, F-D-006).
+
+    Priority chain:
+      1. ``"<entity_name>: <signal_label>"``    when both available + label not bare-severity
+      2. ``"<ticker>: <signal_label>"``         when ticker available + label not bare-severity
+      3. ``signal_label``                       when label is meaningful but no entity/ticker
+      4. humanised alert_type (``"Graph Change Alert"``)  on full fallback
+
+    NEVER emit a bare ``"<SEVERITY> signal"`` string — that is what surfaced
+    on the dashboard as the unhelpful "LOW signal" labels (F-D-006 / F-X-201).
+    """
+    if not is_signal_label_fallback:
+        if entity_name:
+            return f"{entity_name}: {signal_label}"
+        if ticker:
+            return f"{ticker}: {signal_label}"
+        return signal_label
+    # Fallback path — never expose the raw "LOW signal" string. Use entity / ticker
+    # context if we have it, otherwise humanise the alert_type enum value.
+    if entity_name:
+        return entity_name
+    if ticker:
+        return ticker
+    raw = str(alert_type).replace("_", " ").strip()
+    return f"{raw.title()} alert" if raw else "Alert"
 
 
 def _find_schema_path(schema_name: str) -> Path:
@@ -406,7 +441,27 @@ class AlertFanoutUseCase:
             # all topics anyway because it's a cheap deterministic computation
             # and the frontend always renders ``ticker: signal_label`` so a
             # consistent shape simplifies the UI.
-            enriched_payload["signal_label"] = _derive_signal_label(event, severity)
+            signal_label, is_fallback = _derive_signal_label(event, severity)
+            enriched_payload["signal_label"] = signal_label
+            if is_fallback:
+                # Surface upstream data-quality gaps. Frequency of this warning is the
+                # primary metric for tracking F-D-006 / F-X-201 remediation progress.
+                logger.warning(
+                    "alert_fanout.signal_label_fallback",
+                    claim_type=event.get("claim_type"),
+                    polarity=event.get("polarity"),
+                    severity=str(severity),
+                    topic=topic,
+                )
+            # Compose the persistent ``title`` so RecentAlerts / AlarmsPanel never
+            # need to fall back to bare severity in the UI (F-D-006 / F-X-201).
+            alert_title = _compose_alert_title(
+                signal_label=signal_label,
+                entity_name=entity_name,
+                ticker=ticker,
+                alert_type=alert_type,
+                is_signal_label_fallback=is_fallback,
+            )
 
             alert = Alert(
                 entity_id=entity_uuid,
@@ -417,6 +472,10 @@ class AlertFanoutUseCase:
                 payload=enriched_payload,
                 dedup_key=dedup_key,
                 created_at=now,
+                title=alert_title,
+                ticker=ticker,
+                entity_name=entity_name,
+                signal_label=signal_label,
             )
 
             # ── 8. Single transaction: alert + pending rows + outbox ─────────

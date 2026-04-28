@@ -74,11 +74,18 @@ class AlertModel(Base):
     severity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="low")
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Enrichment columns added in migration 0006_add_alert_enrichment_columns.
+    # All nullable, forward-compatible — old rows simply read NULL.
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entity_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    signal_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     __table_args__ = (
         Index("idx_alerts_entity", "entity_id", created_at.desc()),
         Index("idx_alerts_severity", "severity", created_at.desc()),
         Index("idx_alerts_tenant", "tenant_id", postgresql_where="tenant_id IS NOT NULL"),
+        Index("idx_alerts_ticker", "ticker", postgresql_where="ticker IS NOT NULL"),
     )
 
 

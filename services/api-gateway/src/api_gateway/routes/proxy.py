@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from api_gateway.clients import (
     DownstreamError,
@@ -623,6 +626,130 @@ async def get_ohlcv(instrument_id: str, request: Request) -> Any:
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Batch OHLCV (PLAN-0049 T-A-1-05) ─────────────────────────────────────────
+#
+# WHY: the dashboard renders mini-charts for ~10-15 watched instruments at once.
+# Issuing one round-trip per symbol meant ~10x sequential RTT on the cold path
+# (audit F-B-009). This endpoint fans out to S3 in parallel via asyncio.gather
+# and returns a single response with one entry per requested instrument.
+#
+# Hard caps: max 50 instruments per request (BP-026 — bound external blast
+# radius). 5-minute Cache-Control for daily bars (BP-027).
+
+
+_BATCH_OHLCV_MAX_SYMBOLS = 50
+
+
+class _BatchOHLCVRequestItem(BaseModel):
+    """One symbol+timeframe spec inside a batch OHLCV request."""
+
+    instrument_id: str = Field(..., min_length=1, max_length=64)
+    timeframe: str = Field("1d", pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1w|1M)$")
+    start: str | None = None
+    end: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=2000)
+
+
+class _BatchOHLCVRequest(BaseModel):
+    """Body for POST /v1/ohlcv/batch."""
+
+    requests: list[_BatchOHLCVRequestItem] = Field(..., min_length=1, max_length=_BATCH_OHLCV_MAX_SYMBOLS)
+
+
+async def _fetch_one_ohlcv(
+    *,
+    clients: Any,
+    headers: dict[str, str],
+    item: _BatchOHLCVRequestItem,
+) -> dict[str, Any]:
+    """Fetch one symbol's bars; return ``{instrument_id, timeframe, bars, error?}``.
+
+    Failures are caught and reported as a string in ``error`` so the batch as
+    a whole always returns 200 — partial success is preferable to all-or-nothing
+    for dashboard widgets.
+    """
+    # Module-level UTC/datetime/timedelta imports are reused — no local re-import.
+    params: dict[str, Any] = {"timeframe": item.timeframe}
+    # Mirror the singular endpoint's lookback defaults so each batch call gets a
+    # sensible window when start/end are absent.
+    if item.start:
+        params["start"] = item.start
+    else:
+        if item.timeframe in ("1m", "5m"):
+            lookback = 3
+        elif item.timeframe == "1h":
+            lookback = 30
+        else:
+            lookback = 90
+        params["start"] = (datetime.now(tz=UTC) - timedelta(days=lookback)).date().isoformat()
+    if item.end:
+        params["end"] = item.end
+    if item.limit is not None:
+        params["limit"] = item.limit
+
+    try:
+        resp = await clients.market_data.get(
+            f"/api/v1/ohlcv/{item.instrument_id}",
+            params=params,
+            headers=headers,
+        )
+        if resp.status_code != 200:
+            return {
+                "instrument_id": item.instrument_id,
+                "timeframe": item.timeframe,
+                "bars": [],
+                "error": f"market-data returned {resp.status_code}",
+            }
+        body = resp.json()
+        # market-data returns {"items": [...]} or {"bars": [...]} depending on
+        # endpoint version; pick the first non-empty list-like field.
+        bars = body.get("bars") or body.get("items") or body.get("data") or []
+        return {
+            "instrument_id": item.instrument_id,
+            "timeframe": item.timeframe,
+            "bars": bars,
+        }
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        # Narrow catch — httpx.HTTPError covers connect/read/timeout failures;
+        # ValueError/KeyError covers JSON-parse and missing-field bugs from the
+        # downstream response. Anything broader (e.g. asyncio.CancelledError)
+        # propagates so genuine bugs aren't silently masked as a string error.
+        return {
+            "instrument_id": item.instrument_id,
+            "timeframe": item.timeframe,
+            "bars": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+@router.post("/ohlcv/batch")
+async def batch_ohlcv(payload: _BatchOHLCVRequest, request: Request) -> Response:
+    """Fan-out OHLCV fetch for up to 50 symbols in parallel (PLAN-0049 T-A-1-05).
+
+    Returns ``{results: [{instrument_id, timeframe, bars[], error?}], fetched_at}``.
+    Per-symbol failures populate ``error`` instead of failing the whole batch.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # asyncio.gather parallelises the per-symbol fan-out so total latency is
+    # bounded by the slowest symbol rather than sum-of-RTTs.
+    tasks = [_fetch_one_ohlcv(clients=clients, headers=headers, item=item) for item in payload.requests]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    body = {"results": results, "fetched_at": datetime.now(tz=UTC).isoformat()}
+    # Cache-Control: 5 minutes, ``private`` so a shared CDN/edge cache CANNOT
+    # serve one user's response to another — bars are public data but the
+    # batch composition is per-user. (BP-027 / QA F-QA improvement.)
+    return Response(
+        content=json.dumps(body),
+        media_type="application/json",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 def _map_price_snapshot_to_quote(snap: dict[str, Any], instrument_id: str) -> dict[str, Any]:

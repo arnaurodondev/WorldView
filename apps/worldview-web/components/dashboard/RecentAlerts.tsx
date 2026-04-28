@@ -25,6 +25,7 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { severityColor } from "@/lib/utils";
+import { formatAlertTitle } from "@/lib/alerts/format";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AlertPayload } from "@/types/alerts";
 
@@ -62,28 +63,10 @@ export function RecentAlerts() {
     for (const a of alertsResp?.alerts ?? []) {
       if (!seen.has(a.alert_id)) {
         seen.add(a.alert_id);
-        // PLAN-0048 Wave B-2: payload now ships with `entity_name`, `ticker`,
-        // and `signal_label` injected by AlertFanoutUseCase (Wave B-1). The
-        // 5-step IIFE fallback ladder is gone — backend guarantees these fields
-        // on new alerts and the simple `${ticker || name}: ${label}` format
-        // works in every case. We keep one severity-only fallback for legacy
-        // alerts persisted before B-1.
-        const payload = (a.payload as Record<string, unknown> | undefined) ?? {};
-        const ticker = typeof payload.ticker === "string" ? payload.ticker : null;
-        const entityName = typeof payload.entity_name === "string" ? payload.entity_name : null;
-        const signalLabel = typeof payload.signal_label === "string" ? payload.signal_label : null;
-        // WHY ticker || entity_name: ticker is shorter and faster to scan; fall
-        // back to canonical name when the entity isn't an instrument (e.g. a
-        // person or a regulatory body — those have no ticker).
-        const subject = ticker ?? entityName;
-        const message =
-          subject && signalLabel
-            ? `${subject}: ${signalLabel}`
-            : signalLabel
-              ? signalLabel
-              : // Legacy fallback for pre-B-1 alerts.
-                `${(a.severity ?? "").toUpperCase()} alert`.trim();
-
+        // PLAN-0049 T-D-4-04: shared fallback ladder lives in lib/alerts/format
+        // so RecentAlerts and AlarmsPanel can't drift. The formatter NEVER
+        // returns bare "<SEVERITY> signal" strings (regression: F-D-006/F-X-201).
+        const message = formatAlertTitle(a);
         combined.push({
           id: a.alert_id,
           // WHY toUpperCase(): S10 AlertSeverity StrEnum returns lowercase ("low", "critical").

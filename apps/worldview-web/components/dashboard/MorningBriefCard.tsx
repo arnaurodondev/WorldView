@@ -335,9 +335,34 @@ export function MorningBriefCard() {
                 {collapsedSource}
               </ReactMarkdown>
             </div>
+          ) : brief.sections && brief.sections.length > 0 ? (
+            // ── Expanded view (structured): PLAN-0049 T-D-4-01 ──
+            // When the backend's section parser succeeded we render polished
+            // section cards instead of raw markdown — gives the brief a
+            // Bloomberg-grade typographic hierarchy (heading + bullets).
+            <div className="flex flex-col gap-2">
+              {brief.sections.map((sec, i) => (
+                <section key={`${sec.title}-${i}`} className="border-l-2 border-primary/40 pl-2">
+                  <h3 className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                    {sec.title}
+                  </h3>
+                  <ul className="m-0 list-none p-0">
+                    {sec.bullets.map((b, j) => (
+                      <li
+                        key={j}
+                        className="relative pl-2 text-[10px] leading-snug text-foreground/90 before:absolute before:left-0 before:top-1.5 before:h-[3px] before:w-[3px] before:rounded-full before:bg-primary/60"
+                      >
+                        {b}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
           ) : (
-            // ── Expanded view: brief.narrative (structured ## DETAILS sections) ──
-            // No clamp here — the parent overflow-auto handles long content.
+            // ── Expanded view (fallback): brief.narrative as raw markdown ──
+            // Used when sections[] is empty (parser couldn't structure the
+            // narrative) — same look as before PLAN-0049.
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{

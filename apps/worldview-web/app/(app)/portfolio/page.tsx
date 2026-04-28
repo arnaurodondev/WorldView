@@ -555,9 +555,17 @@ export default function PortfolioPage() {
   // The URL always shows /portfolio regardless of which portfolio is active.
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(null);
 
-  // WHY selectedPeriod in state: the 1D/1W/1M buttons control the period shown in the
+  // T-B-2-07: 1S/1W/1M chips removed from the Holdings page header per user
+  // request — the EquityCurveChart's internal toggle is the canonical way to
+  // change period. The KPI strip is now hard-locked to the "1D" performance
+  // window. The state variable is retained (not deleted) so the existing
+  // performance query keys + downstream consumers stay unchanged.
+  // WHY selectedPeriod still in state: the 1D performance API call still uses
   // performance strip. Default 1D matches Bloomberg convention ("today's return first").
-  const [selectedPeriod, setSelectedPeriod] = useState<"1D" | "1W" | "1M">("1D");
+  // T-B-2-07: hardcoded constant — KPI strip is permanently 1D since the
+  // header period chips were removed. Use `as const` so the value type stays
+  // narrow and downstream callers (query keys etc.) compile unchanged.
+  const selectedPeriod = "1D" as const;
 
   // WHY connectModalOpen state here: the modal trigger lives in the Transactions tab
   // brokerage section but the modal must persist through tab switches.
@@ -1270,30 +1278,13 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      {/* ── Period selector + performance strip ──────────────────────────── */}
-      {/* WHY period selector at page level (not inside KPIStrip): the period
-          drives a separate API query (S9 composition) not the KPI computation.
-          Keeping state here avoids prop-drilling and makes the query visible
-          in the same component that renders the result. */}
-      <div className="flex shrink-0 items-center justify-between border-b border-border bg-background px-3 py-1">
-        {/* Period buttons — 1D / 1W / 1M */}
-        <div className="flex items-center gap-0.5">
-          {(["1D", "1W", "1M"] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => setSelectedPeriod(p)}
-              className={[
-                "h-5 w-8 rounded-[2px] font-mono text-[10px] tabular-nums transition-colors",
-                selectedPeriod === p
-                  ? "bg-primary/15 text-primary font-semibold"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-              ].join(" ")}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-
+      {/* ── Performance strip (period chips removed T-B-2-07) ─────────────── */}
+      {/* WHY no period buttons here: per user request, the 1S/1W/1M chips on
+          the Holdings page header have been removed — they were redundant with
+          EquityCurveChart's own period toggle. The KPI/performance strip is
+          now locked to 1D (set in selectedPeriod default). EquityCurveChart's
+          1W/1M/3M/6M/1Y/All toggle is unchanged. */}
+      <div className="flex shrink-0 items-center justify-end border-b border-border bg-background px-3 py-1">
         {/* Performance result — compact inline display */}
         {performanceLoading ? (
           <span className="font-mono text-[10px] text-muted-foreground">—</span>

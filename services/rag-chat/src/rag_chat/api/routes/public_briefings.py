@@ -134,6 +134,11 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # in the collapsed card view and the full narrative when expanded.
         # ``None`` when the LLM didn't emit the two-tier divider (legacy fallback).
         "summary": result.get("summary"),
+        # PLAN-0049 T-A-1-04: pass through structured fields. Both default to
+        # None / [] when the use case couldn't parse them — frontend then falls
+        # back to MarkdownContent over narrative (graceful degradation).
+        "headline": result.get("headline"),
+        "sections": result.get("sections", []),
     }
 
     # ── Write to cache ────────────────────────────────────────────────────────
@@ -219,6 +224,9 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         "generated_at": result["generated_at"],
         "cached": False,
         "entity_id": entity_id,
+        # PLAN-0049 T-A-1-04: structured render fields for the frontend.
+        "headline": result.get("headline"),
+        "sections": result.get("sections", []),
     }
 
     # ── Write to cache ────────────────────────────────────────────────────────

@@ -292,6 +292,42 @@ describe("BrokerageCallbackPage — SnapTrade OAuth callback", () => {
     });
   });
 
+  // ── State: v4 portal callback (connection_id, no userId/sessionId) ─────────
+
+  it("allows activation when userId and sessionId are absent (v4 portal)", async () => {
+    // WHY this test: SnapTrade Connection Portal v4 dropped userId and sessionId
+    // from the callback redirect, and renamed authorizationId → connection_id.
+    // The page must still complete activation in that case — JWT ownership is
+    // sufficient anti-spoofing without those legacy fields.
+    mockActivateBrokerageConnection.mockResolvedValue(ACTIVATED_CONNECTION);
+    // Only the two v4 params: our connectionId + SnapTrade's connection_id.
+    mockSearchParams = new URLSearchParams({
+      connectionId: "conn-v4-001",
+      connection_id: "snap-v4-auth-002",
+    });
+
+    render(<BrokerageCallbackPage />, { wrapper: makeWrapper() });
+
+    // No "Missing required callback parameters" error
+    await waitFor(() => {
+      expect(
+        screen.getByText("Brokerage account connected successfully!"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/Missing required callback parameters/i),
+    ).not.toBeInTheDocument();
+
+    // Activation fired — connection_id forwarded under the legacy
+    // "authorizationId" key, userId/sessionId fall back to empty strings.
+    expect(mockActivateBrokerageConnection).toHaveBeenCalledTimes(1);
+    expect(mockActivateBrokerageConnection).toHaveBeenCalledWith("conn-v4-001", {
+      authorizationId: "snap-v4-auth-002",
+      userId: "",
+      sessionId: "",
+    });
+  });
+
   // ── Strict Mode double-fire guard ─────────────────────────────────────────
 
   it("calls the activation API exactly once (hasActivated guard prevents double-fire)", async () => {

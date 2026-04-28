@@ -38,6 +38,18 @@ COMPOSE_TEST_FILE = REPO_ROOT / "infra" / "compose" / "docker-compose.test.yml"
 # yet been added.  Remove it once the container is wired up.
 COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     # All known gaps resolved in PLAN-0011 follow-up (docker-compose additions).
+    ("knowledge-graph", "economic_events_dataset_consumer_main"): (
+        "Add KG economic-events consumer container — follow-up plan"
+    ),
+    ("knowledge-graph", "insider_transactions_dataset_consumer_main"): (
+        "Add KG insider-transactions consumer container — follow-up plan"
+    ),
+    ("knowledge-graph", "macro_indicator_dataset_consumer_main"): (
+        "Add KG macro-indicator consumer container — follow-up plan"
+    ),
+    ("market-data", "intraday_resampling_consumer_main"): (
+        "Add market-data intraday resampling consumer container — follow-up plan"
+    ),
 }
 
 

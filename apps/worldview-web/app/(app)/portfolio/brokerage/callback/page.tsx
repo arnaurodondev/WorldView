@@ -63,17 +63,19 @@ export default function BrokerageCallbackPage() {
   const queryClient = useQueryClient();
 
   // Read params from the URL.
-  // WHY fallback chain for authorizationId: SnapTrade Connection Portal v4 renamed
-  // the field from "authorizationId" to "connection_id" in the callback redirect.
-  // Check both so the page works with both v3 and v4 portal versions.
+  // WHY two source params for authId: SnapTrade Connection Portal v3 sends
+  // "authorizationId"; Portal v4 renamed it to "connection_id". We accept
+  // either (preferring v3) so the page works regardless of portal version.
   const connectionId = searchParams.get("connectionId") ?? "";
-  const authorizationId =
-    searchParams.get("authorizationId") ??
-    searchParams.get("connection_id") ??
-    "";
-  // WHY ?? "": userId and sessionId are absent in Connection Portal v4.
-  // The backend treats empty string as "not provided" and skips the userId
-  // anti-spoofing check (JWT ownership verification is sufficient without it).
+  const authorizationId = searchParams.get("authorizationId");
+  const connectionIdSnap = searchParams.get("connection_id");
+  // WHY prefer authorizationId: v3 explicit field beats v4 fallback when both
+  // are somehow present (defensive — never observed in practice).
+  const authId = authorizationId || connectionIdSnap || "";
+  // WHY ?? "": userId and sessionId are absent in Connection Portal v4 callbacks.
+  // The backend (services/portfolio/.../brokerage_connections.py:152-167) treats
+  // an empty string as "not provided" and skips the userId anti-spoofing check
+  // (JWT ownership verification on connectionId is sufficient on its own).
   const userId = searchParams.get("userId") ?? "";
   const sessionId = searchParams.get("sessionId") ?? "";
 
@@ -89,8 +91,11 @@ export default function BrokerageCallbackPage() {
     // Guard: don't activate if we already did (Strict Mode double-fire protection)
     if (hasActivated.current) return;
 
-    // Guard: if params are missing, show an error immediately without calling S9
-    if (!connectionId || !authorizationId || !userId || !sessionId) {
+    // Guard: only the two truly critical IDs are required. userId/sessionId are
+    // absent on v4 portal redirects and can be empty strings — the backend
+    // tolerates that. Showing an error when only those two are missing would
+    // block legitimate v4 callbacks.
+    if (!connectionId || !authId) {
       setState("error");
       setErrorMessage(
         "Missing required callback parameters. Please try connecting your brokerage again.",
@@ -112,7 +117,10 @@ export default function BrokerageCallbackPage() {
     // Call S9 to activate the connection server-side
     createGateway(accessToken)
       .activateBrokerageConnection(connectionId, {
-        authorizationId,
+        // WHY pass authId under the legacy "authorizationId" key: the gateway/S9
+        // contract still uses that name. v4's connection_id is normalised here
+        // so backend code stays unchanged.
+        authorizationId: authId,
         userId,
         sessionId,
       })

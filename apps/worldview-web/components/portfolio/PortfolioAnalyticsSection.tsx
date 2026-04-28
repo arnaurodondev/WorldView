@@ -29,8 +29,15 @@
 "use client";
 // WHY "use client": the children all use TanStack Query; React's strict-mode
 // boundary handling means client components compose more safely than
-// trying to mix server + client at this granularity.
+// trying to mix server + client at this granularity. Also, the wrapper
+// reads cached query state to size the equity-curve panel — that requires
+// browser-side query client access.
 
+import { useQuery } from "@tanstack/react-query";
+import { Skeleton } from "@/components/ui/skeleton";
+import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway } from "@/lib/gateway";
 import { EquityCurveChart } from "./EquityCurveChart";
 import { ExposureBreakdown } from "./ExposureBreakdown";
 import { RiskMetricsStrip } from "./RiskMetricsStrip";
@@ -47,6 +54,33 @@ export interface PortfolioAnalyticsSectionProps {
 export function PortfolioAnalyticsSection({
   portfolioId,
 }: PortfolioAnalyticsSectionProps) {
+  // WHY duplicate the EquityCurveChart query here: we need to know whether
+  // there are any snapshot points BEFORE rendering the outer panel wrapper.
+  // The query is keyed on (portfolioId, "3M") — same default the chart uses.
+  // TanStack Query deduplicates by key, so this does NOT cause a second
+  // network request: both calls share one in-flight promise + one cache entry.
+  // staleTime 60_000 — 1 minute matches the chart's setting; daily snapshots
+  // do not change intra-day, so a longer stale window would just delay the
+  // first fetch when the user navigates back.
+  const { accessToken } = useAuth();
+  const { data: equityData, isLoading: equityLoading } = useQuery({
+    queryKey: ["value-history", portfolioId, "3M"],
+    queryFn: () =>
+      createGateway(accessToken).getValueHistory(portfolioId, {
+        days: 90,
+        granularity: "1d",
+      }),
+    enabled: !!accessToken && !!portfolioId,
+    staleTime: 60_000,
+  });
+
+  // Treat all-zero series the same as empty — see EquityCurveChart F-210.
+  const equityPoints = equityData?.points ?? [];
+  const equityIsEmpty =
+    !equityLoading &&
+    (equityPoints.length === 0 ||
+      equityPoints.every((p) => Number(p.value) === 0));
+
   return (
     // WHY mt-3 + space-y-3: terminal density — 12px gap above the section
     // (separating it from the holdings table) and 12px between the chart
@@ -78,9 +112,27 @@ export function PortfolioAnalyticsSection({
             WHY p-2 (was p-3): one notch tighter padding pulls the chart
             content closer to the panel edges — same effect Bloomberg PORT
             uses, where chart content runs nearly edge-to-edge. */}
-        <div className="col-span-12 lg:col-span-8 min-h-[200px] bg-card border border-border rounded-[2px] p-2">
-          <EquityCurveChart portfolioId={portfolioId} />
-        </div>
+        {/* WHY conditional wrapper: when the user has no equity history yet,
+            an unconditional `min-h-[200px] bg-card` panel rendered as a large
+            black rectangle on the dark page background ("big black panel"
+            bug, F-P-001). Splitting into three states keeps the chart's
+            footprint proportional to its content:
+              - loading → skeleton at full height
+              - empty   → small bordered card with InlineEmptyState
+              - data    → original 200px bg-card chart wrapper */}
+        {equityLoading ? (
+          <div className="col-span-12 lg:col-span-8">
+            <Skeleton className="h-[200px] w-full rounded-[2px]" />
+          </div>
+        ) : equityIsEmpty ? (
+          <div className="col-span-12 lg:col-span-8 flex h-auto items-center justify-center rounded-[2px] border border-border/40 py-6">
+            <InlineEmptyState message="No equity history yet — snapshots accumulate over trading days." />
+          </div>
+        ) : (
+          <div className="col-span-12 lg:col-span-8 min-h-[200px] bg-card border border-border rounded-[2px] p-2">
+            <EquityCurveChart portfolioId={portfolioId} />
+          </div>
+        )}
 
         {/* Exposure breakdown — compact panel with the same min-height as
             the chart so the row's vertical alignment stays clean. */}

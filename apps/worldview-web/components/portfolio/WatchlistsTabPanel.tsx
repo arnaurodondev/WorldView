@@ -34,6 +34,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -700,16 +701,24 @@ export function WatchlistsTabPanel({
   }
 
   if (watchlists.length === 0 && !creating) {
+    // T-B-2-05: empty-state guard rendered BEFORE the tab bar so the panel
+    // doesn't show a bare set of tab chrome with no content underneath
+    // (the "void above tabs" bug, F-P-008). Centred flex column keeps the
+    // message + CTA visually balanced inside the panel.
     return (
-      <div className="flex flex-col items-center gap-2 p-4">
+      <div className="flex flex-col items-center justify-center gap-3 py-8">
         <InlineEmptyState message="No watchlists yet." />
-        <button
+        {/* WHY shadcn Button (not raw <button>): matches the rest of the app
+            so size + spacing + focus ring stay consistent with portfolio CTAs. */}
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => setCreating(true)}
-          className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors flex items-center gap-1"
+          className="gap-1"
         >
-          <Plus className="h-3 w-3" />
+          <Plus className="h-3 w-3" aria-hidden="true" />
           Create watchlist
-        </button>
+        </Button>
       </div>
     );
   }
