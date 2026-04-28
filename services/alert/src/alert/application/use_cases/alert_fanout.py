@@ -42,6 +42,7 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from alert.application.ports.entity_resolver import EntityNameResolverPort
     from alert.application.ports.notification import INotificationPublisher
     from alert.application.ports.repositories import (
         AlertSaveRepositoryPort,
@@ -79,6 +80,49 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
 
 # Topics that always get MEDIUM severity regardless of market_impact_score (PRD-0021 F-13)
 _MEDIUM_OVERRIDE_TOPICS: frozenset[str] = frozenset({"graph.state.changed.v1", "intelligence.contradiction.v1"})
+
+# ── Signal-label derivation table (PLAN-0048 Wave B-1) ─────────────────────────
+# WHY a static dict (no LLM): the (claim_type, polarity) tuple → label is a
+# deterministic 8-row mapping. Calling an LLM here would add latency, cost,
+# and a new failure mode — all to produce strings the product team has fixed
+# in the spec. Rule-based + lowercase-normalised inputs is the right shape.
+#
+# Fallback when claim_type or polarity is missing or unknown: render
+# ``"<SEVERITY> signal"`` so the row still has actionable text instead of
+# the bare alert_type ``"SIGNAL"`` (the BP-263 root cause).
+_SIGNAL_LABEL_TABLE: dict[tuple[str, str], str] = {
+    ("forward_guidance", "positive"): "Bullish guidance",
+    ("forward_guidance", "negative"): "Bearish guidance",
+    ("factual", "positive"): "Positive factual",
+    ("factual", "negative"): "Negative factual",
+    ("projection", "positive"): "Bullish projection",
+    ("projection", "negative"): "Bearish projection",
+    ("opinion", "positive"): "Bullish opinion",
+    ("opinion", "negative"): "Bearish opinion",
+}
+
+
+def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> str:
+    """Compute a human-readable signal label from the event payload.
+
+    Reads ``claim_type`` + ``polarity`` (case-insensitive) from the signal
+    event. Falls back to ``"<SEVERITY> signal"`` (e.g. ``"HIGH signal"``)
+    when either field is missing or the combination is unknown.
+
+    WHY case-insensitive: upstream NLP producers may emit ``"FORWARD_GUIDANCE"``
+    or ``"forward_guidance"`` depending on enum serialisation. Normalising to
+    lowercase here is the cheapest correctness fix.
+    """
+    claim_type_raw = event.get("claim_type")
+    polarity_raw = event.get("polarity")
+    # Defensive str() — JSON deserialisation could in theory hand us None or int.
+    claim_type = str(claim_type_raw).lower() if claim_type_raw else ""
+    polarity = str(polarity_raw).lower() if polarity_raw else ""
+    label = _SIGNAL_LABEL_TABLE.get((claim_type, polarity))
+    if label:
+        return label
+    # Fallback: severity.upper() always yields LOW/MEDIUM/HIGH/CRITICAL.
+    return f"{str(severity).upper()} signal"
 
 
 def _find_schema_path(schema_name: str) -> Path:
@@ -214,6 +258,7 @@ class AlertFanoutUseCase:
         alert_delivered_topic: str = "alert.delivered.v1",
         severity_thresholds: SeverityThresholds | None = None,
         metrics: IAlertMetrics | None = None,
+        entity_resolver: EntityNameResolverPort | None = None,
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
@@ -223,6 +268,9 @@ class AlertFanoutUseCase:
         self._alert_delivered_topic = alert_delivered_topic
         self._thresholds = severity_thresholds if severity_thresholds is not None else SeverityThresholds()
         self._metrics: IAlertMetrics = metrics if metrics is not None else NoOpAlertMetrics()
+        # Optional: when None, payload enrichment is skipped (legacy callers + unit tests
+        # that don't care about (entity_name, ticker, signal_label) still work unchanged).
+        self._entity_resolver: EntityNameResolverPort | None = entity_resolver
 
     async def execute(
         self,
@@ -330,13 +378,43 @@ class AlertFanoutUseCase:
             except (ValueError, AttributeError):
                 source_event_id = new_uuid7()
 
+            # Payload enrichment (PLAN-0048 Wave B-1):
+            # The persisted payload powers the frontend's RecentAlerts row text
+            # and AlertDetailSheet. Inject (entity_name, ticker, signal_label)
+            # BEFORE building the Alert so they end up in the DB row + websocket
+            # push + outbox event uniformly. Best-effort — resolver returns
+            # (None, None) on S7 errors and we still ship the alert.
+            enriched_payload: dict[str, Any] = dict(event)
+            entity_name: str | None = None
+            ticker: str | None = None
+            if self._entity_resolver is not None:
+                try:
+                    entity_name, ticker = await self._entity_resolver.resolve(entity_uuid)
+                except Exception:
+                    # Defensive: implementations promise not to raise, but a
+                    # programming error here MUST NOT block the alert path.
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alert_fanout.entity_resolve_error",
+                        entity_id=str(entity_uuid),
+                        exc_info=True,
+                    )
+            if entity_name:
+                enriched_payload["entity_name"] = entity_name
+            if ticker:
+                enriched_payload["ticker"] = ticker
+            # Signal-label is only meaningful for SIGNAL alerts; emit it for
+            # all topics anyway because it's a cheap deterministic computation
+            # and the frontend always renders ``ticker: signal_label`` so a
+            # consistent shape simplifies the UI.
+            enriched_payload["signal_label"] = _derive_signal_label(event, severity)
+
             alert = Alert(
                 entity_id=entity_uuid,
                 alert_type=alert_type,
                 severity=severity,
                 source_event_id=source_event_id,
                 source_topic=topic,
-                payload=dict(event),
+                payload=enriched_payload,
                 dedup_key=dedup_key,
                 created_at=now,
             )

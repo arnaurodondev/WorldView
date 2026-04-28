@@ -44,7 +44,13 @@ class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
         end_date: date | None = None,
         period_type: str | None = None,
         limit: int = 1000,
+        order: str = "asc",  # accepted to match port signature; query helper ignores it.
     ) -> list[MetricDataPoint]:
+        # WHY ignore `order` here: query_timeseries returns rows ordered by
+        # as_of_date ASC unconditionally. The port keeps `order` for future use;
+        # accepting + ignoring it preserves the LSP contract until the helper
+        # gains real ordering support.
+        del order
         return await query_timeseries(
             self._session,
             instrument_id=instrument_id,
