@@ -7069,3 +7069,155 @@ Inject `source_timeframe: Timeframe` via constructor into `ResampledOHLCVUseCase
 - Any consumer that filters on a specific timeframe string must read that string from config, not hardcode it.
 - Any use case that queries bars of a specific timeframe must accept that timeframe as a constructor parameter.
 - Add a test asserting that changing `source_timeframe` in the use case changes the DB query timeframe.
+
+---
+
+## BP-255 — SnapTrade v4 Callback Returns `connection_id`; Frontend/Backend Expect `authorizationId`
+
+**Date discovered**: 2026-04-28
+**Affected areas**: Portfolio brokerage connection OAuth callback flow
+
+**Pattern**:
+SnapTrade Connection Portal v4 changed the callback URL parameters:
+- v3: `?authorizationId=xxx&userId=yyy&sessionId=zzz`
+- v4: `?connection_id=xxx&status=SUCCESS` (no `userId`, no `sessionId`, no `authorizationId`)
+
+Code that requires all three v3 params (validation guards, database checks, URL builders) fails silently or shows error UI for any v4 callback.
+
+**Root cause**:
+Multiple layers were hardcoded for v3 params:
+1. Frontend callback page guard: `if (!connectionId || !authorizationId || !userId || !sessionId)` — fails for v4 (userId/sessionId are empty)
+2. Backend route: `authorizationId: str = Query(...)` and `userId: str = Query(...)` — marked required, returned 422 for v4 params
+3. Anti-spoofing check: `if cmd.snaptrade_user_id != connection.snaptrade_user_id: raise` — no null/empty guard, always raised for v4
+4. Redirect URI config: `localhost:5173` (old Vite dev port) vs actual frontend port `3001`
+
+**Fix**:
+1. Backend route: all callback params optional (`str | None = Query(default=None)`). Accept `connection_id` (v4) as alias for `authorizationId` (v3) via `alias="connection_id"`.
+2. Use case: anti-spoofing check only when `snaptrade_user_id` is non-empty: `if cmd.snaptrade_user_id and cmd.snaptrade_user_id != connection.snaptrade_user_id`.
+3. Frontend callback page: only check `connectionId` and `authorizationId` (not userId/sessionId) in validation guard.
+4. Frontend callback page: read `connection_id` as fallback for `authorizationId` in `searchParams`.
+5. `docker.env` and `dev.local.env`: fix `SNAPTRADE_REDIRECT_URI` port from 5173 to 3001.
+
+**Prevention**:
+- Test brokerage callback flows against both v3 and v4 SnapTrade portal versions.
+- Callback validation guards should only require fields that are guaranteed in ALL versions of the external redirect.
+- When an external API changes redirect params, check all layers: frontend guard, frontend param reading, gateway.ts call, backend route params, use case logic.
+
+---
+
+## BP-256 — `AliasChoices` First-Match Wins: Empty Env Var Shadows Non-Empty Prefixed Var
+
+**Date discovered**: 2026-04-28
+**Affected areas**: Portfolio service SnapTrade config, any pydantic-settings with `AliasChoices`
+
+**Pattern**:
+`docker-compose.yml` `environment:` section sets bare `SNAPTRADE_CLIENT_ID=` (empty via `${SNAPTRADE_CLIENT_ID:-}` when host var is unset). The `env_file:` provides `PORTFOLIO_SNAPTRADE_CLIENT_ID=actual-value`. `AliasChoices("SNAPTRADE_CLIENT_ID", "PORTFOLIO_SNAPTRADE_CLIENT_ID")` tries the first alias first — finds the empty string — and uses it, ignoring the non-empty prefixed var.
+
+**Root cause**:
+pydantic-settings `AliasChoices` uses first-match semantics. When docker-compose `environment:` explicitly sets a bare var to empty string (not unset — empty), it shadows the non-empty prefixed var from `env_file:` regardless of declaration order.
+
+**Fix**:
+Reverse `AliasChoices` order so the prefixed var (`PORTFOLIO_SNAPTRADE_*`) is tried first. The prefixed var in `env_file:` will always be non-empty and will win over the potentially-empty bare var from `environment:`.
+
+**Prevention**:
+- Put the most-specific (prefixed) alias FIRST in `AliasChoices` so it wins over shorter/bare aliases that might be set to empty by `environment:` shell expansion.
+- In docker-compose, be aware that `SOME_VAR=${SOME_VAR:-}` explicitly injects an empty string — it does NOT omit the variable. An injected empty string WILL override `env_file:` values that use the same alias.
+
+---
+
+## BP-257 — `docker compose restart` Does Not Swap Image; Use `up -d --no-deps`
+
+**Date discovered**: 2026-04-28
+**Affected areas**: All Docker Compose managed services
+
+**Pattern**:
+After `docker compose build <service>`, running `docker compose restart <service>` restarts the existing container but keeps the OLD image. The new image is only used when the container is RECREATED (not just restarted). This causes stale code in the running container even after a successful build.
+
+**Root cause**:
+`docker compose restart` sends `SIGTERM`/`SIGKILL` to the running container and restarts it in-place — it does not create a new container from the new image. Only `docker compose up -d` (which detects image changes and recreates) uses the new image.
+
+**Fix**:
+Always use `docker compose up -d --no-deps <service>` after building. Or `docker stop + docker rm + docker compose up -d`.
+Note: even `up -d` may not recreate if the service has multiple variants (e.g. `portfolio`, `portfolio-brokerage-sync`) — each variant has its own image that must be built and recreated independently.
+
+**Prevention**:
+- After `docker compose build`, always use `docker compose up -d` (not `restart`) to apply the new image.
+- When multiple services share a Dockerfile (e.g. portfolio variants), build and recreate ALL of them: `docker compose build --no-cache portfolio portfolio-brokerage-sync`.
+
+---
+
+## BP-258 — Service-to-Service Calls Bypass S9 Gateway: No RS256 Internal JWT Available
+
+**Date discovered**: 2026-04-28
+**Affected areas**: Portfolio brokerage-sync worker → market-data instrument resolution
+
+**Pattern**:
+A background worker (brokerage-sync) calls another microservice (market-data) directly (not via S9 gateway). All backend services require `X-Internal-JWT` (RS256 signed by S9). Background workers cannot obtain an RS256 JWT because they have no user session and no access to S9's private key.
+
+**Root cause**:
+Architecture assumes all backend-to-backend calls route through S9 gateway (which signs and attaches `X-Internal-JWT`). Background workers that call backends directly have no path to obtain a valid RS256 JWT.
+
+**Fix (dev)**:
+1. Enable `MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true` in dev env. This env var is protected by a production guard.
+2. Fix `InternalJWTMiddleware.dispatch()`: check `skip_verification` BEFORE the `if public_key is None:` block so that skip_verification=True bypasses ALL signature validation (not just the "no-public-key" fallback path).
+3. Have the worker generate a static HS256 system JWT in `_system_jwt_headers()` and attach it to the httpx client.
+
+**Fix (production)**:
+Add a `POST /internal/v1/service-token` endpoint to S9 that accepts a pre-shared service credential and returns a short-lived RS256 JWT. Background workers exchange their service credential for an internal JWT at startup.
+
+**Prevention**:
+- Document which services make inter-service HTTP calls outside the S9 gateway path.
+- Add integration test that verifies brokerage-sync can resolve instruments via market-data.
+- Production deployment should never rely on `skip_verification=True`.
+
+## BP-259 — Shared `ingestion_events` Dedup Table: Same Event ID Used by Multiple Consumers
+
+**Summary**: Multiple Kafka consumers subscribing to the same topic share event IDs. A `UNIQUE` constraint on `event_id` alone causes the second consumer to see every event as a duplicate.
+
+**Symptoms**: Consumer processes all messages (LAG=0), commits offsets, but emits no INFO logs and creates no derived records. `create_if_not_exists` silently returns `False` for all matching events.
+
+**Affected areas**: Any two consumers in the same service subscribing to the same Kafka topic (e.g., `ohlcv_consumer` + `intraday_resampling_consumer` both consuming `market.dataset.fetched`).
+
+**Pattern**:
+`ingestion_events` has `UNIQUE (event_id)`. Consumer A processes event `xyz` and inserts `(event_id="xyz", event_type="ohlcv")`. Consumer B (same service, same table) also tries to insert `(event_id="xyz", event_type="intraday_resampling")` → `ON CONFLICT DO NOTHING` → returns `False` → message silently dropped.
+
+**Root cause**:
+The unique constraint uses only `event_id`, treating the same external event as processed regardless of which consumer is processing it.
+
+**Fix**:
+Namespace the dedup key per consumer: `dedup_key = f"{event_id}:{consumer_name}"`. This makes the insert unique per (event, consumer) pair without requiring a schema migration.
+
+**Alternative fix**:
+Change the unique constraint to `(event_id, event_type)` and use `event_type` = consumer name. Requires a DB migration.
+
+**Prevention**:
+- Document that `ingestion_events` dedup is keyed on `event_id` alone.
+- When adding a new consumer to a topic already consumed by an existing consumer in the same service, always namespace the dedup key.
+
+## BP-260 — `is_due(watermark.current_bar_ts)` Blocks Re-Polling When Task Range Extends into the Future
+
+**Summary**: The scheduler's `is_due` check uses `watermark.current_bar_ts` (= `task.range_end`). When a task's `range_end` is in the future (e.g., day-truncated `today + 1 day`), elapsed time is negative and `is_due` always returns `False` for that calendar day.
+
+**Symptoms**: Scheduler evaluates N policies but enqueues 0 tasks every tick. All tasks succeeded but watermarks show `current_bar_ts` = tomorrow midnight.
+
+**Affected areas**: `schedule_tasks.py` incremental polling for same-day tasks; specifically any policy with `base_interval_sec < 86400` that runs at least once per day.
+
+**Pattern**:
+`_build_incremental_task` sets `range_end = today + 1 day` for dedup stability. `execute_task.py` advances `watermark.current_bar_ts = task.range_end = tomorrow midnight`. `policy.is_due(tomorrow_midnight)` computes `elapsed = now - tomorrow < 0` → always `False`.
+
+**Root cause**:
+`current_bar_ts` represents the *temporal extent of the fetched data* (the task's requested time window end), not the *wall-clock time of the last execution*. Using it as a scheduling gate assumes tasks only run for past time windows. When `range_end` is in the future, the gate breaks.
+
+**Fix (per-consumer workaround)**:
+Use `watermark.last_success_at` instead of `current_bar_ts` for `is_due`. `last_success_at` is the actual wall-clock time of last execution and always lies in the past. Note: with day-truncated dedup keys, re-polling still produces 0 inserted tasks (deduplicated), but at least the scheduler generates candidates.
+
+**Fix (architectural)**:
+For intraday polling with minute-granular ranges, use `range_start = last_success_bar_ts` and `range_end = now`. This gives non-deduped tasks that actually fetch only the delta since the last run, but requires storing `last_success_bar_ts` carefully.
+
+**Current behavior** (acceptable for thesis):
+Each symbol's 1m bars are fetched once per day. US equities fetch during market hours (first scheduler tick after 13:30 UTC). Crypto fetches any time. Derived timeframes are updated once per day per symbol.
+
+**Prevention**:
+- Clarify in `schedule_tasks.py` whether `is_due` should use `current_bar_ts` or `last_success_at`.
+- Add a comment documenting that day-truncated `range_end` sets `current_bar_ts` to a future date.
+- If true intraday re-polling is needed, switch to `last_success_at` and minute-granular ranges.
