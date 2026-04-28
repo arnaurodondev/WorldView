@@ -59,25 +59,41 @@ function BarChart({
 }) {
   return (
     <div className="flex-1 min-w-0">
-      {/* Chart title — ALL CAPS per terminal typography rules */}
-      <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground mb-2">
+      {/* Chart title — ALL CAPS per terminal typography rules.
+          WHY mb-1 (not mb-2): tighter density, matches the Bloomberg PORT
+          allocation panel and the Risk strip header rhythm. The 4px gap
+          between the label and the first bar still reads as separation
+          without wasting vertical space. */}
+      <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground mb-1">
         {title}
       </div>
 
       {items.length === 0 ? (
         <InlineEmptyState message="Sector data loading from fundamentals..." />
       ) : (
-        <div className="space-y-1.5">
+        // WHY space-y-0.5 (was 1.5): each row is now ~18px tall (h-[18px] +
+        // 2px gap) — matches the 22px data-row height the rest of the
+        // terminal uses, minus the table border, so 12 sectors fit in
+        // ~220px instead of ~330px. Density wins.
+        <div className="space-y-0.5">
           {items.map((item) => (
-            <div key={item.label} className="flex items-center gap-2">
-              {/* Label — truncated to prevent overflow */}
-              <span className="w-32 shrink-0 text-[10px] text-muted-foreground truncate">
+            // WHY h-[18px]: aligns with the ALLOCATION row rhythm; tall
+            // enough that the 4px bar centers cleanly without crowding.
+            <div key={item.label} className="flex items-center gap-1.5 h-[18px]">
+              {/* Label — truncated to prevent overflow.
+                  WHY w-28 (was w-32): saves 16px on the left so the bar
+                  stretches further. Sector names like "Information
+                  Technology" still fit at 11ch via truncation. */}
+              <span className="w-28 shrink-0 text-[10px] text-muted-foreground truncate">
                 {item.label}
               </span>
 
-              {/* Bar track + fill */}
-              <div className="flex-1 h-[6px] bg-border/40 rounded-[1px] overflow-hidden">
-                {/* WHY bg-positive/30: use semantic positive color at 30% opacity —
+              {/* Bar track + fill.
+                  WHY h-[4px] (was 6px): thinner bar reads as "data marker"
+                  not "panel chrome" — same visual weight as the holdings
+                  table's WEIGHT column bars (h-[3px]). */}
+              <div className="flex-1 h-[4px] bg-border/40 rounded-[1px] overflow-hidden">
+                {/* WHY bg-primary/40: use semantic primary at 40% opacity —
                     bars represent capital allocation (not loss/gain), so neutral
                     but still branded. bg-primary would imply interactivity. */}
                 <div
@@ -86,7 +102,9 @@ function BarChart({
                 />
               </div>
 
-              {/* Percentage label */}
+              {/* Percentage label — tabular-nums keeps the column flush
+                  regardless of digit count (e.g. 5.0% / 33.3% align at the
+                  decimal). */}
               <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
                 {formatPercent(item.pct / 100)}
               </span>
@@ -114,14 +132,24 @@ export function SectorAllocationPanel({
   return (
     // WHY border-t: visually separates the allocation section from the holdings table
     // above it, without needing a full card/panel wrapper.
-    <div className="border-t border-border pt-3 mt-3">
-      {/* Section label */}
-      <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground mb-3">
+    // WHY pt-2 mt-2 (was pt-3 mt-3): terminal density — 8px gap above and
+    // 8px padding inside is enough breathing room without the section
+    // feeling like a separate card. Matches the rhythm of the rest of the
+    // page where every gap is 8/12px, never 24px.
+    <div className="border-t border-border pt-2 mt-2">
+      {/* Section label.
+          WHY mb-2 (was mb-3): tighter so the two BarCharts start closer to
+          their parent label — the visual hierarchy still reads clearly
+          because the BarChart's own "BY SECTOR" sub-label has its own mb-1. */}
+      <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground mb-2">
         ALLOCATION
       </div>
 
-      {/* Two charts side-by-side */}
-      <div className={cn("flex gap-6")}>
+      {/* Two charts side-by-side.
+          WHY gap-4 (was gap-6): 16px column gap is plenty of separation at
+          terminal density. 24px was leaving a noticeable empty band that
+          made the panel feel half-empty. */}
+      <div className={cn("flex gap-4")}>
         <BarChart items={bySector} title="BY SECTOR" />
         <BarChart items={byType} title="BY TYPE" />
       </div>

@@ -102,7 +102,11 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
   const cashPct = (cash / total) * 100;
 
   return (
-    <div className="flex flex-col gap-2 h-full">
+    // WHY gap-1.5 (was gap-2): tighter vertical rhythm. The header / badge /
+    // headline / bar / legend stack now reads as a single dense block of
+    // related data rather than a list of loosely-spaced items. Matches the
+    // KPI strip's gap-0.5 / py-1.5 density.
+    <div className="flex flex-col gap-1.5 h-full">
       <Header />
 
       {/* F-016 (QA 2026-04-28): when one or more holdings fell back to
@@ -110,7 +114,7 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
           "Prices stale" badge above the headline number. WHY a separate
           row (not inline next to "gross"): keeps the headline visual
           rhythm stable so users always read the percentage in the same
-          place. The badge uses the canonical Midnight Pro warning palette. */}
+          place. */}
       {prices_stale && (
         <div
           role="status"
@@ -123,21 +127,26 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
         </div>
       )}
 
-      {/* Headline number — large, monospace, tabular-nums for stable layout */}
-      <div className="font-mono tabular-nums text-[20px] leading-none text-foreground">
+      {/* Headline number — large, monospace, tabular-nums for stable layout.
+          WHY text-[18px] (was 20px): one notch tighter brings the headline
+          in line with the equity-curve cell's KPI numbers and keeps the
+          panel content from feeling bottom-heavy. */}
+      <div className="font-mono tabular-nums text-[18px] leading-none text-foreground">
         {formatPercent(gross_exposure_pct)}
         <span className="ml-1.5 text-[10px] uppercase tracking-[0.06em] text-muted-foreground align-middle">
           gross
         </span>
       </div>
 
-      {/* Horizontal stacked bar — same visual idiom as SectorAllocationPanel */}
+      {/* Horizontal stacked bar — same visual idiom as SectorAllocationPanel.
+          WHY h-[6px] (was 8px): matches the BarChart row bars exactly so the
+          two panels read as one consistent allocation visual language. */}
       <div
-        className="h-[8px] w-full rounded-[2px] overflow-hidden bg-border/40 flex"
+        className="h-[6px] w-full rounded-[2px] overflow-hidden bg-border/40 flex"
         role="img"
         aria-label={`Invested ${investedPct.toFixed(1)}% / Cash ${cashPct.toFixed(1)}%`}
       >
-        {/* Invested segment — primary teal at 60% opacity */}
+        {/* Invested segment — primary yellow at 60% opacity */}
         <div
           className="h-full bg-primary/60"
           style={{ width: `${investedPct}%` }}
@@ -149,15 +158,24 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
         />
       </div>
 
-      {/* Legend / values row — small numerics under each segment */}
-      <div className="flex items-center justify-between font-mono text-[10px] tabular-nums">
-        <span className="text-muted-foreground">
+      {/* Legend / values row — small numerics under each segment.
+          WHY tabular-nums on the values: the dollar amounts often differ in
+          digit count (e.g. $1,234 vs $123,456) — without tabular-nums the
+          right edge would jitter as the prices refresh. */}
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-muted-foreground inline-flex items-center">
           <span className="inline-block w-2 h-2 mr-1 align-middle bg-primary/60 rounded-[1px]" />
-          Invested {formatPrice(invested)}
+          <span className="font-sans">Invested</span>
+          <span className="ml-1 font-mono tabular-nums">
+            {formatPrice(invested)}
+          </span>
         </span>
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground inline-flex items-center">
           <span className="inline-block w-2 h-2 mr-1 align-middle bg-muted-foreground/30 rounded-[1px]" />
-          Cash {formatPrice(cash)}
+          <span className="font-sans">Cash</span>
+          <span className="ml-1 font-mono tabular-nums">
+            {formatPrice(cash)}
+          </span>
         </span>
       </div>
     </div>

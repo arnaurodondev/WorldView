@@ -1076,12 +1076,27 @@ export default function PortfolioPage() {
   return (
     // WHY h-full flex-col: fills the shell's main content area.
     // min-h-0 prevents flexbox from overflowing its parent.
-    <div className="flex flex-col h-full min-h-0 bg-card">
+    //
+    // WHY bg-background (NOT bg-card): the page is the lowest level of the
+    // elevation hierarchy. Panels inside the page (analytics cards, dialogs,
+    // sticky table headers) use bg-card (#111113). If the page itself is
+    // bg-card, every nested bg-card panel disappears into a single near-black
+    // mass — visually the equity curve + exposure cells (each min-h-[220px]
+    // bg-card) end up reading as one gigantic black overlay covering all the
+    // widgets in the Holdings tab. Page = bg-background (#09090B) is one shade
+    // darker than panels so the 1px borders + tonal step give each card its
+    // own silhouette. Matches the dashboard, instrument-detail, and screener
+    // pages, which all sit on bg-background.
+    <div className="flex flex-col h-full min-h-0 bg-background">
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       {/* WHY h-9 shrink-0: 36px header is the terminal standard. shrink-0 prevents
-          flexbox from compressing the header to make room for tab content. */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-3">
+          flexbox from compressing the header to make room for tab content.
+          WHY bg-card: the page is now bg-background (#09090B); the header
+          needs the panel tone (#111113) to read as the chrome row at the
+          top of the workspace, separating it from the empty-page tone below
+          while data loads. */}
+      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-3 bg-card">
         <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
           Portfolio
         </h1>
@@ -1325,7 +1340,12 @@ export default function PortfolioPage() {
       <Tabs defaultValue="holdings" className="flex flex-col flex-1 min-h-0">
         {/* WHY shrink-0 on TabsList: prevents the tab bar from shrinking when
             the tab content grows — the tab bar must always be fully visible. */}
-        <TabsList className="shrink-0 h-9 px-2 border-b border-border rounded-none bg-transparent justify-start gap-0">
+        {/* WHY bg-card on the tab list: the tab bar is page chrome — sits
+            above the analytics scroll area. With the page now bg-background,
+            keeping the tab bar bg-card aligns it tonally with the KPI strip
+            and page header above it (one continuous chrome strip from y=0
+            down to the start of the scroll area). */}
+        <TabsList className="shrink-0 h-9 px-2 border-b border-border rounded-none bg-card justify-start gap-0">
           <TabsTrigger
             value="holdings"
             className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
