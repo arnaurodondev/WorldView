@@ -29,7 +29,7 @@
 // (which reads from localStorage — browser-only). Server Components cannot
 // access React context or browser APIs.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
@@ -37,9 +37,11 @@ import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
 import { StatusBar } from "@/components/shell/StatusBar";
+import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { createGateway } from "@/lib/gateway";
+import { usePortfolioMetrics } from "@/hooks/usePortfolioMetrics";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -82,81 +84,18 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // During active sessions new WS alerts may arrive before the 60s REST poll.
   const badgeCount = Math.max(pendingAlertsData?.total ?? 0, unreadCount);
 
-  // Portfolio NAV for TopBar — uses the same query keys as PortfolioSummary so
-  // TanStack Query deduplicates the HTTP calls (no extra network overhead).
-  // WHY layout-level: TopBar is persistent across page navigations; the value
-  // must not flicker on each route change.
-  const { data: portfoliosData } = useQuery({
-    queryKey: ["portfolios"],
-    queryFn: () => createGateway(accessToken).getPortfolios(),
-    enabled: !!accessToken && isAuthenticated,
-    staleTime: 60_000,
-  });
-  const firstPortfolioId = portfoliosData?.[0]?.portfolio_id;
-  const { data: holdingsResp } = useQuery({
-    queryKey: ["holdings", firstPortfolioId],
-    queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
-    enabled: !!accessToken && isAuthenticated && !!firstPortfolioId,
-    staleTime: 30_000,
-  });
-  const navInstrumentIds = holdingsResp?.holdings.map((h) => h.instrument_id) ?? [];
-  const { data: navQuotes } = useQuery({
-    queryKey: ["holdings-quotes", navInstrumentIds],
-    queryFn: () => createGateway(accessToken).getBatchQuotes(navInstrumentIds),
-    enabled: navInstrumentIds.length > 0 && !!accessToken && isAuthenticated,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-  });
-  // Compute total NAV: sum(quantity × live_price) for all holdings
-  const portfolioValue: number | null = holdingsResp?.holdings.length
-    ? holdingsResp.holdings.reduce((sum, h) => {
-        const quote = navQuotes?.quotes?.[h.instrument_id];
-        const price = quote?.price ?? h.average_cost;
-        return sum + price * h.quantity;
-      }, 0)
-    : null;
+  // PLAN-0050 T-A-1-02: portfolio rail values + 15s refetch are now owned by
+  // hooks/usePortfolioMetrics so any TopBar consumer (and a future account
+  // sheet) gets the same values from the same TanStack query cache.
+  const { portfolioValue, dailyPnl, unrealisedPnl } = usePortfolioMetrics();
 
-  // ── Day P&L + Unrealised P&L for TopBar (PLAN-0048 F-121 fix) ─────────────
-  // WHY computed here (in the layout, not TopBar): the TopBar is a thin
-  // presentational component — all financial computations live in the route
-  // layer that already has portfolio data fetched. The layout already loads
-  // holdings + navQuotes for portfolioValue, so we can derive both P&L
-  // numbers from the same data without an extra network round-trip.
-  //
-  // WHY the TopBar audit (F-121) flagged this: the TopBar component was
-  // designed to render Day P&L / Total P&L slots when both props are
-  // non-null, but the layout never computed and forwarded them. As a result
-  // every viewport showed only `PORT $42K` next to the bell — the rail's
-  // most important fields were silently absent.
-  //
-  // Day P&L: sum across all holdings of (per-share daily price change × qty).
-  // We require the quote AND its `change` field to be defined; if any quote is
-  // still loading (q == null) the contribution is 0 — better to under-report
-  // briefly during the 30s navQuotes refetch than to flicker between values.
-  // We pass `null` only when there are no holdings — the TopBar then renders
-  // its label slot empty rather than "$0.00", which is technically a value
-  // and would mislead the user into thinking the day was flat.
-  const dailyPnl: number | null = holdingsResp?.holdings.length
-    ? holdingsResp.holdings.reduce((sum, h) => {
-        const q = navQuotes?.quotes?.[h.instrument_id];
-        // Treat missing quote / missing change as 0 contribution; once the
-        // quote refetch resolves, the value snaps to the correct sum.
-        return sum + (q?.change ?? 0) * h.quantity;
-      }, 0)
-    : null;
-
-  // Total P&L (a.k.a. Unrealised): mark-to-market value − total cost basis.
-  // WHY null when portfolioValue is null: without a current value we cannot
-  // form a meaningful difference vs cost; the TopBar slot then stays empty.
-  // WHY use h.average_cost (not q.price): cost basis is locked at purchase;
-  // multiplying by current qty against the original avg cost is the textbook
-  // unrealised P&L formula.
-  const totalCost: number = holdingsResp?.holdings.reduce(
-    (s, h) => s + h.average_cost * h.quantity,
-    0,
-  ) ?? 0;
-  const unrealisedPnl: number | null =
-    portfolioValue != null ? portfolioValue - totalCost : null;
+  // ── Ask AI panel open/close (PLAN-0050 T-A-1-03) ─────────────────────────
+  // WHY layout-level state: the AskAiPanel is fixed-positioned (bottom-right)
+  // and must mount above the shell's overflow context. The TopBar holds the
+  // trigger button but only forwards the toggle callback — see TopBarProps.
+  const [askAiOpen, setAskAiOpen] = useState(false);
+  const handleAskAiOpen = useCallback(() => setAskAiOpen(true), []);
+  const handleAskAiClose = useCallback(() => setAskAiOpen(false), []);
 
   // WHY lazy initializer: reads localStorage once at mount, not on every render.
   // True (expanded) is the default so first-time users see the full labeled sidebar.
@@ -263,6 +202,8 @@ export default function AppLayout({ children }: AppLayoutProps) {
           portfolioValue={portfolioValue}
           dailyPnl={dailyPnl}
           unrealisedPnl={unrealisedPnl}
+          onAskAi={handleAskAiOpen}
+          askAiOpen={askAiOpen}
         />
 
         {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the
@@ -298,6 +239,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
         {/* FlashOverlay — full-screen critical alert overlay (z-[9999], above everything) */}
         {/* WHY outside the flex layout: overlay must be position:fixed, not flow-positioned */}
         <FlashOverlay />
+
+        {/* AskAiPanel — floating mini-chat panel (PLAN-0050 T-A-1-03).
+            WHY rendered here at layout root: the panel is fixed bottom-right
+            and must escape any deeper overflow:hidden ancestor (it sits above
+            page content but below FlashOverlay). Conditional mount keeps the
+            SSE EventSource off the page while the panel is closed — opening
+            it is what initiates the connection. */}
+        {askAiOpen && <AskAiPanel onClose={handleAskAiClose} />}
       </div>
     </WorkspaceProvider>
   );

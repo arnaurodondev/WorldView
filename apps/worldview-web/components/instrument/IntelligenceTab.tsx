@@ -30,6 +30,7 @@
 // WHY "use client": uses useQuery for async data fetching and useState via dynamic import.
 
 import dynamic from "next/dynamic";
+import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
 import { useQuery } from "@tanstack/react-query";
 // WHY CheckCircle removed: empty contradictions state now uses inline text only
 import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown } from "lucide-react";
@@ -360,9 +361,15 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
 
         {/* WHY conditional render: show spinner while graphData is loading,
             then render the sigma.js graph once data arrives.
-            The EntityGraph component itself also handles the empty state. */}
+            The EntityGraph component itself also handles the empty state.
+            PLAN-0050 T-F-6-19: wrap the WebGL-rendering EntityGraph in an
+            error boundary so a sigma.js crash (e.g. headless browser with
+            no WebGL, or graphology rejecting malformed data) does not tear
+            down the whole Intelligence tab. */}
         {graphData ? (
-          <EntityGraph data={graphData} centerEntityId={entityId} />
+          <EntityGraphErrorBoundary>
+            <EntityGraph data={graphData} centerEntityId={entityId} />
+          </EntityGraphErrorBoundary>
         ) : (
           <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
