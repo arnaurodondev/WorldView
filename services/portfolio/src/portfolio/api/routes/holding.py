@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from portfolio.api.dependencies import ReadUoWDep
 from portfolio.api.schemas import HoldingResponse, PaginatedResponse
@@ -41,6 +41,14 @@ async def get_holdings(
     portfolio_id: UUID,
     uow: ReadUoWDep,
     request: Request,
+    include_closed: bool = Query(
+        default=False,
+        description=(
+            "Include zero-quantity (closed) positions. Default false — only"
+            " active positions are returned, matching the typical UI view."
+            " Set true for tax/audit reporting that needs historic legs."
+        ),
+    ),
 ) -> PaginatedResponse[HoldingResponse]:
     """List holdings for a portfolio.
 
@@ -50,6 +58,11 @@ async def get_holdings(
     array, forcing the gateway to special-case it. The gateway now
     tolerates both shapes during the transition window.
 
+    F-303 (QA iter-3 2026-04-28): zero-quantity rows are hidden by
+    default — they're either closed positions (sold flat) or orphans
+    from a sparse broker resync after the F-201 repair script. Pro users
+    pass ``?include_closed=true`` to see them.
+
     There's no built-in pagination on holdings (a portfolio rarely has
     more than ~50 positions), so the envelope reports ``total ==
     len(items)`` and a fixed ``limit`` of 1000 — meaning the response is
@@ -58,7 +71,13 @@ async def get_holdings(
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
     uc = GetHoldingsUseCase()
-    enriched_holdings = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
+    enriched_holdings = await uc.execute(
+        portfolio_id,
+        owner_id,
+        x_tenant_id,
+        uow,
+        include_closed=include_closed,
+    )
     items = [
         HoldingResponse(
             id=eh.holding.id,

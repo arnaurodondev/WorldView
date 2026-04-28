@@ -551,20 +551,36 @@ async def get_risk_metrics(
     #   ok                    → enough returns and SPY data to compute everything
     #   insufficient_data     → fewer than _MIN_RETURNS daily returns
     #   benchmark_unavailable → enough returns BUT SPY OHLCV missing → β=null
-    #   data_anomaly_detected → final point is 0 right after a non-zero point
-    #                           (F-209: signals a holdings wipe, not a real
-    #                           catastrophic loss; metrics are suppressed)
+    #   data_anomaly_detected → series contains a contaminated zero (F-209/F-302:
+    #                           signals a holdings wipe, not a real catastrophic
+    #                           loss; metrics are suppressed)
     #
-    # F-209: detect the F-201 wipe pattern. When the most recent value is
-    # exactly zero AND the previous value was non-zero the math is correct
-    # but tells the wrong story (drawdown_max = -100%, sharpe = -3.4) — the
-    # user sees "you've lost everything" when the broker simply returned no
-    # activities. Suppress every metric and surface a distinct status so the
-    # frontend can render an explanatory caption.
-    anomaly_detected = len(portfolio_values) >= 2 and portfolio_values[-1] == 0.0 and portfolio_values[-2] > 0.0
+    # F-209 / F-302: detect ANY contaminated-zero pattern, not just trailing
+    # zeros. The original F-209 fix only checked ``values[-1] == 0 AND
+    # values[-2] > 0``, which missed the more common case of an *intermediate*
+    # zero (e.g. the F-201 wipe wrote a $0 snapshot for a single day, then a
+    # broker resync repopulated subsequent days). The math still computes
+    # drawdown_max = -100% / sharpe = -3.8 over that contaminated history
+    # while ``data_quality.status`` reads ``benchmark_unavailable`` — totally
+    # misleading caption.
+    #
+    # New rule: if ``min(values) == 0`` AND ``max(values) > 0`` the series has
+    # at least one contaminated point sandwiched by real ones. Suppress every
+    # metric and report ``data_anomaly_detected`` with the indices of the
+    # contaminated points so an operator can see at a glance which dates need
+    # to be rewritten by the snapshot-recompute backfill.
+    anomaly_zero_indices: list[int] = (
+        [i for i, v in enumerate(portfolio_values) if v == 0.0] if portfolio_values else []
+    )
+    has_contaminated_zero = len(portfolio_values) >= 2 and len(anomaly_zero_indices) > 0 and max(portfolio_values) > 0.0
+    anomaly_details: dict[str, Any] = {}
 
-    if anomaly_detected:
+    if has_contaminated_zero:
         data_quality_status = "data_anomaly_detected"
+        anomaly_details = {
+            "zero_indices": anomaly_zero_indices,
+            "total_points": len(portfolio_values),
+        }
         # Null every metric — the underlying numbers are mathematically
         # correct but operationally misleading. The frontend uses the
         # status flag to render a caption explaining the suppression.
@@ -603,6 +619,10 @@ async def get_risk_metrics(
             "status": data_quality_status,
             "n_returns": len(portfolio_returns),
             "lookback_days": lookback_days,
+            # F-302: when the anomaly path fires, surface the contaminated
+            # indices so an operator can see at a glance which dates need
+            # rewriting via the snapshot-recompute backfill (F-305 path).
+            **({"details": anomaly_details} if anomaly_details else {}),
         },
     }
 

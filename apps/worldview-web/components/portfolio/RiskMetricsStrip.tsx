@@ -195,8 +195,20 @@ export function RiskMetricsStrip({
   } else if (benchmarkUnavailable) {
     caption = "Beta vs SPY is unavailable while the benchmark series is being ingested.";
   } else if (dataAnomaly) {
+    // F-302 (QA iter-3): the gateway now flags ANY contaminated zero in the
+    // value series (not just trailing). When ``details.zero_indices`` is
+    // present we surface the count so an operator knows whether a single
+    // day or multiple days need the snapshot-recompute backfill. Falls back
+    // to the generic caption when the details block is absent (older
+    // gateway).
+    const detailsBlock =
+      (dq as unknown as { details?: { zero_indices?: number[] } } | undefined)
+        ?.details;
+    const zeroCount = detailsBlock?.zero_indices?.length ?? 0;
     caption =
-      "Detected a sudden zero in the value series — risk metrics suppressed until the broker resync completes.";
+      zeroCount > 0
+        ? `Detected ${zeroCount} contaminated zero ${zeroCount === 1 ? "point" : "points"} in the value series — risk metrics suppressed until the snapshot history is rewritten.`
+        : "Detected a sudden zero in the value series — risk metrics suppressed until the broker resync completes.";
   }
 
   // F-211 (QA iter-2): a11y. The strip is a logical group of related KPIs
