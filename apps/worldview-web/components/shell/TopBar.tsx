@@ -35,13 +35,27 @@ import {
 } from "@/components/ui/dropdown-menu";
 /**
  * formatPortfolioValue — compact portfolio NAV for the TopBar rail.
+ *
  * WHY compact: the TopBar has limited horizontal space. $1.2M is scannable;
  * $1,234,567 is not at the rail font size. Returns "—" while null (loading).
+ *
+ * F-122 fix (PLAN-0048 QA iter-1): the previous implementation rounded
+ * sub-million values to whole thousands ($42,484 → "$42K"), which destroyed
+ * the last $483 of precision. Bloomberg's account rail keeps two decimals
+ * for sub-$1M values because traders care about the actual cents on small
+ * accounts. We now show one decimal place in the K-range ("$42.5K") so the
+ * value stays compact yet retains a useful significant figure, and use whole
+ * dollars (with comma grouping) for sub-$1K values where K-suffix would feel
+ * clumsy ("$847" beats "$0.8K").
  */
 function formatPortfolioValue(value: number | null | undefined): string {
   if (value == null) return "—";
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `$${Math.round(value / 1_000)}K`;
+  // WHY .toFixed(1) (not Math.round): one decimal preserves the most-significant
+  // remaining digit. $42,483.75 now reads "$42.5K" instead of "$42K" — still 5
+  // chars, still scannable, and now communicates the difference between
+  // $42.5K and $42K (a $500 swing on a $42K account is meaningful).
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
   return `$${Math.round(value).toLocaleString()}`;
 }
 
@@ -153,8 +167,11 @@ export function TopBar({
               and right on every refetch. Tabular-nums fixes per-character
               width but not the overall span — we still need min-w to lock
               the slot. Picked widths cover worst-case strings:
-                * "$1.2M" / "$123K" / "—"  → min-w-[3.25rem] (52px)
-                * "+$45.6K" with sign      → min-w-[3.75rem] (60px)
+                * "$1.2M" / "$42.5K" / "—" → min-w-[3.5rem] (56px)
+                * "+$45.6K" with sign      → min-w-[4rem] (64px)
+            F-122 follow-up: bumped slot widths after switching the formatter
+            from "$42K" to "$42.5K" — the extra char needs a wider lane or
+            adjacent labels jump on refetch.
             - All three numeric values use font-mono + tabular-nums so digits
               align column-wise inside their slot.
             WHY text-[11px] (was text-[10px]): user feedback (audit
@@ -173,7 +190,7 @@ export function TopBar({
           >
             <span className="text-muted-foreground">PORT</span>
             {/* min-w slot reserves space so neighbour labels don't jump */}
-            <span className="inline-block min-w-[3.25rem] text-right text-foreground">
+            <span className="inline-block min-w-[3.5rem] text-right text-foreground">
               {formatPortfolioValue(portfolioValue)}
             </span>
           </span>
@@ -192,7 +209,7 @@ export function TopBar({
             aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
           >
             <span className="text-muted-foreground">Day P&amp;L</span>
-            <span className="inline-block min-w-[3.75rem] text-right">
+            <span className="inline-block min-w-[4rem] text-right">
               {dailyPnl >= 0 ? "+" : "-"}
               {formatPortfolioValue(Math.abs(dailyPnl))}
             </span>
@@ -212,7 +229,7 @@ export function TopBar({
             aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
           >
             <span className="text-muted-foreground">Total P&amp;L</span>
-            <span className="inline-block min-w-[3.75rem] text-right">
+            <span className="inline-block min-w-[4rem] text-right">
               {unrealisedPnl >= 0 ? "+" : "-"}
               {formatPortfolioValue(Math.abs(unrealisedPnl))}
             </span>

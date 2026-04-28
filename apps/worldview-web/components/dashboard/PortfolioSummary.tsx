@@ -402,8 +402,16 @@ export function PortfolioSummary() {
               <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
                 {livePrice > 0 ? formatPrice(livePrice) : "—"}
               </span>
-              {/* Value */}
-              <span className="w-[54px] shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
+              {/* Value — widened from w-[54px] to min-w-[80px] (F-203 fix,
+                  PLAN-0048 QA iter-1). At 11px monospace the string
+                  "$13,545.00" (10 chars × ~6.5px ≈ 65px) overflowed the
+                  54px cell, visually fusing with the next column ("P&L %")
+                  to read "$13,545.001.76%". 80px fits the worst-case
+                  6-digit dollar value with room for the leading "$" and
+                  the cents. min-w (instead of fixed w) lets the cell grow
+                  if a holding ever crosses into the millions without
+                  needing another patch. */}
+              <span className="min-w-[80px] shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
                 {formatPrice(holdingValue)}
               </span>
               {/* P&L % */}

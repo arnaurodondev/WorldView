@@ -906,10 +906,17 @@ export default function PortfolioPage() {
           ? ((livePrice - h.average_cost) / h.average_cost) * 100
           : 0;
 
-      if (topGainer == null || pnlPct > topGainer.pnlPct) {
+      // Top gainer = highest positive pnlPct; only assign when > 0.
+      // F-202 fix (PLAN-0048 QA iter-1): symmetric guard for top loser —
+      // when every position is profitable, the previous Math.min logic
+      // selected the smallest gainer (e.g. MSFT +1.70%) and labelled it
+      // "Top Loser", which mis-signalled to the trader that MSFT was DOWN
+      // 1.70%. A loser must have negative pnlPct, otherwise the tile
+      // should display "—" (handled in PortfolioKPIStrip when topLoser=null).
+      if (pnlPct > 0 && (topGainer == null || pnlPct > topGainer.pnlPct)) {
         topGainer = { ticker: h.ticker, pnlPct };
       }
-      if (topLoser == null || pnlPct < topLoser.pnlPct) {
+      if (pnlPct < 0 && (topLoser == null || pnlPct < topLoser.pnlPct)) {
         topLoser = { ticker: h.ticker, pnlPct };
       }
     }
@@ -1386,9 +1393,24 @@ export default function PortfolioPage() {
               {/* WHY enrichedHoldings: raw holdings have empty ticker/name (S1 doesn't
                   store them). enrichedHoldings merges ticker/name/entity_id from company
                   overviews so the TICKER and NAME columns render correctly. */}
+              {/* F-205 fix (PLAN-0048 QA iter-1): the SECTOR column was
+                  rendering "—" for every holding because we never passed
+                  `sectors`. The data is already loaded for the allocation
+                  panel below — we just project it into the
+                  instrument_id → sector shape SemanticHoldingsTable expects.
+                  WHY inline (not useMemo): the projection is O(n) over a
+                  small array (≤50 holdings) and runs only when overviews
+                  resolve; memoising adds complexity without measurable
+                  benefit at this size. */}
               <SemanticHoldingsTable
                 holdings={enrichedHoldings}
                 quotes={holdingsQuotes}
+                sectors={Object.fromEntries(
+                  Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
+                    id,
+                    ov?.sector ?? null,
+                  ]),
+                )}
                 totalValue={kpi.totalValue}
               />
 

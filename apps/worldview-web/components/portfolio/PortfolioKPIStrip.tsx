@@ -103,12 +103,11 @@ export function PortfolioKPIStrip({
   positionCount,
   realizedPnl,
 }: PortfolioKPIStripProps) {
-  // WHY format unrealisedPnlPct with explicit sign:
-  // Traders expect +4.82% not 4.82% — the sign is part of the meaning.
-  const pnlPctFormatted =
-    unrealisedPnlPct >= 0
-      ? `+${formatPercent(unrealisedPnlPct)}`
-      : formatPercent(unrealisedPnlPct);
+  // F-201 fix (PLAN-0048 QA iter-1): formatPercent already prepends "+" for
+  // positive values (lib/utils.ts:81). The previous "+${formatPercent()}" wrap
+  // produced "++30.92%" in the UNREALISED P&L tile. Just call formatPercent
+  // directly — its sign output is already correct for traders' expectations.
+  const pnlPctFormatted = formatPercent(unrealisedPnlPct);
 
   return (
     // WHY border-b: the KPI strip sits between the page header and the tab bar.

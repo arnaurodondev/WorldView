@@ -149,6 +149,15 @@ export function RecentAlerts() {
           {merged.map((alert) => {
             const { text: severityText, bg: severityBg } = severityColor(alert.severity);
             const timeStr = relativeTime(alert.created_at);
+            // F-301 defensive follow-up: even though AlertStreamContext now
+            // aliases alert_id → id, REST-sourced alerts may still arrive
+            // without an id in pathological cases. Guard the href so we
+            // never emit `?selected=undefined` again. Falling back to
+            // `/alerts` (no selection) keeps the row navigable as a
+            // generic "open alerts page" link.
+            const href = alert.id
+              ? `/alerts?selected=${encodeURIComponent(alert.id)}`
+              : "/alerts";
 
             return (
               // WHY <Link>: users expect clicking an alert row to navigate to the
@@ -158,8 +167,8 @@ export function RecentAlerts() {
               // page opens the AlertDetailSheet automatically — much faster path
               // to "see the full payload" than landing on the list and clicking.
               <Link
-                key={alert.id}
-                href={`/alerts?selected=${encodeURIComponent(alert.id)}`}
+                key={alert.id || `${alert.created_at}-${alert.alert_type}`}
+                href={href}
                 // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
                 className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40 no-underline"
               >
@@ -205,8 +214,27 @@ export function RecentAlerts() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function relativeTime(isoStr: string): string {
-  const diffMs = Date.now() - new Date(isoStr).getTime();
+/**
+ * relativeTime — "5m" / "3h" / "now" for the alert timestamp slot.
+ *
+ * F-303 fix (PLAN-0048 QA iter-1): WS-sourced alerts may arrive without a
+ * `created_at` (or with a malformed ISO string), in which case
+ * `new Date(undefined).getTime()` returns NaN. The previous implementation
+ * subtracted that NaN from Date.now() and string-concatenated the result,
+ * producing visible "NaNh" timestamps in the dashboard alerts feed.
+ *
+ * We now guard against:
+ *   1. Empty/missing isoStr → "—"
+ *   2. Date that fails to parse (Number.isNaN on .getTime()) → "—"
+ *   3. Future timestamps (negative diff from clock skew) → "now"
+ */
+function relativeTime(isoStr: string | null | undefined): string {
+  if (!isoStr) return "—";
+  const t = new Date(isoStr).getTime();
+  if (!Number.isFinite(t)) return "—";
+  const diffMs = Date.now() - t;
+  // Future (e.g. clock skew) → display as "now" rather than a negative count
+  if (diffMs < 0) return "now";
   const diffMin = Math.floor(diffMs / 60_000);
   if (diffMin < 1) return "now";
   if (diffMin < 60) return `${diffMin}m`;

@@ -96,6 +96,29 @@ export function formatPercentDirect(
 }
 
 /**
+ * formatPercentUnsigned — format a percentage WITHOUT a sign prefix.
+ *
+ * WHY THIS EXISTS: formatPercent always prepends "+" for positives because it
+ * is intended for P&L / change percentages where direction carries meaning.
+ * For non-directional ratios — allocation shares ("Equity 100.00%"), portfolio
+ * weights, position sizes — a leading "+" is a CATEGORY ERROR. It implies the
+ * share has gained 100%, not that it represents 100% of the portfolio.
+ *
+ * USAGE: weights, allocation shares, percentage-of-total displays.
+ * For directional values (P&L %, daily change %), keep using formatPercent.
+ *
+ * F-307 fix (PLAN-0048 QA iter-1): allocation panel was showing "+100.00%"
+ * for a single-asset-type portfolio.
+ */
+export function formatPercentUnsigned(
+  value: number | null | undefined,
+  decimals = 2,
+): string {
+  if (value == null) return "—";
+  return `${(value * 100).toFixed(decimals)}%`;
+}
+
+/**
  * formatVolume — compact volume notation for table cells
  * e.g., 1234567 → "1.23M", 987654321 → "987.65M"
  */
