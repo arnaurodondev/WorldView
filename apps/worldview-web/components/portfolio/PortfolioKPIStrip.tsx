@@ -114,7 +114,11 @@ export function PortfolioKPIStrip({
     // WHY border-b: the KPI strip sits between the page header and the tab bar.
     // A bottom border creates the visual divider expected by terminal UX patterns.
     // WHY divide-x divide-border: 1px separator between each tile — no gaps, no cards.
-    <div className="flex divide-x divide-border border-b border-border shrink-0">
+    // WHY bg-card: now that the parent page is bg-background (#09090B) the strip
+    // needs an explicit panel-tone background so the 7-tile band reads as a
+    // distinct chrome surface, not a darker continuation of the page. Same
+    // pattern as the dashboard KPI strip.
+    <div className="flex divide-x divide-border border-b border-border shrink-0 bg-card">
       {/* Tile 1: Total Value — no color (neutral fact) */}
       <KPITile
         label="Total Value"
@@ -155,7 +159,9 @@ export function PortfolioKPIStrip({
         label="Top Gainer"
         value={
           topGainer
-            ? `${topGainer.ticker} +${formatPercent(topGainer.pnlPct / 100)}`
+            // WHY no leading "+": formatPercent already prefixes positive values
+            // with "+" (lib/utils.ts:81). Adding another "+" produced "++143.70%".
+            ? `${topGainer.ticker} ${formatPercent(topGainer.pnlPct / 100)}`
             : "—"
         }
         positive={topGainer != null}

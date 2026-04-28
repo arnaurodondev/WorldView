@@ -225,8 +225,19 @@ export function SemanticHoldingsTable({
       <table className="w-full border-collapse text-[11px]">
 
         {/* ── Column headers ─────────────────────────────────────────────── */}
-        <thead className="sticky top-0 bg-card z-10">
-          <tr className="h-[22px] border-b border-border">
+        {/*
+          WHY bg-card on the <tr> (not the <thead>): with `border-collapse`
+          tables, paint of <thead>-level backgrounds during sticky scroll is
+          inconsistent across Chromium/Safari/Firefox — some browsers leak
+          the page background through the cells, producing a "transparent
+          floating header" artefact when the user scrolls down through the
+          analytics section. Putting the bg-card on the <tr> (which is the
+          actual row painted) fixes this. We keep z-10 so the row stays above
+          the body cells but below page-level chrome (TopBar/StatusBar live
+          in the shell layout above).
+        */}
+        <thead className="sticky top-0 z-10">
+          <tr className="h-[22px] border-b border-border bg-card">
             {/* Non-sortable columns: TICKER, NAME, AVG COST, CURRENT */}
             <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
               TICKER
