@@ -10,6 +10,20 @@ PSQL="docker exec -i $CONTAINER psql -U postgres"
 
 echo "Seeding portfolio_db..."
 $PSQL -d portfolio_db <<'SQL'
+-- ── F-403 (CRITICAL, QA iter-4 2026-04-28) ──────────────────────────────────
+-- Single source of truth for the seeded ``instruments.id → symbol`` mapping.
+-- Both ``portfolio_db.instruments`` and ``market_data_db.instruments`` MUST
+-- agree on this map; otherwise quote/OHLCV/news lookups quote the wrong
+-- ticker (the iter-4 bug: same UUID was NVDA in portfolio_db but GOOGL in
+-- market_data_db, so a Demo holding tagged "NVDA" silently received GOOGL
+-- prices). The market_data_db side is canonical because it is the upstream
+-- producer of ``market.instrument.created`` events; portfolio_db.instruments
+-- is the local cache that consumes those events.
+--
+-- Mapping (matches market_data_db.instruments below):
+--   1001 AAPL, 1002 MSFT, 1003 GOOGL, 1004 TSLA, 1005 AMZN,
+--   1006 NVDA, 1007 META,  1008 JPM,  1009 NFLX, 1010 DIS
+
 INSERT INTO tenants (id, name, status, created_at) VALUES
     ('01900000-0000-7000-8000-000000000001', 'Demo Tenant', 'active', NOW())
 ON CONFLICT (id) DO NOTHING;
@@ -21,6 +35,39 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO portfolios (id, tenant_id, owner_id, name, currency, status, created_at) VALUES
     ('01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'Demo Portfolio', 'USD', 'active', NOW())
 ON CONFLICT (id) DO NOTHING;
+
+-- F-402 (MAJOR, QA iter-4): extend portfolio_db.instruments to mirror
+-- market_data_db.instruments for all 10 seeded symbols. The Kafka
+-- ``market.instrument.created`` consumer normally fills this cache, but the
+-- seed flow doesn't replay events (the consumer only sees forward-going
+-- traffic). Watchlist rows referencing 1006/1007/1009/1010 stayed stuck in
+-- "resolving…" forever because the local cache had nothing to join on.
+--
+-- F-403 (CRITICAL, QA iter-4): UUID 1003 must be GOOGL (matching
+-- market_data_db). Demo's NVDA holding moved to UUID 1006 below.
+INSERT INTO instruments (id, symbol, exchange, name, currency, asset_class, entity_id, source_event_id) VALUES
+    ('01900000-0000-7000-8000-000000001001', 'AAPL',  'US', 'Apple Inc.',                 'USD', 'equity', '11111111-0001-7000-8000-000000000001', '23f6eeba-0cd6-4e4f-8824-db0a1b3b4257'),
+    ('01900000-0000-7000-8000-000000001002', 'MSFT',  'US', 'Microsoft Corporation',      'USD', 'equity', '11111111-0002-7000-8000-000000000001', 'c77268c3-bbff-4b99-971d-c8cc7f43ab28'),
+    ('01900000-0000-7000-8000-000000001003', 'GOOGL', 'US', 'Alphabet Inc.',              'USD', 'equity', '11111111-0003-7000-8000-000000000001', '69722c9f-13bd-4c55-91e0-776661e7789e'),
+    ('01900000-0000-7000-8000-000000001004', 'TSLA',  'US', 'Tesla, Inc.',                'USD', 'equity', '11111111-0005-7000-8000-000000000001', 'f8e652de-e7ca-4576-b270-6a7a701bb8de'),
+    ('01900000-0000-7000-8000-000000001005', 'AMZN',  'US', 'Amazon.com, Inc.',           'USD', 'equity', '11111111-0004-7000-8000-000000000001', '030536a9-444f-49a6-9987-73baa7cef7e9'),
+    ('01900000-0000-7000-8000-000000001006', 'NVDA',  'US', 'NVIDIA Corporation',         'USD', 'equity', '11111111-0006-7000-8000-000000000001', 'a1b2c3d4-0006-4000-8000-000000000006'),
+    ('01900000-0000-7000-8000-000000001007', 'META',  'US', 'Meta Platforms, Inc.',       'USD', 'equity', '11111111-0007-7000-8000-000000000001', 'a1b2c3d4-0007-4000-8000-000000000007'),
+    ('01900000-0000-7000-8000-000000001008', 'JPM',   'US', 'JPMorgan Chase & Co.',       'USD', 'equity', '11111111-0008-7000-8000-000000000001', 'a1b2c3d4-0008-4000-8000-000000000008'),
+    ('01900000-0000-7000-8000-000000001009', 'NFLX',  'US', 'Netflix, Inc.',              'USD', 'equity', '11111111-0009-7000-8000-000000000001', 'a1b2c3d4-0009-4000-8000-000000000009'),
+    ('01900000-0000-7000-8000-000000001010', 'DIS',   'US', 'The Walt Disney Company',    'USD', 'equity', '11111111-0010-7000-8000-000000000001', 'a1b2c3d4-0010-4000-8000-000000000010')
+ON CONFLICT (id) DO UPDATE SET
+    -- F-403 reseed: when re-running ``make seed`` against a DB that already
+    -- holds the OLD (incorrect) NVDA-on-1003 mapping we MUST overwrite the
+    -- symbol/name fields, otherwise the cache stays poisoned. The columns
+    -- listed here are the ones that uniquely identify a security; we leave
+    -- ``entity_id`` alone so that any production-style entity already
+    -- linked to this row by the consumer is preserved.
+    symbol = EXCLUDED.symbol,
+    name = EXCLUDED.name,
+    exchange = EXCLUDED.exchange,
+    currency = EXCLUDED.currency,
+    asset_class = EXCLUDED.asset_class;
 
 INSERT INTO watchlists (id, tenant_id, user_id, name, status, created_at) VALUES
     ('01900000-0000-7000-8000-000000000200', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'Tech Watchlist', 'active', NOW()),
@@ -92,13 +139,33 @@ WHERE entity_id IS NULL
 -- the seed values rather than left at whatever the repair script wrote (or
 -- whatever the live brokerage sync produced). Other columns are also
 -- refreshed for consistency.
+--
+-- F-403 (QA iter-4 2026-04-28): Demo's NVDA position moved from instrument_id
+-- 1003 (which is now GOOGL — matching market_data_db) to instrument_id 1006
+-- (the real NVDA UUID). Cost basis $141.20 stays — that was originally NVDA's
+-- cost. Without this remap, every Demo "NVDA" market-data lookup would still
+-- return GOOGL data despite the cache fix above.
+--
+-- Hardening: we delete any orphan Demo holdings that point at the OLD NVDA
+-- mapping (instrument_id=1003) BEFORE the upsert so a leftover row from a
+-- pre-iter-4 seed doesn't leave Demo with an extra GOOGL position. Scoped
+-- to the demo portfolio so it's safe to run against any DB state.
+DELETE FROM holdings
+WHERE portfolio_id = '01900000-0000-7000-8000-000000000100'
+  AND instrument_id = '01900000-0000-7000-8000-000000001003'
+  AND id <> '01900000-0000-7000-8000-000000000402';
+
 INSERT INTO holdings (id, portfolio_id, instrument_id, tenant_id, quantity, average_cost, currency, updated_at) VALUES
     ('01900000-0000-7000-8000-000000000400', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001001', '01900000-0000-7000-8000-000000000001', 50.00000000, 178.50000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000401', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001002', '01900000-0000-7000-8000-000000000001', 30.00000000, 412.75000000, 'USD', NOW()),
-    ('01900000-0000-7000-8000-000000000402', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001003', '01900000-0000-7000-8000-000000000001', 20.00000000, 141.20000000, 'USD', NOW()),
+    -- holding 0402 was NVDA on the (now-corrected) UUID 1003. Move to 1006.
+    ('01900000-0000-7000-8000-000000000402', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001006', '01900000-0000-7000-8000-000000000001', 20.00000000, 141.20000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000403', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001004', '01900000-0000-7000-8000-000000000001', 15.00000000, 245.30000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000404', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001005', '01900000-0000-7000-8000-000000000001', 25.00000000, 185.60000000, 'USD', NOW())
 ON CONFLICT (id) DO UPDATE SET
+    -- F-403 reseed: instrument_id is part of the upsert payload — old DBs
+    -- where holding 0402 still points at 1003 must be remapped to 1006.
+    instrument_id = EXCLUDED.instrument_id,
     quantity = EXCLUDED.quantity,
     average_cost = EXCLUDED.average_cost,
     currency = EXCLUDED.currency,

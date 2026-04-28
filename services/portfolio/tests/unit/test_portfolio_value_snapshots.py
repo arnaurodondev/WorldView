@@ -25,7 +25,11 @@ from portfolio.application.use_cases.compute_portfolio_value import (
 )
 from portfolio.domain.entities.holding import Holding
 from portfolio.domain.entities.portfolio import Portfolio
-from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
+from portfolio.domain.entities.portfolio_value_snapshot import (
+    DATA_QUALITY_OK,
+    DATA_QUALITY_PARTIAL_PRICES,
+    PortfolioValueSnapshot,
+)
 from portfolio.domain.enums import PortfolioKind, PortfolioStatus
 from portfolio.workers.portfolio_snapshot_worker import (
     PortfolioSnapshotWorker,
@@ -229,7 +233,14 @@ class TestComputePortfolioValueUseCase:
         assert latest.total_value == Decimal("2750")
 
     @pytest.mark.asyncio
-    async def test_missing_price_logs_warning_and_zeroes_contribution(self) -> None:
+    async def test_missing_price_falls_back_to_cost_basis_and_flags_partial(self) -> None:
+        """F-401 (iter-4): a fully missing price contributes cost basis.
+
+        Before iter-4 a missing bar contributed $0 — the snapshot silently
+        undercounted. Now the use case falls back to ``qty x avg_cost`` and
+        marks the snapshot ``data_quality = "partial_prices"`` so the read
+        path can render a "partial data" badge to the user.
+        """
         uow = FakeUnitOfWork()
         portfolio_id = uuid4()
         tenant_id = uuid4()
@@ -238,7 +249,8 @@ class TestComputePortfolioValueUseCase:
         await uow.holdings.save(h1)
         await uow.holdings.save(h2)
 
-        # h2 has no price.
+        # h2 has no price on any date — the lookback exhausts and the use
+        # case falls back to cost basis (5 * 200 = 1000).
         prices = _FakePriceClient({h1.instrument_id: Decimal("150"), h2.instrument_id: None})
         uc = ComputePortfolioValueUseCase(prices)
 
@@ -251,9 +263,119 @@ class TestComputePortfolioValueUseCase:
             uow,
         )
 
-        # Only h1 contributes to value; cost still includes both.
-        assert snap.total_value == Decimal("1500")
+        # h1 contributes 10 * 150 = 1500. h2 falls back to cost = 5 * 200 = 1000.
+        assert snap.total_value == Decimal("2500")
         assert snap.total_cost == Decimal("2000")
+        # F-401: any fallback must downgrade data_quality.
+        assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
+
+    @pytest.mark.asyncio
+    async def test_full_coverage_marks_data_quality_ok(self) -> None:
+        """When every holding has a fresh on-date close, data_quality is ``ok``."""
+        uow = FakeUnitOfWork()
+        portfolio_id = uuid4()
+        tenant_id = uuid4()
+        h1 = _make_holding(portfolio_id, tenant_id, qty="10", cost="100")
+        await uow.holdings.save(h1)
+
+        prices = _FakePriceClient({h1.instrument_id: Decimal("150")})
+        uc = ComputePortfolioValueUseCase(prices)
+
+        snap = await uc.execute(
+            ComputePortfolioValueCommand(
+                portfolio_id=portfolio_id,
+                tenant_id=tenant_id,
+                as_of_date=date(2026, 4, 28),
+            ),
+            uow,
+        )
+        assert snap.data_quality == DATA_QUALITY_OK
+
+    @pytest.mark.asyncio
+    async def test_stale_price_lookback_uses_recent_close_and_flags_partial(self) -> None:
+        """F-401: when ``as_of_date`` has no bar but a recent prior date does,
+        use the prior close and flag the snapshot ``partial_prices``.
+
+        This emulates the real Demo issue: AMZN had no Apr-28 bar yet but the
+        Apr-27 close was available. Pre-fix, AMZN contributed $0; the fix now
+        contributes 25 * 261.76 = $6,544 with a partial-prices flag.
+        """
+
+        # Per-date price client to exercise the lookback specifically.
+        class _DatedPriceClient(OHLCVPriceClient):
+            def __init__(self, by_date: dict[tuple[UUID, date], Decimal]) -> None:
+                self._by_date = by_date
+
+            async def get_close_on_date(
+                self,
+                instrument_id: UUID,
+                on_date: date,
+            ) -> Decimal | None:
+                return self._by_date.get((instrument_id, on_date))
+
+        uow = FakeUnitOfWork()
+        portfolio_id = uuid4()
+        tenant_id = uuid4()
+        h = _make_holding(portfolio_id, tenant_id, qty="25", cost="185.60")
+        await uow.holdings.save(h)
+
+        as_of = date(2026, 4, 28)
+        # Bar exists ONLY for the previous calendar day.
+        prices = _DatedPriceClient({(h.instrument_id, date(2026, 4, 27)): Decimal("261.76")})
+        uc = ComputePortfolioValueUseCase(prices)
+
+        snap = await uc.execute(
+            ComputePortfolioValueCommand(
+                portfolio_id=portfolio_id,
+                tenant_id=tenant_id,
+                as_of_date=as_of,
+            ),
+            uow,
+        )
+
+        # Stale-price fallback contributes the 4/27 close, not zero, not cost.
+        assert snap.total_value == Decimal("25") * Decimal("261.76")
+        # Flagged as partial because the close was not on as_of_date.
+        assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
+
+    @pytest.mark.asyncio
+    async def test_lookback_exhausted_falls_back_to_cost(self) -> None:
+        """When no bar within 5 calendar days, contribution is cost basis."""
+
+        class _DatedPriceClient(OHLCVPriceClient):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get_close_on_date(
+                self,
+                instrument_id: UUID,
+                on_date: date,
+            ) -> Decimal | None:
+                self.calls += 1
+                return None
+
+        uow = FakeUnitOfWork()
+        portfolio_id = uuid4()
+        tenant_id = uuid4()
+        h = _make_holding(portfolio_id, tenant_id, qty="10", cost="50")
+        await uow.holdings.save(h)
+
+        prices = _DatedPriceClient()
+        uc = ComputePortfolioValueUseCase(prices)
+        snap = await uc.execute(
+            ComputePortfolioValueCommand(
+                portfolio_id=portfolio_id,
+                tenant_id=tenant_id,
+                as_of_date=date(2026, 4, 28),
+            ),
+            uow,
+        )
+
+        # 6 attempts: as_of_date + 5 lookback days.
+        assert prices.calls == 6
+        # Cost-basis fallback: 10 * 50 = 500.
+        assert snap.total_value == Decimal("500")
+        assert snap.data_quality == DATA_QUALITY_PARTIAL_PRICES
 
     @pytest.mark.asyncio
     async def test_no_holdings_writes_zero_snapshot(self) -> None:

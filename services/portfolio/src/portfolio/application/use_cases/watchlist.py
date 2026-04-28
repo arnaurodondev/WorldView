@@ -246,6 +246,15 @@ class AddWatchlistMemberUseCase:
                 f"Entity {cmd.entity_id} is already in watchlist {cmd.watchlist_id}",
             )
 
+        # F-404 (QA iter-4): the unique-by-entity_id check above is necessary
+        # but not sufficient. Two different entity_ids (one seed-style, one
+        # KG-style) can resolve to the SAME instrument_id, in which case
+        # the watchlist would render the same ticker twice. We therefore
+        # also reject any add whose RESOLVED instrument is already a member
+        # of the watchlist. The pre-check happens AFTER the resolution loop
+        # below, so it lives at the bottom of this use case rather than here.
+        # (See "F-404 instrument-level dup guard" below.)
+
         # ── Resolve ticker/name/instrument_id at add-time (PLAN-0046 T-46-2-01) ──
         # WHY HERE (not on read): we want to avoid (a) cross-service joins and
         # (b) per-page-load resolution. The local ``instruments`` table is fed
@@ -300,6 +309,28 @@ class AddWatchlistMemberUseCase:
                 entity_id=str(cmd.entity_id),
                 entity_type=cmd.entity_type,
             )
+
+        # F-404 (QA iter-4): instrument-level dup guard. If the resolution
+        # above produced an ``instrument_id`` and the watchlist already has a
+        # member with that same ``instrument_id`` (under a DIFFERENT
+        # ``entity_id``), reject the add with a 409. Without this, the
+        # underlying SQL unique index (migration 0014) raises an
+        # ``IntegrityError`` that surfaces to the user as a generic 500.
+        # Doing the check here keeps the error contract clean and avoids
+        # the wasted INSERT round-trip.
+        #
+        # We only run the scan when ``instrument_id`` resolved — NULL
+        # instrument_ids are allowed to coexist (one entity might resolve
+        # later to the same instrument as another, but the migration's
+        # partial index only enforces uniqueness on non-NULL values).
+        if instrument_id is not None:
+            existing_members = await uow.watchlist_members.list_by_watchlist(cmd.watchlist_id)
+            for member in existing_members:
+                if member.instrument_id == instrument_id:
+                    raise WatchlistMemberAlreadyExistsError(
+                        f"Instrument {instrument_id} is already in watchlist {cmd.watchlist_id} "
+                        f"(under entity {member.entity_id})",
+                    )
 
         member = WatchlistMember(
             id=new_uuid(),
