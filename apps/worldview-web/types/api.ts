@@ -815,6 +815,15 @@ export interface BriefingResponse {
   // The route handler maps execute_public_morning()'s "content" key → "narrative"
   // before serialising. See: services/rag-chat/src/rag_chat/api/schemas.py line 117.
   narrative: string;
+  // WHY summary is optional + nullable (PLAN-0048 Wave A):
+  // The v2.2 MORNING_BRIEFING prompt splits its output into a ``## SUMMARY``
+  // block (1-2 sentences) and a ``## DETAILS`` block. The S8 use case parses
+  // them apart and ships the summary half here. Older cached briefings
+  // generated before the v2.2 rollout will lack this field entirely (hence
+  // optional `?`), and instrument briefs always pass null (hence `| null`).
+  // The MorningBriefCard falls back to clamp-3 of the narrative when null —
+  // never break rendering when summary is missing.
+  summary?: string | null;
   risk_summary: {
     concentration_score: number;
     top_risk_signals: Array<{ signal_id: string; description: string }>;

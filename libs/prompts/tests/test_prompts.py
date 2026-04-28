@@ -63,6 +63,33 @@ class TestMorningBriefing:
         )
         assert "Never speculate beyond the evidence provided" in result
 
+    def test_v22_two_tier_format(self) -> None:
+        """v2.2 prompt must instruct the LLM to emit ## SUMMARY + --- + ## DETAILS.
+
+        PLAN-0048 Wave A — verifies the two-tier output contract is part of the
+        rendered prompt so the splitter in GenerateBriefingUseCase has a chance
+        to find a divider. Without these directives the LLM falls back to
+        single-block output and the collapsed card view degrades.
+        """
+        result = MORNING_BRIEFING.render(
+            portfolio_context="",
+            news_context="",
+            alerts_context="",
+            market_overview="",
+            events_context="",
+            safety=SAFETY_FOOTER,
+            current_date="2026-04-26",
+        )
+        # The prompt must spell out both block headers and the divider rule.
+        assert "## SUMMARY" in result
+        assert "## DETAILS" in result
+        assert "literal `---` divider" in result
+        # And it must forbid the redundant body chrome the card already supplies.
+        assert "Morning Briefing" in result  # appears in the forbid clause
+        assert "Date:" in result  # appears in the forbid clause
+        # Version constant must reflect the bump.
+        assert MORNING_BRIEFING.version == "2.2"
+
 
 class TestInstrumentBriefing:
     def test_render(self) -> None:

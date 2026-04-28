@@ -66,6 +66,91 @@ def _strip_reasoning(text: str) -> str:
     return text
 
 
+# ── Two-tier brief splitter (PLAN-0048 Wave A, prompt v2.2) ─────────────────
+#
+# The v2.2 MORNING_BRIEFING prompt forces the LLM to emit:
+#
+#     ## SUMMARY
+#     <1-2 sentences>
+#
+#     ---
+#
+#     ## DETAILS
+#     ### Market Overview
+#     ...
+#
+# We split on the FIRST line that is exactly ``---`` (after trim) so:
+#   - The summary half feeds the collapsed card view (replaces line-clamp-3).
+#   - The details half feeds the expanded card view.
+#
+# WHY a strict line-mode split (not ``str.split("---", 1)``):
+# Markdown content can legitimately contain ``---`` mid-paragraph (e.g. an
+# em-dash range). Requiring the divider to be on its own line eliminates
+# false-positive splits.
+def _split_summary_and_details(content: str) -> tuple[str | None, str]:
+    """Split a v2.2 morning brief into ``(summary, narrative)``.
+
+    The LLM is instructed to emit a ``## SUMMARY`` block, a literal ``---``
+    divider line, then a ``## DETAILS`` block. Older prompts and instrument
+    briefs emit a single block with no divider — those return ``(None, full_text)``
+    so the frontend can degrade gracefully.
+
+    Both returned strings have their leading ``## SUMMARY`` / ``## DETAILS``
+    headers stripped — the card chrome already labels the two views, so the
+    duplicate headers would just steal vertical space.
+    """
+    if not content:
+        return None, content
+
+    lines = content.splitlines()
+    divider_idx: int | None = None
+    # Walk the first ~50 lines looking for a bare "---" line. We cap the search
+    # because a divider after that point almost certainly belongs to a markdown
+    # rule inside the body, not to our two-tier separator.
+    for i, line in enumerate(lines[:50]):
+        if line.strip() == "---":
+            divider_idx = i
+            break
+
+    if divider_idx is None:
+        # No divider found — assume legacy single-block output. Return the full
+        # content as the narrative and leave summary unset.
+        return None, content
+
+    summary_block = "\n".join(lines[:divider_idx]).strip()
+    details_block = "\n".join(lines[divider_idx + 1 :]).strip()
+
+    # Strip the redundant block headers ("## SUMMARY" / "## DETAILS") — the
+    # frontend chrome already labels these regions, so the headers would
+    # double-decorate the rendered output.
+    summary_block = _strip_block_header(summary_block, "summary")
+    details_block = _strip_block_header(details_block, "details")
+
+    # Defensive: if the summary block is empty after stripping, fall back to
+    # treating the full content as narrative. An empty summary would render as
+    # a blank line in the collapsed view which is worse than a clamp-3 fallback.
+    if not summary_block:
+        return None, content
+
+    return summary_block, details_block or content
+
+
+def _strip_block_header(block: str, expected: str) -> str:
+    """Remove a leading ``## SUMMARY`` / ``## DETAILS`` header from ``block``.
+
+    Case-insensitive; tolerates 1-3 leading ``#`` characters and an optional
+    trailing colon. Returns the block unchanged if no matching header is found.
+    """
+    lines = block.splitlines()
+    if not lines:
+        return block
+    first = lines[0].strip().lower().rstrip(":")
+    # Match "# summary", "## summary", "### summary" — same for "details".
+    if first in (f"# {expected}", f"## {expected}", f"### {expected}", expected):
+        return "\n".join(lines[1:]).lstrip()
+    return block
+
+
 class GenerateBriefingUseCase:
     """Generate an AI-narrative portfolio risk brief for email delivery or frontend.
 
@@ -366,6 +451,16 @@ class GenerateBriefingUseCase:
             chunks.append(chunk)
         content = _strip_reasoning("".join(chunks))
 
+        # ── 4b. Two-tier split (PLAN-0048 Wave A) ─────────────────────────────
+        # The v2.2 MORNING_BRIEFING prompt asks the LLM to emit a ``## SUMMARY``
+        # block + ``---`` divider + ``## DETAILS`` block. Splitting here lets the
+        # frontend show the summary in the collapsed card and the details when
+        # expanded, eliminating the redundant "Morning Briefing" / date headers
+        # that wasted ~15% of the dashboard row before this change.
+        # Returns (None, full_content) for legacy single-block output so the UI
+        # can fall back to the old line-clamp-3 path.
+        summary, narrative = _split_summary_and_details(content)
+
         # ── 5. Derive risk_summary from portfolio holdings (HHI concentration) ─
         risk_summary = _build_morning_risk_summary(ctx)
 
@@ -377,11 +472,23 @@ class GenerateBriefingUseCase:
         log.info(  # type: ignore[no-any-return]
             "morning_briefing_generated",
             user_id=user_id,
-            chars=len(content),
+            # Track whether the LLM honored the v2.2 two-tier contract. If
+            # has_summary is consistently False in production we know the model
+            # is ignoring the format directive and we can adjust temperature
+            # or switch providers.
+            chars=len(narrative),
+            has_summary=summary is not None,
         )
 
         return {
-            "content": content,
+            # ``content`` keeps the field name expected by the route layer (which
+            # maps result["content"] → response.narrative). The narrative half of
+            # the split goes here so the expanded card view shows the structured
+            # ## DETAILS sections without the redundant ## SUMMARY heading.
+            "content": narrative,
+            # ``summary`` is the new field — None when the LLM didn't emit the
+            # v2.2 two-tier format (legacy fallback path).
+            "summary": summary,
             "risk_summary": risk_summary,
             "entity_mentions": entity_mentions,
             "citations": citations,

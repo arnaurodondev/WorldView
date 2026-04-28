@@ -367,6 +367,75 @@ async def test_internal_execute_still_works() -> None:
     assert "generated_at" in result
 
 
+# ── Test: Morning v2.2 two-tier split (PLAN-0048 Wave A) ───────────────────
+
+
+async def test_morning_v22_two_tier_split() -> None:
+    """v2.2 prompt output (## SUMMARY + --- + ## DETAILS) splits cleanly.
+
+    The use case must:
+      - Strip the redundant ``## SUMMARY`` / ``## DETAILS`` headers (the card
+        chrome already supplies labels).
+      - Place the summary block in result["summary"].
+      - Place the details block in result["content"] (which the route maps to
+        the response's ``narrative`` field).
+    """
+    v22_output = (
+        "## SUMMARY\n"
+        "AAPL leads with strong Q3 earnings; portfolio concentration risk elevated.\n"
+        "\n"
+        "---\n"
+        "\n"
+        "## DETAILS\n"
+        "### Market Overview\n"
+        "Tech sector +1.4% on the day.\n"
+        "\n"
+        "### Portfolio Impact\n"
+        "AAPL position gained ~$1,200.\n"
+    )
+    ctx = _sample_morning_context()
+    llm = _make_llm_chain(v22_output)
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(morning_ctx=ctx)
+
+    uc = GenerateBriefingUseCase(llm_chain=llm, valkey=valkey, context_gatherer=gatherer)
+    result = await uc.execute_public_morning(_USER_ID, _TENANT_ID)
+
+    # Summary half — 1-2 sentences, no leading "## SUMMARY" header
+    assert result["summary"] is not None
+    assert "AAPL leads" in result["summary"]
+    assert "## SUMMARY" not in result["summary"]
+    assert "---" not in result["summary"]
+
+    # Narrative half — structured sections, no leading "## DETAILS" header
+    assert "Market Overview" in result["content"]
+    assert "Portfolio Impact" in result["content"]
+    assert "## DETAILS" not in result["content"]
+    assert "## SUMMARY" not in result["content"]
+
+
+async def test_morning_legacy_no_divider_falls_back() -> None:
+    """Legacy single-block output (pre-v2.2) returns summary=None.
+
+    When the LLM ignores the v2.2 format directive (or we serve a cached brief
+    from before the rollout), there is no ``---`` divider. The use case must
+    not crash — instead it returns the full content as narrative and leaves
+    summary as None so the frontend falls back to the line-clamp-3 view.
+    """
+    legacy_output = "# Market Overview\n\nAll markets are up today."
+    ctx = _sample_morning_context()
+    llm = _make_llm_chain(legacy_output)
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(morning_ctx=ctx)
+
+    uc = GenerateBriefingUseCase(llm_chain=llm, valkey=valkey, context_gatherer=gatherer)
+    result = await uc.execute_public_morning(_USER_ID, _TENANT_ID)
+
+    # No divider → summary is None, full text in content (forward-compat)
+    assert result["summary"] is None
+    assert "# Market Overview" in result["content"]
+
+
 # ── Test: Morning citations from context ────────────────────────────────────
 
 
