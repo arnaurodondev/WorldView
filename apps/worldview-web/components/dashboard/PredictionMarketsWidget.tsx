@@ -279,7 +279,14 @@ export function PredictionMarketsWidget() {
             like a toggle group of independent buttons, not a listbox. SR
             users hear "macro, pressed" / "macro, not pressed" — matches the
             visible filled-vs-outlined state. */}
-        <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Filter by category">
+        {/* F-QA-16: overflow-x-auto + min-w-0 lets the pill row scroll
+            horizontally on narrow viewports instead of overflowing the
+            24px header rule. The header label keeps its shrink-0 anchor. */}
+        <div
+          className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
+          role="group"
+          aria-label="Filter by category"
+        >
           {(["all", "macro", "politics", "sports", "crypto"] as const).map((label) => {
             // null = "all" sentinel — keeps the state model boolean-like for filtering.
             const value: Category | null = label === "all" ? null : (label as Category);

@@ -18,6 +18,7 @@
 // WHY "use client": Uses useAuth (React context), logout() (async action),
 // and DropdownMenu (Radix UI state). All require client rendering.
 
+import type { RefObject } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, Settings, User, Bell } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -50,6 +51,26 @@ import {
  * dollars (with comma grouping) for sub-$1K values where K-suffix would feel
  * clumsy ("$847" beats "$0.8K").
  */
+/**
+ * F-QA-09 fix: tolerance for floating-point near-zero P&L. Without a deadband,
+ * a portfolio that mathematically nets to $0.00 can render as +$0 (green) or
+ * -$0 (red) depending on summation order over many positions. $0.005 is
+ * smaller than the smallest displayable cent, so anything inside the band
+ * is genuinely "flat" for display purposes.
+ */
+const PNL_FLAT_EPSILON = 0.005;
+
+/**
+ * pnlColorClass — colour the P&L slot according to direction, using a
+ * deadband so floating-point dust doesn't paint a flat day red or green.
+ */
+function pnlColorClass(value: number): string {
+  if (value > PNL_FLAT_EPSILON) return "text-[hsl(var(--positive))]";
+  if (value < -PNL_FLAT_EPSILON) return "text-[hsl(var(--negative))]";
+  // Inside the deadband we treat the move as flat — muted neutral colour.
+  return "text-muted-foreground";
+}
+
 function formatPortfolioValue(value: number | null | undefined): string {
   if (value == null) return "—";
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
@@ -95,6 +116,11 @@ interface TopBarProps {
   onAskAi?: () => void;
   /** True while the AskAiPanel is currently shown — toggles the button's pressed look. */
   askAiOpen?: boolean;
+  /**
+   * Ref forwarded to the AskAi trigger button. F-QA-05 fix: the layout uses
+   * this ref to restore focus to the trigger when the panel closes (WCAG 2.4.3).
+   */
+  askAiButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function TopBar({
@@ -104,6 +130,7 @@ export function TopBar({
   unrealisedPnl,
   onAskAi,
   askAiOpen,
+  askAiButtonRef,
 }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
@@ -211,13 +238,15 @@ export function TopBar({
             The wrapper renders its known-value children only — the
             container itself is conditional on at least one value existing
             so empty accounts still get a clean rail. */}
-        {(portfolioValue !== undefined || dailyPnl != null || unrealisedPnl != null) && (
+        {(portfolioValue != null || dailyPnl != null || unrealisedPnl != null) && (
           <div
             className="flex items-center gap-2 rounded-[2px] border border-border/30 bg-muted/20 px-2 py-0.5"
             aria-label="Portfolio header metrics"
           >
-            {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention. */}
-            {portfolioValue !== undefined && (
+            {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
+                F-QA-23: standardised on `!= null` (covers both null AND undefined) for
+                consistency with the dailyPnl / unrealisedPnl checks below. */}
+            {portfolioValue != null && (
               <span
                 className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
                 title="Total portfolio value (live quote-based)"
@@ -232,16 +261,17 @@ export function TopBar({
 
             {/* Divider hairline between PORT and Day P&L — only renders when both
                 are present so a single-value cluster doesn't show a stray rule. */}
-            {portfolioValue !== undefined && dailyPnl != null && (
+            {portfolioValue != null && dailyPnl != null && (
               <span aria-hidden="true" className="h-3 w-px bg-border/40" />
             )}
 
-            {/* Day P&L — colored teal/red so direction is instantly readable. */}
+            {/* Day P&L — colored teal/red so direction is instantly readable.
+                F-QA-09 fix: pnlColorClass uses a deadband to render a true
+                "flat" day as neutral muted colour instead of arbitrarily
+                green or red because of floating-point dust. */}
             {dailyPnl != null && (
               <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-                  dailyPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
-                }`}
+                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(dailyPnl)}`}
                 title="Today's portfolio P&L (live quote-based)"
                 aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
               >
@@ -257,12 +287,11 @@ export function TopBar({
               <span aria-hidden="true" className="h-3 w-px bg-border/40" />
             )}
 
-            {/* Total P&L — total mark-to-market vs cost basis. */}
+            {/* Total P&L — total mark-to-market vs cost basis.
+                F-QA-09 fix: same deadband as Day P&L. */}
             {unrealisedPnl != null && (
               <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-                  unrealisedPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
-                }`}
+                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(unrealisedPnl)}`}
                 title="Total unrealised P&L vs cost basis (mark-to-market)"
                 aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
               >
@@ -281,7 +310,7 @@ export function TopBar({
             rendered at app/(app)/layout.tsx — keeping its mount above the
             TopBar means the panel is not constrained by any overflow:hidden
             container in the shell. We forward only the open callback. */}
-        {onAskAi && <AskAiButton onOpen={onAskAi} isOpen={askAiOpen} />}
+        {onAskAi && <AskAiButton ref={askAiButtonRef} onOpen={onAskAi} isOpen={askAiOpen} />}
 
         {/* ── Refresh All (PLAN-0050 T-F-6-06) ───────────────────────────────
             Sits between Ask AI and the bell so the rail reads as

@@ -116,13 +116,17 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
             : "bg-muted-foreground";
     return (
       <span className="inline-flex items-center gap-1">
+        {/* F-QA-06: aria-hidden so screen readers don't double-narrate the
+            status — the StaleBadge sibling already conveys the same meaning
+            verbally for non-live states ("DELAYED", "STALE", "N/A"). The dot
+            is a SIGHTED-only signal kept silent for AT users. */}
         <span
           className={`h-[6px] w-[6px] rounded-full ${dotColor}`}
           // WHY visually 6px (not 3px): 3px is a single CSS pixel at 1×
           // DPR and disappears against the dark background. 6px is what
           // the audit's "3px dot" actually means in user-visible pixels —
           // matches the AlarmsPanel severity dot for visual consistency.
-          aria-label={`Quote status: ${status}`}
+          aria-hidden="true"
           title={`Quote status: ${status}`}
         />
         <StaleBadge

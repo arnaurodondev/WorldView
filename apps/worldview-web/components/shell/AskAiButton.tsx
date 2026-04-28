@@ -37,6 +37,7 @@
 // imports a Lucide icon component, both of which require client rendering
 // in App Router.
 
+import { forwardRef } from "react";
 import { Sparkles } from "lucide-react";
 
 interface AskAiButtonProps {
@@ -55,24 +56,33 @@ interface AskAiButtonProps {
  * visually with the portfolio value (which is the rail's single most
  * important number).
  */
-export function AskAiButton({ onOpen, isOpen = false }: AskAiButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      // WHY rounded-[2px]: design system mandates 2px radius across the shell.
-      // WHY ring + bg shift on isOpen: the floating panel is fixed bottom-right
-      // so users lose the visual link back to the trigger; a faint ring keeps
-      // the button visually "lit" while the panel is open.
-      className={`flex h-6 items-center gap-1 rounded-[2px] border border-amber-500/30 bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 hover:text-amber-200 ${
-        isOpen ? "ring-1 ring-amber-400/60" : ""
-      }`}
-      aria-label="Open AI assistant"
-      aria-pressed={isOpen}
-      title="Ask AI (⌘K coming soon)"
-    >
-      <Sparkles className="h-3 w-3" aria-hidden="true" />
-      AI
-    </button>
-  );
-}
+// F-QA-05: forwardRef so the layout can refocus this trigger when the panel
+// closes — a WCAG 2.4.3 requirement for transient overlays. Without the ref
+// the parent has no handle to restore focus to.
+export const AskAiButton = forwardRef<HTMLButtonElement, AskAiButtonProps>(
+  function AskAiButton({ onOpen, isOpen = false }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onOpen}
+        // WHY rounded-[2px]: design system mandates 2px radius across the shell.
+        // WHY ring + bg shift on isOpen: the floating panel is fixed bottom-right
+        // so users lose the visual link back to the trigger; a faint ring keeps
+        // the button visually "lit" while the panel is open.
+        className={`flex h-6 items-center gap-1 rounded-[2px] border border-amber-500/30 bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 hover:text-amber-200 ${
+          isOpen ? "ring-1 ring-amber-400/60" : ""
+        }`}
+        aria-label="Open AI assistant"
+        aria-pressed={isOpen}
+        // F-QA-19: dropped the "coming soon" copy — the keyboard shortcut is
+        // not yet wired so advertising it was untruthful. We will reinstate
+        // the hint when the global ⌘K handler ships.
+        title="Ask AI"
+      >
+        <Sparkles className="h-3 w-3" aria-hidden="true" />
+        AI
+      </button>
+    );
+  },
+);

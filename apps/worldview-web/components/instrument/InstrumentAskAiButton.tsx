@@ -132,7 +132,12 @@ export function InstrumentAskAiButton({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-40 flex items-center gap-1.5 rounded-[2px] border border-amber-500/40 bg-amber-500/90 px-3 py-2 text-xs font-semibold text-black shadow-lg transition-colors hover:bg-amber-400"
+          // F-QA-12: bottom-10 (40px) places the button above the 24px
+          // StatusBar with comfortable clearance. The previous bottom-6
+          // placed the bottom edge of a 32px button flush with the StatusBar
+          // top edge, intercepting clicks on status connectors at the right
+          // edge of the bar.
+          className="fixed bottom-10 right-6 z-40 flex items-center gap-1.5 rounded-[2px] border border-amber-500/40 bg-amber-500/90 px-3 py-2 text-xs font-semibold text-black shadow-lg transition-colors hover:bg-amber-400"
           aria-label={`Ask AI about ${ticker}`}
           title={`Ask AI about ${ticker}`}
         >

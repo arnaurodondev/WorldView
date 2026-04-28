@@ -214,8 +214,10 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
     // WHY fixed bottom-4 right-4: floats in the corner over all page content.
     // WHY z-50: below FlashOverlay (z-[9999]) but above page content (z-0).
     <div
-      // WHY rounded-[2px] (was rounded-lg): terminal 2px radius rule applies to panels
-      className="fixed bottom-4 right-4 z-50 flex w-80 flex-col rounded-[2px] border border-border bg-background"
+      // WHY rounded-[2px] (was rounded-lg): terminal 2px radius rule applies to panels.
+      // F-QA-12: bottom-10 lifts the panel above the 24px StatusBar so its
+      // bottom border doesn't visually merge with the bar.
+      className="fixed bottom-10 right-4 z-50 flex w-80 flex-col rounded-[2px] border border-border bg-background"
       role="complementary"
       aria-label="AI assistant"
     >
@@ -250,6 +252,24 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
         </div>
       </div>
 
+      {/* ── Context hint (optional, instrument-page floater) ─────────────
+          Surfaces a quiet one-liner so the user knows the assistant is
+          aware of the current page context.
+          F-QA-10 fix: always render the hint when supplied — the prior
+          `&& !response && !isStreaming && !error` made the hint vanish
+          after the first answer streamed, so the user re-typed without
+          any indication that the assistant still had page context.
+          The hint sits ABOVE the response area, above the input slot,
+          so it stays visible across the full conversation lifecycle.
+          We do NOT auto-prepend it to the user's typed message — that
+          would be magical and could leak page state into transcripts the
+          user might not want shared. */}
+      {contextHint && (
+        <div className="border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
+          {contextHint}
+        </div>
+      )}
+
       {/* ── Response area ────────────────────────────── */}
       {(response || isStreaming || error) && (
         <div className="max-h-64 overflow-y-auto px-3 py-3">
@@ -264,17 +284,6 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
               )}
             </p>
           )}
-        </div>
-      )}
-
-      {/* ── Context hint (optional, instrument-page floater) ─────────────
-          Surfaces a quiet one-liner so the user knows the assistant is
-          aware of the current page context. We do NOT auto-prepend it to
-          the user's typed message — that would be magical and could leak
-          page state into transcripts the user might not want shared. */}
-      {contextHint && !response && !isStreaming && !error && (
-        <div className="border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
-          {contextHint}
         </div>
       )}
 
