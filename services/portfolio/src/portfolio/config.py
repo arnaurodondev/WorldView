@@ -74,24 +74,26 @@ class Settings(BaseSettings):
     internal_jwt_skip_verification: bool = False
 
     # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
-    # AliasChoices supports both bare SNAPTRADE_* and PORTFOLIO_SNAPTRADE_* env vars.
+    # WHY PORTFOLIO_* listed first: docker-compose brokerage-sync sets bare SNAPTRADE_*
+    # vars to "" (empty) via shell expansion when host env is unset. Putting the prefixed
+    # alias first ensures the non-empty docker.env value wins over the empty bare var.
     snaptrade_client_id: SecretStr = Field(
         default=SecretStr(""),
-        validation_alias=AliasChoices("SNAPTRADE_CLIENT_ID", "PORTFOLIO_SNAPTRADE_CLIENT_ID"),
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_CLIENT_ID", "SNAPTRADE_CLIENT_ID"),
     )
     snaptrade_consumer_key: SecretStr = Field(
         default=SecretStr(""),
-        validation_alias=AliasChoices("SNAPTRADE_CONSUMER_KEY", "PORTFOLIO_SNAPTRADE_CONSUMER_KEY"),
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_CONSUMER_KEY"),
     )
     snaptrade_redirect_uri: str = Field(
-        default="http://localhost:5173/portfolio/brokerage/callback",
-        validation_alias=AliasChoices("SNAPTRADE_REDIRECT_URI", "PORTFOLIO_SNAPTRADE_REDIRECT_URI"),
+        default="http://localhost:3001/portfolio/brokerage/callback",
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_REDIRECT_URI", "SNAPTRADE_REDIRECT_URI"),
     )
     snaptrade_secret_encryption_key: str = Field(
         default="",
         validation_alias=AliasChoices(
-            "SNAPTRADE_SECRET_ENCRYPTION_KEY",
             "PORTFOLIO_SNAPTRADE_SECRET_ENCRYPTION_KEY",
+            "SNAPTRADE_SECRET_ENCRYPTION_KEY",
         ),
     )
     brokerage_sync_cycle_seconds: int = 14400  # 4 hours

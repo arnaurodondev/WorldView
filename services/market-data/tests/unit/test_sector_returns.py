@@ -17,20 +17,20 @@ def _make_uow(sector_rows: list[dict]) -> MagicMock:
     return uow
 
 
-def test_sector_returns_maps_1w_to_timeframe():
-    """'1W' period must translate to '1w' timeframe for OHLCV query."""
+def test_sector_returns_maps_1w_to_lookback_7():
+    """'1W' period must translate to 7-day calendar lookback."""
     uow = _make_uow([])
     uc = GetSectorReturnsUseCase(uow)
     asyncio.run(uc.execute("1W"))
-    uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with("1w")
+    uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with(7)
 
 
-def test_sector_returns_maps_1m_to_timeframe():
-    """'1M' period must translate to '1M' timeframe."""
+def test_sector_returns_maps_1m_to_lookback_30():
+    """'1M' period must translate to 30-day calendar lookback."""
     uow = _make_uow([])
     uc = GetSectorReturnsUseCase(uow)
     asyncio.run(uc.execute("1M"))
-    uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with("1M")
+    uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with(30)
 
 
 def test_sector_returns_invalid_period():

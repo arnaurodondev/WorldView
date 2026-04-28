@@ -350,7 +350,7 @@ async def test_fallback_rate_limited_retries_task() -> None:
     """Fallback adapter raises ProviderRateLimited → task.retry() is called."""
     registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
     tracker = _make_zero_bar_tracker(streak_value=5)
-    use_case, uow = _build_use_case(registry, zero_bar_tracker=tracker)
+    use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
     # Primary (Yahoo) returns zero bars to trigger failover
@@ -376,7 +376,7 @@ async def test_fallback_auth_error_fails_task() -> None:
     """Fallback adapter raises ProviderAuthError → task.fail() is called."""
     registry = _make_registry(Provider.EODHD, Provider.YAHOO_FINANCE)
     tracker = _make_zero_bar_tracker(streak_value=5)
-    use_case, uow = _build_use_case(registry, zero_bar_tracker=tracker)
+    use_case, _ = _build_use_case(registry, zero_bar_tracker=tracker)
     task = _make_task(DatasetType.OHLCV, "1d")
 
     # Primary (Yahoo) returns zero bars to trigger failover

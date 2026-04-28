@@ -284,7 +284,7 @@ class TestDeepInfraProviderPath:
     async def test_external_api_called_when_api_key_set(self) -> None:
         """When api_key is set, POST goes to chat/completions, not /api/generate."""
         articles = [(_DOC_ID, "Apple reports earnings", "NEWS")]
-        factory, session = _make_session_factory(articles)
+        factory, _ = _make_session_factory(articles)
 
         openai_resp = {"choices": [{"message": {"content": json.dumps({"score": 0.8, "reason": "earnings"})}}]}
 

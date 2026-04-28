@@ -427,7 +427,7 @@ class TestEnrichedConsumerClaimsE2E:
     @pytest.mark.unit
     async def test_consumer_materializes_claims_from_enriched_message(self) -> None:
         """Claims in the enriched message flow through to graph_write."""
-        sf, session = _mock_session_factory()
+        sf, _ = _mock_session_factory()
         config = ConsumerConfig(
             group_id="kg-enriched-test",
             topics=["nlp.article.enriched.v1"],

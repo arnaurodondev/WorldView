@@ -7,9 +7,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from market_data.application.ports.uow import ReadOnlyUnitOfWork
 
-_PERIOD_TO_TIMEFRAME: dict[str, str] = {
-    "1W": "1w",
-    "1M": "1M",
+# Calendar lookback days per period — used against daily bars.
+# WHY not derived 1w/1M bars: derived bars require ≥2 such bars per instrument,
+# which is rarely available in practice. Daily bars with a calendar lookback work
+# with any instrument that has ≥2 trading days of history.
+_PERIOD_TO_LOOKBACK_DAYS: dict[str, int] = {
+    "1W": 7,
+    "1M": 30,
 }
 
 
@@ -33,11 +37,11 @@ class GetPeriodMoversUseCase:
 
         mover_type: "gainers" (DESC by period_return_pct) or "losers" (ASC).
         """
-        if period not in _PERIOD_TO_TIMEFRAME:
+        if period not in _PERIOD_TO_LOOKBACK_DAYS:
             msg = f"Unsupported period '{period}' for period movers. Use 1W or 1M."
             raise ValueError(msg)
         if mover_type not in ("gainers", "losers"):
             msg = f"mover_type must be 'gainers' or 'losers', got '{mover_type}'"
             raise ValueError(msg)
-        timeframe = _PERIOD_TO_TIMEFRAME[period]
-        return await self._uow.ohlcv_read.get_period_movers(timeframe, mover_type, limit)
+        lookback_days = _PERIOD_TO_LOOKBACK_DAYS[period]
+        return await self._uow.ohlcv_read.get_period_movers(lookback_days, mover_type, limit)

@@ -1769,8 +1769,32 @@ async def ai_signals(request: Request) -> Any:
                     kg_body = json.loads(kg_batch_resp.content)
                     for ent in kg_body.get("entities", []):
                         ticker_map[str(ent["entity_id"])] = ent.get("ticker")
-            except Exception:  # noqa: S110
-                pass  # ticker enrichment is best-effort
+            except Exception:
+                logger.warning("ai_signals_ticker_enrichment_failed", exc_info=True)
+
+        # Batch-resolve doc_ids → article titles via content-store.
+        # S6 includes doc_id in every signal; content-store /documents/batch returns
+        # title, url, published_at, source_name per doc_id in a single query.
+        article_map: dict[str, dict[str, str | None]] = {}
+        doc_ids = list({str(item.get("doc_id", "")) for item in items if item.get("doc_id")})
+        if doc_ids:
+            try:
+                cs_resp = await clients.content_store.post(
+                    "/api/v1/documents/batch",
+                    json={"doc_ids": doc_ids},
+                    headers=headers,
+                )
+                if cs_resp.status_code == 200:
+                    cs_body = json.loads(cs_resp.content)
+                    for doc in cs_body.get("documents", []):
+                        article_map[str(doc["doc_id"])] = {
+                            "title": doc.get("title"),
+                            "url": doc.get("url"),
+                            "source_name": doc.get("source_name"),
+                            "published_at": doc.get("published_at"),
+                        }
+            except Exception:
+                logger.warning("ai_signals_article_enrichment_failed", exc_info=True)
 
         signals = [
             {
@@ -1779,7 +1803,9 @@ async def ai_signals(request: Request) -> Any:
                 "ticker": ticker_map.get(str(item.get("entity_id", ""))),
                 "label": _signal_type_to_label(str(item.get("signal_type", ""))),
                 "score": float(item.get("confidence", 0.0)),
-                "article_title": None,  # evidence_text is a claim UUID, not a title
+                "article_title": article_map.get(str(item.get("doc_id", "")), {}).get("title"),
+                "article_url": article_map.get(str(item.get("doc_id", "")), {}).get("url"),
+                "source_name": article_map.get(str(item.get("doc_id", "")), {}).get("source_name"),
                 "created_at": str(item.get("detected_at", "")),
             }
             for item in items

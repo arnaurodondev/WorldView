@@ -197,7 +197,7 @@ async def test_circuit_starts_closed() -> None:
 @pytest.mark.asyncio
 async def test_circuit_opens_after_threshold_failures() -> None:
     """After failure_threshold consecutive failures the circuit transitions to OPEN."""
-    breaker, mock_valkey = _make_breaker(failure_threshold=3)
+    breaker, _ = _make_breaker(failure_threshold=3)
 
     # Record 2 failures — circuit should remain CLOSED.
     await breaker.record_failure("quotes")
@@ -233,7 +233,7 @@ async def test_circuit_open_prevents_task_execution() -> None:
     await breaker.record_failure("quotes")
     assert await breaker.is_open("quotes") is True
 
-    use_case, uow = _make_use_case_with_cb(breaker)
+    use_case, _ = _make_use_case_with_cb(breaker)
     task = _make_quote_task()
 
     with pytest.raises(ProviderRateLimited, match="circuit breaker OPEN"):
