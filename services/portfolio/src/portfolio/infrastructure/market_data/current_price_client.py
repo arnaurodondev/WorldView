@@ -3,10 +3,13 @@
 PLAN-0046 Wave 5 / T-46-5-02. R9: REST only, no DB access.
 
 The S3 endpoint ``POST /api/v1/quotes/batch`` takes
-``{"instrument_ids": [...]}`` and returns ``{"quotes": {id: {price, ...}}}``
-(see ``services/api-gateway/src/api_gateway/routes/proxy.py``
-``get_quotes_batch`` for the canonical shape — this client targets the
-same backend route directly without going through S9).
+``{"instrument_ids": [...]}`` and returns
+``{"quotes": {id: {bid, ask, last, volume, timestamp, updated_at}}}``
+(see ``services/market-data/src/market_data/api/routers/quotes.py``
+``_to_quote_response``). Note: there is **no** ``price`` key on this
+shape; the gateway proxy at S9 reshapes it to ``{price, ...}`` for the
+frontend, but the portfolio service goes direct to S3 and must read the
+raw shape itself.
 
 F-007 (QA 2026-04-28): the previous version called market-data without
 authentication and got 401s, which silently degraded the exposure read
@@ -14,6 +17,17 @@ to "cost basis" on every request. Each call now mints a short-lived
 HS256 system JWT (same pattern as the brokerage-sync worker — dev S3
 runs with ``skip_verification=True`` and accepts any decodable JWT;
 production needs a proper service account token from S9).
+
+F-301 (QA iter-3 2026-04-28): the auth fix made the call return 200, but
+the price extraction read ``quote["price"]`` — which never existed on the
+S3 envelope. Every quote silently fell back to None, every holding fell
+back to ``average_cost`` and the exposure card silently rendered cost
+basis as live exposure with ``prices_stale=true``. The extraction now
+prefers ``last`` (most-recent traded price), falls back to the bid/ask
+mid, and finally accepts ``price`` for forward-compat with any future
+backend that adds the key. A structured warning is logged when *every*
+quote in a batch is missing both keys so the next QA pass would catch a
+silent regression immediately rather than via the price-staleness flag.
 """
 
 from __future__ import annotations
@@ -122,28 +136,35 @@ class HttpCurrentPriceClient(CurrentPriceClient):
             logger.warning("current_price_invalid_json")  # type: ignore[no-any-return]
             return {}
 
-        # Expected shape: {"quotes": {"<uuid>": {"price": "..."}}}
-        # The S9 batch endpoint maps to this shape (see proxy._map_price_snapshot_to_quote).
-        # When called directly against S3, the legacy ``/api/v1/quotes/batch`` returns
-        # the same envelope. ``price`` may be a string OR a number depending on the
-        # backend version; we handle both.
+        # F-301: actual S3 shape is
+        #     {"quotes": {"<uuid>": {"bid": "...", "ask": "...", "last": "...",
+        #                            "volume": ..., "timestamp": "...",
+        #                            "updated_at": "..."}}}
+        # Pre-fix code read ``quote["price"]`` which never existed on this
+        # envelope; every quote silently came back None. We now extract the
+        # most-recent-traded price using a 3-level preference chain:
+        #   1. ``last``  — canonical "most recent trade" on the S3 schema.
+        #   2. mid       — ((bid + ask) / 2) when only quote-side prices exist
+        #                  (e.g. an illiquid name with no recent print).
+        #   3. ``price`` — forward-compat for any future backend version that
+        #                  collapses the shape (e.g. the S9 proxy did this).
         raw_quotes = payload.get("quotes")
         if not isinstance(raw_quotes, dict):
             return {}
 
         result: dict[UUID, Decimal] = {}
+        # Track how many entries were silently dropped so we can emit a
+        # single structured warning when the batch is non-empty but yielded
+        # nothing — that pattern is exactly the F-301 silent regression and
+        # the warning lets future QA catch it within seconds via container
+        # logs instead of via the staleness flag on the UI.
+        skipped_no_price = 0
         for raw_id, quote in raw_quotes.items():
             if not isinstance(quote, dict):
                 continue
-            price_raw = quote.get("price")
-            if price_raw is None:
-                continue
-            try:
-                # Decimal(str(...)) avoids float-precision drift when the
-                # backend returns a JSON number; works identically when it
-                # returns a string.
-                price = Decimal(str(price_raw))
-            except Exception:  # noqa: S112 — malformed-quote skip is intentional
+            price = _extract_price(quote)
+            if price is None:
+                skipped_no_price += 1
                 continue
             try:
                 instrument_uuid = UUID(str(raw_id))
@@ -151,5 +172,65 @@ class HttpCurrentPriceClient(CurrentPriceClient):
                 continue
             result[instrument_uuid] = price
 
+        # F-301: structured warning when every quote in the batch was
+        # unparsable. ``raw_quotes`` is non-empty here (we'd have returned
+        # already if not) so this signals a contract regression in S3 —
+        # the previous bug went unnoticed for an entire iteration because
+        # we only logged on transport errors, not on shape errors.
+        if raw_quotes and not result:
+            logger.warning(  # type: ignore[no-any-return]
+                "current_price_all_quotes_missing_price",
+                instrument_count=len(raw_quotes),
+                skipped_no_price=skipped_no_price,
+                sample_keys=list(next(iter(raw_quotes.values())).keys())
+                if isinstance(next(iter(raw_quotes.values()), None), dict)
+                else [],
+            )
+
         # Cast for mypy: dict-comprehension type was inferred OK above.
         return cast("dict[UUID, Decimal]", result)
+
+
+def _extract_price(quote: dict[str, object]) -> Decimal | None:
+    """Pull a usable per-share price from one S3 quote entry.
+
+    Preference chain (matches F-301 fix):
+        1. ``last``  → most recent traded price (canonical S3 field).
+        2. mid       → ``(bid + ask) / 2`` when both are present and the
+                       book has crossed (ask >= bid). A degenerate locked
+                       book (ask < bid) is treated as no quote.
+        3. ``price`` → legacy / S9-proxy shape that flattened the envelope.
+
+    Decimal(str(...)) avoids float-precision drift regardless of whether
+    the backend returns a JSON number or a string; works identically for
+    both.
+    """
+    # 1. last
+    last_raw = quote.get("last")
+    if last_raw is not None:
+        try:
+            return Decimal(str(last_raw))
+        except Exception:  # noqa: S110 — malformed value, fall through
+            pass
+
+    # 2. mid — only attempt when BOTH bid and ask are non-null and parse
+    bid_raw = quote.get("bid")
+    ask_raw = quote.get("ask")
+    if bid_raw is not None and ask_raw is not None:
+        try:
+            bid = Decimal(str(bid_raw))
+            ask = Decimal(str(ask_raw))
+            if bid >= 0 and ask >= bid:
+                return (bid + ask) / Decimal(2)
+        except Exception:  # noqa: S110 — malformed value, fall through
+            pass
+
+    # 3. price (forward-compat / S9-proxy shape)
+    price_raw = quote.get("price")
+    if price_raw is not None:
+        try:
+            return Decimal(str(price_raw))
+        except Exception:  # noqa: S110 — malformed value, fall through
+            pass
+
+    return None

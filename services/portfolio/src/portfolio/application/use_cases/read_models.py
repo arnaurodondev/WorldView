@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -56,7 +57,29 @@ class GetHoldingsUseCase:
         owner_id: UUID,
         tenant_id: UUID,
         uow: ReadOnlyUnitOfWork,
+        *,
+        include_closed: bool = False,
     ) -> list[EnrichedHolding]:
+        """Return enriched holdings for a portfolio.
+
+        F-303 (QA iter-3 2026-04-28): zero-quantity rows are noise in the
+        default UI — they're either fully-sold positions retained for tax
+        reporting OR orphans left behind when the F-201 repair script
+        zeroed quantities and a sparse broker resync didn't repopulate
+        every row. Either way, mixing them with active positions in the
+        Holdings table makes a Demo portfolio with 5 active positions
+        look like 17 (12 noise rows of "0 shares / $0 / 0%").
+
+        Default behaviour: hide ``quantity == 0`` rows. Pro users can
+        opt-in via ``include_closed=True`` (mapped from a ``?include_closed``
+        query param at the API layer) when they want to see the historic
+        position list — e.g. for tax / audit reporting.
+
+        The filter is applied AFTER aggregation for the ROOT case so a
+        position that's net-zero across sub-portfolios (rebalanced flat)
+        is also hidden by default — that matches user expectation more
+        than "show every leg".
+        """
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
@@ -69,9 +92,17 @@ class GetHoldingsUseCase:
         # with quantity sum + qty-weighted average cost.
         if portfolio.kind == PortfolioKind.ROOT:
             sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
-            return await uow.holdings.list_by_portfolio_ids_aggregated_enriched(sub_ids)
+            holdings = await uow.holdings.list_by_portfolio_ids_aggregated_enriched(sub_ids)
+        else:
+            holdings = await uow.holdings.list_by_portfolio_enriched(portfolio_id)
 
-        return await uow.holdings.list_by_portfolio_enriched(portfolio_id)
+        # F-303: filter zero-quantity unless the caller opted in.
+        # ``Decimal(0)`` == 0 works for both Decimal and int/float quantities
+        # because Python's numeric-comparison rules treat them as equal.
+        if not include_closed:
+            holdings = [eh for eh in holdings if eh.holding.quantity != Decimal(0)]
+
+        return holdings
 
 
 class ListTransactionsUseCase:

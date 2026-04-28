@@ -1432,10 +1432,25 @@ async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
 
 
 @router.get("/holdings/{portfolio_id}")
-async def get_holdings(portfolio_id: str, request: Request) -> Any:
+async def get_holdings(
+    portfolio_id: str,
+    request: Request,
+    include_closed: bool = Query(
+        default=False,
+        description=(
+            "F-303 (QA iter-3): forward to S1 so the caller can opt in to"
+            " seeing zero-quantity (closed) positions. Default false."
+        ),
+    ),
+) -> Any:
     """Proxy GET /api/v1/holdings/{portfolio_id} → S1 Portfolio service.
 
     Requires authentication. Returns all holdings for the specified portfolio.
+
+    F-303 (QA iter-3): forwards ``?include_closed`` query param so the
+    backend can filter zero-quantity holdings by default. Without this
+    forward the proxy strips the param and the user always sees the
+    default-filtered list — defeating the opt-in for tax/audit views.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1444,6 +1459,7 @@ async def get_holdings(portfolio_id: str, request: Request) -> Any:
     resp = await clients.portfolio.get(
         f"/api/v1/holdings/{portfolio_id}",
         headers=headers,
+        params={"include_closed": "true"} if include_closed else None,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

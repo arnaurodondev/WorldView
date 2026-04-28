@@ -167,8 +167,18 @@ async def _backfill_one_portfolio(
     lookback_days: int,
     *,
     dry_run: bool,
+    recompute_from: date | None = None,
 ) -> tuple[int, int]:
-    """Backfill snapshots for one portfolio. Returns (written, skipped_dry_run)."""
+    """Backfill snapshots for one portfolio. Returns (written, skipped_dry_run).
+
+    F-305 (QA iter-3 2026-04-28): when ``recompute_from`` is provided, the
+    script first DELETEs any existing snapshots from that date forward,
+    then replays the range. This is the recovery path for contaminated
+    history (e.g. the F-201 wipe wrote a $0 snapshot for one day, then
+    later snapshots reflect a different holdings set, producing a -88%
+    cliff between adjacent points). Without the wipe, the upsert is a
+    no-op on existing rows; the cliff persists.
+    """
     today = datetime.now(tz=UTC).date()
     earliest = await _earliest_transaction_date(write_factory, portfolio.id)
     if earliest is None:
@@ -177,6 +187,34 @@ async def _backfill_one_portfolio(
 
     cap = today - timedelta(days=lookback_days)
     start = max(earliest, cap)
+
+    # F-305: when ``recompute_from`` is set, raise the start to that date
+    # AND wipe existing snapshots in the range so the upsert genuinely
+    # rewrites history (otherwise the upsert silently overwrites with the
+    # same value). We DO NOT extend the range earlier than ``start``
+    # already chose — recomputing further back than the lookback window
+    # would defeat the safety cap.
+    if recompute_from is not None:
+        wipe_from = max(recompute_from, start)
+        async with write_factory() as session:  # type: ignore[operator]
+            wipe_result = await session.execute(
+                text(
+                    "DELETE FROM portfolio_value_snapshots "
+                    "WHERE portfolio_id = :pid AND snapshot_date >= :from_date",
+                ),
+                {"pid": portfolio.id, "from_date": wipe_from},
+            )
+            await session.commit()
+            wiped = int(wipe_result.rowcount or 0)
+        logger.info(
+            "backfill_wipe_for_recompute",
+            portfolio_id=str(portfolio.id),
+            wiped_rows=wiped,
+            from_date=wipe_from.isoformat(),
+        )
+        # The replay loop walks back from today to ``start``; force start
+        # to ``wipe_from`` so we don't replay dates we kept intact.
+        start = wipe_from
 
     # Load all transactions ONCE — replay is in memory.
     async with SqlAlchemyUnitOfWork(write_factory) as uow:  # type: ignore[arg-type]
@@ -246,6 +284,7 @@ async def _run(
     *,
     dry_run: bool,
     lookback_days: int,
+    recompute_from: date | None = None,
 ) -> BackfillReport:
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
@@ -285,6 +324,7 @@ async def _run(
                     price_client,
                     lookback_days,
                     dry_run=dry_run,
+                    recompute_from=recompute_from,
                 )
                 total_written += written
                 total_skipped += skipped
@@ -326,12 +366,37 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_LOOKBACK_DAYS,
         help=f"Max calendar days to backfill (default: {DEFAULT_LOOKBACK_DAYS}).",
     )
+    parser.add_argument(
+        "--recompute-from",
+        type=str,
+        default=None,
+        help=(
+            "F-305: ISO date (YYYY-MM-DD). When set, wipe existing snapshots "
+            "from this date forward and rewrite from replay. Use this to "
+            "rebuild contaminated history (e.g. after the F-201 holdings "
+            "wipe). Without this flag the script's upsert is a no-op on "
+            "existing rows and stale values are preserved."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    recompute_from: date | None = None
+    if args.recompute_from is not None:
+        try:
+            recompute_from = date.fromisoformat(args.recompute_from)
+        except ValueError as exc:
+            msg = f"--recompute-from must be ISO YYYY-MM-DD; got {args.recompute_from!r}: {exc}"
+            raise SystemExit(msg) from exc
 
     configure_logging("portfolio-backfill-snapshots")
     settings = Settings()  # type: ignore[call-arg]
     report = asyncio.run(
-        _run(settings, dry_run=args.dry_run, lookback_days=args.lookback_days),
+        _run(
+            settings,
+            dry_run=args.dry_run,
+            lookback_days=args.lookback_days,
+            recompute_from=recompute_from,
+        ),
     )
 
     logger.info(

@@ -28,6 +28,20 @@ INSERT INTO watchlists (id, tenant_id, user_id, name, status, created_at) VALUES
     ('01900000-0000-7000-8000-000000000202', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'E-Commerce & Retail', 'active', NOW())
 ON CONFLICT (id) DO NOTHING;
 
+-- F-304 (QA iter-3 2026-04-28): the entity_id stored on watchlist_members
+-- is the *KG entity id*, which equals the value populated on
+-- ``instruments.entity_id`` by the market.instrument.created Kafka
+-- consumer. Pre-fix the seed used the ``instruments.id`` row PK
+-- (01900000-0000-7000-8000-0000000010xx) for both columns, which is
+-- correct for ``watchlist_members.entity_id == instruments.id`` lookups
+-- but fails the ``JOIN ON instruments.entity_id`` path used by the
+-- denorm backfill. We now insert the *same* UUID into both
+-- ``watchlist_members.entity_id`` AND ``instruments.entity_id`` (see
+-- the matching market_data_db section below) so either join path
+-- resolves cleanly. Combined with the dual-key fallback in
+-- ``backfill_watchlist_member_denorm.py``, both seed-style and
+-- production-style data resolve successfully.
+--
 -- Tech Watchlist members: AAPL, MSFT, GOOGL
 INSERT INTO watchlist_members (id, watchlist_id, entity_id, entity_type, added_at) VALUES
     ('01900000-0000-7000-8000-000000000300', '01900000-0000-7000-8000-000000000200', '01900000-0000-7000-8000-000000001001', 'company', NOW()),
@@ -48,6 +62,28 @@ INSERT INTO watchlist_members (id, watchlist_id, entity_id, entity_type, added_a
     ('01900000-0000-7000-8000-000000000307', '01900000-0000-7000-8000-000000000202', '01900000-0000-7000-8000-000000001007', 'company', NOW()),
     ('01900000-0000-7000-8000-000000000308', '01900000-0000-7000-8000-000000000202', '01900000-0000-7000-8000-000000001009', 'company', NOW())
 ON CONFLICT (id) DO NOTHING;
+
+-- F-304: ensure portfolio_db's ``instruments.entity_id`` is populated to
+-- match the seed's watchlist_members.entity_id. Without this the backfill
+-- script's join ``ON instruments.entity_id = wm.entity_id`` returns no
+-- rows. We set entity_id = id (the seed's convention) so either join key
+-- works. Idempotent — only writes when the column is NULL so production
+-- rows with a real KG entity_id are never overwritten.
+UPDATE instruments
+SET entity_id = id
+WHERE entity_id IS NULL
+  AND id IN (
+    '01900000-0000-7000-8000-000000001001',
+    '01900000-0000-7000-8000-000000001002',
+    '01900000-0000-7000-8000-000000001003',
+    '01900000-0000-7000-8000-000000001004',
+    '01900000-0000-7000-8000-000000001005',
+    '01900000-0000-7000-8000-000000001006',
+    '01900000-0000-7000-8000-000000001007',
+    '01900000-0000-7000-8000-000000001008',
+    '01900000-0000-7000-8000-000000001009',
+    '01900000-0000-7000-8000-000000001010'
+  );
 
 -- Demo holdings for the original 5 instruments
 -- F-201 (QA iter-2): seed must be RESET-idempotent so re-running ``make seed``
