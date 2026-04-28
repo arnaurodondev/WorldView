@@ -167,7 +167,7 @@ All three return a `PaginatedResponse<T>`:
 | Topic | Event Types | Key | Schema |
 |-------|-------------|-----|--------|
 | `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created`, `watchlist.created`, `watchlist.deleted` | `aggregate_id` | Per-event `.avsc` files |
-| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed` | `aggregate_id` | `watchlist.item_added.avsc`, `watchlist.item_removed.avsc` |
+| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed`, `watchlist.renamed` | `aggregate_id` | `watchlist.item_added.avsc`, `watchlist.item_removed.avsc` |
 
 ### Consumed
 

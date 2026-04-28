@@ -28,7 +28,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, X, Loader2, Trash2, Plus, MoreHorizontal } from "lucide-react";
+import { Search, X, Loader2, Trash2, Plus, MoreHorizontal, Pencil } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -417,6 +417,66 @@ function CreateWatchlistInput({
   );
 }
 
+// ── RenameTabInput ────────────────────────────────────────────────────────────
+// WHY separate component: isolates the focused input state so that the parent
+// tab bar doesn't re-render on every keystroke (only the rename cell does).
+
+function RenameTabInput({
+  currentName,
+  isPending,
+  onConfirm,
+  onCancel,
+}: {
+  currentName: string;
+  isPending: boolean;
+  onConfirm: (newName: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(currentName);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // WHY select-on-mount: pre-selects the existing name so the user can immediately
+  // type a replacement without manually clearing it first.
+  useEffect(() => {
+    inputRef.current?.select();
+  }, []);
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onConfirm(value.trim());
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    }
+  }
+
+  return (
+    <div className="flex items-center h-full px-1">
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        // WHY blur-confirm: committing on blur means clicking elsewhere saves the rename
+        // without needing Enter — matches standard spreadsheet/terminal editing conventions.
+        // WHY isPending guard: disabled inputs can still fire blur in some browsers;
+        // skip the confirm call when the mutation is already in-flight.
+        onBlur={() => { if (!isPending) onConfirm(value.trim()); }}
+        disabled={isPending}
+        maxLength={64}
+        className={cn(
+          "h-6 w-[120px] bg-background border border-primary rounded-[2px] px-2",
+          "font-mono text-[11px] text-foreground outline-none",
+          isPending && "opacity-60 cursor-not-allowed",
+        )}
+        aria-label="Rename watchlist"
+      />
+      {isPending && <Loader2 className="ml-1 h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
+    </div>
+  );
+}
+
 // ── WatchlistsTabPanel ─────────────────────────────────────────────────────────
 
 export function WatchlistsTabPanel({
@@ -435,6 +495,10 @@ export function WatchlistsTabPanel({
   // WHY creating state: toggles an inline input form in the tab bar instead of opening
   // a separate modal — keeps the interaction lightweight and in-context.
   const [creating, setCreating] = useState(false);
+
+  // WHY renamingWatchlistId: tracks which tab (if any) is in inline-rename edit mode.
+  // null means none are being renamed. The rename input is rendered in-place over the tab label.
+  const [renamingWatchlistId, setRenamingWatchlistId] = useState<string | null>(null);
 
   // WHY track which entity is being deleted: shows a per-row spinner only on the
   // affected row, not a global loading state that would block the whole table.
@@ -476,6 +540,19 @@ export function WatchlistsTabPanel({
         const remaining = watchlists.filter((w) => w.watchlist_id !== deletedId);
         setActiveWatchlistId(remaining[0]?.watchlist_id ?? null);
       }
+    },
+  });
+
+  // ── Rename watchlist mutation ──────────────────────────────────────────────
+  const renameMutation = useMutation({
+    mutationFn: ({ watchlistId, newName }: { watchlistId: string; newName: string }) =>
+      createGateway(accessToken).renameWatchlist(watchlistId, newName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["watchlists"] });
+      setRenamingWatchlistId(null);
+    },
+    onError: () => {
+      // Keep the input visible so the user can retry or cancel
     },
   });
 
@@ -554,48 +631,79 @@ export function WatchlistsTabPanel({
                   : "border-transparent",
               )}
             >
-              <button
-                role="tab"
-                aria-selected={wl.watchlist_id === activeWatchlist?.watchlist_id}
-                onClick={() => setActiveWatchlistId(wl.watchlist_id)}
-                className={cn(
-                  "h-full px-3 text-[11px] font-mono transition-colors whitespace-nowrap",
-                  wl.watchlist_id === activeWatchlist?.watchlist_id
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {wl.name}
-              </button>
+              {/* WHY conditional render: when this tab is in rename mode, replace the
+                  read-only label with an inline text input pre-filled with the current
+                  name. Enter commits, Escape cancels. Blur also commits if a name was
+                  typed (consistent with Bloomberg's in-place rename pattern). */}
+              {renamingWatchlistId === wl.watchlist_id ? (
+                <RenameTabInput
+                  currentName={wl.name}
+                  isPending={renameMutation.isPending}
+                  onConfirm={(newName) => {
+                    if (newName && newName !== wl.name) {
+                      renameMutation.mutate({ watchlistId: wl.watchlist_id, newName });
+                    } else {
+                      setRenamingWatchlistId(null);
+                    }
+                  }}
+                  onCancel={() => setRenamingWatchlistId(null)}
+                />
+              ) : (
+                <button
+                  role="tab"
+                  aria-selected={wl.watchlist_id === activeWatchlist?.watchlist_id}
+                  onClick={() => setActiveWatchlistId(wl.watchlist_id)}
+                  className={cn(
+                    "h-full px-3 text-[11px] font-mono transition-colors whitespace-nowrap",
+                    wl.watchlist_id === activeWatchlist?.watchlist_id
+                      ? "text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {wl.name}
+                </button>
+              )}
 
-              {/* ··· dropdown for rename/delete — visible on tab hover */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    aria-label={`Options for ${wl.name}`}
-                    className={cn(
-                      "h-5 w-5 flex items-center justify-center rounded-[2px] mr-1",
-                      "opacity-0 group-hover/tab:opacity-100 transition-opacity",
-                      "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-                    )}
-                    // WHY stopPropagation on mousedown: prevent the dropdown trigger from
-                    // also activating the tab button and triggering an unintended tab switch.
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <MoreHorizontal className="h-3 w-3" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="min-w-[120px]">
-                  <DropdownMenuItem
-                    className="text-[11px] text-negative focus:text-negative"
-                    disabled={deleteWatchlistMutation.isPending}
-                    onClick={() => handleDeleteWatchlist(wl.watchlist_id)}
-                  >
-                    <Trash2 className="h-3 w-3 mr-1.5" />
-                    Delete watchlist
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {/* ··· dropdown for rename/delete — visible on tab hover, hidden during rename */}
+              {renamingWatchlistId !== wl.watchlist_id && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      aria-label={`Options for ${wl.name}`}
+                      className={cn(
+                        "h-5 w-5 flex items-center justify-center rounded-[2px] mr-1",
+                        "opacity-0 group-hover/tab:opacity-100 transition-opacity",
+                        "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                      )}
+                      // WHY stopPropagation on mousedown: prevent the dropdown trigger from
+                      // also activating the tab button and triggering an unintended tab switch.
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <MoreHorizontal className="h-3 w-3" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-[120px]">
+                    <DropdownMenuItem
+                      className="text-[11px]"
+                      onClick={() => {
+                        setActiveWatchlistId(wl.watchlist_id);
+                        setRenamingWatchlistId(wl.watchlist_id);
+                      }}
+                    >
+                      <Pencil className="h-3 w-3 mr-1.5" />
+                      Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="text-[11px] text-negative focus:text-negative"
+                      disabled={deleteWatchlistMutation.isPending}
+                      onClick={() => handleDeleteWatchlist(wl.watchlist_id)}
+                    >
+                      <Trash2 className="h-3 w-3 mr-1.5" />
+                      Delete watchlist
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           ))}
 

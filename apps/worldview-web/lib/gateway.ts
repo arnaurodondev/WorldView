@@ -1061,6 +1061,29 @@ export function createGateway(token?: string | null) {
     },
 
     /**
+     * renameWatchlist — rename a watchlist via PATCH /v1/watchlists/{id}
+     *
+     * WHY transform: S1 PATCH returns `WatchlistResponse` (id, user_id, …) which needs
+     * the same field mapping to the frontend `Watchlist` type as create/get endpoints.
+     */
+    async renameWatchlist(watchlistId: string, newName: string): Promise<Watchlist> {
+      const raw = await apiFetch<{
+        id: string;
+        tenant_id: string;
+        user_id: string;
+        name: string;
+        status: string;
+        created_at: string;
+      }>(`/v1/watchlists/${encodeURIComponent(watchlistId)}`, {
+        method: "PATCH",
+        body: { name: newName },
+        token: t,
+      });
+
+      return mapRawWatchlist(raw);
+    },
+
+    /**
      * deleteWatchlist — delete a watchlist
      */
     deleteWatchlist(watchlistId: string): Promise<void> {
