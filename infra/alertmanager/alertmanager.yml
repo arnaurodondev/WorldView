@@ -33,8 +33,35 @@ receivers:
         send_resolved: true
         headers:
           subject: "[CRITICAL] {{ .GroupLabels.alertname }} — {{ .GroupLabels.job }}"
+    # WHY slack_configs: Slack provides faster on-call visibility than email for
+    # critical alerts (e.g. ValkeyDown, FastBurnRate).  The webhook URL is injected
+    # via SLACK_WEBHOOK_URL env var — set it in docker.env or the environment block
+    # for the alertmanager container.  If the env var is empty the slack_configs
+    # block is still valid YAML; Alertmanager will fail to POST but will not crash
+    # (it logs the error and continues delivering via email).
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#alerts-critical"
+        send_resolved: true
+        title: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
+        text: >-
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Severity:* {{ .Labels.severity }}
+          *Job:* {{ .Labels.job }}
+          {{ end }}
 
 inhibit_rules:
+  # Suppress all lower-severity alerts when ServiceDown fires for the same job
+  # — avoids alert flood (HighErrorRate + CriticalErrorRate + HighP95Latency all
+  # firing simultaneously for a service that is simply down). (F-036)
+  - source_match:
+      severity: critical
+      alertname: ServiceDown
+    target_match_re:
+      alertname: "(HighErrorRate|CriticalErrorRate|HighP95Latency|OutboxBacklog|KafkaConsumerSilent)"
+    equal: [job]
+
   # Suppress HighErrorRate (warning) when CriticalErrorRate fires for the
   # same job — avoids duplicate paging noise. (audit finding)
   - source_match:

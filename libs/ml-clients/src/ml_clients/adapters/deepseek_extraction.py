@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING
 
 import structlog
@@ -12,6 +13,8 @@ from ml_clients.errors import FatalError, RetryableError
 
 if TYPE_CHECKING:
     import asyncio
+
+    from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
 
@@ -36,12 +39,14 @@ class DeepSeekExtractionAdapter:
         *,
         semaphore: asyncio.Semaphore,
         timeout_s: float = _EXTRACTION_TIMEOUT_S,
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
         self._base_url = base_url
         self._semaphore = semaphore
         self._timeout_s = timeout_s
+        self._metrics = metrics
 
     async def extract(self, inp: ExtractionInput) -> ExtractionOutput:
         try:
@@ -49,46 +54,72 @@ class DeepSeekExtractionAdapter:
         except ImportError as exc:
             raise FatalError("openai package not installed; install ml-clients[openai]") from exc
 
-        async with self._semaphore:
-            try:
-                # Explicit timeout prevents the default 600s openai SDK hang.
-                # Connect: 5s, read/write: timeout_s.  The outer asyncio.wait_for
-                # in callers is NOT sufficient — openai uses httpx internally and
-                # httpx timeouts take precedence (BP-235 pattern).
-                client = openai.AsyncOpenAI(
-                    api_key=self._api_key,
-                    base_url=self._base_url,
-                    timeout=openai.Timeout(connect=5.0, read=self._timeout_s, write=30.0, pool=5.0),
-                )
-                response = await client.chat.completions.create(
-                    model=self._model_id,
-                    messages=[
-                        {"role": "system", "content": inp.prompt},
-                        {"role": "user", "content": inp.context},
-                    ],
-                )
-                raw_response: str = response.choices[0].message.content or ""
-                logger.info("deepseek_extraction_completed", model_id=self._model_id)
+        start = time.perf_counter()
+        status = "success"
+        tokens_in = 0
+        tokens_out = 0
+        try:
+            async with self._semaphore:
                 try:
-                    result: dict[str, object] = json.loads(raw_response)
-                except json.JSONDecodeError as exc:
-                    raise FatalError(f"malformed extraction output: {exc}") from exc
-                return ExtractionOutput(
-                    result=result,
-                    raw_response=raw_response,
-                    model_id=self._model_id,
+                    # Explicit timeout prevents the default 600s openai SDK hang.
+                    # Connect: 5s, read/write: timeout_s.  The outer asyncio.wait_for
+                    # in callers is NOT sufficient — openai uses httpx internally and
+                    # httpx timeouts take precedence (BP-235 pattern).
+                    client = openai.AsyncOpenAI(
+                        api_key=self._api_key,
+                        base_url=self._base_url,
+                        timeout=openai.Timeout(connect=5.0, read=self._timeout_s, write=30.0, pool=5.0),
+                    )
+                    response = await client.chat.completions.create(
+                        model=self._model_id,
+                        messages=[
+                            {"role": "system", "content": inp.prompt},
+                            {"role": "user", "content": inp.context},
+                        ],
+                    )
+                    # Capture actual token usage from API response when available
+                    if response.usage is not None:
+                        tokens_in = response.usage.prompt_tokens or 0
+                        tokens_out = response.usage.completion_tokens or 0
+                    raw_response: str = response.choices[0].message.content or ""
+                    logger.info("deepseek_extraction_completed", model_id=self._model_id)
+                    try:
+                        result: dict[str, object] = json.loads(raw_response)
+                    except json.JSONDecodeError as exc:
+                        raise FatalError(f"malformed extraction output: {exc}") from exc
+                    return ExtractionOutput(
+                        result=result,
+                        raw_response=raw_response,
+                        model_id=self._model_id,
+                    )
+                except openai.RateLimitError as exc:
+                    raise RetryableError(f"DeepSeek rate limit (429): {exc}") from exc
+                except openai.APIConnectionError as exc:
+                    raise RetryableError(f"DeepSeek connection error: {exc}") from exc
+                except openai.APITimeoutError as exc:
+                    raise RetryableError(f"DeepSeek timeout: {exc}") from exc
+                except openai.APIStatusError as exc:
+                    if exc.status_code >= 500:
+                        raise RetryableError(f"DeepSeek 5xx: {exc}") from exc
+                    raise FatalError(f"DeepSeek 4xx: {exc}") from exc
+                except (RetryableError, FatalError):
+                    raise
+                except Exception as exc:
+                    raise FatalError(f"Unexpected DeepSeek error: {exc}") from exc
+        except (RetryableError, FatalError):
+            status = "error"
+            raise
+        finally:
+            if self._metrics:
+                latency = time.perf_counter() - start
+                self._metrics.ml_api_requests_total.labels(
+                    model_id=self._model_id, operation="extract", status=status
+                ).inc()
+                self._metrics.ml_api_latency_seconds.labels(model_id=self._model_id, operation="extract").observe(
+                    latency
                 )
-            except openai.RateLimitError as exc:
-                raise RetryableError(f"DeepSeek rate limit (429): {exc}") from exc
-            except openai.APIConnectionError as exc:
-                raise RetryableError(f"DeepSeek connection error: {exc}") from exc
-            except openai.APITimeoutError as exc:
-                raise RetryableError(f"DeepSeek timeout: {exc}") from exc
-            except openai.APIStatusError as exc:
-                if exc.status_code >= 500:
-                    raise RetryableError(f"DeepSeek 5xx: {exc}") from exc
-                raise FatalError(f"DeepSeek 4xx: {exc}") from exc
-            except (RetryableError, FatalError):
-                raise
-            except Exception as exc:
-                raise FatalError(f"Unexpected DeepSeek error: {exc}") from exc
+                self._metrics.ml_api_tokens_in_total.labels(model_id=self._model_id).inc(tokens_in)
+                self._metrics.ml_api_tokens_out_total.labels(model_id=self._model_id).inc(tokens_out)
+                # DeepSeek extraction: $0.00000014 per input token, $0.00000028 per output token
+                cost = (tokens_in * 0.00000014) + (tokens_out * 0.00000028)
+                self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model_id).inc(cost)

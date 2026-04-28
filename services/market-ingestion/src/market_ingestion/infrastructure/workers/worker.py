@@ -132,18 +132,30 @@ class WorkerProcess:
             lease_seconds=self._lease_seconds,
         )
         while not self._stop_event.is_set():
-            claimed = await self._claim_batch()
-            if not claimed:
-                await asyncio.sleep(self._idle_sleep)
-                continue
+            # WHY try/except here: an unhandled exception escaping _claim_batch,
+            # _try_batch_execute, or asyncio.gather would silently kill the worker
+            # loop — the container stays up but ingestion stops completely.
+            # Catching at the loop level lets transient errors (DB blip, provider
+            # timeout, OOM spike) cause a short pause + retry rather than a silent
+            # death.  CancelledError is re-raised so SIGTERM propagates correctly.
+            try:
+                claimed = await self._claim_batch()
+                if not claimed:
+                    await asyncio.sleep(self._idle_sleep)
+                    continue
 
-            # Try batch execution first for eligible tasks (same provider+timeframe,
-            # OHLCV intraday, adapter supports_batch).
-            _, remaining = await self._try_batch_execute(claimed)
+                # Try batch execution first for eligible tasks (same provider+timeframe,
+                # OHLCV intraday, adapter supports_batch).
+                _, remaining = await self._try_batch_execute(claimed)
 
-            # Execute remaining tasks individually (as before).
-            if remaining:
-                await asyncio.gather(*[self._execute_with_semaphore(task) for task in remaining])
+                # Execute remaining tasks individually (as before).
+                if remaining:
+                    await asyncio.gather(*[self._execute_with_semaphore(task) for task in remaining])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("worker_loop_error", worker_id=self._worker_id)
+                await asyncio.sleep(5)
 
         logger.info("worker_stopped", worker_id=self._worker_id)
 

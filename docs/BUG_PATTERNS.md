@@ -7413,3 +7413,146 @@ In `MoverRow`, changed condition to `mover.price != null && mover.price > 0`. No
 **Prevention**:
 - Numeric fields that represent prices/quantities must be treated as "unavailable" when 0, not just when null
 - Document the `price: 0` placeholder in the type definition with a note that downstream renders must guard `> 0`
+
+
+## BP-268 — asyncio.create_task() Without done_callback Silently Swallows Consumer Crashes
+
+**Category**: Distributed Systems / Kafka consumers
+**Severity**: BLOCKING
+**Affected areas**: All `*_consumer_main.py` files across S5, S6, S7, S8, S10, and market-data consumers
+**First seen**: 2026-04-28 (observability audit)
+
+**Symptoms**:
+- Kafka consumer stops processing without the process exiting
+- No ERROR log at the consumer-crash level
+- Messages accumulate in Kafka topic without any alert firing
+- Detection only via `ServiceDown` after Docker healthcheck fires (30–60s blind spot)
+
+**Root Cause**:
+`asyncio.create_task(consumer.run())` returns a Task whose exception is stored in the future result. The main coroutine blocks on `stop_event.wait()` and never awaits the consumer task. If the consumer exits via an unhandled exception, the exception is silently stored — the main coroutine continues to wait. The process does not exit and Docker does not restart the container.
+
+**Fix Applied**:
+Add a `done_callback` to every consumer task:
+```python
+def _on_consumer_exit(task: asyncio.Task) -> None:
+    if not task.cancelled() and not stop_event.is_set():
+        exc = task.exception()
+        if exc is not None:
+            log.error("consumer_task_fatal", error=str(exc), exc_info=exc)
+            sys.exit(1)
+
+consumer_task = asyncio.create_task(consumer.run())
+consumer_task.add_done_callback(_on_consumer_exit)
+```
+
+**Prevention**:
+- Never use `asyncio.create_task()` without either awaiting the task or adding a `done_callback`
+- All consumer main functions must follow this pattern
+
+---
+
+## BP-269 — structlog OTel Context Not Injected — trace_id Missing from Logs
+
+**Category**: Observability / Loki↔Tempo correlation
+**Severity**: CRITICAL
+**Affected areas**: `libs/observability/src/observability/logging.py`
+**First seen**: 2026-04-28 (observability audit)
+
+**Symptoms**:
+- Grafana "Logs from trace" drilldown returns zero results
+- Loki derivedFields `trace_id` regex matches nothing
+- Loki logs have no `trace_id` or `span_id` fields despite OTel middleware being configured
+
+**Root Cause**:
+`configure_logging()` shared_processors list contained no processor that reads the active OTel span. Documentation and `docs/libs/observability.md` claimed `trace_id + span_id are injected into every log line by OTel middleware` — this was incorrect. The OTel middleware creates spans and propagates context in the ASGI scope, but structlog is a separate logging layer that does not automatically read OTel context.
+
+**Fix Applied**:
+Added `_inject_otel_trace_context` processor to `shared_processors` in `configure_logging()`:
+```python
+def _inject_otel_trace_context(logger, method, event_dict):
+    from opentelemetry import trace
+    span = trace.get_current_span()
+    ctx = span.get_span_context()
+    if ctx.is_valid:
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
+```
+
+**Prevention**:
+- Always verify end-to-end log↔trace correlation after observability stack changes
+- Test with: make a request, copy trace_id from Tempo, search Loki for it; if no results, the injection is broken
+- `docs/libs/observability.md` updated to document the processor requirement
+
+---
+
+## BP-270 — Prometheus Regex s[1-9] Excludes Service S10
+
+**Category**: Monitoring / alert configuration
+**Severity**: MAJOR
+**Affected areas**: `infra/prometheus/rules/alert-rules.yml`
+**First seen**: 2026-04-28 (observability audit)
+
+**Symptoms**:
+- `OutboxBacklog` and `DeadLetterQueueNonEmpty` alerts never fire for S10 (alert delivery service)
+- S10 outbox/DLQ completely unmonitored
+
+**Root Cause**:
+`{__name__=~"s[1-9]_outbox_pending_total"}` — the character class `[1-9]` matches a SINGLE digit 1–9. Service S10 has a two-digit service number; `s10_` is never matched.
+
+**Fix Applied**:
+Changed to `s[0-9]+_outbox_pending_total` — matches s1 through s99.
+
+**Prevention**:
+- Never use `[0-9]` or `[1-9]` alone when matching service numbers that could reach double digits
+- Always use `[0-9]+` (one or more digits) or `\d+` in service name regex patterns
+
+---
+
+## BP-271 — histogram_quantile Without sum by (label, le) Returns Incorrect Percentiles
+
+**Category**: Monitoring / Prometheus PromQL
+**Severity**: MAJOR
+**Affected areas**: `infra/grafana/dashboards/eodhd-health.json`
+**First seen**: 2026-04-28 (observability audit)
+
+**Symptoms**:
+- EODHD latency dashboard shows wildly incorrect p50/p95 values
+- Values may appear correct for one endpoint but be wrong for others
+
+**Root Cause**:
+`histogram_quantile(0.5, rate(s2_eodhd_request_duration_seconds_bucket[5m]))` — when `rate()` returns multiple series (one per `endpoint` label value), `histogram_quantile` without explicit aggregation picks an arbitrary series rather than merging histograms correctly. The correct form requires `sum by (relevant_label, le)` before `histogram_quantile` to merge the bucket series properly.
+
+**Fix Applied**:
+```promql
+histogram_quantile(0.50, sum by (endpoint, le) (rate(s2_eodhd_request_duration_seconds_bucket[5m])))
+```
+
+**Prevention**:
+- Always wrap histogram metric `rate()` with `sum by (<breakdown_labels>, le)` before passing to `histogram_quantile`
+- The `le` label MUST be included in the `by` clause — without it the merge is incorrect
+- Recording rules in `recording-rules.yml` already use the correct pattern; dashboard panels must follow the same rule
+
+---
+
+## BP-272 — ML Adapter latency_ms=0 / tokens_in=0 Corrupts Cost Analytics
+
+**Category**: ML / cost tracking
+**Severity**: MAJOR
+**Affected areas**: `libs/ml-clients/src/ml_clients/adapters/gemini_description.py`, `services/nlp-pipeline/.../unresolved_resolution_worker.py`
+**First seen**: 2026-04-28 (observability audit)
+
+**Symptoms**:
+- `llm_usage_log` table shows `latency_ms=0` and `tokens_in=0` for many LLM calls
+- Cost estimation in `estimate_cost()` returns $0.00 for calls that consumed tokens
+- Monthly cost tracking is unreliable
+
+**Root Cause**:
+Several adapters and workers call `usage_logger.log()` but pass literal `0` for `latency_ms`, `tokens_in`, and `tokens_out`. `GeminiDescriptionAdapter` documents this explicitly: `# GeminiDescriptionAdapter does not track wall-clock time`. The response objects from Ollama (`eval_count`, `eval_duration`), DeepInfra (`usage.prompt_tokens`, `usage.completion_tokens`), and Google Gemini (`usage_metadata.prompt_token_count`) all contain the actual values but are never read.
+
+**Fix Applied**:
+Add `t0 = time.perf_counter()` before every LLM API call. Read token usage from the API response after the call. Pass real values to `usage_logger.log()`. Never pass literal `0`.
+
+**Prevention**:
+- Code review checklist: if a call to `usage_logger.log()` has literal `0` for any numeric field, it is wrong
+- Add a lint rule or test that asserts `tokens_in > 0` for non-embedding calls in the usage log

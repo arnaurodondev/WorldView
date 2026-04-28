@@ -21,7 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from alert.api import dlq, email_routes, health, routes
 from alert.config import Settings
 from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
@@ -109,10 +109,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     watchlist_cache = WatchlistCache(valkey, s1_client, ttl=settings.watchlist_cache_ttl_seconds)  # type: ignore[arg-type]
     app.state.watchlist_cache = watchlist_cache
 
-    # 7. WebSocket connection manager
+    # 7. WebSocket connection manager — pass metrics so connect/disconnect update
+    # the websocket_active_connections gauge (enabled via include_websocket=True above).
     from alert.infrastructure.websocket.manager import ConnectionManager
 
-    ws_manager = ConnectionManager()
+    ws_manager = ConnectionManager(metrics=app.state.metrics)
     app.state.ws_manager = ws_manager
 
     # 8. Kafka health producer (lightweight — for /readyz Kafka connectivity check)
@@ -143,6 +144,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     app.state.settings = settings
 
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
     # Middleware (must register before app starts)
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
@@ -151,7 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         skip_verification=settings.internal_jwt_skip_verification,
         jti_replay_check_enabled=settings.jti_replay_check_enabled,
     )
-    metrics: Any = create_metrics(service_name=settings.service_name)
+    metrics: Any = create_metrics(service_name=settings.service_name, include_websocket=True)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics

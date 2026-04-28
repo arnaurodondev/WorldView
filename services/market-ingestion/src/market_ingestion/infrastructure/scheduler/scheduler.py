@@ -58,12 +58,24 @@ class SchedulerProcess:
             max_tasks_per_tick=self._max_tasks_per_tick,
         )
         while not self._stop_event.is_set():
-            await self._tick()
-            with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.shield(self._stop_event.wait()),
-                    timeout=self._tick_interval,
-                )
+            # WHY try/except here: _tick() catches DB errors internally, but an
+            # unhandled exception from asyncio.wait_for or asyncio.shield (e.g. an
+            # unexpected RuntimeError) would silently kill the scheduler loop.
+            # Catching at the loop level ensures the scheduler always retries after
+            # a short pause rather than dying silently.  CancelledError re-raises
+            # so SIGTERM / stop() propagates correctly.
+            try:
+                await self._tick()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(self._stop_event.wait()),
+                        timeout=self._tick_interval,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("scheduler_loop_error")
+                await asyncio.sleep(5)
 
         logger.info("scheduler_stopped")
 

@@ -14,6 +14,7 @@ both proceed past the cap.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 
     from ml_clients.description_client import CostTrackerProtocol
     from ml_clients.usage_log import LlmUsageLogProtocol
+    from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
 
@@ -88,6 +90,7 @@ class GeminiDescriptionAdapter:
         cost_tracker: CostTrackerProtocol | None = None,
         max_monthly_usd: float = _DEFAULT_MAX_MONTHLY_USD,
         usage_logger: LlmUsageLogProtocol | None = None,
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
@@ -97,6 +100,7 @@ class GeminiDescriptionAdapter:
         self._genai_client: object | None = None  # Lazy: initialized on first generate call
         # Optional cost logger — fire-and-forget via asyncio.create_task (PLAN-0033 T-D-1-03)
         self._usage_logger = usage_logger
+        self._metrics = metrics
 
     async def generate_description(
         self,
@@ -136,69 +140,100 @@ class GeminiDescriptionAdapter:
                 raise FatalError("google-genai package not installed; install ml-clients[gemini]") from exc
             self._genai_client = genai.Client(api_key=self._api_key)
 
-        async with self._semaphore:
-            try:
-                response = await self._genai_client.aio.models.generate_content(  # type: ignore[union-attr]
-                    model=self._model_id,
-                    contents=prompt,
-                )
-                description: str = response.text.strip()
-
-                # ---- Adjust reservation to actual cost ----
-                await self._adjust_cost(estimated_cost, response, prompt)
-
-                logger.info(
-                    "gemini_description_generated",
-                    entity_id=entity_id,
-                    entity_type=entity_type,
-                    model_id=self._model_id,
-                )
-                return description or None
-
-            except (RetryableError, FatalError):
-                # Undo reservation — the API call failed, no cost incurred
-                await self._undo_reservation(estimated_cost)
-                # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
-                if self._usage_logger is not None:
-                    import asyncio as _asyncio
-
-                    _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
-                        self._usage_logger.log(
-                            model_id=self._model_id,
-                            provider="gemini",
-                            capability="description",
-                            tokens_in=0,
-                            tokens_out=0,
-                            latency_ms=0,
-                            estimated_cost_usd=0.0,
-                            success=False,
-                            error_code="model_error",
-                        ),
+        start = time.perf_counter()
+        status = "success"
+        tokens_in = 0
+        tokens_out = 0
+        try:
+            async with self._semaphore:
+                try:
+                    response = await self._genai_client.aio.models.generate_content(  # type: ignore[union-attr]
+                        model=self._model_id,
+                        contents=prompt,
                     )
-                raise
-            except Exception as exc:
-                # Undo reservation — the API call failed
-                await self._undo_reservation(estimated_cost)
-                # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
-                if self._usage_logger is not None:
-                    import asyncio as _asyncio
+                    description: str = response.text.strip()
 
-                    _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
-                        self._usage_logger.log(
-                            model_id=self._model_id,
-                            provider="gemini",
-                            capability="description",
-                            tokens_in=0,
-                            tokens_out=0,
-                            latency_ms=0,
-                            estimated_cost_usd=0.0,
-                            success=False,
-                            error_code="model_error",
-                        ),
+                    # Capture actual token usage for metrics
+                    usage = getattr(response, "usage_metadata", None)
+                    if usage is not None:
+                        tokens_in = getattr(usage, "prompt_token_count", 0) or 0
+                        tokens_out = getattr(usage, "candidates_token_count", 0) or 0
+
+                    # ---- Adjust reservation to actual cost ----
+                    await self._adjust_cost(estimated_cost, response, prompt)
+
+                    logger.info(
+                        "gemini_description_generated",
+                        entity_id=entity_id,
+                        entity_type=entity_type,
+                        model_id=self._model_id,
                     )
-                if type(exc).__name__ in _RETRYABLE_GEMINI_ERRORS:
-                    raise RetryableError(f"Gemini transient error: {exc}") from exc
-                raise FatalError(f"Gemini error: {exc}") from exc
+                    return description or None
+
+                except (RetryableError, FatalError):
+                    # Undo reservation — the API call failed, no cost incurred
+                    await self._undo_reservation(estimated_cost)
+                    # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
+                    if self._usage_logger is not None:
+                        import asyncio as _asyncio
+
+                        _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                            self._usage_logger.log(
+                                model_id=self._model_id,
+                                provider="gemini",
+                                capability="description",
+                                tokens_in=0,
+                                tokens_out=0,
+                                latency_ms=0,
+                                estimated_cost_usd=0.0,
+                                success=False,
+                                error_code="model_error",
+                            ),
+                        )
+                    raise
+                except Exception as exc:
+                    # Undo reservation — the API call failed
+                    await self._undo_reservation(estimated_cost)
+                    # Fire-and-forget failure cost log (PLAN-0033 T-D-1-03)
+                    if self._usage_logger is not None:
+                        import asyncio as _asyncio
+
+                        _asyncio.create_task(  # noqa: RUF006 — fire-and-forget observer
+                            self._usage_logger.log(
+                                model_id=self._model_id,
+                                provider="gemini",
+                                capability="description",
+                                tokens_in=0,
+                                tokens_out=0,
+                                latency_ms=0,
+                                estimated_cost_usd=0.0,
+                                success=False,
+                                error_code="model_error",
+                            ),
+                        )
+                    if type(exc).__name__ in _RETRYABLE_GEMINI_ERRORS:
+                        raise RetryableError(f"Gemini transient error: {exc}") from exc
+                    raise FatalError(f"Gemini error: {exc}") from exc
+        except (RetryableError, FatalError):
+            status = "error"
+            raise
+        finally:
+            if self._metrics:
+                latency = time.perf_counter() - start
+                self._metrics.ml_api_requests_total.labels(
+                    model_id=self._model_id, operation="describe", status=status
+                ).inc()
+                self._metrics.ml_api_latency_seconds.labels(model_id=self._model_id, operation="describe").observe(
+                    latency
+                )
+                # Fall back to word-count approximation from context_hints if no usage data
+                if tokens_in == 0:
+                    tokens_in = sum(len(str(v).split()) for v in context_hints.values())
+                self._metrics.ml_api_tokens_in_total.labels(model_id=self._model_id).inc(tokens_in)
+                self._metrics.ml_api_tokens_out_total.labels(model_id=self._model_id).inc(tokens_out)
+                # Gemini 2.5-pro / flash-lite: $0.000000075 per input token, $0.0000003 per output token
+                cost = (tokens_in * 0.000000075) + (tokens_out * 0.0000003)
+                self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model_id).inc(cost)
 
     # ------------------------------------------------------------------
     # Internals — atomic cost cap (G-005 / PLAN-0031 C-2)

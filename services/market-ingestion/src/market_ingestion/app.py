@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_ingestion.config import Settings
 from market_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
@@ -96,6 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     _settings = settings or Settings()  # type: ignore[call-arg]
     app.state.settings = _settings
+
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)

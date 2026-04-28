@@ -19,6 +19,11 @@ storage:
       path: /var/tempo/wal
 
 metrics_generator:
+  # Enable span-metrics and service-graphs processors so Grafana can show
+  # service dependency graphs and span-derived RED metrics. (F-013)
+  processors:
+    - span-metrics
+    - service-graphs
   storage:
     path: /var/tempo/generator/wal
   traces_storage:

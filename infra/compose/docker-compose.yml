@@ -589,6 +589,38 @@ services:
       retries: 3
       start_period: 10s
 
+  # ── Infrastructure exporters (monitoring profile) ───────────────────────────
+  # WHY: Prometheus cannot scrape Postgres or Valkey natively — they don't expose
+  # a /metrics endpoint.  These exporters act as translators: postgres_exporter
+  # converts pg_stat_* views into Prometheus metrics (used by ValkeyDown alert and
+  # DB connection pool dashboards); redis_exporter does the same for Valkey/Redis.
+  # Both are in the monitoring profile so they only start when observability is
+  # requested (same as Prometheus/Grafana).
+
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    profiles: [monitoring, all]
+    environment:
+      # WHY env var expansion: credentials must not be hardcoded; docker.env sets
+      # POSTGRES_USER/POSTGRES_PASSWORD at runtime.  Defaults match the dev values
+      # in postgres init so `--profile monitoring` works out-of-the-box.
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/worldview_db?sslmode=disable"
+    ports:
+      - "127.0.0.1:9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    profiles: [monitoring, all]
+    environment:
+      # WHY redis_exporter not valkey_exporter: oliver006/redis_exporter is fully
+      # compatible with Valkey (fork of Redis 7.2) — the Redis protocol is identical.
+      REDIS_ADDR: "redis://valkey:6379"
+    ports:
+      - "127.0.0.1:9121:9121"
+
   # ── Content Ingestion (S4) — 4 processes, same image ──────────────────────
   # Migrations (one-shot)
   content-ingestion-migrate:
@@ -1774,6 +1806,38 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+
+  # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
+  # WHY pushgateway: Prometheus scrapes metrics by polling a /metrics endpoint.
+  # The synthetic monitor is a short-lived async loop that cannot expose its own
+  # HTTP server while running probes. Pushgateway acts as an intermediary: the
+  # monitor pushes after each probe cycle, and Prometheus scrapes the gateway.
+  pushgateway:
+    image: prom/pushgateway:v1.8.0
+    profiles: [monitoring, all]
+    ports:
+      - "127.0.0.1:9091:9091"
+
+  # ── Synthetic monitor — simulates user journeys and pushes results ──────────
+  # Runs three probes every 60s (configurable via PROBE_INTERVAL_S):
+  #   1. probe_api_gateway_health  — GET /health must return 200
+  #   2. probe_market_data_quote   — GET /api/v1/market-data/AAPL/quote must not 5xx
+  #   3. probe_portfolio_holdings  — GET /api/v1/portfolio/holdings must not 5xx
+  #      (skipped if SYNTHETIC_JWT is empty — auth-required endpoint)
+  # Results land in Prometheus via Pushgateway; SyntheticProbeDown alert fires
+  # when any probe_success == 0 for >5 minutes.
+  synthetic-monitor:
+    build:
+      context: ../synthetic
+      dockerfile: Dockerfile
+    profiles: [monitoring, all]
+    environment:
+      PUSHGATEWAY_URL: "http://pushgateway:9091"
+      API_BASE_URL: "http://api-gateway:8000"
+      SYNTHETIC_JWT: "${SYNTHETIC_MONITOR_JWT:-}"
+    depends_on:
+      - pushgateway
+    restart: unless-stopped
 
 volumes:
   minio_data:

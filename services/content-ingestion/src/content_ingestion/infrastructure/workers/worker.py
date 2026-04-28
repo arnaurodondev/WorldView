@@ -133,11 +133,25 @@ class WorkerProcess:
                 concurrency=self._settings.worker_concurrency,
             )
             while not self._stop_event.is_set():
-                claimed = await self._claim_batch()
-                if not claimed:
-                    await asyncio.sleep(self._idle_sleep)
-                    continue
-                await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
+                # WHY try/except here: an unhandled exception in _claim_batch or
+                # asyncio.gather would silently kill the worker loop — the container
+                # stays up (exit code 0) but ingestion stops completely.  Catching
+                # at the loop level ensures transient errors (DB blip, OOM in a
+                # single task) cause a short pause + retry rather than a silent death.
+                # CancelledError must be re-raised so SIGTERM / task cancellation
+                # still propagates correctly (the worker's stop() sets _stop_event,
+                # but the async framework also cancels the coroutine).
+                try:
+                    claimed = await self._claim_batch()
+                    if not claimed:
+                        await asyncio.sleep(self._idle_sleep)
+                        continue
+                    await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("worker_loop_error", worker_id=self._worker_id)
+                    await asyncio.sleep(5)
 
             logger.info("worker_stopped", worker_id=self._worker_id)
 

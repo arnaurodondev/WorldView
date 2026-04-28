@@ -87,6 +87,34 @@ class TestCreateMetrics:
             reg = CollectorRegistry()
             create_metrics("same-svc", registry=reg)  # must not raise
 
+    def test_kafka_consumer_lag_gauge_present(self) -> None:
+        reg = CollectorRegistry()
+        m = create_metrics("lag-svc", registry=reg)
+        assert m.kafka_consumer_lag is not None
+
+    def test_kafka_consumer_lag_set(self) -> None:
+        reg = CollectorRegistry()
+        m = create_metrics("lag-set-svc", registry=reg)
+        m.kafka_consumer_lag.labels(topic="t", partition="0", consumer_group="g").set(42)
+
+    def test_websocket_gauge_absent_by_default(self) -> None:
+        reg = CollectorRegistry()
+        m = create_metrics("no-ws-svc", registry=reg)
+        assert m.websocket_active_connections is None
+
+    def test_websocket_gauge_present_when_requested(self) -> None:
+        reg = CollectorRegistry()
+        m = create_metrics("ws-svc", registry=reg, include_websocket=True)
+        assert m.websocket_active_connections is not None
+
+    def test_websocket_gauge_increments_decrements(self) -> None:
+        reg = CollectorRegistry()
+        m = create_metrics("ws-ops-svc", registry=reg, include_websocket=True)
+        assert m.websocket_active_connections is not None
+        m.websocket_active_connections.inc()
+        m.websocket_active_connections.inc()
+        m.websocket_active_connections.dec()
+
     def test_none_registry_uses_global_registry(self) -> None:
         """Regression for BP-173: `create_metrics(None)` must use the global REGISTRY.
 
@@ -107,6 +135,7 @@ class TestCreateMetrics:
             REGISTRY.unregister(m.kafka_messages_produced_total)
             REGISTRY.unregister(m.outbox_dispatched_total)
             REGISTRY.unregister(m.outbox_dispatch_errors_total)
+            REGISTRY.unregister(m.kafka_consumer_lag)
         except Exception:  # noqa: S110
             pass  # best-effort cleanup; don't fail the test if unregister raises
 

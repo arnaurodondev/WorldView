@@ -32,11 +32,17 @@ flowchart LR
 ```
 
 **How trace context reaches log lines:**
-The OTel FastAPI middleware creates a span for each request. The `observability`
-library configures structlog with a processor that reads the active OTel span
-context and injects `trace_id` and `span_id` as structlog bound variables.
-This means every `logger.info(...)` call inside a request handler automatically
-carries the trace identifiers — no manual binding required.
+The OTel FastAPI middleware creates a span for each request. `configure_logging()`
+registers `_inject_otel_trace_context` as a structlog processor that calls
+`opentelemetry.trace.get_current_span()` on every log event and binds `trace_id`
+and `span_id` as structlog fields. This means every `logger.info(...)` call inside
+a request handler automatically carries the trace identifiers — no manual binding
+required.
+
+> **BP-269**: The OTel middleware alone does NOT inject trace_id into structlog.
+> The `_inject_otel_trace_context` processor in `configure_logging()` is required.
+> Verify after setup: make a request, find its trace in Tempo, search Loki for
+> `trace_id="<that id>"` — if no results, the processor is missing.
 
 When `otlp_endpoint` is `None` or blank, `configure_tracing()` installs a
 **no-op `TracerProvider`**. Span creation calls still succeed (they return
