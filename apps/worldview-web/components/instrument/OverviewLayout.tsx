@@ -48,6 +48,7 @@ import { OverviewSidebarMetrics } from "@/components/instrument/InstrumentKeyMet
 import { InstrumentTopNews } from "@/components/instrument/InstrumentTopNews";
 import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
+import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
 import type { OHLCVBar, Fundamentals, Instrument } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -186,6 +187,19 @@ export function OverviewLayout({
           centerLabel={centerLabel}
         />
       </div>
+
+      {/* ── PLAN-0050 T-A-1-04: floating Ask-AI button (instrument-scoped).
+          Renders fixed bottom-right of the viewport. Pinned at the layout
+          edge so it persists across the Overview tab regardless of which
+          panel the user is currently scrolled to. The button receives
+          ticker/price/30d-OHLCV/fundamentals/brief context so the
+          assistant opens already aware of what the user is reading. */}
+      <InstrumentAskAiButton
+        ticker={centerLabel}
+        currentPrice={currentPrice}
+        recentBars={initialBars}
+        fundamentals={fundamentals}
+      />
     </div>
   );
 }

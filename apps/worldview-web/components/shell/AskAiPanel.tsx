@@ -39,11 +39,20 @@ import { Button } from "@/components/ui/button";
 
 interface AskAiPanelProps {
   onClose: () => void;
+  /**
+   * Optional one-line greeting shown above the input slot — used by the
+   * instrument-page floater (PLAN-0050 T-A-1-04) to surface the page
+   * context ("Context: AAPL · price $193 · 30d move +4.2% · P/E 28.6").
+   * Purely decorative — it is NOT sent to the chat backend automatically;
+   * users still type their question, and may copy/edit the hint into
+   * their first message if they want the model to see it verbatim.
+   */
+  contextHint?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function AskAiPanel({ onClose }: AskAiPanelProps) {
+export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
   const router = useRouter();
   const { accessToken } = useAuth();
 
@@ -255,6 +264,17 @@ export function AskAiPanel({ onClose }: AskAiPanelProps) {
               )}
             </p>
           )}
+        </div>
+      )}
+
+      {/* ── Context hint (optional, instrument-page floater) ─────────────
+          Surfaces a quiet one-liner so the user knows the assistant is
+          aware of the current page context. We do NOT auto-prepend it to
+          the user's typed message — that would be magical and could leak
+          page state into transcripts the user might not want shared. */}
+      {contextHint && !response && !isStreaming && !error && (
+        <div className="border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
+          {contextHint}
         </div>
       )}
 

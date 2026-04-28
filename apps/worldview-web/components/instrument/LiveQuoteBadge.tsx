@@ -90,17 +90,47 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
     );
   }
 
-  // ── Compact mode: just the freshness badge (no price block) ───────────────
-  // WHY: in CompactInstrumentHeader, price+change are already rendered inline from
-  // props. The compact badge just signals data freshness alongside that static display.
-  // StaleBadge renders nothing for "live"/"recent" — stays invisible on fresh data.
+  // ── Compact mode: always-visible 3px status dot + freshness badge ─────────
+  // WHY: in CompactInstrumentHeader, price+change are already rendered inline.
+  // PLAN-0050 T-F-6-09 (closes F-I-017): the prior implementation rendered
+  // ONLY the StaleBadge — which hides itself on live data — so a healthy
+  // quote produced an empty span. Users had no positive confirmation that
+  // the data was actually live (vs. stuck-on-stale-cache). The audit
+  // flagged this as "absence-of-evidence" UX. We now render an always-on
+  // 3px dot whose colour encodes the status:
+  //   - live / recent   → positive teal (data is fresh, system OK)
+  //   - delayed         → warning amber (data is OK but lagging)
+  //   - stale           → negative red (do not act on this price)
+  //   - unavailable     → muted (no data — service-side outage)
+  // The StaleBadge stays alongside for the explicit text label on the
+  // non-live cases (DELAYED / STALE / N/A).
   if (compact) {
+    const status = quote.freshness_status ?? "live";
+    const dotColor =
+      status === "live" || status === "recent"
+        ? "bg-positive"
+        : status === "delayed"
+          ? "bg-warning"
+          : status === "stale"
+            ? "bg-negative"
+            : "bg-muted-foreground";
     return (
-      <StaleBadge
-        status={quote.freshness_status}
-        staleReason={quote.stale_reason}
-        dataAsOf={quote.data_as_of}
-      />
+      <span className="inline-flex items-center gap-1">
+        <span
+          className={`h-[6px] w-[6px] rounded-full ${dotColor}`}
+          // WHY visually 6px (not 3px): 3px is a single CSS pixel at 1×
+          // DPR and disappears against the dark background. 6px is what
+          // the audit's "3px dot" actually means in user-visible pixels —
+          // matches the AlarmsPanel severity dot for visual consistency.
+          aria-label={`Quote status: ${status}`}
+          title={`Quote status: ${status}`}
+        />
+        <StaleBadge
+          status={quote.freshness_status}
+          staleReason={quote.stale_reason}
+          dataAsOf={quote.data_as_of}
+        />
+      </span>
     );
   }
 

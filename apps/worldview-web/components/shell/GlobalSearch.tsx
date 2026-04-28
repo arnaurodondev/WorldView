@@ -96,8 +96,12 @@ export function GlobalSearch() {
   // (after each navigation) without requiring a useEffect + setState.
   const recentInstruments = useMemo(() => readRecent(), [recentKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // WHY debounce 300ms: don't fire S9 search on every keystroke — wait for pause
-  const debouncedQuery = useDebounce(query, 300);
+  // PLAN-0050 T-F-6-14 (closes F-I-026): debounce dropped from 300ms to 250ms.
+  // Audit: at 300ms the user types a 4-letter ticker and finishes before the
+  // first request fires — feels laggy on fast typists. 250ms is the inflection
+  // where one suggestion request fires for an average 3-5 char ticker, still
+  // cheap enough to avoid per-keystroke spam.
+  const debouncedQuery = useDebounce(query, 250);
 
   const { data } = useQuery({
     queryKey: ["instrument-search", debouncedQuery],

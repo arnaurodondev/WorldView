@@ -25,6 +25,8 @@ import { UtcClock } from "@/components/shell/UtcClock";
 import { IndexTicker } from "@/components/shell/IndexTicker";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
+import { AskAiButton } from "@/components/shell/AskAiButton";
+import { RefreshAllButton } from "@/components/shell/RefreshAllButton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -85,6 +87,14 @@ interface TopBarProps {
   dailyPnl?: number | null;
   /** Total unrealised (mark-to-market) P&L in USD — same null semantics as above. */
   unrealisedPnl?: number | null;
+  /**
+   * Open the AskAiPanel. Owned by app/(app)/layout.tsx so the panel can render
+   * outside the TopBar's overflow context (it is fixed-positioned). Optional
+   * because tests / Storybook may render TopBar without the assistant wired up.
+   */
+  onAskAi?: () => void;
+  /** True while the AskAiPanel is currently shown — toggles the button's pressed look. */
+  askAiOpen?: boolean;
 }
 
 export function TopBar({
@@ -92,6 +102,8 @@ export function TopBar({
   portfolioValue,
   dailyPnl,
   unrealisedPnl,
+  onAskAi,
+  askAiOpen,
 }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
@@ -179,62 +191,102 @@ export function TopBar({
             without growing the 36px bar height. Labels also bumped to 11px
             for visual parity. */}
 
-        {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
-            WHY whitespace-nowrap: prevents "PORT $1.2M" from breaking onto two
-            lines if a parent ever sets flex-wrap. */}
-        {portfolioValue !== undefined && (
-          <span
-            className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
-            title="Total portfolio value (live quote-based)"
-            aria-label={`Portfolio value ${formatPortfolioValue(portfolioValue)}`}
+        {/* ── Portfolio metrics cluster (PLAN-0050 T-A-1-01) ────────────────
+            The three values (PORT / Day P&L / Total P&L) are now visually
+            grouped inside a single subtly-tinted box with a thin border and
+            internal divider hairlines. Why:
+            - Before: three free-floating sibling spans separated only by
+              gap-2 made the rail feel like a row of unrelated badges. The
+              audit (F-D-008) called this "loose" and noted the eye had to
+              re-anchor on each label to follow the relationship between
+              NAV, day move, and total P&L.
+            - After: one box with bg-muted/20 + border-border/30 reads as
+              "your account", and the divider hairlines reinforce that
+              these three numbers are calculated from the same source. We
+              keep the same per-value min-w slots so digits still don't jump
+              on every refetch.
+
+            WHY render the cluster wrapper even when a value is null: it
+            stabilises the rail width as positions update from null → known.
+            The wrapper renders its known-value children only — the
+            container itself is conditional on at least one value existing
+            so empty accounts still get a clean rail. */}
+        {(portfolioValue !== undefined || dailyPnl != null || unrealisedPnl != null) && (
+          <div
+            className="flex items-center gap-2 rounded-[2px] border border-border/30 bg-muted/20 px-2 py-0.5"
+            aria-label="Portfolio header metrics"
           >
-            <span className="text-muted-foreground">PORT</span>
-            {/* min-w slot reserves space so neighbour labels don't jump */}
-            <span className="inline-block min-w-[3.5rem] text-right text-foreground">
-              {formatPortfolioValue(portfolioValue)}
-            </span>
-          </span>
+            {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention. */}
+            {portfolioValue !== undefined && (
+              <span
+                className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
+                title="Total portfolio value (live quote-based)"
+                aria-label={`Portfolio value ${formatPortfolioValue(portfolioValue)}`}
+              >
+                <span className="text-muted-foreground">PORT</span>
+                <span className="inline-block min-w-[3.5rem] text-right text-foreground">
+                  {formatPortfolioValue(portfolioValue)}
+                </span>
+              </span>
+            )}
+
+            {/* Divider hairline between PORT and Day P&L — only renders when both
+                are present so a single-value cluster doesn't show a stray rule. */}
+            {portfolioValue !== undefined && dailyPnl != null && (
+              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
+            )}
+
+            {/* Day P&L — colored teal/red so direction is instantly readable. */}
+            {dailyPnl != null && (
+              <span
+                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+                  dailyPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
+                }`}
+                title="Today's portfolio P&L (live quote-based)"
+                aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
+              >
+                <span className="text-muted-foreground">Day P&amp;L</span>
+                <span className="inline-block min-w-[4rem] text-right">
+                  {dailyPnl >= 0 ? "+" : "-"}
+                  {formatPortfolioValue(Math.abs(dailyPnl))}
+                </span>
+              </span>
+            )}
+
+            {dailyPnl != null && unrealisedPnl != null && (
+              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
+            )}
+
+            {/* Total P&L — total mark-to-market vs cost basis. */}
+            {unrealisedPnl != null && (
+              <span
+                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+                  unrealisedPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
+                }`}
+                title="Total unrealised P&L vs cost basis (mark-to-market)"
+                aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
+              >
+                <span className="text-muted-foreground">Total P&amp;L</span>
+                <span className="inline-block min-w-[4rem] text-right">
+                  {unrealisedPnl >= 0 ? "+" : "-"}
+                  {formatPortfolioValue(Math.abs(unrealisedPnl))}
+                </span>
+              </span>
+            )}
+          </div>
         )}
 
-        {/* Day P&L — colored teal/red so direction is instantly readable.
-            WHY explicit "Day P&L" label (renamed from "Daily"): user audit
-            feedback — "Daily" alone is ambiguous (daily what? bar? brief?).
-            "Day P&L" matches the standard Bloomberg/IBKR account rail label. */}
-        {dailyPnl != null && (
-          <span
-            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-              dailyPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
-            }`}
-            title="Today's portfolio P&L (live quote-based)"
-            aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
-          >
-            <span className="text-muted-foreground">Day P&amp;L</span>
-            <span className="inline-block min-w-[4rem] text-right">
-              {dailyPnl >= 0 ? "+" : "-"}
-              {formatPortfolioValue(Math.abs(dailyPnl))}
-            </span>
-          </span>
-        )}
+        {/* ── Ask AI trigger (PLAN-0050 T-A-1-03) ───────────────────────────
+            Persistent assistant entry-point. The actual floating panel is
+            rendered at app/(app)/layout.tsx — keeping its mount above the
+            TopBar means the panel is not constrained by any overflow:hidden
+            container in the shell. We forward only the open callback. */}
+        {onAskAi && <AskAiButton onOpen={onAskAi} isOpen={askAiOpen} />}
 
-        {/* Total P&L — total mark-to-market vs cost basis.
-            WHY "Total P&L" (renamed from "Unrlzd"): user audit feedback —
-            "Unrlzd" is a finance-jargon abbreviation; "Total P&L" reads
-            correctly to anyone and still fits in the rail at 11px. */}
-        {unrealisedPnl != null && (
-          <span
-            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-              unrealisedPnl >= 0 ? "text-[hsl(var(--positive))]" : "text-[hsl(var(--negative))]"
-            }`}
-            title="Total unrealised P&L vs cost basis (mark-to-market)"
-            aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
-          >
-            <span className="text-muted-foreground">Total P&amp;L</span>
-            <span className="inline-block min-w-[4rem] text-right">
-              {unrealisedPnl >= 0 ? "+" : "-"}
-              {formatPortfolioValue(Math.abs(unrealisedPnl))}
-            </span>
-          </span>
-        )}
+        {/* ── Refresh All (PLAN-0050 T-F-6-06) ───────────────────────────────
+            Sits between Ask AI and the bell so the rail reads as
+            "tools (AI · refresh) → notifications (bell) → identity (avatar)". */}
+        <RefreshAllButton />
 
         {/* Alert bell — shows unread count badge */}
         <button

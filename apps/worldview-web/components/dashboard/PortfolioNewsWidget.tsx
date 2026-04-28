@@ -39,12 +39,14 @@ export function PortfolioNewsWidget() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-portfolio-news"],
-    // WHY limit: 4 (was 10): this widget renders exactly 4 rows. Requesting 10
-    // articles and slicing to 4 meant S6 ran a heavier SQL query, serialised 10
-    // RankedArticle objects, transmitted them over the wire, and then the browser
-    // discarded 6 of them. Sending limit=4 trims the query result set at the
-    // source — less DB I/O, less network payload, same rendered output.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 4 }),
+    // PLAN-0050 T-F-6-02 (closes F-D-007): the widget previously showed exactly
+    // 4 rows because the cell was a single-row strip. The dashboard now gives
+    // this widget the full Row 4 column height, so 4 rows leaves the bottom
+    // half visibly empty and forces traders to navigate to /news/top to see
+    // anything beyond the headline ribbon. We now fetch 20 articles and let
+    // the inner div scroll — same DB cost as the prior 10-then-slice pattern,
+    // 5× more news visible per scan.
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
     enabled: !!accessToken,
     // WHY 60_000: news feed refreshes frequently; 1-min stale time ensures we
     // catch breaking stories while not hammering S9.
@@ -52,10 +54,10 @@ export function PortfolioNewsWidget() {
     refetchInterval: 60_000,
   });
 
-  // WHY no .slice() here: limit: 4 already constrains the API response.
-  // Keeping .slice(0, 4) as a safety guard in case the backend returns more
-  // than requested (should not happen, but defensive programming).
-  const articles = (data?.articles ?? []).slice(0, 4);
+  // PLAN-0050 T-F-6-02: render up to 20 — the parent widget owns the scroll.
+  // We retain a hard cap so a backend bug returning thousands of articles
+  // can't blow up DOM size.
+  const articles = (data?.articles ?? []).slice(0, 20);
 
   return (
     // WHY bg-background (not bg-card): keeps all dashboard widgets visually
@@ -72,9 +74,12 @@ export function PortfolioNewsWidget() {
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
+      {/* PLAN-0050 T-F-6-02: skeleton shows 6 rows (the visible default) so
+          the loading state matches the typical scroll-window the user sees,
+          rather than the prior 4-row layout. */}
       {isLoading && (
         <div className="flex-1 divide-y divide-border/30">
-          {Array.from({ length: 4 }).map((_, i) => (
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex h-[22px] items-center gap-1.5 px-2">
               <Skeleton className="h-3 w-[30px]" style={{ animationDelay: `${i * 40}ms` }} />
               <Skeleton className="h-3 flex-1" />

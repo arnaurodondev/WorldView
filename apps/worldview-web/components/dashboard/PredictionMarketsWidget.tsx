@@ -28,28 +28,10 @@ import { cn } from "@/lib/utils";
 
 // ── ECON filter ───────────────────────────────────────────────────────────────
 
-/**
- * Keywords that identify economics-related prediction markets.
- *
- * WHY client-side filter: the Polymarket API doesn't expose category tags
- * consistently; keyword matching on the title is more reliable. This list
- * covers the major macro/monetary topics that finance traders care about.
- * The filter is optional (toggled by the ECON button) so traders can see
- * all markets or economics-only markets as needed.
- */
-const ECON_KEYWORDS = [
-  "gdp", "inflation", "fed", "federal reserve", "interest rate", "cpi",
-  "unemployment", "recession", "rate cut", "rate hike", "fomc", "payroll",
-  "pce", "treasury", "yield", "deficit", "tariff", "trade war", "economic",
-  "fiscal", "monetary", "pmi", "ism",
-];
-
-/**
- * isEconomics — true if the market title contains any economics keyword.
- * WHY case-insensitive: titles may use "Fed" or "fed" interchangeably.
- */
-const isEconomics = (title: string): boolean =>
-  ECON_KEYWORDS.some((kw) => title.toLowerCase().includes(kw));
+// PLAN-0050 T-F-6-01: the binary ECON keyword filter (ECON_KEYWORDS +
+// isEconomics) was removed when the toggle was replaced by the multi-bucket
+// category pill row — its job is now subsumed by `categorize()` which
+// returns "macro" for the same set of titles.
 
 // ── Category heuristic (PLAN-0048 D-2) ────────────────────────────────────────
 
@@ -220,15 +202,18 @@ const CATEGORY_CHIP_CLASS = "bg-muted text-muted-foreground text-[9px] uppercase
 export function PredictionMarketsWidget() {
   const { accessToken } = useAuth();
 
-  // WHY econOnly state: traders specialising in macro often only want economics
-  // markets visible. The toggle persists for the session (local state) — not URL
-  // because it's a dashboard widget preference, not a navigable view.
-  const [econOnly, setEconOnly] = useState<boolean>(false);
+  // PLAN-0050 T-F-6-01: replaced the binary ECON toggle with a category pill
+  // row. The audit (F-D-005) noted the prior toggle hid the other 4 buckets the
+  // categoriser already produced (politics/sports/crypto/general), forcing
+  // traders interested in any of those to scroll past unrelated rows. The pill
+  // row makes all 5 buckets first-class — same data, more useful filter axis.
+  // null = "All" (no filter); a non-null value keeps only that category.
+  const [categoryFilter, setCategoryFilter] = useState<Category | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-prediction-markets"],
     queryFn: () =>
-      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: 5 }),
+      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: 8 }),
     enabled: !!accessToken,
     // WHY 60_000: prediction market prices update continuously; 1-min refresh
     // keeps the probabilities reasonably fresh for dashboard context.
@@ -236,12 +221,14 @@ export function PredictionMarketsWidget() {
     refetchInterval: 60_000,
   });
 
-  // Apply ECON filter client-side: if econOnly, keep only economics markets.
-  // WHY fetch 5 then filter: we overfetch slightly so the ECON filter has enough
-  // candidates without an extra API call. The limit=5 limit is a reasonable
-  // overfetch for a widget showing 3 results.
+  // PLAN-0050 T-F-6-01: filter by selected category (null = no filter).
+  // We overfetch (limit=8 vs the 3 we render) so any single bucket usually has
+  // at least one row even after filtering. If the bucket is empty we show the
+  // shared empty state below — the user can clear the filter to see everything.
   const allMarkets = data?.markets ?? [];
-  const filteredMarkets = econOnly ? allMarkets.filter((m) => isEconomics(m.title)) : allMarkets;
+  const filteredMarkets = categoryFilter
+    ? allMarkets.filter((m) => categorize(m.title) === categoryFilter)
+    : allMarkets;
   const topMarkets = filteredMarkets.slice(0, 3);
   const totalMarkets = data?.total ?? 0;
 
@@ -277,25 +264,44 @@ export function PredictionMarketsWidget() {
       {/* WHY justify-between: section label on the left, ECON toggle on the right —
           follows the same header layout pattern as SectorHeatmapWidget and
           PreMarketMoversWidget. Keeps all controls in the header row (Bloomberg convention). */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+      <div className="flex h-6 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
+        <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           PREDICTION MARKETS
         </span>
-        {/* WHY ECON button: macro-focused traders only care about economics markets.
-            The toggle filters client-side (no extra API call) — immediate response.
-            WHY aria-pressed: communicates toggle state to screen readers. */}
-        <button
-          onClick={() => setEconOnly((v) => !v)}
-          className={cn(
-            "px-1.5 text-[9px] font-mono uppercase transition-colors",
-            econOnly
-              ? "bg-primary/20 text-primary"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-          aria-pressed={econOnly}
-        >
-          ECON
-        </button>
+        {/* PLAN-0050 T-F-6-01: category pill row (replaces the prior ECON
+            boolean toggle). Pill order matches the categoriser's first-match
+            priority (macro → politics → sports → crypto), which is also the
+            "most-finance-relevant first" reading order. The "All" pill is
+            always present — it is the natural reset and avoids a third "X
+            clear filter" affordance that would not fit at 24px header height.
+
+            WHY aria-pressed on every pill (not aria-selected): pills behave
+            like a toggle group of independent buttons, not a listbox. SR
+            users hear "macro, pressed" / "macro, not pressed" — matches the
+            visible filled-vs-outlined state. */}
+        <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Filter by category">
+          {(["all", "macro", "politics", "sports", "crypto"] as const).map((label) => {
+            // null = "all" sentinel — keeps the state model boolean-like for filtering.
+            const value: Category | null = label === "all" ? null : (label as Category);
+            const active = categoryFilter === value;
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setCategoryFilter(value)}
+                aria-pressed={active}
+                className={cn(
+                  "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                  active
+                    ? "bg-primary/20 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}

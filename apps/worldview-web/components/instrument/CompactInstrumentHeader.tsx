@@ -23,7 +23,7 @@
 // WHY "use client": uses useState for description expand/collapse toggle.
 
 import { useState } from "react";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Check, Copy, Link2 } from "lucide-react";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
@@ -74,6 +74,44 @@ export function CompactInstrumentHeader({
   // grid-template-rows animation — needs React state to toggle the CSS variable.
   const [descExpanded, setDescExpanded] = useState(false);
 
+  // PLAN-0050 T-F-6-17 (closes F-I-029) + T-F-6-21 (closes F-I-035):
+  // single state machine for two adjacent affordances — copy ticker, copy
+  // page URL. We share one "feedback" state because both reset to "idle"
+  // after the same 1.2s confirm window; storing each separately would mean
+  // two timers + two booleans for what is effectively the same UI affordance.
+  type CopyState = "idle" | "ticker" | "link";
+  const [copied, setCopied] = useState<CopyState>("idle");
+
+  // WHY guard against navigator.clipboard being undefined: this runs in
+  // jsdom (test environment) where clipboard is not implemented, and on
+  // any insecure-context page (HTTP, file://) where the spec says the
+  // clipboard API is not exposed. Falling back to a no-op keeps the test
+  // harness happy and the code defensive against insecure deployments.
+  function safeCopy(value: string): Promise<void> {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      return navigator.clipboard.writeText(value);
+    }
+    return Promise.resolve();
+  }
+
+  function handleCopyTicker() {
+    void safeCopy(ticker).then(() => {
+      setCopied("ticker");
+      window.setTimeout(() => setCopied("idle"), 1200);
+    });
+  }
+
+  function handleCopyLink() {
+    // window.location.href is the deepest-link the user is currently
+    // looking at — including query params (?tab=news, ?selected=…).
+    // That's exactly what a colleague needs when the user "shares this view".
+    const url = typeof window !== "undefined" ? window.location.href : "";
+    void safeCopy(url).then(() => {
+      setCopied("link");
+      window.setTimeout(() => setCopied("idle"), 1200);
+    });
+  }
+
   // Derived: format change for display
   const changeStr = change != null
     ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}`
@@ -102,10 +140,32 @@ export function CompactInstrumentHeader({
           <ChevronLeft className="h-4 w-4" />
         </button>
 
-        {/* Ticker — monospace bold; Bloomberg always monospaces symbols */}
-        <span className="font-mono text-[13px] font-semibold text-foreground shrink-0">
-          {ticker}
-        </span>
+        {/* Ticker — monospace bold; Bloomberg always monospaces symbols.
+            PLAN-0050 T-F-6-17: clicking copies the ticker to clipboard so
+            traders can paste it into Slack / a colleague's terminal / a
+            spreadsheet without retyping. The Copy/Check icon flip provides
+            the standard 1-second visual confirm. We use a button with
+            the same monospace bold styling so the layout doesn't shift
+            when wrapping the text in an interactive element. */}
+        <button
+          type="button"
+          onClick={handleCopyTicker}
+          className="group flex shrink-0 items-center gap-1 font-mono text-[13px] font-semibold text-foreground hover:text-primary"
+          aria-label={copied === "ticker" ? `Copied ${ticker}` : `Copy ticker ${ticker}`}
+          title={copied === "ticker" ? "Copied!" : "Copy ticker"}
+        >
+          <span>{ticker}</span>
+          {copied === "ticker" ? (
+            <Check className="h-3 w-3 text-positive" aria-hidden="true" />
+          ) : (
+            // opacity-0 → 70 on hover keeps the chrome quiet by default and
+            // surfaces the affordance only when the trader's mouse is on the row.
+            <Copy
+              className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70"
+              aria-hidden="true"
+            />
+          )}
+        </button>
 
         {/* Exchange badge — subtle muted pill, no shadow, rounded-[2px] only */}
         <span className="rounded-[2px] bg-muted/40 px-1 font-mono text-[10px] text-muted-foreground shrink-0">
@@ -148,6 +208,24 @@ export function CompactInstrumentHeader({
               renders price in text-2xl which would overflow the row. Compact mode
               renders just the freshness indicator — zero height unless data is stale. */}
           <LiveQuoteBadge compact instrumentId={instrumentId} initialPrice={price} />
+
+          {/* Share / copy-link (PLAN-0050 T-F-6-21, closes F-I-035).
+              Copies the current page URL — a "send this view" affordance.
+              Lives at the right edge of the header row, mirroring how
+              Bloomberg's WPSP places its share icon next to the price. */}
+          <button
+            type="button"
+            onClick={handleCopyLink}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label={copied === "link" ? "Link copied" : "Copy page link"}
+            title={copied === "link" ? "Copied!" : "Copy link to this view"}
+          >
+            {copied === "link" ? (
+              <Check className="h-3.5 w-3.5 text-positive" aria-hidden="true" />
+            ) : (
+              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+          </button>
         </div>
       </div>
 
