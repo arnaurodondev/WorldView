@@ -1626,6 +1626,61 @@ export function createGateway(token?: string | null) {
       return { markets, total: raw.total };
     },
 
+    /**
+     * getPredictionMarketHistory — time-series of yes-probability snapshots
+     *
+     * WHY THIS EXISTS (PLAN-0048 D-2): the dashboard PredictionMarketsWidget
+     * needs (a) a 24h Δ pp computed from the most recent two snapshots and
+     * (b) a 7-day mini sparkline. Both come from the existing S9 → S3 history
+     * proxy at `/v1/signals/prediction-markets/{id}/history`.
+     *
+     * WHY days-only API surface: callers use day windows (1d for delta,
+     * 7d for sparkline). We translate `days` to a `from=now-Nd` query param
+     * so the caller doesn't have to format ISO dates.
+     *
+     * WHY shaped: the S3 response uses `outcomes_prices: { Yes, No }` per
+     * snapshot. We extract `yes_probability` for the dashboard widget so
+     * the consumer doesn't need to re-implement the same lookup logic.
+     */
+    async getPredictionMarketHistory(
+      marketId: string,
+      days = 7,
+    ): Promise<{ market_id: string; points: Array<{ snapshot_at: string; yes_probability: number }> }> {
+      // Compute the `from` timestamp client-side. WHY ISO + Z: FastAPI's
+      // `datetime` query param expects ISO 8601; the trailing Z keeps it UTC.
+      const fromIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const qs = new URLSearchParams({ from: fromIso, limit: "200" }).toString();
+
+      const raw = await apiFetch<{
+        market_id: string;
+        snapshots: Array<{
+          snapshot_at: string;
+          outcomes_prices: Record<string, number>;
+          volume_24h: number | null;
+        }>;
+      }>(
+        `/v1/signals/prediction-markets/${encodeURIComponent(marketId)}/history?${qs}`,
+        { token: t },
+      );
+
+      // Map each snapshot to a simple {snapshot_at, yes_probability} pair.
+      // WHY default 0: if the outcome key is missing (rare — early ingestion
+      // gap), 0 is safer than NaN for sparkline rendering. The chart still
+      // looks reasonable; the trader sees the gap.
+      const points = (raw.snapshots ?? []).map((s) => ({
+        snapshot_at: s.snapshot_at,
+        yes_probability: s.outcomes_prices?.Yes ?? s.outcomes_prices?.yes ?? 0,
+      }));
+
+      // S3 returns snapshots ORDER BY snapshot_at DESC. The sparkline + delta
+      // logic below expects ascending (oldest → newest) order so the path
+      // moves left-to-right in time. Reverse here once instead of in every
+      // consumer.
+      points.reverse();
+
+      return { market_id: raw.market_id, points };
+    },
+
     // ── Dashboard composed endpoints ──────────────────────────────────
 
     /**

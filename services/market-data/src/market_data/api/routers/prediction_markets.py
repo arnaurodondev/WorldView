@@ -7,9 +7,12 @@ Endpoints:
 
 R25: no infrastructure imports — all reads go through use cases.
 R16: API layer uses only use cases.
-Note: volume_24h is stored on snapshots, not on the market record; the list
-and detail responses return None for this field (PRD marks it as nullable).
-The history endpoint exposes per-snapshot volume_24h correctly.
+Note: volume_24h is stored on snapshots, not on the market record. The list
+endpoint pulls the latest snapshot volume via ``LEFT JOIN LATERAL`` in the
+repo (PLAN-0048 D-1) and forwards it through the use case. The detail
+endpoint still returns ``None`` (single-market view; can be wired similarly
+later when needed).  The history endpoint exposes per-snapshot volume_24h
+correctly.
 """
 
 from __future__ import annotations
@@ -79,19 +82,25 @@ async def list_prediction_markets(
             detail=f"status must be one of: {', '.join(sorted(_VALID_STATUS_VALUES))}",
         )
     pairs, total = await uc.execute(status=status, query=query, limit=limit, offset=offset)
+    # WHY float() with None-guard: ``volume_24h`` is a ``Decimal`` from the DB
+    # (precision-preserving on the wire side).  PLAN-0048 D-1: previously this
+    # was hardcoded to ``None`` because it required a separate query; the
+    # repo now JOINs the latest snapshot inline so we can forward the value.
+    # Pydantic ``float | None`` accepts None — so markets without snapshots
+    # still serialise cleanly.
     items = [
         PredictionMarketSummaryResponse(
             market_id=market.market_id,
             question=market.question,
             outcomes=_build_outcomes(market.outcomes, prices),
-            volume_24h=None,  # stored in snapshot, not on market entity
+            volume_24h=float(volume) if volume is not None else None,
             close_time=market.close_time,
             resolution_status=market.resolution_status,
             resolved_answer=market.resolved_answer,
             market_slug=market.market_slug,
             updated_at=market.updated_at,
         )
-        for market, prices in pairs
+        for market, prices, volume in pairs
     ]
     return PredictionMarketsListResponse(items=items, total=total, limit=limit, offset=offset)
 
@@ -148,13 +157,16 @@ async def get_prediction_market(
     if result is None:
         raise HTTPException(status_code=404, detail=f"Market '{market_id}' not found")
 
-    market, prices = result
+    market, prices, volume = result
+    # WHY float() with None-guard: ``volume_24h`` is ``Decimal`` from the
+    # snapshot row.  ``None`` survives unchanged for markets without a
+    # snapshot.  PLAN-0048 D-1.
     return PredictionMarketDetailResponse(
         market_id=market.market_id,
         question=market.question,
         description=market.description,
         outcomes=_build_outcomes(market.outcomes, prices),
-        volume_24h=None,  # stored in snapshot, not on market entity
+        volume_24h=float(volume) if volume is not None else None,
         close_time=market.close_time,
         resolution_status=market.resolution_status,
         resolved_answer=market.resolved_answer,

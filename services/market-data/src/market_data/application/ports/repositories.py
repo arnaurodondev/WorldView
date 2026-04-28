@@ -459,8 +459,14 @@ class FundamentalMetricsQueryRepository(ABC):
         end_date: date | None = None,
         period_type: str | None = None,
         limit: int = 1000,
+        order: str = "asc",
     ) -> list[MetricDataPoint]:
-        """Return timeseries data points for an instrument/metric combination."""
+        """Return timeseries data points for an instrument/metric combination.
+
+        ``order`` is ``"asc"`` (oldest first) or ``"desc"`` (newest first applied
+        at the SQL ``LIMIT`` boundary). The implementation must always return
+        rows in chronological order regardless of ``order``.
+        """
 
     @abstractmethod
     async def screen(
@@ -510,11 +516,16 @@ class PredictionMarketRepository(ABC):
         query: str | None,
         limit: int,
         offset: int,
-    ) -> tuple[list[PredictionMarket], int]:
-        """Return a paginated list of markets and the total count.
+    ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
+        """Return a paginated list of ``(market, latest_volume_24h)`` pairs and total.
 
         ``status``: filter by ``resolution_status`` (exact match); ``None`` = all.
         ``query``: filter by ``question ILIKE '%query%'``; ``None`` = all.
+
+        ``latest_volume_24h``: ``volume_24h`` from the most recent snapshot
+        (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``
+        when the market has no snapshots or the latest snapshot has no volume.
+        Forward-compatible: callers tolerating ``None`` continue to work.
         """
 
 

@@ -134,42 +134,74 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         query: str | None,
         limit: int,
         offset: int,
-    ) -> tuple[list[PredictionMarket], int]:
-        """Return paginated markets and the total count via window function."""
+    ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
+        """Return paginated ``(market, latest_volume_24h)`` pairs and total count.
+
+        Adds a ``LEFT JOIN LATERAL`` to ``prediction_market_snapshots`` that
+        pulls the single newest snapshot per market (ORDER BY snapshot_at
+        DESC LIMIT 1).  PLAN-0048 D-1: the list endpoint must surface real
+        24-hour volume — previously the field was hardcoded to ``None``
+        because it lives on the hypertable, not the master ``prediction_markets``
+        row.  LATERAL keeps the join evaluated per-row (uses the partial
+        per-market index on snapshot_at) instead of a window function over
+        the whole snapshot table.
+        """
         # F-101: build WHERE clause from static string segments only; all user
         # values are bound via named parameters — no f-string interpolation of
         # user data.
         params: dict[str, Any] = {"limit": limit, "offset": offset}
 
         # Base query — always-true predicate allows clean appending below.
+        # WHY LEFT JOIN LATERAL (not DISTINCT ON over snapshots): we want at
+        # most ONE additional column per market row, no behaviour change to
+        # the existing pagination/ORDER/COUNT(*) OVER() shape.  LEFT (not
+        # INNER) ensures markets without snapshots still appear with NULL
+        # volume — matches the previous behaviour where volume was always
+        # NULL.
         base = (
-            "SELECT id, market_id, source, question, description, outcomes, "
-            "close_time, resolution_status, resolved_answer, market_slug, "
-            "created_at, updated_at, COUNT(*) OVER() AS total "
-            "FROM prediction_markets"
+            "SELECT m.id, m.market_id, m.source, m.question, m.description, m.outcomes, "
+            "m.close_time, m.resolution_status, m.resolved_answer, m.market_slug, "
+            "m.created_at, m.updated_at, latest.volume_24h AS latest_volume_24h, "
+            "COUNT(*) OVER() AS total "
+            "FROM prediction_markets m "
+            "LEFT JOIN LATERAL ("
+            "  SELECT volume_24h "
+            "  FROM prediction_market_snapshots s "
+            "  WHERE s.market_id = m.market_id "
+            "  ORDER BY s.snapshot_at DESC "
+            "  LIMIT 1"
+            ") latest ON TRUE"
         )
         predicates: list[str] = []
 
         if status is not None:
-            predicates.append("resolution_status = :status")
+            predicates.append("m.resolution_status = :status")
             params["status"] = status
 
         if query is not None:
             # Escape ILIKE metacharacters before building the pattern (M-002).
             safe_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            predicates.append("question ILIKE :query_like ESCAPE '\\\\'")
+            predicates.append("m.question ILIKE :query_like ESCAPE '\\\\'")
             params["query_like"] = f"%{safe_query}%"
 
         where_sql = (" WHERE " + " AND ".join(predicates)) if predicates else ""
-        full_sql = base + where_sql + " ORDER BY updated_at DESC LIMIT :limit OFFSET :offset"
+        full_sql = base + where_sql + " ORDER BY m.updated_at DESC LIMIT :limit OFFSET :offset"
 
         result = await self._session.execute(text(full_sql).bindparams(**params))
         rows = result.fetchall()
         if not rows:
             return [], 0
         total = int(rows[0].total)
-        markets = [_row_to_market(row) for row in rows]
-        return markets, total
+        # Project each row into (market, latest_volume_24h).  Decimal cast
+        # mirrors the snapshot row mapper for type consistency on the wire.
+        pairs: list[tuple[PredictionMarket, Decimal | None]] = [
+            (
+                _row_to_market(row),
+                Decimal(str(row.latest_volume_24h)) if row.latest_volume_24h is not None else None,
+            )
+            for row in rows
+        ]
+        return pairs, total
 
 
 class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):

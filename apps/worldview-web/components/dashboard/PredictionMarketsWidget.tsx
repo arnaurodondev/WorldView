@@ -16,10 +16,10 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery, useAuth, and useState for ECON filter toggle.
+// WHY "use client": uses useQuery, useAuth, useQueries, and useState for ECON filter toggle.
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,6 +50,166 @@ const ECON_KEYWORDS = [
  */
 const isEconomics = (title: string): boolean =>
   ECON_KEYWORDS.some((kw) => title.toLowerCase().includes(kw));
+
+// ── Category heuristic (PLAN-0048 D-2) ────────────────────────────────────────
+
+/**
+ * MACRO_KEYWORDS / POLITICS_KEYWORDS / SPORTS_KEYWORDS / CRYPTO_KEYWORDS
+ *
+ * WHY client-side categorisation: the Polymarket API doesn't return a
+ * structured `category` field consistently — it lives in tags that aren't
+ * exposed by our S4 ingestion path. Title keyword matching is good enough
+ * for the dashboard chip and avoids an API change. Order matters: the FIRST
+ * matching set wins, so "fed bitcoin" → macro (since macro is checked
+ * before crypto). Most markets only match one set, so collisions are rare.
+ *
+ * WHY four buckets + "general" default: covers the dominant Polymarket
+ * verticals that finance traders care about. Anything else falls into
+ * "general" — neutral chip so the trader can still skim the row.
+ */
+const MACRO_KEYWORDS = [
+  "fed", "rate", "inflation", "gdp", "cpi", "unemployment", "recession",
+  "fomc", "payroll", "pce", "treasury", "yield", "deficit", "tariff",
+  "economic", "fiscal", "monetary", "pmi",
+];
+const POLITICS_KEYWORDS = [
+  "election", "president", "presidential", "senate", "congress", "vote",
+  "primary", "governor", "supreme court", "impeach",
+];
+const SPORTS_KEYWORDS = [
+  "nba", "nfl", "mlb", "nhl", "superbowl", "super bowl", "world cup",
+  "olympics", "champion", "f1", "fifa", "uefa",
+];
+const CRYPTO_KEYWORDS = [
+  "bitcoin", "ethereum", "btc", "eth", "crypto", "solana", "sol", "altcoin",
+];
+
+type Category = "macro" | "politics" | "sports" | "crypto" | "general";
+
+/**
+ * categorize — derive a coarse category for the market title.
+ * WHY first-match wins: see comment block above. The order is macro → politics
+ * → sports → crypto, putting the most finance-relevant categories first so
+ * a "Fed cuts rates AND BTC > 100k" market is tagged macro (right call for
+ * a finance dashboard).
+ */
+function categorize(title: string): Category {
+  const t = title.toLowerCase();
+  if (MACRO_KEYWORDS.some((k) => t.includes(k))) return "macro";
+  if (POLITICS_KEYWORDS.some((k) => t.includes(k))) return "politics";
+  if (SPORTS_KEYWORDS.some((k) => t.includes(k))) return "sports";
+  if (CRYPTO_KEYWORDS.some((k) => t.includes(k))) return "crypto";
+  return "general";
+}
+
+// ── Countdown helper (PLAN-0048 D-2) ──────────────────────────────────────────
+
+/**
+ * formatCountdown — convert a close-time ISO string to a relative label.
+ *
+ * WHY hand-rolled (not date-fns): keeping new deps to zero (project rule).
+ * The four-state output (closed / closes today / closes in Nd / —) is small
+ * enough that the formatting logic is clearer inline than via a library.
+ *
+ * Output:
+ *   - null close-time → "—"  (no resolution date known)
+ *   - close < now      → "closed"
+ *   - same calendar UTC day → "closes today"
+ *   - else → "closes in Nd"
+ *
+ * WHY UTC day comparison: avoids timezone surprises where a NY trader sees
+ * a market labelled "closes in 1d" while a London trader sees "today" for
+ * the same row. The trade-off: a market closing 03:00 UTC tomorrow shows
+ * "closes in 1d" to a NY trader at 23:00 ET (their "today" is the close
+ * day local). Acceptable since the precise close time is in the row title.
+ */
+function formatCountdown(closeIso: string | null | undefined): string {
+  if (!closeIso) return "—";
+  const close = new Date(closeIso);
+  if (Number.isNaN(close.getTime())) return "—";
+  const now = new Date();
+  if (close.getTime() <= now.getTime()) return "closed";
+
+  // Compare UTC day-of-year for "today" check.
+  const sameUtcDay =
+    close.getUTCFullYear() === now.getUTCFullYear() &&
+    close.getUTCMonth() === now.getUTCMonth() &&
+    close.getUTCDate() === now.getUTCDate();
+  if (sameUtcDay) return "closes today";
+
+  // Round UP days remaining: a market closing in 25 hours should read
+  // "closes in 2d", not "1d" — traders need the upper bound to plan around.
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const days = Math.ceil((close.getTime() - now.getTime()) / msPerDay);
+  return `closes in ${days}d`;
+}
+
+// ── Sparkline (PLAN-0048 D-2) ─────────────────────────────────────────────────
+
+/**
+ * Sparkline — tiny inline-SVG line chart of yes-probability over N points.
+ *
+ * WHY inline SVG (no library): bundle-size discipline. A single <path>
+ * with manually computed `d=` is ~30 lines of JS and zero external code.
+ * No library covers the 60×16 trader-strip use case better than this.
+ *
+ * WHY no axes/labels: the value is in the SHAPE, not the absolute number.
+ * The Yes/No pills already give the latest reading. The sparkline tells the
+ * trader at a glance whether sentiment is rising, flat, or falling.
+ *
+ * WHY 1px stroke + no fill: matches the rest of the terminal density —
+ * a thicker line would dominate the row visually.
+ *
+ * WHY positive-if-last>first: simple binary signal that's faster to read
+ * than a numeric Δ. We already show the Δ in pp on the same line.
+ */
+function Sparkline({ values, width = 60, height = 16 }: { values: number[]; width?: number; height?: number }) {
+  // Need at least 2 points for a line; otherwise render nothing (the empty
+  // div keeps layout stable so other rows don't shift).
+  if (values.length < 2) return <span className="inline-block" style={{ width, height }} />;
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // WHY epsilon range: when min == max (flat line), divide-by-zero would
+  // produce NaN coordinates. A 1e-6 floor keeps the path renderable as a
+  // straight horizontal line at mid-height.
+  const range = Math.max(max - min, 1e-6);
+
+  // Map each value to (x, y) where y is INVERTED — SVG y=0 is the top, but
+  // a higher probability should appear higher on screen. We subtract from
+  // height so the largest value is at y=0.
+  const stepX = width / (values.length - 1);
+  const points = values.map((v, i) => {
+    const x = i * stepX;
+    const y = height - ((v - min) / range) * height;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const d = `M ${points[0]} L ${points.slice(1).join(" ")}`;
+
+  // Up = positive (teal), down = negative (red). Equal/single-point = neutral.
+  const trendClass =
+    values[values.length - 1] > values[0]
+      ? "stroke-positive"
+      : values[values.length - 1] < values[0]
+      ? "stroke-negative"
+      : "stroke-muted-foreground";
+
+  return (
+    <svg width={width} height={height} className="overflow-visible" aria-hidden="true">
+      <path d={d} className={cn("fill-none", trendClass)} strokeWidth={1} />
+    </svg>
+  );
+}
+
+// ── Category chip styling (PLAN-0048 D-2) ─────────────────────────────────────
+
+/**
+ * Static class string per category — kept as a const so Tailwind's JIT
+ * picks up every variant at build time (dynamic class names are dropped).
+ * All chips share the same dimensions so the title row width is stable
+ * across markets.
+ */
+const CATEGORY_CHIP_CLASS = "bg-muted text-muted-foreground text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -84,6 +244,29 @@ export function PredictionMarketsWidget() {
   const filteredMarkets = econOnly ? allMarkets.filter((m) => isEconomics(m.title)) : allMarkets;
   const topMarkets = filteredMarkets.slice(0, 3);
   const totalMarkets = data?.total ?? 0;
+
+  // ── Per-row history fetch (PLAN-0048 D-2) ──────────────────────────────────
+  // WHY useQueries (not per-row useQuery in a child component): hooks must be
+  // called at the top of the component, not conditionally inside a `.map()`.
+  // useQueries fans out one query per market in a single hook call, returning
+  // an aligned array of results. With at most 3 rows the parallelism is
+  // bounded; staleTime=60s prevents repeated fetches when the user toggles
+  // ECON or the parent re-renders.
+  // WHY enabled gate on accessToken: the gateway requires a token; skipping
+  // until the token is present prevents 401 noise in the network panel.
+  // WHY queryKey includes market_id + days: each row's history is cached
+  // independently — switching the filtered set doesn't invalidate the others.
+  // WHY no refetchInterval: the parent's `data` query already polls every
+  // 60s; refetching history at the same cadence would double the request
+  // volume without meaningful UX benefit (sparkline updates daily-scale).
+  const historyQueries = useQueries({
+    queries: topMarkets.map((m) => ({
+      queryKey: ["dashboard-prediction-market-history", m.market_id, 7],
+      queryFn: () => createGateway(accessToken).getPredictionMarketHistory(m.market_id, 7),
+      enabled: !!accessToken,
+      staleTime: 60_000,
+    })),
+  });
 
   return (
     // WHY bg-background: consistent with all other dashboard widgets — the
@@ -143,7 +326,7 @@ export function PredictionMarketsWidget() {
           Bloomberg convention: title first, data below — same as news item rows. */}
       {!isLoading && topMarkets.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {topMarkets.map((market) => {
+          {topMarkets.map((market, idx) => {
             const yesPct = Math.round(market.yes_probability * 100);
             const noPct = 100 - yesPct;
 
@@ -170,12 +353,53 @@ export function PredictionMarketsWidget() {
               window.open(marketUrl, "_blank", "noopener,noreferrer");
             }
 
-            // WHY formatVolume: $1.2M is clearer than $1200000 at 10px text.
-            const formattedVolume = market.volume_usd >= 1_000_000
-              ? `$${(market.volume_usd / 1_000_000).toFixed(1)}M vol`
-              : market.volume_usd >= 1_000
-              ? `$${(market.volume_usd / 1_000).toFixed(0)}K vol`
-              : `$${market.volume_usd.toFixed(0)} vol`;
+            // WHY null/zero guard (BP-264): pre-D-1 the S3 list endpoint always
+            // returned volume_24h=None; the gateway mapped null→0. PLAN-0048
+            // D-1 wires real volume through the LATERAL JOIN, but markets
+            // without snapshots still produce 0 — keep treating 0 == "no data".
+            const formattedVolume = market.volume_usd > 0
+              ? market.volume_usd >= 1_000_000
+                ? `$${(market.volume_usd / 1_000_000).toFixed(1)}M vol`
+                : market.volume_usd >= 1_000
+                ? `$${(market.volume_usd / 1_000).toFixed(0)}K vol`
+                : `$${market.volume_usd.toFixed(0)} vol`
+              : null;
+
+            // ── PLAN-0048 D-2: derive category, delta, countdown, sparkline ──
+            const category = categorize(market.title);
+            const countdown = formatCountdown(market.resolution_date);
+
+            // History query for THIS row (aligned by index).
+            const history = historyQueries[idx]?.data?.points ?? [];
+
+            // 24h Δ in percentage points (pp) — find the first snapshot
+            // recorded ≥24h ago and subtract from the most recent.
+            // WHY pp not %: a market moving from 50% to 55% is a 5pp change,
+            // not a 10% change. Traders read prediction markets in pp.
+            // WHY ≥24h boundary (not "the snapshot 24h ago exactly"): polling
+            // intervals are not exactly daily, so we accept the closest
+            // snapshot that's at LEAST 24h old. This favours "fresh enough"
+            // over "perfectly aligned" for the dashboard scan.
+            let deltaPp: number | null = null;
+            if (history.length >= 2) {
+              const latest = history[history.length - 1];
+              const cutoffMs = new Date(latest.snapshot_at).getTime() - 24 * 60 * 60 * 1000;
+              // Walk backwards from the second-newest looking for the first
+              // sample older than 24h. Falls back to the OLDEST point if no
+              // such sample exists (e.g. only 6h of data) — in that case the
+              // delta is the full history Δ, which is still informative.
+              let prev = history[0];
+              for (let i = history.length - 2; i >= 0; i--) {
+                if (new Date(history[i].snapshot_at).getTime() <= cutoffMs) {
+                  prev = history[i];
+                  break;
+                }
+              }
+              deltaPp = (latest.yes_probability - prev.yes_probability) * 100;
+            }
+
+            // Pull just the yes_probability values for the sparkline.
+            const sparkValues = history.map((p) => p.yes_probability);
 
             return (
               // WHY h-auto (not h-[22px]): this market block is 2 rows × 22px each.
@@ -194,19 +418,30 @@ export function PredictionMarketsWidget() {
                 }}
                 aria-label={`Open prediction market: ${market.title}`}
               >
-                {/* Line 1: Market title — full width, truncated if very long */}
+                {/* Line 1: Market title + category chip — full width, truncated if very long */}
                 {/* WHY h-[22px]: maintains the §0 Terminal Quality row height rhythm
-                    even when content fits on one line. */}
-                <div className="flex h-[22px] items-center">
+                    even when content fits on one line.
+                    WHY chip AFTER title (not before): traders scan titles left-to-right;
+                    the category chip is supplementary metadata, so it lives at the end
+                    where it doesn't compete with the question for attention. */}
+                <div className="flex h-[22px] items-center gap-1.5">
                   <span
                     className="min-w-0 truncate text-[11px] text-foreground"
                     title={market.title}
                   >
                     {market.title}
                   </span>
+                  {/* Category chip — small, muted, never colored to avoid drawing
+                      the eye away from the actual probability data. */}
+                  <span className={CATEGORY_CHIP_CLASS}>{category}</span>
                 </div>
 
-                {/* Line 2: Yes/No pills + volume — data line below the title */}
+                {/* Line 2: Yes/No pills + Δ24h + countdown + sparkline + volume */}
+                {/* WHY single horizontal line at h-[22px]: density. The trader
+                    must be able to read all secondary info in a single eye-scan.
+                    Order: probability (primary signal) → delta (momentum) →
+                    countdown (urgency) → sparkline (trend shape) → volume
+                    (market activity). Each piece earns its place. */}
                 <div className="flex h-[22px] items-center gap-1.5">
                   {/* YES probability pill */}
                   <span className={cn(
@@ -226,15 +461,51 @@ export function PredictionMarketsWidget() {
                     N {noPct}%
                   </span>
 
-                  {/* Spacer — pushes volume to the right */}
+                  {/* Δ 24h — only render when we actually have a delta.
+                      WHY signed format with explicit "+": positive delta should
+                      look distinct from "5pp" without a sign — traders parse
+                      direction in <100ms by sign character.
+                      WHY toFixed(1): one decimal of pp = ~1% step granularity,
+                      which matches the smallest meaningful Polymarket movement
+                      without flickering on every minor poll. */}
+                  {deltaPp !== null && (
+                    <span
+                      className={cn(
+                        "font-mono text-[9px] tabular-nums",
+                        deltaPp > 0
+                          ? "text-positive"
+                          : deltaPp < 0
+                          ? "text-negative"
+                          : "text-muted-foreground",
+                      )}
+                      title={`24h change in pp`}
+                    >
+                      Δ {deltaPp > 0 ? "+" : ""}
+                      {deltaPp.toFixed(1)}pp
+                    </span>
+                  )}
+
+                  {/* Close countdown — relative time, mono-font for tabular align */}
+                  <span className="font-mono text-[9px] tabular-nums text-muted-foreground">
+                    {countdown}
+                  </span>
+
+                  {/* Spacer — pushes the trailing items (sparkline, volume) right */}
                   <span className="flex-1" />
 
-                  {/* Volume — right-aligned, muted (secondary info) */}
-                  {/* WHY text-[10px] tabular-nums: consistent with other financial
-                      secondary values across the dashboard row pattern. */}
-                  <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-                    {formattedVolume}
-                  </span>
+                  {/* Sparkline — 7-day trend; renders nothing when <2 points
+                      WHY before volume: visual signal first, numeric second —
+                      the eye picks up shape faster than text on a busy row. */}
+                  {sparkValues.length >= 2 && (
+                    <Sparkline values={sparkValues} />
+                  )}
+
+                  {/* Volume — right-aligned, muted (secondary info); hidden when null/0 (BP-264) */}
+                  {formattedVolume && (
+                    <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                      {formattedVolume}
+                    </span>
+                  )}
                 </div>
               </div>
             );
