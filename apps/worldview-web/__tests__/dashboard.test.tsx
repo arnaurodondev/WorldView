@@ -178,6 +178,33 @@ vi.mock("@/lib/gateway", () => ({
     // line intentionally omitted here to avoid overriding the mock with events.
     // WHY getPortfolios/getHoldings: PortfolioSummary widget in DashboardPage
     getPortfolios: vi.fn().mockResolvedValue([]),
+    // WHY getWatchlists/getWatchlistMembers: WatchlistMoversWidget (Wave E-2)
+    // queries these to build the row list. Returning [] makes the widget
+    // render its "No watchlist yet" empty-state — that's still a valid
+    // path the dashboard tests just need to mount cleanly.
+    getWatchlists: vi.fn().mockResolvedValue([]),
+    getWatchlistMembers: vi.fn().mockResolvedValue([]),
+    // WHY getOHLCV: WatchlistMoversWidget calls this in 1W/1M mode. Tests
+    // run in default 1D mode where this is a no-op, but vitest still
+    // hits the mock if `enabled` flips during the render lifecycle.
+    getOHLCV: vi.fn().mockResolvedValue({
+      instrument_id: "ins-1",
+      ticker: "",
+      timeframe: "1D",
+      bars: [],
+    }),
+    // WHY getCompanyOverview: WatchlistMoversWidget fans out per-instrument
+    // overview lookups for sector filtering. Empty mock OK — same key as
+    // PreMarketMoversWidget's mover-overview-sector queries.
+    getCompanyOverview: vi.fn().mockResolvedValue({
+      instrument: {
+        instrument_id: "ins-1",
+        entity_id: "ins-1",
+        ticker: "AAPL",
+        name: "Apple Inc",
+        gics_sector: "Information Technology",
+      },
+    }),
     getHoldings: vi.fn().mockResolvedValue({
       portfolio_id: "p1",
       holdings: [],
