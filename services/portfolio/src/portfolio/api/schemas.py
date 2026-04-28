@@ -84,6 +84,12 @@ class PortfolioResponse(BaseModel):
     name: str
     currency: str
     status: str
+    # PLAN-0046 Wave 3 / T-46-3-01: discriminator surfaced to clients so the
+    # frontend can render the ROOT badge and disable delete. ``manual`` /
+    # ``brokerage`` / ``root``. Field is required on the response — S1 always
+    # populates ``kind`` once migration 0011 has been applied (default
+    # backfilled to 'manual' for historical rows).
+    kind: str
     created_at: datetime
 
 

@@ -684,6 +684,10 @@ export function createGateway(token?: string | null) {
           name: string;
           currency: string;
           status: string;
+          // PLAN-0046 Wave 3 / T-46-3-04 — kind discriminator from S1.
+          // Optional in the type to keep older S9 builds backward-compatible
+          // during rollout; once migration 0011 is everywhere this is always set.
+          kind?: "manual" | "brokerage" | "root";
           created_at: string;
         }>;
         total: number;
@@ -701,6 +705,9 @@ export function createGateway(token?: string | null) {
         // WHY default: S1 does not return updated_at on PortfolioResponse (it only has created_at).
         // Use created_at as fallback so components that display "last updated" still render.
         updated_at: p.created_at,
+        // Forward the kind discriminator unchanged so the page can sort the ROOT
+        // entry first and disable delete on aggregate portfolios.
+        kind: p.kind,
       }));
     },
 

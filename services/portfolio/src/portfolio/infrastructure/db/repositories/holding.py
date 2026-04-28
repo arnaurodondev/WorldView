@@ -73,6 +73,85 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
             )
         return enriched
 
+    async def list_by_portfolio_ids_aggregated_enriched(
+        self,
+        portfolio_ids: list[UUID],
+    ) -> list[EnrichedHolding]:
+        """Aggregate holdings across multiple portfolios (PLAN-0046 / T-46-3-03).
+
+        Strategy: fetch all holdings for the listed portfolios with the same
+        instrument LEFT-JOIN as the single-portfolio path, then collapse by
+        ``instrument_id`` in Python. This trades one round-trip + a small
+        in-memory reduce for a much simpler implementation than a SQL GROUP
+        BY with weighted-average cost (which would also need to special-case
+        zero-quantity rows). For the user counts we target (≤ 5 portfolios,
+        ≤ 100 instruments each) the overhead is negligible.
+
+        WHY weighted average cost (not simple mean): if a user holds 100 AAPL
+        @ $150 in one portfolio and 10 AAPL @ $200 in another, the blended
+        cost basis is (100*150 + 10*200) / 110 = $154.55, not $175. Simple
+        mean would mislead the P&L calculation in the UI.
+        """
+        from collections import defaultdict
+        from decimal import Decimal
+
+        if not portfolio_ids:
+            return []
+
+        stmt = (
+            select(HoldingModel, InstrumentModel.symbol, InstrumentModel.name, InstrumentModel.entity_id)
+            .outerjoin(InstrumentModel, HoldingModel.instrument_id == InstrumentModel.id)
+            .where(HoldingModel.portfolio_id.in_(portfolio_ids))
+        )
+        result = await self._session.execute(stmt)
+
+        # Per-instrument accumulators.
+        qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
+        cost_qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))  # SUM(qty * avg_cost)
+        # Carry the first (holding, ticker, name, entity_id) seen for each instrument
+        # so we can reconstruct an EnrichedHolding without losing the joined fields.
+        first_seen: dict[UUID, tuple[HoldingModel, str | None, str | None, UUID | None]] = {}
+
+        for holding_row, symbol, name, entity_id in result.tuples():
+            iid = holding_row.instrument_id
+            qty_sum[iid] += holding_row.quantity
+            cost_qty_sum[iid] += holding_row.quantity * holding_row.average_cost
+            first_seen.setdefault(iid, (holding_row, symbol, name, entity_id))
+
+        enriched: list[EnrichedHolding] = []
+        for iid, total_qty in qty_sum.items():
+            # WHY rename to *_val: mypy narrows ``name`` from the loop above
+            # (where it came from a Mapped[str] tuple slot inferred as str)
+            # and refuses to re-bind it to ``str | None`` here. Distinct names
+            # for the unpacked snapshot tuple side-step the collision and
+            # also make it explicit that these come from ``first_seen``.
+            base_row, symbol_val, name_val, entity_id_val = first_seen[iid]
+            # NULLIF(SUM(qty), 0) — avoid division by zero for fully-closed positions
+            # that still have stale holding rows (shouldn't happen, but defensive).
+            weighted_cost = (cost_qty_sum[iid] / total_qty) if total_qty != 0 else Decimal(0)
+            aggregated = Holding(
+                # Synthesize an id deterministically from instrument_id so successive
+                # calls return stable ids (helpful for React keys); the row is
+                # virtual and never persisted.
+                id=base_row.id,
+                portfolio_id=base_row.portfolio_id,
+                instrument_id=iid,
+                tenant_id=base_row.tenant_id,
+                quantity=total_qty,
+                average_cost=weighted_cost,
+                currency=base_row.currency,
+                updated_at=base_row.updated_at,
+            )
+            enriched.append(
+                EnrichedHolding(
+                    holding=aggregated,
+                    ticker=symbol_val,
+                    name=name_val,
+                    entity_id=entity_id_val,
+                ),
+            )
+        return enriched
+
     async def save(self, holding: Holding) -> None:
         row = await self._session.get(HoldingModel, holding.id)
         if row is None:

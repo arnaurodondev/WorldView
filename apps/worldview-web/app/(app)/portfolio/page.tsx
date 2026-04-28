@@ -589,14 +589,49 @@ export default function PortfolioPage() {
     staleTime: 60_000,
   });
 
+  // ── PLAN-0046 Wave 3 / T-46-3-04 — sort with ROOT first ─────────────────
+  // WHY a sorted copy (not a re-fetch): the gateway returns portfolios in
+  // creation order. The product spec wants the aggregate "All Accounts" view
+  // (kind === "root") to appear first in the selector and to be the initial
+  // active portfolio on first load. Sorting client-side keeps the API stable
+  // — if we ever drop the ROOT-first rule, only this memo changes.
+  //
+  // Tie-break: name A→Z. This is purely cosmetic — within manual/brokerage
+  // the user has typically only a handful of portfolios, so any deterministic
+  // order is fine; alphabetical is the most intuitive.
+  const sortedPortfolios = useMemo(() => {
+    if (!portfolios) return undefined;
+    // Slice to avoid mutating the TanStack Query cached array (would trigger
+    // re-renders downstream and confuse staleness detection).
+    return portfolios.slice().sort((a, b) => {
+      // ROOT always first — sorts before everything else regardless of name.
+      const aRoot = a.kind === "root" ? 0 : 1;
+      const bRoot = b.kind === "root" ? 0 : 1;
+      if (aRoot !== bRoot) return aRoot - bRoot;
+      return a.name.localeCompare(b.name);
+    });
+  }, [portfolios]);
+
   // WHY derived active portfolio (not stored in state):
-  // The default is portfolios[0]; selecting a portfolio updates selectedPortfolioId.
-  // Storing both would cause a double-render on initial load.
+  // The default is sortedPortfolios[0] (= ROOT once it lands in S1's response);
+  // selecting a portfolio updates selectedPortfolioId. Storing both would
+  // cause a double-render on initial load.
+  //
+  // PLAN-0046 Wave 3 / T-46-3-04 — default-select the ROOT portfolio: because
+  // sortedPortfolios puts kind === "root" first, sortedPortfolios?.[0] is the
+  // root if present, otherwise falls back to whichever portfolio happens to
+  // be first (legacy behaviour for environments where migration 0011 hasn't
+  // shipped yet).
   const activePortfolioId =
-    selectedPortfolioId ?? portfolios?.[0]?.portfolio_id ?? null;
-  const activePortfolio = portfolios?.find(
+    selectedPortfolioId ?? sortedPortfolios?.[0]?.portfolio_id ?? null;
+  const activePortfolio = sortedPortfolios?.find(
     (p) => p.portfolio_id === activePortfolioId,
   );
+
+  // PLAN-0046 Wave 3 / T-46-3-04 — derived flag used in multiple places.
+  // Centralised so future kind-aware UX (e.g. disabling Add Position on root)
+  // doesn't have to duplicate the comparison.
+  const activeIsRoot = activePortfolio?.kind === "root";
 
   // ── Mutation callbacks ────────────────────────────────────────────────────
   // WHY placed AFTER activePortfolioId derivation: handlePositionAdded captures
@@ -819,7 +854,14 @@ export default function PortfolioPage() {
     // populated from company overviews. topGainer/topLoser display ticker in the KPI strip.
     for (const h of enrichedHoldings) {
       const q = holdingsQuotes[h.instrument_id];
-      const livePrice = q?.price ?? h.current_price ?? h.average_cost;
+      // WHY q.price>0 (B-2): a delisted instrument (e.g., a fully-sold position
+      // like VTV) returns price:0 from the batch endpoint. The previous nullish
+      // chain treated 0 as a real value and computed pnlPct = -100% — incorrectly
+      // flagging the position as the day's biggest loser.
+      const livePrice =
+        q?.price && q.price > 0
+          ? q.price
+          : h.current_price ?? h.average_cost;
       totalValue += livePrice * h.quantity;
       totalCost += h.average_cost * h.quantity;
 
@@ -899,7 +941,8 @@ export default function PortfolioPage() {
       // WHY three-way fallback: live quote → server-enriched current_price → cost basis
       // This mirrors the KPI memo's price logic so sector weights are consistent with
       // the total value shown in the KPI strip.
-      const price = q?.price ?? h.current_price ?? h.average_cost;
+      const price =
+        q?.price && q.price > 0 ? q.price : h.current_price ?? h.average_cost;
       const val = price * h.quantity;
       valueByInstrument[h.instrument_id] = val;
       return sum + val;
@@ -988,7 +1031,7 @@ export default function PortfolioPage() {
         {/* Portfolio selector — only shown when user has multiple portfolios.
             WHY hidden for single portfolio: a dropdown with one item is just clutter.
             The active portfolio name is shown in the "0 positions" badge instead. */}
-        {portfolios && portfolios.length > 1 && (
+        {sortedPortfolios && sortedPortfolios.length > 1 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -996,21 +1039,43 @@ export default function PortfolioPage() {
                 size="sm"
                 className="h-6 gap-1 px-1.5 text-[11px] font-mono text-foreground"
               >
+                {/* PLAN-0046 Wave 3 / T-46-3-04 — show "ALL" badge inline next
+                    to the trigger label when the active portfolio is the root.
+                    This makes the aggregate view immediately recognisable
+                    without opening the menu. */}
                 {activePortfolio?.name ?? "Select portfolio"}
+                {activeIsRoot && (
+                  <span
+                    className="ml-1 rounded-[2px] border border-primary/60 bg-primary/10 px-1 py-px text-[9px] font-mono uppercase tracking-[0.06em] text-primary"
+                    aria-label="Aggregate portfolio"
+                  >
+                    ALL
+                  </span>
+                )}
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              {portfolios.map((p: Portfolio) => (
+              {sortedPortfolios.map((p: Portfolio) => (
                 <DropdownMenuItem
                   key={p.portfolio_id}
                   onClick={() => setSelectedPortfolioId(p.portfolio_id)}
                   className={cn(
-                    "font-mono text-xs",
+                    "font-mono text-xs flex items-center gap-1.5",
                     p.portfolio_id === activePortfolioId && "text-primary font-medium",
                   )}
                 >
                   {p.name}
+                  {/* Per-row ALL badge: keeps the root recognisable inside the
+                      menu even when another portfolio is currently active. */}
+                  {p.kind === "root" && (
+                    <span
+                      className="rounded-[2px] border border-primary/60 bg-primary/10 px-1 py-px text-[9px] font-mono uppercase tracking-[0.06em] text-primary"
+                      aria-label="Aggregate portfolio — All Accounts"
+                    >
+                      ALL
+                    </span>
+                  )}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -1030,12 +1095,35 @@ export default function PortfolioPage() {
           {/* "Add Position" button — only useful when there's an active portfolio.
               WHY disabled when no portfolio: without a portfolio there's nowhere to add
               the position. The button is hidden entirely (not just disabled) to avoid
-              confusion — it only appears when there's something to add to. */}
+              confusion — it only appears when there's something to add to.
+
+              PLAN-0046 Wave 3 / T-46-3-04 — also disabled when the active portfolio
+              is the ROOT aggregate. The S1 backend rejects POST /v1/transactions
+              with HTTP 400 (CANNOT_RECORD_TRANSACTION_ON_ROOT) for root portfolios;
+              graying the button out client-side prevents a wasted round-trip and
+              gives the user instant feedback via the tooltip. */}
           {activePortfolioId && (
             <button
-              aria-label="Add a new position to this portfolio"
-              onClick={() => setAddPositionOpen(true)}
-              className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-border text-muted-foreground rounded-[2px] hover:border-primary/60 hover:text-primary transition-colors flex items-center gap-1"
+              aria-label={
+                activeIsRoot
+                  ? "Cannot add positions directly to the aggregate portfolio"
+                  : "Add a new position to this portfolio"
+              }
+              title={
+                activeIsRoot
+                  ? "Switch to a specific portfolio to add a position. The aggregate view is read-only."
+                  : undefined
+              }
+              onClick={() => {
+                if (!activeIsRoot) setAddPositionOpen(true);
+              }}
+              disabled={activeIsRoot}
+              className={cn(
+                "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
+                activeIsRoot
+                  ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
+                  : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary",
+              )}
             >
               <Plus className="h-3 w-3" />
               Add Position
@@ -1257,6 +1345,18 @@ export default function PortfolioPage() {
             ) : (
               <TransactionsTable
                 transactions={transactionsResp?.transactions ?? []}
+                // WHY pass holdingOverviews as ticker lookup (A-2): the gateway
+                // returns tx.ticker = "" because S1's TransactionListItem omits the
+                // ticker. The page already fetches getCompanyOverview per holding
+                // (holdingOverviews map keyed by instrument_id). Reusing it avoids a
+                // second round-trip to enrich transactions and guarantees that the
+                // TICKER column matches the holdings table for the same instrument.
+                tickerByInstrumentId={Object.fromEntries(
+                  Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
+                    id,
+                    ov?.ticker,
+                  ]),
+                )}
               />
             )}
           </div>

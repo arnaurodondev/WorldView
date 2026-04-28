@@ -25,6 +25,27 @@ class PortfolioStatus(StrEnum):
     DELETED = "deleted"
 
 
+class PortfolioKind(StrEnum):
+    """Discriminator for portfolio purpose / data source.
+
+    PLAN-0046 Wave 3 / T-46-3-01.
+
+    - ``MANUAL``    : user-created via ``POST /v1/portfolios``; transactions
+                      are recorded manually by the user.
+    - ``BROKERAGE`` : created during a SnapTrade brokerage connection flow;
+                      holdings are derived from broker snapshots.
+    - ``ROOT``      : auto-provisioned per user (one only — enforced by a
+                      partial unique index). Aggregates holdings/transactions
+                      across all the user's other portfolios. Cannot be
+                      archived, renamed away from "All Accounts" by users,
+                      or written to via ``POST /v1/transactions``.
+    """
+
+    MANUAL = "manual"
+    BROKERAGE = "brokerage"
+    ROOT = "root"
+
+
 class TransactionType(StrEnum):
     BUY = "BUY"
     SELL = "SELL"

@@ -143,6 +143,32 @@ class FakePortfolioRepository(PortfolioRepository):
     async def save(self, portfolio: Portfolio) -> None:
         self._store[portfolio.id] = portfolio
 
+    async def find_root_by_owner(self, owner_id: UUID, tenant_id: UUID) -> Portfolio | None:
+        # PLAN-0046 Wave 3 / T-46-3-02. Mirrors the SQL repo: filter by
+        # owner+tenant+kind=root. The DB enforces uniqueness via a partial
+        # index; here we just return the first match.
+        from portfolio.domain.enums import PortfolioKind
+
+        for p in self._store.values():
+            if p.owner_id == owner_id and p.tenant_id == tenant_id and p.kind == PortfolioKind.ROOT:
+                return p
+        return None
+
+    async def list_non_root_active_ids_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[UUID]:
+        # PLAN-0046 Wave 3 / T-46-3-03. Used by holdings/transactions fan-out
+        # for ROOT portfolios — returns the ids of the sub-portfolios whose
+        # rows should be unioned together.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [
+            p.id
+            for p in self._store.values()
+            if p.owner_id == owner_id
+            and p.tenant_id == tenant_id
+            and p.kind != PortfolioKind.ROOT
+            and p.status == PortfolioStatus.ACTIVE
+        ]
+
 
 class FakeInstrumentRepository(InstrumentRepository):
     """In-memory instrument store."""
@@ -218,6 +244,23 @@ class FakeTransactionRepository(TransactionRepository):
         total = len(items)
         return items[offset : offset + limit], total
 
+    async def list_by_portfolio_ids(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        # PLAN-0046 Wave 3 / T-46-3-03: union across multiple portfolios,
+        # sorted newest-first to mirror the SQL ORDER BY.
+        if not portfolio_ids:
+            return [], 0
+        pid_set = set(portfolio_ids)
+        items = [t for t in self._store.values() if t.portfolio_id in pid_set and t.tenant_id == tenant_id]
+        items.sort(key=lambda t: (t.executed_at, t.created_at), reverse=True)
+        total = len(items)
+        return items[offset : offset + limit], total
+
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
 
@@ -237,6 +280,39 @@ class FakeHoldingRepository(HoldingRepository):
     async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]:
         holdings = [h for (pid, _), h in self._store.items() if pid == portfolio_id]
         return [EnrichedHolding(holding=h, ticker=None, name=None, entity_id=None) for h in holdings]
+
+    async def list_by_portfolio_ids_aggregated_enriched(
+        self,
+        portfolio_ids: list[UUID],
+    ) -> list[EnrichedHolding]:
+        # PLAN-0046 Wave 3 / T-46-3-03: mirror the SQL repo behaviour —
+        # group by instrument_id, sum quantity, qty-weighted average cost.
+        from collections import defaultdict
+        from dataclasses import replace
+        from decimal import Decimal
+
+        if not portfolio_ids:
+            return []
+
+        pid_set = set(portfolio_ids)
+        qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
+        cost_qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
+        first_seen: dict[UUID, Holding] = {}
+
+        for (pid, _), h in self._store.items():
+            if pid not in pid_set:
+                continue
+            qty_sum[h.instrument_id] += h.quantity
+            cost_qty_sum[h.instrument_id] += h.quantity * h.average_cost
+            first_seen.setdefault(h.instrument_id, h)
+
+        enriched: list[EnrichedHolding] = []
+        for iid, total_qty in qty_sum.items():
+            base = first_seen[iid]
+            weighted_cost = (cost_qty_sum[iid] / total_qty) if total_qty != 0 else Decimal(0)
+            aggregated = replace(base, quantity=total_qty, average_cost=weighted_cost)
+            enriched.append(EnrichedHolding(holding=aggregated, ticker=None, name=None, entity_id=None))
+        return enriched
 
     async def save(self, holding: Holding) -> None:
         self._store[(holding.portfolio_id, holding.instrument_id)] = holding
