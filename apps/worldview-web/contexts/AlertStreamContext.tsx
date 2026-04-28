@@ -103,10 +103,26 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
 
   /** dispatch — route an incoming alert to the correct state bucket */
   const dispatch = useCallback((alert: AlertPayload) => {
+    // F-301 fix (PLAN-0048 QA iter-1): the S10 WebSocket payload uses
+    // `alert_id` while the AlertPayload type expects `id`. Without aliasing,
+    // every WS-sourced alert ended up with `id === undefined`, and the
+    // dashboard RecentAlerts widget rendered deep-links as
+    // `?selected=undefined` — clicking landed users on a sheet that could
+    // not resolve any alert. Normalising at the dispatch boundary means
+    // every consumer downstream sees a non-null `id` regardless of which
+    // wire shape (legacy `id` or new `alert_id`) the server sends.
+    // We cast through `unknown` because TypeScript does not know the
+    // server may add fields beyond the typed union.
+    const raw = alert as AlertPayload & { alert_id?: string };
+    const id = alert.id ?? raw.alert_id ?? "";
     // WHY toUpperCase(): S10 AlertSeverity StrEnum emits lowercase ("critical") but
     // AlertPayload.severity is typed as uppercase union ("CRITICAL"). Normalise here
     // so the CRITICAL routing check and downstream severityColor() calls both work.
-    const normalised: AlertPayload = { ...alert, severity: (alert.severity?.toUpperCase() ?? "LOW") as AlertPayload["severity"] };
+    const normalised: AlertPayload = {
+      ...alert,
+      id,
+      severity: (alert.severity?.toUpperCase() ?? "LOW") as AlertPayload["severity"],
+    };
     if (normalised.severity === "CRITICAL") {
       // CRITICAL alerts go to the critical queue for immediate full-screen display
       setCriticalQueue((prev) => [...prev, normalised]);

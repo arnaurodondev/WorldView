@@ -335,9 +335,12 @@ export function SemanticHoldingsTable({
                     : dayChangePct >= 0 ? "text-positive" : "text-negative",
                 )}
               >
-                {dayChangePct == null
-                  ? "—"
-                  : `${dayChangePct >= 0 ? "+" : ""}${formatPercent(dayChangePct / 100)}`}
+                {/* F-201 fix (PLAN-0048 QA iter-1): formatPercent already
+                    prefixes "+"/"-" for non-null values (see lib/utils.ts:81),
+                    so the previous explicit ternary produced "++0.00%" /
+                    "++30.92%" everywhere positive. Trust the formatter and
+                    drop the wrapper. */}
+                {dayChangePct == null ? "—" : formatPercent(dayChangePct / 100)}
               </td>
 
               {/* P&L $ — cumulative unrealised P&L (vs avg cost) */}
@@ -357,7 +360,9 @@ export function SemanticHoldingsTable({
                   pnlPct >= 0 ? "text-positive" : "text-negative",
                 )}
               >
-                {pnlPct >= 0 ? "+" : ""}{formatPercent(pnlPct / 100)}
+                {/* F-201 fix: same double-"+" bug as DAY % above — drop the
+                    redundant ternary; formatPercent already signs the value. */}
+                {formatPercent(pnlPct / 100)}
               </td>
 
               {/* Value */}

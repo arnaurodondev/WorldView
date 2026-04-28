@@ -154,11 +154,24 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
     [acknowledged, snoozed, now],
   );
 
-  /** Active alerts grouped by severity */
+  /** Active alerts grouped by severity.
+   *
+   * F-302 fix (PLAN-0048 QA iter-1): the backend returns severity as a
+   * lowercase StrEnum value ("low", "medium", "high", "critical") but the
+   * SEVERITY_ORDER constant uses the uppercase union from the typed Alert
+   * model. The previous strict-equality check was always false, so every
+   * group rendered empty and the page showed "No pending alerts" while 45
+   * pending alerts were sitting in the API response.
+   *
+   * Normalising via toUpperCase() on both sides makes the comparison
+   * case-insensitive without requiring the backend to change. RecentAlerts
+   * already does the same normalisation (line 91) — we mirror that pattern
+   * here so both surfaces behave identically.
+   */
   const activeAlertsBySeverity = SEVERITY_ORDER.reduce<Record<AlertSeverity, Alert[]>>(
     (acc, sev) => {
       acc[sev] = allAlerts.filter(
-        (a) => a.severity === sev && isVisible(a),
+        (a) => (a.severity ?? "").toUpperCase() === sev && isVisible(a),
       );
       return acc;
     },
@@ -424,13 +437,18 @@ interface AlertRowProps {
 }
 
 function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
+  // F-302 follow-up: backend severity may arrive lowercase. SEV_DOT_COLOR is
+  // keyed by the uppercase union — looking up `alert.severity` directly when
+  // the value is "low" returns undefined and renders an unstyled bg. Normalise
+  // once here so the dot is always coloured correctly.
+  const severityKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
   return (
     <li>
       {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules */}
       <div className="flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40">
 
         {/* Severity dot — quick visual severity scan */}
-        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[alert.severity])} />
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[severityKey])} />
 
         {/* Entity ticker — if available */}
         {alert.ticker && (
@@ -516,7 +534,9 @@ function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
           while the visible row uses the dot indicator for compactness.
           Tests look for text content "CRIT"/"HIGH"/"MED"/"LOW" from SeverityBadge. */}
       <span className="sr-only">
-        <SeverityBadge severity={alert.severity} size="sm" />
+        {/* Pass the normalised uppercase key so SeverityBadge's switch table
+            hits the correct branch even if backend sends lowercase (F-302). */}
+        <SeverityBadge severity={severityKey} size="sm" />
       </span>
 
     </li>

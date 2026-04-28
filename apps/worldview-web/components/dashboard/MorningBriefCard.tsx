@@ -239,9 +239,17 @@ export function MorningBriefCard() {
       <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
         {/* Generated timestamp — muted, monospace for scannable date/time.
             font-mono + tabular-nums keeps digit columns aligned per Midnight
-            Pro convention for any numeric data. */}
-        <span className="w-[100px] shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/60">
-          {ts} UTC
+            Pro convention for any numeric data.
+            F-115 fix (PLAN-0048 QA iter-1): the previous 100px slot wrapped
+            "2026-04-28 07:14 UTC" onto a second line, breaking the h-5
+            header. We widen the slot to 152px AND restore the "Generated "
+            prefix that was silently dropped during the Wave A redesign —
+            the briefing.test.tsx test asserts the visible "Generated" text
+            (R19 forbids deleting/weakening tests). The label also
+            disambiguates the timestamp from "current UTC time" so users
+            don't confuse the brief's mtime with wall-clock time. */}
+        <span className="w-[152px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground/60">
+          Generated {ts} UTC
         </span>
 
         {/* "Morning Briefing" title — centered in the remaining space */}

@@ -116,6 +116,48 @@ export default function AppLayout({ children }: AppLayoutProps) {
       }, 0)
     : null;
 
+  // ── Day P&L + Unrealised P&L for TopBar (PLAN-0048 F-121 fix) ─────────────
+  // WHY computed here (in the layout, not TopBar): the TopBar is a thin
+  // presentational component — all financial computations live in the route
+  // layer that already has portfolio data fetched. The layout already loads
+  // holdings + navQuotes for portfolioValue, so we can derive both P&L
+  // numbers from the same data without an extra network round-trip.
+  //
+  // WHY the TopBar audit (F-121) flagged this: the TopBar component was
+  // designed to render Day P&L / Total P&L slots when both props are
+  // non-null, but the layout never computed and forwarded them. As a result
+  // every viewport showed only `PORT $42K` next to the bell — the rail's
+  // most important fields were silently absent.
+  //
+  // Day P&L: sum across all holdings of (per-share daily price change × qty).
+  // We require the quote AND its `change` field to be defined; if any quote is
+  // still loading (q == null) the contribution is 0 — better to under-report
+  // briefly during the 30s navQuotes refetch than to flicker between values.
+  // We pass `null` only when there are no holdings — the TopBar then renders
+  // its label slot empty rather than "$0.00", which is technically a value
+  // and would mislead the user into thinking the day was flat.
+  const dailyPnl: number | null = holdingsResp?.holdings.length
+    ? holdingsResp.holdings.reduce((sum, h) => {
+        const q = navQuotes?.quotes?.[h.instrument_id];
+        // Treat missing quote / missing change as 0 contribution; once the
+        // quote refetch resolves, the value snaps to the correct sum.
+        return sum + (q?.change ?? 0) * h.quantity;
+      }, 0)
+    : null;
+
+  // Total P&L (a.k.a. Unrealised): mark-to-market value − total cost basis.
+  // WHY null when portfolioValue is null: without a current value we cannot
+  // form a meaningful difference vs cost; the TopBar slot then stays empty.
+  // WHY use h.average_cost (not q.price): cost basis is locked at purchase;
+  // multiplying by current qty against the original avg cost is the textbook
+  // unrealised P&L formula.
+  const totalCost: number = holdingsResp?.holdings.reduce(
+    (s, h) => s + h.average_cost * h.quantity,
+    0,
+  ) ?? 0;
+  const unrealisedPnl: number | null =
+    portfolioValue != null ? portfolioValue - totalCost : null;
+
   // WHY lazy initializer: reads localStorage once at mount, not on every render.
   // True (expanded) is the default so first-time users see the full labeled sidebar.
   // typeof window guard makes this safe during Next.js SSR pre-render.
@@ -216,7 +258,12 @@ export default function AppLayout({ children }: AppLayoutProps) {
       {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
        * main content area scrolls independently without moving the TopBar/Sidebar */}
       <div className="flex h-screen flex-col bg-background">
-        <TopBar unreadAlerts={badgeCount} portfolioValue={portfolioValue} />
+        <TopBar
+          unreadAlerts={badgeCount}
+          portfolioValue={portfolioValue}
+          dailyPnl={dailyPnl}
+          unrealisedPnl={unrealisedPnl}
+        />
 
         {/* WHY flex flex-1 overflow-hidden: the sidebar and main area share the
          * remaining height below the TopBar, each scrolling independently. */}

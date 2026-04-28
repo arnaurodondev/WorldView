@@ -1765,23 +1765,54 @@ export function createGateway(token?: string | null) {
       // WHY ticker ?? symbol fallback: S3's ScreenInstrumentResponse uses `ticker`.
       // Some older or alternate responses may use `symbol`. Try both so the widget
       // always shows a symbol string instead of an empty cell.
-      const movers = (raw.results ?? []).map((r) => ({
-        instrument_id: r.instrument_id ?? "",
-        // WHY propagate entity_id when present: top-mover rows need it for correct
-        // instrument detail navigation. ADR-F-12 mandates entity_id in URLs.
-        // Falls back to undefined so the UI can degrade to instrument_id-based routing.
-        entity_id: r.entity_id ?? undefined,
-        ticker: r.ticker ?? r.symbol ?? r.name?.split(" ")[0] ?? r.instrument_id?.slice(0, 6) ?? "",
-        name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
-        price: 0, // Not available from screener — would need a quote lookup
-        // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
-        // The Mover.change_pct field is treated as a percentage by MoverRow
-        // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
-        change_pct: (r.metrics?.daily_return ?? 0) * 100,
-        volume: null as number | null,
-      }));
+      // F-304 fix (PLAN-0048 QA iter-1): pull the latest close/price from
+      // any of the metric fields S3 may surface so we never display $0.00
+      // for a real ticker — and apply strict directional filtering below.
+      const movers = (raw.results ?? []).map((r) => {
+        const metrics = (r.metrics ?? {}) as Record<string, unknown>;
+        // S3's screener returns price under various keys depending on the
+        // configured metric set: `close`, `last_price`, or sometimes a flat
+        // `price`. Probe all three before falling back to 0 — this rescues
+        // the $0.00 rows the audit captured in /tmp/qa-iter1/d1920-top-movers.
+        const priceFromMetrics =
+          typeof metrics.close === "number"
+            ? metrics.close
+            : typeof metrics.last_price === "number"
+              ? metrics.last_price
+              : typeof metrics.price === "number"
+                ? metrics.price
+                : typeof (r as Record<string, unknown>).price === "number"
+                  ? ((r as Record<string, unknown>).price as number)
+                  : 0;
+        return {
+          instrument_id: r.instrument_id ?? "",
+          // WHY propagate entity_id when present: top-mover rows need it for correct
+          // instrument detail navigation. ADR-F-12 mandates entity_id in URLs.
+          // Falls back to undefined so the UI can degrade to instrument_id-based routing.
+          entity_id: r.entity_id ?? undefined,
+          ticker: r.ticker ?? r.symbol ?? r.name?.split(" ")[0] ?? r.instrument_id?.slice(0, 6) ?? "",
+          name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
+          price: priceFromMetrics,
+          // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
+          // The Mover.change_pct field is treated as a percentage by MoverRow
+          // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
+          change_pct: (r.metrics?.daily_return ?? 0) * 100,
+          volume: null as number | null,
+        };
+      });
 
-      return { movers, type: moverType };
+      // F-304 fix (PLAN-0048 QA iter-1): the audit observed the gainers
+      // list contained negative-% rows (e.g. GOOGL -0.54%) and the same
+      // ticker appeared in BOTH the gainers and losers panes. The screener
+      // sometimes returns rows whose daily_return is opposite to the
+      // requested side when the underlying sort is unstable — strict
+      // directional filtering on the client guarantees gainers > 0 and
+      // losers < 0 regardless of upstream behaviour.
+      const filtered = movers.filter((m) =>
+        moverType === "gainers" ? m.change_pct > 0 : m.change_pct < 0,
+      );
+
+      return { movers: filtered, type: moverType };
     },
 
     /**

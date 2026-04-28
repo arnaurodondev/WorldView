@@ -22,7 +22,11 @@
 
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
-import { formatPercent } from "@/lib/utils";
+// F-307 fix (PLAN-0048 QA iter-1): allocation shares are NOT directional
+// (a sector representing 100% of a portfolio has not "gained 100%"). Using
+// formatPercent (which prepends "+") produced the visible category error
+// "Equity +100.00%". Switch to formatPercentUnsigned for share displays.
+import { formatPercentUnsigned } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -106,7 +110,8 @@ function BarChart({
                   regardless of digit count (e.g. 5.0% / 33.3% align at the
                   decimal). */}
               <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                {formatPercent(item.pct / 100)}
+                {/* No "+" prefix — shares are non-directional (F-307). */}
+                {formatPercentUnsigned(item.pct / 100)}
               </span>
             </div>
           ))}
