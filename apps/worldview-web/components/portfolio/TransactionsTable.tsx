@@ -39,12 +39,14 @@ import type { Transaction } from "@/types/api";
 export interface TransactionsTableProps {
   transactions: Transaction[];
   /**
-   * Optional map of instrument_id → ticker. The S1 transaction list does not
-   * include the ticker (it only knows the instrument_id UUID). The portfolio
-   * page already loads holdingOverviews keyed by instrument_id; passing that
-   * map here lets us render the real ticker (e.g. "AAPL") instead of "—".
-   * BP-262 (2026-04-28): unenriched transactions previously displayed dashes
-   * for every TICKER cell, making the blotter unreadable.
+   * @deprecated F-205 (QA iter-2): the gateway / S1 now populate ``ticker``
+   * directly on every transaction (``ListTransactionsUseCase`` joins to
+   * ``instruments``). The fallback lookup is retained ONLY so existing call
+   * sites that still pass the map don't break — it's no longer required for
+   * a correct render. New consumers MUST omit this prop.
+   *
+   * Historical context: BP-262 added this workaround when ``tx.ticker`` was
+   * always empty. The server-side enrichment supersedes it.
    */
   tickerByInstrumentId?: Record<string, string | null | undefined>;
 }

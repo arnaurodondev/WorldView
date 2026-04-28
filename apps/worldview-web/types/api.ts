@@ -559,8 +559,28 @@ export interface ValueHistoryPoint {
   cash: number;
 }
 
+/**
+ * F-009 (QA iter-2): empty-state hint payload.
+ *
+ * ``last_snapshot_at`` — most recent snapshot in the FILTERED window (not
+ * across all time). When the window is empty this is null.
+ * ``next_scheduled_run_utc`` — full ISO-8601 timestamp of the next 21:30 UTC
+ * snapshot wake-up. The chart's empty-state caption renders this as "Next
+ * snapshot scheduled for YYYY-MM-DD HH:MM UTC".
+ *
+ * Both fields are independently nullable so older S1 builds that don't yet
+ * populate them keep parsing.
+ */
+export interface ValueHistoryMetadata {
+  last_snapshot_at: string | null;
+  next_scheduled_run_utc: string | null;
+}
+
 export interface ValueHistoryResponse {
   points: ValueHistoryPoint[];
+  // Optional on the wire — older gateways omit it; the chart falls back to
+  // the previous static empty-state message when undefined.
+  metadata?: ValueHistoryMetadata;
 }
 
 /**
@@ -612,7 +632,14 @@ export interface RiskMetricsResponse {
   as_of?: string;
   lookback_window?: { from: string; to: string };
   data_quality?: {
-    status: "ok" | "insufficient_data" | "benchmark_unavailable";
+    // F-209 (QA iter-2): added "data_anomaly_detected" — gateway flags the
+    // F-201 wipe pattern (a sudden zero in the value series) so the strip
+    // can suppress misleading -100% drawdown / -3.4 Sharpe values.
+    status:
+      | "ok"
+      | "insufficient_data"
+      | "benchmark_unavailable"
+      | "data_anomaly_detected";
     n_returns: number;
     lookback_days: number;
   };

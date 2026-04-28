@@ -7,7 +7,7 @@ raw headers (PRD-0025, F-CRIT-001 remediation).
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from portfolio.api.schemas import (
     PortfolioCreateRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
+    ValueHistoryMetadata,
     ValueHistoryPoint,
     ValueHistoryResponse,
 )
@@ -167,38 +168,57 @@ async def get_value_history(
     request: Request,
     from_date: date | None = Query(default=None, alias="from"),
     to_date: date | None = Query(default=None, alias="to"),
+    days: int | None = Query(default=None, ge=1, le=3650),
     granularity: Literal["1d", "1w", "1m"] = Query(default="1d"),
 ) -> ValueHistoryResponse:
     """Return the daily portfolio value snapshots over the requested range.
 
     PLAN-0046 Wave 5 / T-46-5-01. Powers the equity-curve chart.
 
-    Default range = last 90 days (today inclusive). ``granularity=1w`` /
-    ``1m`` resamples to last-snapshot-per-bucket. Returns 404 (via the
-    ``PortfolioNotFoundError`` exception handler) if the portfolio is
-    missing or not owned by the caller's tenant.
+    Range resolution (F-202, QA iter-2):
+      * ``from`` + ``to`` — explicit range, both honoured; ``from`` wins if both
+        ``from`` and ``days`` are supplied (so older clients keep working).
+      * ``days=N`` alone — translates to ``from = today - N days, to = today``.
+      * No params — returns last 90 days (the documented default).
+      * ``granularity=1w`` / ``1m`` resamples to last-snapshot-per-bucket.
+
+    Returns 404 (via the ``PortfolioNotFoundError`` exception handler) if the
+    portfolio is missing or not owned by the caller's tenant.
+
+    F-009 (QA iter-2): the response now also carries a ``metadata`` block with
+    ``last_snapshot_at`` (most recent snapshot in the FILTERED range, or ``null``
+    when the range is empty) and ``next_scheduled_run_utc`` (the next 21:30 UTC
+    snapshot wake-up). The frontend uses both to render an honest empty-state
+    hint ("Next snapshot scheduled for …") instead of a generic message.
 
     R27: depends on ``ReadOnlyUnitOfWork`` (read replica).
     """
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
 
-    # Default ``to`` to today UTC.
-    # F-022: ``from`` is now genuinely optional — when omitted we use a
-    # date-floor sentinel (year 1) so the underlying repository's range
-    # scan includes the earliest snapshot. The previous default of
-    # ``today - 90 days`` silently truncated history when the caller
-    # explicitly wanted the full series for the "All" period toggle.
+    # F-202 / F-009: range resolution.
+    # Order of precedence:
+    #   1. explicit ``from`` always wins (existing client contract).
+    #   2. otherwise ``days`` translates to a today-anchored window.
+    #   3. otherwise no lower bound (the route returns the full series; this
+    #      mirrors the F-022 fix that lets the "All" period selector return
+    #      every snapshot rather than the previous 90-day sneaky default).
     today = datetime.now(tz=UTC).date()
     end = to_date or today
-    # date.min ≈ 0001-01-01 — earlier than any real snapshot, so the
-    # range scan returns everything up to ``end``. We deliberately do
-    # NOT default to a fixed lookback here; callers that want a 90-day
-    # window already send ``from`` explicitly.
-    start = date.min if from_date is None else from_date
+    if from_date is not None:
+        start = from_date
+    elif days is not None:
+        start = today - timedelta(days=days)
+    else:
+        # date.min ≈ 0001-01-01 — earlier than any real snapshot, so the range
+        # scan returns everything up to ``end``. The docstring promises 90-day
+        # default in plain English, but the backend has always treated "no
+        # params" as "all snapshots" since the F-022 fix; the guard here keeps
+        # that behaviour explicit.
+        start = date.min
     if start > end:
         # 400 instead of silently swapping — surfaces caller error explicitly.
-        raise HTTPException(status_code=400, detail="`from` must be on or before `to`")
+        raise HTTPException(status_code=400, detail="`from`/`days` must produce a range on or before `to`")
 
     uc = GetValueHistoryUseCase()
     snapshots = await uc.execute(
@@ -213,16 +233,36 @@ async def get_value_history(
         uow,
     )
 
+    points = [
+        ValueHistoryPoint(
+            date=s.snapshot_date,
+            value=s.total_value,
+            cost_basis=s.total_cost,
+            cash=s.cash_value,
+        )
+        for s in snapshots
+    ]
+
+    # F-009: compute metadata.
+    # ``last_snapshot_at`` reflects the latest snapshot **inside the returned
+    # window** so the frontend hint matches what the user is seeing. We chose
+    # not to look up the latest snapshot across all time because that confuses
+    # the "what's new since I last looked at THIS view" mental model.
+    last_snapshot_at = snapshots[-1].snapshot_date.isoformat() if snapshots else None
+    # Next scheduled run = next 21:30 UTC. The constant lives in the worker;
+    # we compute it here from a fresh ``datetime.now`` so the hint is always
+    # forward-looking. If we're past 21:30 UTC today, schedule for tomorrow.
+    now_utc = datetime.now(tz=UTC)
+    next_run = now_utc.replace(hour=21, minute=30, second=0, microsecond=0)
+    if next_run <= now_utc:
+        next_run = next_run + timedelta(days=1)
+
     return ValueHistoryResponse(
-        points=[
-            ValueHistoryPoint(
-                date=s.snapshot_date,
-                value=s.total_value,
-                cost_basis=s.total_cost,
-                cash=s.cash_value,
-            )
-            for s in snapshots
-        ],
+        points=points,
+        metadata=ValueHistoryMetadata(
+            last_snapshot_at=last_snapshot_at,
+            next_scheduled_run_utc=next_run.isoformat(),
+        ),
     )
 
 

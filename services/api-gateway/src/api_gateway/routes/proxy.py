@@ -1661,6 +1661,31 @@ async def get_portfolio_value_history(portfolio_id: str, request: Request) -> An
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# F-204 (QA iter-2): admin trigger so an operator can rebuild today's
+# portfolio_value_snapshots row after a manual data fix. The frontend does
+# not call this — the gateway exposes it for ops use through curl/dev tools
+# with the operator's own JWT. S1 enforces tenant ownership.
+@router.post("/admin/portfolios/{portfolio_id}/recompute-snapshot")
+async def recompute_portfolio_snapshot(portfolio_id: str, request: Request) -> Any:
+    """Proxy POST /api/v1/admin/portfolios/{id}/recompute-snapshot → S1.
+
+    Idempotent on the S1 side (upsert keyed on
+    ``(portfolio_id, snapshot_date)``). Auth required — any authenticated
+    user can trigger this for portfolios in their own tenant; we accept
+    the broad authorization because the auth-roles wiring (admin tier) is
+    deferred (PRD-0025) and the operation is non-destructive.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        f"/api/v1/admin/portfolios/{portfolio_id}/recompute-snapshot",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/portfolios/{portfolio_id}/exposure")
 async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/portfolios/{id}/exposure → S1 Portfolio service.

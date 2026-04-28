@@ -52,6 +52,31 @@ import { formatPrice, formatPercent, cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 
+// ── Formatting helpers ────────────────────────────────────────────────────────
+
+/**
+ * Format the next-snapshot ISO timestamp ("2026-04-29T21:30:00+00:00") as a
+ * concise "YYYY-MM-DD HH:MM UTC" string for the empty-state hint (F-009).
+ *
+ * WHY a custom formatter (not toLocaleString): we want the displayed time to
+ * be in UTC verbatim — telling the user "Next snapshot scheduled for 2026-04-29
+ * 21:30 UTC" is more honest than rendering it in local time, where 21:30 UTC
+ * could appear as 5:30 PM in New York or 7:30 AM in Sydney depending on
+ * locale. UTC is the system's canonical scheduling timezone.
+ */
+function formatNextSnapshotHint(iso: string): string {
+  // Defensive: invalid ISO falls back to the raw string so the user still
+  // sees something rather than "Invalid Date".
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  const yyyy = parsed.getUTCFullYear();
+  const mm = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(parsed.getUTCDate()).padStart(2, "0");
+  const hh = String(parsed.getUTCHours()).padStart(2, "0");
+  const min = String(parsed.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+}
+
 // ── Period configuration ──────────────────────────────────────────────────────
 
 /**
@@ -67,7 +92,11 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 // ``from`` query param as "every snapshot since the earliest one", so a
 // 10-year clamp is no longer required. ``days: null`` is the marker for
 // the gateway call below.
+// F-212 (QA iter-2): re-added "1W" — iter-1 silently dropped it when adding
+// "All". 1W matches the rest of the dashboard's KPI lookback selector and
+// is a common short-horizon trader view.
 const PERIODS = [
+  { label: "1W", days: 7 },
   { label: "1M", days: 30 },
   { label: "3M", days: 90 },
   { label: "6M", days: 180 },
@@ -164,18 +193,13 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
   // a meaningful trend without compressing recent moves.
   const [period, setPeriod] = useState<PeriodLabel>("3M");
 
-  // Compute `from` date from the period — server applies `to = today` default.
-  // F-022: when the user picks "All" we send NO ``from`` and let the server
-  // return every snapshot back to the earliest one. ``null`` here is the
-  // sentinel that means "omit the param entirely" (vs ``undefined`` which
-  // would also work but is less explicit).
-  const fromDate = useMemo<string | null>(() => {
-    const days = PERIODS.find((p) => p.label === period)!.days;
-    if (days == null) return null;
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    // YYYY-MM-DD — matches the API's ISO-date contract.
-    return d.toISOString().slice(0, 10);
+  // F-202 (QA iter-2): switch the period selector to send ``days=N`` rather
+  // than computing ``from`` client-side. The backend now accepts both, but
+  // ``days`` is cleaner — server is source-of-truth for "today" and avoids
+  // the timezone drift that ``new Date()`` on the client risks. "All" still
+  // omits the param so the server returns every snapshot.
+  const periodDays: number | null = useMemo(() => {
+    return PERIODS.find((p) => p.label === period)!.days;
   }, [period]);
 
   // Fetch via TanStack Query — keyed on (portfolioId, period) so
@@ -185,10 +209,9 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
     queryKey: ["value-history", portfolioId, period],
     queryFn: () =>
       createGateway(accessToken).getValueHistory(portfolioId, {
-        // F-022: only include ``from`` when we actually have a bounded
-        // window. Spread guards against passing ``from: null`` to the
-        // gateway helper which would coerce it back to a string.
-        ...(fromDate ? { from: fromDate } : {}),
+        // F-202: only include ``days`` for bounded windows. "All" omits
+        // both params so the server returns the full series.
+        ...(periodDays != null ? { days: periodDays } : {}),
         granularity: "1d",
       }),
     enabled: !!accessToken && !!portfolioId,
@@ -226,13 +249,37 @@ export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
   // BP-265 awareness: data.points may legitimately be empty (no snapshots
   // for the period — e.g. brand-new portfolio). Don't silently render an
   // empty chart — show an honest empty state.
+  // F-210 (QA iter-2): also treat a series of all-zero points as "empty".
+  // Pre-fix the snapshot worker wrote a $0 row every trading day for empty
+  // portfolios, producing a flat line at $0 that misled users. The worker
+  // has been changed to skip those writes, but legacy data may still exist
+  // — this guard ensures the chart renders correctly either way.
   const points = data?.points ?? [];
-  if (points.length === 0) {
+  const allZeroValues =
+    points.length > 0 && points.every((p) => Number(p.value) === 0);
+  if (points.length === 0 || allZeroValues) {
+    // F-009 (QA iter-2): when the gateway returns metadata, render a
+    // sub-line telling the user when the next snapshot will be written.
+    // The metadata block is forward-compatible — older gateways omit it
+    // and we fall back to the previous static message.
+    const meta = data?.metadata;
+    const nextRun = meta?.next_scheduled_run_utc ?? null;
+    const subline = nextRun
+      ? `Next snapshot scheduled for ${formatNextSnapshotHint(nextRun)}.`
+      : null;
+    const message = allZeroValues
+      ? "Open a position to see your equity curve."
+      : "No snapshots yet — the worker writes one per trading day.";
     return (
       <div className="flex flex-col gap-2 h-full">
         <ChartHeader period={period} setPeriod={setPeriod} />
-        <div className="flex-1 min-h-[180px] flex items-center justify-center">
-          <InlineEmptyState message="No snapshots yet — the worker writes one per trading day." />
+        <div className="flex-1 min-h-[180px] flex flex-col items-center justify-center gap-1">
+          <InlineEmptyState message={message} />
+          {subline && (
+            <div className="text-[10px] text-muted-foreground/80">
+              {subline}
+            </div>
+          )}
         </div>
       </div>
     );

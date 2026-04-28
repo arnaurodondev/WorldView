@@ -45,6 +45,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -55,6 +56,46 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/v1")
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+# ── F-006: bare-envelope error helper ────────────────────────────────────────
+
+
+class _BareEnvelopeError(Exception):
+    """Internal exception that the route handler converts to a bare-envelope
+    JSONResponse — bypassing FastAPI's ``HTTPException`` which always wraps
+    ``detail=dict`` in ``{"detail": {...}}``.
+
+    The portfolio domain's other endpoints (value-history, exposure) emit
+    ``{"error_code", "message", "details"}`` directly via S1's exception
+    handlers. Keeping the risk-metrics shape identical lets the frontend
+    switch on ``error_code`` everywhere instead of special-casing the
+    risk-metrics route.
+    """
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        error_code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.message = message
+        self.details: dict[str, Any] = details or {}
+
+    def to_response(self) -> JSONResponse:
+        return JSONResponse(
+            status_code=self.status_code,
+            content={
+                "error_code": self.error_code,
+                "message": self.message,
+                "details": self.details,
+            },
+        )
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -279,17 +320,18 @@ async def _fetch_value_history(
     if resp.status_code == 404:
         # Bubble 404 up so the API hands the frontend a clean "not found"
         # rather than confusingly-empty metrics.
-        # F-006: match the rest of the portfolio domain's error envelope
-        # ({error_code, message, details}) instead of FastAPI's default
-        # {detail: "..."} shape — the frontend switches on ``error_code``
-        # to decide how to render the failure.
-        raise HTTPException(
+        # F-006 (QA iter-2 carry-over): match the rest of the portfolio domain's
+        # error envelope ({error_code, message, details}) — FastAPI's
+        # ``HTTPException(detail=dict)`` wraps the body in ``{"detail": {...}}``,
+        # so the previous fix did not actually fix the wrapping. We raise a
+        # ``_BareEnvelopeError`` here and convert it in the route handler via
+        # a JSONResponse so the body is the bare envelope, matching the S1
+        # value-history / exposure error shape.
+        raise _BareEnvelopeError(
             status_code=404,
-            detail={
-                "error_code": "PORTFOLIO_NOT_FOUND",
-                "message": "Portfolio not found",
-                "details": {},
-            },
+            error_code="PORTFOLIO_NOT_FOUND",
+            message="Portfolio not found",
+            details={},
         )
     if resp.status_code != 200:
         logger.warning(
@@ -440,15 +482,21 @@ async def get_risk_metrics(
     clients = _clients(request)
 
     # 1. Portfolio value history (uses the user's JWT — value-history is
-    #    tenant-scoped and 404s if not owned by the caller).
+    #    tenant-scoped and 404s if not owned by the caller). The fetcher
+    #    raises ``_BareEnvelopeError`` on a downstream 404 — we convert that
+    #    to a bare-envelope JSONResponse here so the body matches the rest
+    #    of the portfolio domain's error contract (F-006, QA iter-2).
     user_headers = _user_headers(request)
-    portfolio_series = await _fetch_value_history(
-        clients,
-        portfolio_id,
-        from_date=start,
-        to_date=today,
-        headers=user_headers,
-    )
+    try:
+        portfolio_series = await _fetch_value_history(
+            clients,
+            portfolio_id,
+            from_date=start,
+            to_date=today,
+            headers=user_headers,
+        )
+    except _BareEnvelopeError as bare_exc:
+        return bare_exc.to_response()
 
     # 2. SPY OHLCV — public reference data, system JWT is sufficient.
     sys_headers = _system_headers(request)
@@ -500,10 +548,33 @@ async def get_risk_metrics(
     # null and can render an honest empty-state hint instead of just "—".
     #
     # status discrimination:
-    #   ok                   → enough returns and SPY data to compute everything
-    #   insufficient_data    → fewer than _MIN_RETURNS daily returns
+    #   ok                    → enough returns and SPY data to compute everything
+    #   insufficient_data     → fewer than _MIN_RETURNS daily returns
     #   benchmark_unavailable → enough returns BUT SPY OHLCV missing → β=null
-    if insufficient or len(portfolio_returns) < _MIN_RETURNS:
+    #   data_anomaly_detected → final point is 0 right after a non-zero point
+    #                           (F-209: signals a holdings wipe, not a real
+    #                           catastrophic loss; metrics are suppressed)
+    #
+    # F-209: detect the F-201 wipe pattern. When the most recent value is
+    # exactly zero AND the previous value was non-zero the math is correct
+    # but tells the wrong story (drawdown_max = -100%, sharpe = -3.4) — the
+    # user sees "you've lost everything" when the broker simply returned no
+    # activities. Suppress every metric and surface a distinct status so the
+    # frontend can render an explanatory caption.
+    anomaly_detected = len(portfolio_values) >= 2 and portfolio_values[-1] == 0.0 and portfolio_values[-2] > 0.0
+
+    if anomaly_detected:
+        data_quality_status = "data_anomaly_detected"
+        # Null every metric — the underlying numbers are mathematically
+        # correct but operationally misleading. The frontend uses the
+        # status flag to render a caption explaining the suppression.
+        drawdown_max = None
+        drawdown_current = None
+        volatility = None
+        sharpe = None
+        sortino = None
+        beta_vs_spy = None
+    elif insufficient or len(portfolio_returns) < _MIN_RETURNS:
         data_quality_status = "insufficient_data"
     elif not spy_series:
         data_quality_status = "benchmark_unavailable"

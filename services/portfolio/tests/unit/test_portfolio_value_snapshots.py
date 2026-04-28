@@ -365,7 +365,10 @@ class TestPortfolioSnapshotWorkerRunOnce:
         for p in (p1, p2, root):
             await uow.portfolios.save(p)
 
-        # Holdings for p1 only — p2 has none (zero snapshot).
+        # Holdings for p1 only — p2 has none. F-210 (QA iter-2) changed
+        # behaviour here: empty portfolios are now SKIPPED rather than
+        # written as $0 rows. The chart's empty-state hint is more honest
+        # than a flat-zero line, and the time-series stays clean.
         h = _make_holding(p1.id, tenant, qty="10", cost="100")
         await uow.holdings.save(h)
 
@@ -385,8 +388,10 @@ class TestPortfolioSnapshotWorkerRunOnce:
         s_root = await uow.portfolio_value_snapshots.get_latest(root.id)
 
         assert s1 is not None and s1.total_value == Decimal("1500")
-        assert s2 is not None and s2.total_value == Decimal(0)
-        # Phase 2: root sums non-root snapshots for the owner.
+        # F-210: p2 has no holdings → no snapshot written.
+        assert s2 is None
+        # Phase 2: root sums non-root snapshots for the owner. Only p1 has
+        # one, so the root sum equals p1's snapshot.
         assert s_root is not None
         assert s_root.total_value == Decimal("1500")
         assert s_root.total_cost == Decimal("1000")
