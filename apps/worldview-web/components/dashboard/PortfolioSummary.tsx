@@ -21,18 +21,30 @@
 // WHY "use client": uses useQuery (TanStack Query) for data fetching,
 // useAuth to get the access token, useState for component-level state.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
+import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
+
+// WHY local Period type: avoids importing a global enum just for three values
+// — the dashboard only ever toggles 1D/1W/1M and Bloomberg's panel-header
+// period selectors stick to short labels. Keep it inline + tightly typed.
+type Period = "1D" | "1W" | "1M";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function PortfolioSummary() {
   const { accessToken } = useAuth();
+
+  // WHY local period state (C-3): the dashboard widget owns its own period
+  // selector — independent from the heatmap and movers selectors so users can
+  // compare different timeframes side by side (e.g., daily P&L while reviewing
+  // monthly sector heatmap). Defaults to 1D — the most common morning routine.
+  const [period, setPeriod] = useState<Period>("1D");
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
@@ -62,6 +74,57 @@ export function PortfolioSummary() {
     // WHY 15s: portfolio widget is visible all day; live prices matter
     refetchInterval: 15_000,
     staleTime: 0,
+  });
+
+  // ── Query 4: company overview enrichment for ticker/name (BUG-3 fix) ──────
+  // WHY this exists: holdings from S1 have ticker:null/name:null for holdings
+  // imported via brokerage that haven't been enriched yet. Without this query,
+  // the dashboard fell back to `h.instrument_id.slice(0, 8)` and rendered raw
+  // UUID prefixes like "019dbf56" as the holding name. The full portfolio page
+  // already does this; mirror it here so the dashboard widget matches.
+  // WHY 5min staleTime: ticker/name/sector are effectively immutable per
+  // instrument — refetching them aggressively burns S9 quota for no signal.
+  const { data: holdingOverviews } = useQuery({
+    queryKey: ["dashboard-holdings-overviews", instrumentIds],
+    queryFn: async () => {
+      const gw = createGateway(accessToken);
+      const results = await Promise.all(
+        instrumentIds.map((id) =>
+          gw.getCompanyOverview(id).catch(() => null),
+        ),
+      );
+      return Object.fromEntries(
+        instrumentIds.map((id, i) => [
+          id,
+          {
+            ticker: results[i]?.instrument?.ticker ?? null,
+            name: results[i]?.instrument?.name ?? null,
+          },
+        ]),
+      ) as Record<string, { ticker: string | null; name: string | null }>;
+    },
+    enabled: instrumentIds.length > 0 && !!accessToken,
+    staleTime: 300_000,
+  });
+
+  // ── Query 5: portfolio performance for the selected period (C-3) ─────────
+  // WHY this query: the headline P&L number used to show ONLY mark-to-market
+  // unrealised P&L from cost basis. That answers "how am I doing overall?"
+  // but not "how did the portfolio move today/this week/this month?" — which
+  // is what the period selector promises. getPortfolioPerformance returns a
+  // weighted return computed from OHLCV bars per holding.
+  const { data: performance } = useQuery({
+    queryKey: ["dashboard-portfolio-performance", firstPortfolio?.portfolio_id, period],
+    queryFn: () =>
+      createGateway(accessToken).getPortfolioPerformance(
+        firstPortfolio!.portfolio_id,
+        period,
+      ),
+    enabled: !!accessToken && !!firstPortfolio,
+    // WHY 60s staleTime + 60s refetch: performance is a derived calculation
+    // — it doesn't need to refresh as aggressively as the live quotes query.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 
   const isLoading = portfoliosLoading || holdingsLoading || quotesLoading;
@@ -125,14 +188,28 @@ export function PortfolioSummary() {
   let totalCost = 0;
   for (const h of holdings) {
     const quote = quotes[h.instrument_id];
-    const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
+    // WHY price>0 guard (B-2): a closed/delisted instrument can return price:0
+    // from the batch quote endpoint — treat that as "no live price" rather than
+    // collapsing the holding's value to 0 and skewing totals/pnl downward.
+    const livePrice =
+      quote?.price && quote.price > 0
+        ? quote.price
+        : h.current_price ?? h.average_cost;
     totalValue += livePrice * h.quantity;
     totalCost += h.average_cost * h.quantity;
   }
   const totalUnrealisedPnl = totalValue - totalCost;
   const totalUnrealisedPnlPct = totalCost > 0 ? (totalUnrealisedPnl / totalCost) * 100 : 0;
 
-  const isPnlPositive = totalUnrealisedPnl >= 0;
+  // WHY prefer period return when available (C-3): the headline number tracks
+  // the user's selected period. We still fall back to mark-to-market unrealised
+  // P&L when the period query is in flight so the widget never goes blank.
+  // performance.return_pct is in % (e.g., 1.23 = 1.23%). return_abs is in $.
+  const headlinePnl =
+    performance?.return_abs != null ? performance.return_abs : totalUnrealisedPnl;
+  const headlinePnlPct =
+    performance?.return_pct != null ? performance.return_pct : totalUnrealisedPnlPct;
+  const isPnlPositive = headlinePnl >= 0;
 
   // ── Top 4 holdings by current value ───────────────────────────────────────
   const topHoldings = [...holdings]
@@ -152,15 +229,33 @@ export function PortfolioSummary() {
     // period selector pattern is consistent across Row 3.
     <div className="flex h-full flex-col bg-background">
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
-      {/* WHY simple header (no period buttons): PLAN-0043 A-3 removes the
-          1D/1W/1M period buttons from PortfolioSummary — portfolio data doesn't
-          have a period-based S9 endpoint yet. The global dashboard period selector
-          (for heatmap + movers) is separate and lives in those widgets' own headers.
-          Removing non-functional buttons reduces UI noise. */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+      {/* WHY period buttons restored (C-3): the previous code disabled them
+          because no period-based S9 endpoint existed; getPortfolioPerformance
+          (S9 GET /v1/portfolios/{id}/performance?period=) lands the gap.
+          The buttons match the gap-px / px-1.5 / text-[9px] convention from
+          PreMarketMoversWidget so the dashboard period UIs stay visually
+          aligned across panels. */}
+      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           PORTFOLIO
         </span>
+        <div className="flex gap-px">
+          {(["1D", "1W", "1M"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              aria-pressed={period === p}
+              className={cn(
+                "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                period === p
+                  ? "bg-primary/20 text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Inner content — padded to match other widgets */}
@@ -176,44 +271,84 @@ export function PortfolioSummary() {
         </span>
       </div>
 
-      {/* Total value — large, prominent */}
+      {/* Total value + P&L — single flex row (PLAN-0048 Wave C-2)
+          WHY one row instead of stacked rows:
+          User audit (2026-04-28) found that at narrow widget widths the value
+          and P&L could collide visually because each line wrapped independently.
+          Putting both in one flex row with whitespace-nowrap on each child
+          guarantees they never wrap into each other and the layout remains
+          predictable across all viewport widths. */}
       <div className="mb-3">
-        {/* WHY text-xl (was text-2xl): 24px is too large for a dashboard widget.
-            text-xl (20px) keeps the value prominent without dominating the small panel. */}
-        <p className="font-mono text-xl font-semibold tabular-nums text-foreground">
-          {/* WHY "~" prefix: standard financial convention for "approximately".
-              Shown when one or more prices are delayed, stale, or unavailable.
-              Bloomberg uses this same convention on delayed portfolios. */}
-          {isApproximate && (
-            <span
-              className="mr-0.5 text-muted-foreground"
-              title="Some prices are delayed or unavailable"
-            >
-              ~
+        {/* WHY items-baseline: aligns the bottom of the large value digits
+            with the bottom of the smaller P&L digits — typographically
+            cleaner than items-center which would float the small text mid-cap.
+            WHY gap-2: visual breathing room between value and P&L without
+            either feeling detached. */}
+        <div className="flex items-baseline gap-2">
+          {/* Total value — large, prominent
+              WHY flex-1: claim all leftover horizontal space so the P&L
+              chunk hugs the right edge.
+              WHY whitespace-nowrap + tabular-nums: locks the value onto a
+              single line with column-aligned digits.
+              WHY min-w-0: required so flex shrinking can kick in if the
+              widget container ever narrows below the value's intrinsic width.
+              WHY text-xl (was text-2xl): 24px is too large for a dashboard
+              widget. text-xl (20px) keeps the value prominent without
+              dominating the small panel. */}
+          <p className="min-w-0 flex-1 whitespace-nowrap font-mono text-xl font-semibold tabular-nums text-foreground">
+            {/* WHY "~" prefix: standard financial convention for "approximately".
+                Shown when one or more prices are delayed, stale, or unavailable.
+                Bloomberg uses this same convention on delayed portfolios.
+                WHY inline (not on its own line): the approximation symbol must
+                stay glued to the value so the user never reads the value
+                without the qualifier. */}
+            {isApproximate && (
+              <span
+                className="mr-0.5 text-muted-foreground"
+                title="Some prices are delayed or unavailable"
+              >
+                ~
+              </span>
+            )}
+            {formatPrice(totalValue)}
+          </p>
+
+          {/* P&L cluster — right-aligned, never wraps.
+              WHY shrink-0 + whitespace-nowrap: the P&L is the secondary metric
+              but must remain fully readable; we'd rather the value (above)
+              shrink/truncate than have the P&L break across lines.
+              WHY text-sm (14px): smaller than the value (20px) to establish
+              hierarchy — the user's eye lands on total value first, P&L
+              second. */}
+          <div
+            className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-sm ${priceChangeClass(headlinePnlPct)}`}
+          >
+            {isPnlPositive ? (
+              <TrendingUp className="h-3 w-3 shrink-0" />
+            ) : (
+              <TrendingDown className="h-3 w-3 shrink-0" />
+            )}
+            <span className="font-mono tabular-nums">
+              {/* WHY "~" on P&L too: stale prices propagate into derived P&L too. */}
+              {isApproximate && <span className="text-muted-foreground">~</span>}
+              {formatPrice(Math.abs(headlinePnl))}
+              {" "}
+              ({formatPercent(headlinePnlPct / 100)})
             </span>
-          )}
-          {formatPrice(totalValue)}
-        </p>
-        <div className={`flex items-center gap-1 ${priceChangeClass(totalUnrealisedPnlPct)}`}>
-          {isPnlPositive ? (
-            <TrendingUp className="h-3 w-3" />
-          ) : (
-            <TrendingDown className="h-3 w-3" />
-          )}
-          <span className="font-mono text-sm tabular-nums">
-            {/* WHY "~" on P&L too: if the total value is approximate, the P&L derived
-                from it is also approximate. Both numbers share the same stale data. */}
-            {isApproximate && <span className="text-muted-foreground">~</span>}
-            {formatPrice(Math.abs(totalUnrealisedPnl))}
-            {" "}
-            ({formatPercent(totalUnrealisedPnlPct / 100)})
-          </span>
+            {/* WHY tiny period suffix: traders glance at the number first; this
+                suffix tells them which period the % refers to without expanding
+                the line height. font-mono + tabular-nums for digit-column
+                alignment when "1D" / "1W" / "1M" swap. */}
+            <span className="ml-0.5 font-mono text-[10px] uppercase tabular-nums text-muted-foreground">
+              {period}
+            </span>
+          </div>
         </div>
         {/* WHY subtle note (not error): stale prices are common during pre-market/weekends.
             A jarring error state would concern the user unnecessarily. A small hint
             below the P&L is enough to inform without alarming. */}
         {isApproximate && (
-          <p className="mb-2 text-[10px] text-muted-foreground">
+          <p className="mt-1 text-[10px] text-muted-foreground">
             Some prices are delayed
           </p>
         )}
@@ -223,11 +358,23 @@ export function PortfolioSummary() {
       <div className="space-y-1">
         {topHoldings.map((h) => {
           const quote = quotes[h.instrument_id];
-          const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
+          // WHY zero-price guard (B-2): batch quotes may return price:0 for closed
+          // or delisted instruments (e.g., a fully-sold position). The previous
+          // `?? fallback` chain treated 0 as a real price and produced -100% pnl.
+          // Treat 0/missing as "no live price" and fall back to the snapshot value.
+          const livePrice =
+            quote?.price && quote.price > 0
+              ? quote.price
+              : h.current_price ?? h.average_cost;
           const holdingValue = livePrice * h.quantity;
           const pnlPct = h.average_cost > 0
             ? ((livePrice - h.average_cost) / h.average_cost) * 100
             : 0;
+          // WHY enrichment (A-4): prefer the overview ticker/name over the raw
+          // S1 holding fields (which are null for unenriched brokerage imports).
+          const ov = holdingOverviews?.[h.instrument_id];
+          const displayTicker = ov?.ticker || h.ticker || "—";
+          const displayName = ov?.name || h.name || "Unknown holding";
 
           return (
             <div
@@ -236,17 +383,24 @@ export function PortfolioSummary() {
             >
               {/* Ticker — monospace, fixed width for alignment */}
               <span className="w-[40px] shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
-                {h.ticker || "—"}
+                {displayTicker}
               </span>
-              {/* Name — truncated, muted */}
+              {/* Name — truncated, muted. WHY no instrument_id slice fallback:
+                  raw UUID prefixes (e.g. "019dbf56") looked like a bug to users. */}
               <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
-                {h.name || h.instrument_id.slice(0, 8)}
+                {displayName}
               </span>
               {/* Qty — compact shares count */}
               <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
                 {h.quantity % 1 === 0
                   ? h.quantity.toLocaleString()
                   : h.quantity.toFixed(2)}×
+              </span>
+              {/* Price (C-3) — current per-share price. Distinct from Value:
+                  traders need to see the live tick to compare against limit
+                  orders / cost basis without doing mental division (Value/Qty). */}
+              <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                {livePrice > 0 ? formatPrice(livePrice) : "—"}
               </span>
               {/* Value */}
               <span className="w-[54px] shrink-0 text-right font-mono text-[11px] tabular-nums text-foreground">
