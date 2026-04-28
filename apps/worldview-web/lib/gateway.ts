@@ -725,24 +725,33 @@ export function createGateway(token?: string | null) {
      * The frontend expects `HoldingsResponse = {portfolio_id, holdings: Holding[], total_value, ...}`.
      */
     async getHoldings(portfolioId: string): Promise<HoldingsResponse> {
-      // S1 returns a plain array of HoldingResponse objects (now enriched with
-      // ticker/name/entity_id via instruments LEFT JOIN — PLAN-0045 C-1)
+      // S1 used to return a plain array of HoldingResponse, but PLAN-0046 QA
+      // F-011 standardised the shape to the paginated envelope
+      // ``{items, total, limit, offset}``. We accept BOTH during the transition
+      // window: an old gateway running a pre-F011 portfolio service still
+      // works, and a new gateway against a post-F011 service unwraps ``items``.
+      type RawHolding = {
+        id: string;
+        portfolio_id: string;
+        instrument_id: string;
+        quantity: string; // S1 serialises Decimal as "0.00000000" string
+        average_cost: string; // same decimal string format
+        currency: string;
+        ticker: string | null;       // from instruments table (null if not synced yet)
+        name: string | null;         // from instruments table
+        entity_id: string | null;    // from instruments table
+      };
       const raw = await apiFetch<
-        Array<{
-          id: string;
-          portfolio_id: string;
-          instrument_id: string;
-          quantity: string; // S1 serialises Decimal as "0.00000000" string
-          average_cost: string; // same decimal string format
-          currency: string;
-          ticker: string | null;       // from instruments table (null if not synced yet)
-          name: string | null;         // from instruments table
-          entity_id: string | null;    // from instruments table
-        }>
+        RawHolding[] | { items: RawHolding[]; total: number; limit: number; offset: number }
       >(`/v1/holdings/${encodeURIComponent(portfolioId)}`, { token: t });
 
-      // Normalise: if S1 somehow returns null (shouldn't happen), treat as empty array
-      const items = Array.isArray(raw) ? raw : [];
+      // Normalise both shapes into a flat array. Defensive: a malformed
+      // response that isn't an array OR an envelope yields an empty list.
+      const items: RawHolding[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray((raw as { items?: unknown }).items)
+          ? (raw as { items: RawHolding[] }).items
+          : [];
 
       // Transform S1 HoldingResponse into frontend Holding type
       const holdings: Holding[] = items.map((h) => ({
@@ -865,6 +874,11 @@ export function createGateway(token?: string | null) {
         gross_exposure_pct: string;
         net_exposure_pct: string;
         leverage: string;
+        // F-016 (QA 2026-04-28): two new optional fields. Older S1 builds
+        // omit them entirely; the spread below treats undefined as
+        // "not stale" so the UI renders no badge.
+        prices_stale?: boolean;
+        prices_as_of?: string | null;
       }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/exposure`, { token: t });
       return {
         invested: parseFloat(raw.invested),
@@ -872,6 +886,8 @@ export function createGateway(token?: string | null) {
         gross_exposure_pct: parseFloat(raw.gross_exposure_pct),
         net_exposure_pct: parseFloat(raw.net_exposure_pct),
         leverage: parseFloat(raw.leverage),
+        prices_stale: raw.prices_stale ?? false,
+        prices_as_of: raw.prices_as_of ?? null,
       };
     },
 
@@ -1035,6 +1051,23 @@ export function createGateway(token?: string | null) {
         created_at: raw.created_at,
         updated_at: raw.created_at, // S1 has no updated_at; use created_at as fallback
       };
+    },
+
+    /**
+     * deletePortfolio — delete a non-root portfolio.
+     *
+     * F-013 (QA 2026-04-28): added so the new Delete button on the
+     * portfolio page can wire up. The S9 proxy forwards to S1 which
+     * archives the portfolio (soft delete) and rejects ROOT portfolios
+     * with 400 + RootPortfolioNotArchivableError. The frontend disables
+     * the button for root, so under normal flow only manual/brokerage
+     * portfolios end up here.
+     */
+    deletePortfolio(portfolioId: string): Promise<void> {
+      return apiFetch<void>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}`,
+        { method: "DELETE", token: t },
+      );
     },
 
     /**
@@ -1255,6 +1288,9 @@ export function createGateway(token?: string | null) {
           name: string | null;
           instrument_id: string | null;
           added_at: string;
+          // F-010 (QA 2026-04-28): backend reports "resolved" / "pending"
+          // for each member so the UI can render a "resolving…" badge.
+          resolution?: "resolved" | "pending";
         }>;
         total: number;
       }>(
@@ -1272,6 +1308,9 @@ export function createGateway(token?: string | null) {
         ticker: m.ticker,
         name: m.name ?? "—",
         added_at: m.added_at,
+        // Default to "resolved" for older backends that don't yet emit
+        // the field — matches the previous behaviour (no badge).
+        resolution: m.resolution ?? "resolved",
       }));
     },
 

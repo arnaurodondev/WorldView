@@ -1405,6 +1405,32 @@ async def create_portfolio(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# F-013 (QA 2026-04-28) — DELETE proxy. S1 already exposes the handler
+# (``/api/v1/portfolios/{id}`` DELETE) and rejects ROOT portfolios with
+# RootPortfolioNotArchivableError. The gateway just needs to forward the
+# call so the frontend Delete button can wire up.
+@router.delete("/portfolios/{portfolio_id}", status_code=204)
+async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
+    """Proxy DELETE /api/v1/portfolios/{id} → S1 Portfolio service.
+
+    Returns 204 No Content on success. S1 returns 400 with
+    RootPortfolioNotArchivableError when the user attempts to delete the
+    root aggregate — the frontend disables the button for root anyway,
+    but the server-side guard is the authoritative check.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.delete(
+        f"/api/v1/portfolios/{portfolio_id}",
+        headers=headers,
+    )
+    # S1 returns 204 with no body on success. Pass status + body through
+    # so the frontend can read the error envelope on failures.
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/holdings/{portfolio_id}")
 async def get_holdings(portfolio_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/holdings/{portfolio_id} → S1 Portfolio service.
@@ -1468,9 +1494,22 @@ async def get_portfolio_performance(
         )
 
     try:
-        holdings_data = json.loads(holdings_resp.content)
+        holdings_data_raw = json.loads(holdings_resp.content)
     except Exception:
         raise HTTPException(status_code=502, detail="Invalid response from portfolio service")  # noqa: B904
+
+    # F-011 (QA 2026-04-28): S1 now returns ``{items, total, limit, offset}``.
+    # Accept both shapes here so a partial roll-out (gateway upgraded but
+    # portfolio service not yet restarted) doesn't break the performance
+    # endpoint. Older gateway-tests that mock the bare-array shape stay
+    # green for the same reason.
+    holdings_data = (
+        holdings_data_raw
+        if isinstance(holdings_data_raw, list)
+        else (holdings_data_raw.get("items") or [])
+        if isinstance(holdings_data_raw, dict)
+        else []
+    )
 
     if not holdings_data:
         return {
@@ -1661,6 +1700,30 @@ async def list_transactions(request: Request) -> Any:
     resp = await clients.portfolio.get(
         "/api/v1/transactions",
         params=qp,
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# F-012 (QA 2026-04-28) — nested transactions form mirrors the analytics
+# routes (``/portfolios/{id}/value-history``, ``/exposure``, ``/risk-metrics``)
+# so REST consumers can stay consistent. The flat ``/v1/transactions`` route
+# above remains as the canonical path for backward compatibility.
+@router.get("/portfolios/{portfolio_id}/transactions")
+async def list_transactions_nested(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/transactions → S1 Portfolio service.
+
+    F-012: nested alias preferred for new clients. S1 owns both the nested
+    and the flat handlers (see ``services/portfolio/.../transaction.py``).
+    Forwards limit/offset query params unchanged.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/transactions",
+        params=dict(request.query_params),
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

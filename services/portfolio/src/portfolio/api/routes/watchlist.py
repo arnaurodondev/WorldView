@@ -209,6 +209,10 @@ async def list_members(
         ),
         uow,
     )
+    # F-010: derive ``resolution`` from whether the denorm fields were
+    # populated at add-time. NULL ticker → "pending"; the frontend renders
+    # a small "resolving…" badge so the user understands the row will
+    # auto-fill once the local instruments cache picks up the entity.
     return WatchlistMemberListResponse(
         members=[
             WatchlistMemberListItem(
@@ -218,6 +222,7 @@ async def list_members(
                 name=m.name,
                 instrument_id=m.instrument_id,
                 added_at=m.added_at,
+                resolution="resolved" if m.ticker is not None else "pending",
             )
             for m in result.members
         ],

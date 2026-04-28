@@ -40,6 +40,7 @@ this — see ``ExposureBreakdown.tsx`` empty-state behaviour.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
@@ -70,13 +71,26 @@ class CurrentPriceClient(Protocol):
 
 @dataclass(frozen=True)
 class ExposureResult:
-    """Output DTO. All numbers are ``Decimal`` for API serialisation parity."""
+    """Output DTO. All numbers are ``Decimal`` for API serialisation parity.
+
+    ``prices_stale`` (F-016): True when the price client returned no quotes
+    for one or more instruments and we fell back to ``average_cost``. The
+    caller (and ultimately the frontend) uses this to render a "stale"
+    badge so the user knows ``invested`` reflects cost-basis-as-of-acquisition,
+    not live market value.
+
+    ``prices_as_of`` is left as None for v1 — the upstream ``CurrentPriceClient``
+    port doesn't yet surface a per-quote timestamp. The field is reserved
+    so the frontend can rely on a stable shape when v2 wires it up.
+    """
 
     invested: Decimal
     cash: Decimal
     gross_exposure_pct: Decimal
     net_exposure_pct: Decimal
     leverage: Decimal
+    prices_stale: bool = False
+    prices_as_of: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -117,12 +131,17 @@ class GetExposureUseCase:
 
         if not holdings:
             zero = Decimal(0)
+            # An empty portfolio is *trivially* not stale — there are no
+            # prices to be missing. Returning False here keeps the UI
+            # from rendering a "stale" badge over a blank exposure card.
             return ExposureResult(
                 invested=zero,
                 cash=zero,
                 gross_exposure_pct=zero,
                 net_exposure_pct=zero,
                 leverage=zero,
+                prices_stale=False,
+                prices_as_of=None,
             )
 
         # Fetch current prices for ALL distinct instruments in a single
@@ -133,6 +152,14 @@ class GetExposureUseCase:
 
         invested = Decimal(0)
         total_cost = Decimal(0)
+        # F-016: detect price staleness. If ANY holding falls back to
+        # ``average_cost`` because the price client returned no quote,
+        # we mark the entire response as stale so the frontend can show
+        # a yellow "Prices stale" badge. Intentional all-or-nothing flag
+        # (vs per-holding) because the gross headline aggregates over
+        # the whole book — a single missing quote is enough to make the
+        # number partially synthetic.
+        stale = False
         for h in holdings:
             total_cost += h.quantity * h.average_cost
             # WHY fall back to average_cost on missing price: the alternative
@@ -141,7 +168,12 @@ class GetExposureUseCase:
             # opposite of what a portfolio manager wants from an exposure
             # readout. Cost basis is a conservative proxy when no live
             # quote is available.
-            price = prices.get(h.instrument_id, h.average_cost)
+            quote = prices.get(h.instrument_id)
+            if quote is None:
+                stale = True
+                price = h.average_cost
+            else:
+                price = quote
             invested += h.quantity * price
 
         cash = Decimal(0)  # v1 — broker cash not tracked.
@@ -161,4 +193,8 @@ class GetExposureUseCase:
             gross_exposure_pct=gross_exposure_pct,
             net_exposure_pct=net_exposure_pct,
             leverage=leverage,
+            prices_stale=stale,
+            # v1 leaves prices_as_of=None — the port doesn't yet surface
+            # a per-quote timestamp. See dataclass docstring.
+            prices_as_of=None,
         )

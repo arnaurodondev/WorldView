@@ -252,8 +252,41 @@ class PortfolioSnapshotWorker:
     # ── Public entry points ───────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Long-running scheduling loop (production entry point)."""
+        """Long-running scheduling loop (production entry point).
+
+        F-001 / F-017 (QA 2026-04-28): on startup, before sleeping for up
+        to 24 hours, we walk the past 30 trading days and fill in any
+        missing snapshot rows. This eliminates the "empty equity chart
+        for 6+ hours after every container restart" failure mode and
+        also recovers automatically from multi-day outages.
+
+        Order of operations:
+
+        1. Startup catch-up — for each non-root active portfolio, check
+           which of the past 30 trading days are missing a snapshot and
+           run ``ComputePortfolioValueUseCase`` for those dates. Then
+           re-aggregate root snapshots for any dates that gained
+           sub-portfolio rows. Per-day try/except so one failure doesn't
+           halt the whole catch-up.
+        2. Today's snapshot — also run "today" if it's a trading day so
+           the chart is fresh for users logging in immediately after a
+           deploy.
+        3. Normal schedule loop — sleep until 21:30 UTC and run once
+           per trading day from there on.
+        """
         logger.info("portfolio_snapshot_worker_started")  # type: ignore[no-any-return]
+
+        try:
+            await self._startup_catchup()
+        except Exception as exc:
+            # Catch broadly: the catch-up is best-effort. A failure here
+            # must not prevent the regular schedule from starting.
+            logger.error(  # type: ignore[no-any-return]
+                "portfolio_snapshot_worker_startup_catchup_failed",
+                error=type(exc).__name__,
+                error_message=str(exc),
+            )
+
         while True:
             now = datetime.now(tz=UTC)
             sleep_seconds = _seconds_until_next_run(now)
@@ -278,6 +311,130 @@ class PortfolioSnapshotWorker:
                     "portfolio_snapshot_worker_cycle_error",
                     error=str(exc),
                 )
+
+    async def _startup_catchup(self, lookback_trading_days: int = 30) -> None:
+        """Fill in missing snapshot rows for the past N trading days.
+
+        F-001 / F-017 implementation. We iterate calendar days backwards
+        from today, skipping weekends/holidays, until we have visited
+        ``lookback_trading_days`` actual trading days. For each such date:
+
+        * Phase 1 (per-portfolio): if no snapshot row exists for that
+          ``(portfolio_id, date)`` pair, compute one. Per-portfolio
+          try/except so a single bad portfolio doesn't poison the whole
+          catch-up. We only WRITE missing dates — already-present rows
+          are left untouched (idempotent).
+        * Phase 2 (root aggregation): re-run the root aggregator for the
+          same date so any newly-written sub-portfolio rows are reflected
+          in the root sum. Idempotent on dates that already had
+          everything.
+
+        This is the only place in the worker that does a multi-day pass —
+        the steady-state schedule loop does single-day runs.
+        """
+        today = datetime.now(tz=UTC).date()
+
+        # Build the list of trading days to consider, walking backwards.
+        # We include today only when it's a trading day so first-deploy
+        # users see a fresh chart on day 1.
+        trading_days: list[date] = []
+        cursor = today
+        # Bounded calendar walk — at worst we walk lookback_trading_days * 2
+        # calendar days (one weekend + one mid-week holiday is rare).
+        max_calendar_days = lookback_trading_days * 3
+        steps = 0
+        while len(trading_days) < lookback_trading_days and steps < max_calendar_days:
+            if is_trading_day(cursor):
+                trading_days.append(cursor)
+            cursor = cursor - timedelta(days=1)
+            steps += 1
+
+        # Sort ascending so when we walk and run Phase 2 the root
+        # aggregation sees a consistent forward-in-time series. (Phase 1
+        # is per-portfolio idempotent so order within Phase 1 doesn't
+        # matter, but Phase 2 reads back the rows so the ordering keeps
+        # logs readable.)
+        trading_days.sort()
+
+        logger.info(  # type: ignore[no-any-return]
+            "portfolio_snapshot_worker_startup_catchup_start",
+            trading_day_count=len(trading_days),
+            from_date=trading_days[0].isoformat() if trading_days else None,
+            to_date=trading_days[-1].isoformat() if trading_days else None,
+        )
+
+        # Pre-load portfolios once; the loop below just checks per-day
+        # existence to skip the price-fetching work when a row is already
+        # written.
+        async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            portfolios = await uow.portfolios.list_all_non_root_active()
+
+        use_case = ComputePortfolioValueUseCase(self._price_client)
+
+        # Per-day Phase 1
+        for d in trading_days:
+            wrote_any = False
+            for portfolio in portfolios:
+                try:
+                    async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+                        # Idempotency: skip if a row already exists for this
+                        # (portfolio, date). The repo's ``list_range`` over
+                        # a single day is the cheapest existence probe we
+                        # have without adding a new port method.
+                        existing = await uow.portfolio_value_snapshots.list_range(
+                            portfolio.id,
+                            d,
+                            d,
+                        )
+                        if existing:
+                            logger.info(  # type: ignore[no-any-return]
+                                "portfolio_snapshot_catchup_skip_existing",
+                                portfolio_id=str(portfolio.id),
+                                date=d.isoformat(),
+                            )
+                            continue
+
+                        await use_case.execute(
+                            ComputePortfolioValueCommand(
+                                portfolio_id=portfolio.id,
+                                tenant_id=portfolio.tenant_id,
+                                as_of_date=d,
+                            ),
+                            uow,
+                        )
+                        await uow.commit()
+                        wrote_any = True
+                        logger.info(  # type: ignore[no-any-return]
+                            "portfolio_snapshot_catchup_wrote",
+                            portfolio_id=str(portfolio.id),
+                            date=d.isoformat(),
+                        )
+                except Exception as exc:
+                    # Same defensive policy as the steady-state pass — keep
+                    # going even if one portfolio is broken.
+                    logger.error(  # type: ignore[no-any-return]
+                        "portfolio_snapshot_catchup_compute_failed",
+                        portfolio_id=str(portfolio.id),
+                        date=d.isoformat(),
+                        error=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+
+            # Phase 2 only when we actually wrote something for this day.
+            # Skipping the aggregation when all sub-portfolios were already
+            # snapshotted keeps catch-up fast (no redundant DB reads).
+            if wrote_any:
+                try:
+                    await self._aggregate_root_portfolios(d)
+                except Exception as exc:
+                    logger.error(  # type: ignore[no-any-return]
+                        "portfolio_snapshot_catchup_root_aggregate_failed",
+                        date=d.isoformat(),
+                        error=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+
+        logger.info("portfolio_snapshot_worker_startup_catchup_complete")  # type: ignore[no-any-return]
 
     async def run_once(self, as_of_date: date) -> None:
         """Single pass — Phase 1 (non-root) then Phase 2 (root aggregation).

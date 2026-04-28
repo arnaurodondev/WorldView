@@ -7,7 +7,7 @@ raw headers (PRD-0025, F-CRIT-001 remediation).
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -160,12 +160,6 @@ async def archive_portfolio(
 # ── PLAN-0046 Wave 5 — analytics endpoints ────────────────────────────────────
 
 
-# Default lookback window for the equity curve when the caller does not pass
-# ``from``. 90 calendar days ≈ 63 trading days — matches the convention used by
-# the OHLCV proxy (proxy.py) so the chart and the price history align.
-_DEFAULT_VALUE_HISTORY_LOOKBACK_DAYS = 90
-
-
 @router.get("/portfolios/{portfolio_id}/value-history", response_model=ValueHistoryResponse)
 async def get_value_history(
     portfolio_id: UUID,
@@ -189,12 +183,19 @@ async def get_value_history(
     owner_id = _extract_owner_id(request)
     x_tenant_id = _extract_tenant_id(request)
 
-    # Default ``to`` to today UTC; default ``from`` to today minus 90 days.
-    # We compute these in the API layer (not the use case) so the use case
-    # remains pure on its inputs and easier to unit-test.
+    # Default ``to`` to today UTC.
+    # F-022: ``from`` is now genuinely optional — when omitted we use a
+    # date-floor sentinel (year 1) so the underlying repository's range
+    # scan includes the earliest snapshot. The previous default of
+    # ``today - 90 days`` silently truncated history when the caller
+    # explicitly wanted the full series for the "All" period toggle.
     today = datetime.now(tz=UTC).date()
     end = to_date or today
-    start = from_date or (end - timedelta(days=_DEFAULT_VALUE_HISTORY_LOOKBACK_DAYS))
+    # date.min ≈ 0001-01-01 — earlier than any real snapshot, so the
+    # range scan returns everything up to ``end``. We deliberately do
+    # NOT default to a fixed lookback here; callers that want a 90-day
+    # window already send ``from`` explicitly.
+    start = date.min if from_date is None else from_date
     if start > end:
         # 400 instead of silently swapping — surfaces caller error explicitly.
         raise HTTPException(status_code=400, detail="`from` must be on or before `to`")
@@ -262,4 +263,8 @@ async def get_exposure(
         gross_exposure_pct=result.gross_exposure_pct,
         net_exposure_pct=result.net_exposure_pct,
         leverage=result.leverage,
+        # F-016 — surface staleness so the frontend can render a "Prices
+        # stale" badge instead of pretending cost-basis is live market value.
+        prices_stale=result.prices_stale,
+        prices_as_of=result.prices_as_of,
     )

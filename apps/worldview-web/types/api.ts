@@ -574,6 +574,13 @@ export interface ExposureResponse {
   gross_exposure_pct: number;
   net_exposure_pct: number;
   leverage: number;
+  // F-016 (QA 2026-04-28): when the price client could not fetch a live
+  // quote for one or more holdings, the use case falls back to
+  // ``average_cost`` and sets this flag so the UI can render a
+  // "Prices stale" badge above the gross-exposure number.
+  // ``prices_as_of`` is reserved for v2 (currently always null on the wire).
+  prices_stale?: boolean;
+  prices_as_of?: string | null;
 }
 
 /**
@@ -593,6 +600,22 @@ export interface RiskMetricsResponse {
   sortino: number | null;
   beta_vs_spy: number | null;
   n_returns: number;
+  // F-014 / F-015 (QA 2026-04-28): context fields so the UI can render
+  // a meaningful hint when metrics are null. ``as_of`` is the UTC ISO-8601
+  // computation timestamp; ``lookback_window`` reports the actual
+  // ``from``/``to`` dates the gateway used.
+  // ``data_quality.status`` discriminates the three possible reasons a
+  // metric might be null:
+  //   "ok"                      — enough data; metrics are populated
+  //   "insufficient_data"       — fewer than ~10 daily returns
+  //   "benchmark_unavailable"   — SPY OHLCV missing → only beta is null
+  as_of?: string;
+  lookback_window?: { from: string; to: string };
+  data_quality?: {
+    status: "ok" | "insufficient_data" | "benchmark_unavailable";
+    n_returns: number;
+    lookback_days: number;
+  };
 }
 
 // ── Watchlist ──────────────────────────────────────────────────────────────
@@ -603,6 +626,10 @@ export interface WatchlistMember {
   ticker: string | null;
   name: string;
   added_at: string;
+  // F-010 (QA 2026-04-28): "resolved" when the local instruments cache
+  // had a match at add-time, "pending" when not. The frontend renders
+  // a small "resolving…" badge for pending rows.
+  resolution?: "resolved" | "pending";
 }
 
 export interface Watchlist {

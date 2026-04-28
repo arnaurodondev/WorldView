@@ -279,7 +279,18 @@ async def _fetch_value_history(
     if resp.status_code == 404:
         # Bubble 404 up so the API hands the frontend a clean "not found"
         # rather than confusingly-empty metrics.
-        raise HTTPException(status_code=404, detail="Portfolio not found")
+        # F-006: match the rest of the portfolio domain's error envelope
+        # ({error_code, message, details}) instead of FastAPI's default
+        # {detail: "..."} shape — the frontend switches on ``error_code``
+        # to decide how to render the failure.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "PORTFOLIO_NOT_FOUND",
+                "message": "Portfolio not found",
+                "details": {},
+            },
+        )
     if resp.status_code != 200:
         logger.warning(
             "risk_metrics_value_history_unexpected_status",
@@ -484,6 +495,21 @@ async def get_risk_metrics(
             s_returns = _daily_returns(s_aligned)
             beta_vs_spy = _beta(p_returns, s_returns)
 
+    # F-014 / F-015: surface ``as_of``, ``lookback_window``, and a
+    # ``data_quality`` block so the frontend knows *why* a metric is
+    # null and can render an honest empty-state hint instead of just "—".
+    #
+    # status discrimination:
+    #   ok                   → enough returns and SPY data to compute everything
+    #   insufficient_data    → fewer than _MIN_RETURNS daily returns
+    #   benchmark_unavailable → enough returns BUT SPY OHLCV missing → β=null
+    if insufficient or len(portfolio_returns) < _MIN_RETURNS:
+        data_quality_status = "insufficient_data"
+    elif not spy_series:
+        data_quality_status = "benchmark_unavailable"
+    else:
+        data_quality_status = "ok"
+
     payload: dict[str, Any] = {
         "portfolio_id": portfolio_id,
         "lookback_days": lookback_days,
@@ -494,6 +520,19 @@ async def get_risk_metrics(
         "sortino": sortino,
         "beta_vs_spy": beta_vs_spy,
         "n_returns": len(portfolio_returns),
+        # When the metric was computed (UTC ISO-8601). Lets the frontend
+        # cache-bust intelligently if it ever wants to compare against a
+        # later snapshot.
+        "as_of": datetime.now(tz=UTC).isoformat(),
+        "lookback_window": {
+            "from": start.isoformat(),
+            "to": today.isoformat(),
+        },
+        "data_quality": {
+            "status": data_quality_status,
+            "n_returns": len(portfolio_returns),
+            "lookback_days": lookback_days,
+        },
     }
 
     # WHY explicit Response: payload contains JSON ``null`` for missing
