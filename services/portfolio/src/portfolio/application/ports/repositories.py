@@ -257,6 +257,22 @@ class WatchlistMemberRepository(ABC):
     async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]: ...
 
     @abstractmethod
+    async def list_by_watchlist_paginated(
+        self,
+        watchlist_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WatchlistMember], int]:
+        """Return ``(members, total)`` for a watchlist, paginated.
+
+        PLAN-0046 / T-46-2-02. Powers ``GET /v1/watchlists/{id}/members``.
+        ``total`` is the COUNT before pagination so the frontend can render
+        "showing X of N". Implementations should sort deterministically
+        (by ``added_at`` ascending) so pagination is stable across calls.
+        """
+        ...
+
+    @abstractmethod
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]: ...
 
     @abstractmethod

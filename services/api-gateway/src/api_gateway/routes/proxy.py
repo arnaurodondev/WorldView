@@ -1737,6 +1737,30 @@ async def delete_watchlist(watchlist_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/watchlists/{watchlist_id}/members")
+async def list_watchlist_members(watchlist_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/watchlists/{watchlist_id}/members → S1 Portfolio service.
+
+    Requires authentication. Forwards the standard ``limit``/``offset`` query
+    string straight through. PLAN-0046 / T-46-2-02 — replaces the old client
+    behaviour where the gateway hard-coded ``members: []`` (BP-265).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    # Preserve the inbound query string so pagination params reach S1 verbatim.
+    qs = request.url.query
+    target_path = f"/api/v1/watchlists/{watchlist_id}/members"
+    if qs:
+        target_path = f"{target_path}?{qs}"
+    resp = await clients.portfolio.get(
+        target_path,
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.post("/watchlists/{watchlist_id}/members")
 async def add_watchlist_member(watchlist_id: str, request: Request) -> Any:
     """Proxy POST /api/v1/watchlists/{watchlist_id}/members → S1 Portfolio service.

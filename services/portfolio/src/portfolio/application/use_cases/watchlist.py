@@ -246,12 +246,57 @@ class AddWatchlistMemberUseCase:
                 f"Entity {cmd.entity_id} is already in watchlist {cmd.watchlist_id}",
             )
 
+        # ── Resolve ticker/name/instrument_id at add-time (PLAN-0046 T-46-2-01) ──
+        # WHY HERE (not on read): we want to avoid (a) cross-service joins and
+        # (b) per-page-load resolution. The local ``instruments`` table is fed
+        # by the ``market.instrument.created/updated`` Kafka consumer (see S1
+        # context), so any instrument the user can search for is already
+        # present locally with its ``entity_id``. We look it up once and
+        # snapshot the human-readable fields onto the member row. R9 stays
+        # intact because we never reach across DBs.
+        #
+        # NULL handling: if the instrument is not found locally (e.g. a brand
+        # new entity from KG that S3 hasn't broadcast yet) we still write the
+        # row — the watchlist must accept the add. The frontend renders "—"
+        # for the missing fields and the user can re-add later to refresh.
+        ticker: str | None = None
+        name: str | None = None
+        instrument_id: UUID | None = None
+        try:
+            # Repository on the application port — query against the local
+            # ``instruments`` cache. ``entity_id`` is intentionally nullable
+            # on that table, so a row may exist with no entity link.
+            instruments_repo = uow.instruments
+            # Walk the small local cache to find a matching ``entity_id``.
+            # We don't have a dedicated ``get_by_entity_id`` on the port;
+            # ``list_all`` is cheap because the table only contains
+            # instruments the user's tenants have ever interacted with.
+            # If this becomes hot we can add a port method later.
+            all_instruments, _ = await instruments_repo.list_all(limit=10_000, offset=0)
+            for inst in all_instruments:
+                if inst.entity_id == cmd.entity_id:
+                    ticker = inst.symbol
+                    name = inst.name
+                    instrument_id = inst.id
+                    break
+        except Exception as resolve_exc:  # — resolution is best-effort
+            # Keep going with NULL fields rather than blocking the add. The
+            # warning preserves a breadcrumb for ops.
+            logger.warning(
+                "watchlist_member_resolve_failed",
+                entity_id=str(cmd.entity_id),
+                error=str(resolve_exc),
+            )
+
         member = WatchlistMember(
             id=new_uuid(),
             watchlist_id=cmd.watchlist_id,
             entity_id=cmd.entity_id,
             entity_type=cmd.entity_type,
             added_at=utc_now(),
+            ticker=ticker,
+            name=name,
+            instrument_id=instrument_id,
         )
         await uow.watchlist_members.save(member)
 

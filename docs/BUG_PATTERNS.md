@@ -7317,3 +7317,49 @@ Snapshot is the only authoritative source of "what the user holds right now":
 - New ground-truth comparison check in `/qa` for brokerage integrations.
 
 **Regression test**: `services/portfolio/tests/unit/test_use_cases_upsert_holdings_from_snapshot.py`
+
+---
+
+## BP-265 — Gateway Hard-Coded Empty Collections Mask Missing Endpoints
+
+**Category**: Frontend / Gateway / API contract
+**Severity**: HIGH
+**First seen**: 2026-04-28 (PLAN-0046 Wave 2 — F-003)
+**Services**: worldview-web (gateway), api-gateway (S9), portfolio (S1)
+
+**Symptoms**:
+- A real watchlist with N members rendered as the empty state ("Search above to add your first symbol.").
+- Adds appeared to succeed (POST 201) but the row never appeared.
+- Quotes never loaded for watchlist members because the upstream member array was [].
+
+**Root cause**:
+`apps/worldview-web/lib/gateway.ts::mapRawWatchlist` returned a hard-coded
+`members: [] as WatchlistMember[]` because S1 had no `GET /watchlists/{id}/members`
+endpoint at the time. The placeholder was never revisited when the rest of the
+UI started consuming `watchlist.members`. The gateway was the ONLY layer that
+"knew" the data was missing, but it returned a structurally valid empty array
+that downstream code accepted as truth.
+
+**Fix**:
+1. Add backend endpoint: `GET /v1/watchlists/{id}/members` (S1) + S9 proxy.
+2. Denormalise `ticker`/`name`/`instrument_id` onto `watchlist_members` at
+   add-time so the read path stays a single-table query (R9).
+3. Refactor `mapRawWatchlist` to accept an optional `members` array — callers
+   that have it pass it in; callers that don't (create/rename payloads) get a
+   `[]` default, but `getWatchlist` now fans out to `getWatchlistMembers` so
+   the consumer always receives real data.
+4. UI fetches members lazily for the active tab via
+   `useQuery(["watchlist-members", id])`; cache invalidated on add/remove.
+
+**Prevention**:
+- Collections returned by gateway mappers must come from a real fetch — never
+  default to `[]` because "we don't have the endpoint yet". Surface it as a
+  TypeScript error or an explicit unimplemented stub instead.
+- When adding a new collection field to a frontend type, audit every mapper
+  that constructs that type and verify each populates it from a real source.
+- Code-review checklist item: "any `[]` literal in a gateway mapper is
+  flagged for justification".
+
+**Regression test**:
+- Backend: `services/portfolio/tests/unit/test_use_cases_watchlist.py::test_list_members_returns_members_for_owner`
+- Gateway: `services/api-gateway/tests/test_s9_wave2_proxy.py::test_watchlist_members_list_proxies_to_s1`

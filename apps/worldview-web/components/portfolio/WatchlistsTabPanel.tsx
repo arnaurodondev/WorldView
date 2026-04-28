@@ -25,7 +25,7 @@
 "use client";
 // WHY "use client": uses useState for active tab, search state, create mode, and async mutations.
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, X, Loader2, Trash2, Plus, MoreHorizontal, Pencil } from "lucide-react";
@@ -162,7 +162,15 @@ function WatchlistTable({
   const members = watchlist.members;
 
   if (members.length === 0) {
-    return <InlineEmptyState message="Search above to add your first symbol." />;
+    // WHY centered wrapper (B-5): InlineEmptyState rendered raw collapsed to a
+    // tiny inline element at the top of a tall container, leaving most of the
+    // tab pane visually empty. py-8 + flex-centering puts the message in the
+    // optical center of the empty area.
+    return (
+      <div className="flex flex-1 items-center justify-center py-8">
+        <InlineEmptyState message="Search above to add your first symbol." />
+      </div>
+    );
   }
 
   return (
@@ -245,8 +253,12 @@ function AddSymbolBar({
   }, []);
 
   const { data: searchResults, isFetching: searchFetching } = useQuery({
-    queryKey: ["watchlist-instrument-search", debouncedQuery],
-    queryFn: () => createGateway(accessToken).searchInstruments(debouncedQuery, 8),
+    queryKey: ["watchlist-fundamentals-search", debouncedQuery],
+    // WHY searchFundamentals (B-3): the watchlist endpoint needs the REAL KG
+    // entity_id. searchInstruments falls back to instrument_id and the add
+    // silently fails. The screener joins through S7 KG so it returns the real
+    // entity_id directly — same shape, correct ID.
+    queryFn: () => createGateway(accessToken).searchFundamentals(debouncedQuery, 8),
     enabled: !!accessToken && debouncedQuery.length >= 1,
     staleTime: 30_000,
   });
@@ -255,12 +267,21 @@ function AddSymbolBar({
     mutationFn: (entityId: string) =>
       createGateway(accessToken).addWatchlistMember(watchlistId, entityId),
     onSuccess: () => {
+      // PLAN-0046 / T-46-2-03: invalidate the per-watchlist members query so
+      // the just-added row is fetched and rendered, AND the list query so the
+      // tab badge member count refreshes.
       queryClient.invalidateQueries({ queryKey: ["watchlists"] });
+      queryClient.invalidateQueries({
+        queryKey: ["watchlist-members", watchlistId],
+      });
       setSearchQuery("");
       setDebouncedQuery("");
       setShowDropdown(false);
       onAdded();
     },
+    // WHY surface error: previously the mutation failed silently when the
+    // backend rejected an unknown entity_id. The dropdown now shows the
+    // server-side error message under the result list (rendered below).
   });
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -514,8 +535,14 @@ export function WatchlistsTabPanel({
     onSettled: () => {
       setDeletingEntityId(null);
     },
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
+      // PLAN-0046 / T-46-2-03: invalidate BOTH the watchlists list (for
+      // member_count) AND the per-watchlist members query so the row
+      // disappears immediately after delete.
       queryClient.invalidateQueries({ queryKey: ["watchlists"] });
+      queryClient.invalidateQueries({
+        queryKey: ["watchlist-members", vars.watchlistId],
+      });
     },
   });
 
@@ -572,6 +599,80 @@ export function WatchlistsTabPanel({
     deleteWatchlistMutation.mutate(watchlistId);
   }
 
+  // ── All hooks must run before any early return (rules-of-hooks) ──────────
+  // WHY hoisted above the `isLoading`/empty-state branches: React requires
+  // identical hook order on every render. We compute the active watchlist
+  // meta and fire the dependent useQuery/useMemo BEFORE the conditional
+  // returns so the hook count never changes.
+  const activeWatchlistMeta =
+    watchlists.find((w) => w.watchlist_id === activeWatchlistId) ??
+    watchlists[0];
+
+  // ── Lazy member fetch for the active tab (PLAN-0046 / T-46-2-03) ─────────────
+  // WHY lazy (only the active tab): a user can have many watchlists; fetching
+  // every tab's members upfront would multiply round-trips with no UI benefit
+  // since only one tab is ever visible at a time. The query key includes the
+  // watchlist_id so each tab gets its own cache entry — switching back to a
+  // previously visited tab is instant.
+  //
+  // WHY enabled gate: avoid triggering a fetch before we know which tab is
+  // active or before the auth token is ready.
+  const activeWatchlistId_safe = activeWatchlistMeta?.watchlist_id ?? null;
+  const { data: activeMembers, isLoading: membersLoading } = useQuery({
+    queryKey: ["watchlist-members", activeWatchlistId_safe],
+    queryFn: () =>
+      createGateway(accessToken).getWatchlistMembers(activeWatchlistId_safe!),
+    enabled: !!accessToken && !!activeWatchlistId_safe,
+    // WHY 30s staleTime: matches the rest of the watchlist surface; live
+    // quotes refresh every 30s, member list rarely changes between adds.
+    staleTime: 30_000,
+  });
+
+  // WHY useMemo: keeps the merged object reference stable so downstream hooks
+  // (member-id list, quote query key) don't churn each render. The original
+  // un-memoised version triggered the react-hooks/exhaustive-deps warning.
+  const activeWatchlist = useMemo(
+    () =>
+      activeWatchlistMeta
+        ? {
+            ...activeWatchlistMeta,
+            members: activeMembers ?? activeWatchlistMeta.members,
+            member_count: (activeMembers ?? activeWatchlistMeta.members).length,
+          }
+        : undefined,
+    [activeWatchlistMeta, activeMembers],
+  );
+
+  // ── Quotes for the active watchlist's members (PLAN-0046 / T-46-2-03) ─────
+  // WHY here (not in parent): the parent's `quotes` prop was previously fed
+  // by an upstream `watchlistInstrumentIds` derived from `watchlists.members`.
+  // Now that `getWatchlists()` no longer carries members, the parent's pipe
+  // returns empty. Fetching live quotes for the active tab here keeps the
+  // change local to the panel and avoids a wider refactor of the page.
+  const activeInstrumentIds = useMemo(
+    () =>
+      (activeWatchlist?.members ?? [])
+        .map((m) => m.instrument_id)
+        .filter((id): id is string => id !== null),
+    [activeWatchlist],
+  );
+  const { data: localQuotesResp } = useQuery({
+    queryKey: ["watchlist-active-quotes", activeWatchlist?.watchlist_id, activeInstrumentIds],
+    queryFn: () =>
+      createGateway(accessToken).getBatchQuotes(activeInstrumentIds),
+    enabled: activeInstrumentIds.length > 0 && !!accessToken,
+    refetchInterval: 30_000,
+    staleTime: 0,
+  });
+  // WHY merge with parent `quotes`: keep backward-compat with any quotes the
+  // parent might still pass (e.g. from holdings shared across views) while
+  // preferring our freshly fetched values for the active watchlist members.
+  const mergedQuotes = useMemo(
+    () => ({ ...quotes, ...(localQuotesResp?.quotes ?? {}) }),
+    [quotes, localQuotesResp],
+  );
+
+  // ── Early returns AFTER all hooks ────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-24 text-[11px] text-muted-foreground">
@@ -594,10 +695,6 @@ export function WatchlistsTabPanel({
       </div>
     );
   }
-
-  const activeWatchlist =
-    watchlists.find((w) => w.watchlist_id === activeWatchlistId) ??
-    watchlists[0];
 
   return (
     <div className="flex flex-col">
@@ -737,14 +834,24 @@ export function WatchlistsTabPanel({
       )}
 
       {/* ── Active watchlist table ─────────────────────────────────────── */}
-      {activeWatchlist && (
-        <WatchlistTable
-          watchlist={activeWatchlist}
-          quotes={quotes}
-          onRowClick={handleRowClick}
-          onDeleteMember={handleDeleteMember}
-          deletingEntityId={deletingEntityId}
-        />
+      {/* WHY membersLoading guard: while the GET /members request is in flight
+          (PLAN-0046 T-46-2-03) the merged `members` array could briefly be []
+          and the table would flash the "Search above…" empty state. Showing a
+          subtle loading row instead avoids the misleading flicker. */}
+      {activeWatchlist && membersLoading && !activeMembers ? (
+        <div className="flex items-center justify-center h-12 text-[11px] text-muted-foreground">
+          Loading members…
+        </div>
+      ) : (
+        activeWatchlist && (
+          <WatchlistTable
+            watchlist={activeWatchlist}
+            quotes={mergedQuotes}
+            onRowClick={handleRowClick}
+            onDeleteMember={handleDeleteMember}
+            deletingEntityId={deletingEntityId}
+          />
+        )
       )}
     </div>
   );
