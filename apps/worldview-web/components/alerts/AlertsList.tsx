@@ -24,14 +24,15 @@
  */
 
 "use client";
-// WHY "use client": uses useState (ack/snooze state), useQuery (data), useRouter (navigation).
+// WHY "use client": uses useState (ack/snooze state), useQuery (data), useRouter (URL updates).
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { SeverityBadge } from "@/components/alerts/SeverityBadge";
+import { AlertDetailSheet } from "@/components/alerts/AlertDetailSheet";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -83,7 +84,20 @@ function safeJsonGet<T>(key: string, fallback: T): T {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function AlertsList() {
+/**
+ * AlertsListProps — externally-controlled selection via the parent route.
+ *
+ * WHY a `selectedId` prop (not internal state): the parent /alerts route reads
+ * `?selected=` from the URL and passes it down. This makes deep-linking from
+ * RecentAlerts (Dashboard) and refreshing the page Just Work — the URL is the
+ * single source of truth for "which alert is open in the detail sheet".
+ */
+export interface AlertsListProps {
+  /** Alert id selected via the ?selected= URL param, or null when none. */
+  selectedId?: string | null;
+}
+
+export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
   const { accessToken } = useAuth();
   const router = useRouter();
 
@@ -119,7 +133,11 @@ export function AlertsList() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
-  const allAlerts = data?.alerts ?? [];
+  // WHY useMemo: `data?.alerts ?? []` would otherwise produce a fresh array
+  // identity on every render, invalidating the selectedAlert useMemo + any
+  // child memo dependent on the list. Memoising on `data?.alerts` stabilises
+  // the reference between fetches.
+  const allAlerts = useMemo<Alert[]>(() => data?.alerts ?? [], [data?.alerts]);
   const now = Date.now();
 
   /**
@@ -194,6 +212,36 @@ export function AlertsList() {
       return next;
     });
   }, []);
+
+  // ── Selection handlers (PLAN-0048 Wave B-3) ───────────────────────────────
+
+  /**
+   * Update the URL ?selected= param via router.replace.
+   *
+   * WHY router.replace (not push): opening / closing the sheet should not
+   * pollute browser history with a separate entry per alert — the back
+   * button must jump back to the page the user came from, not iterate
+   * through every alert they viewed.
+   */
+  const handleSelect = useCallback(
+    (alertId: string) => {
+      router.replace(`/alerts?selected=${encodeURIComponent(alertId)}`);
+    },
+    [router],
+  );
+
+  /** Close the detail sheet — strips the ?selected= param. */
+  const handleCloseSheet = useCallback(() => {
+    router.replace("/alerts");
+  }, [router]);
+
+  // Resolve the currently selected Alert from the loaded list. WHY useMemo:
+  // `allAlerts` rebuilds on every fetch; we only want to recompute the lookup
+  // when the data or the selectedId actually changes.
+  const selectedAlert = useMemo<Alert | null>(() => {
+    if (!selectedId) return null;
+    return allAlerts.find((a) => a.alert_id === selectedId) ?? null;
+  }, [selectedId, allAlerts]);
 
   // ── Loading state ────────────────────────────────────────────────────────────
   if (isLoading) {
@@ -285,9 +333,12 @@ export function AlertsList() {
                 <AlertRow
                   key={alert.alert_id}
                   alert={alert}
-                  onNavigate={() => {
-                    router.push(`/instruments/${encodeURIComponent(alert.entity_id)}`);
-                  }}
+                  // PLAN-0048 Wave B-3: clicking a row now updates the URL
+                  // ?selected= param instead of navigating to /instruments.
+                  // router.replace (not push) keeps history clean — opening
+                  // and closing the sheet shouldn't pollute the back-button
+                  // history with one entry per alert.
+                  onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
                 />
@@ -328,9 +379,7 @@ export function AlertsList() {
                 <AlertRow
                   key={alert.alert_id}
                   alert={alert}
-                  onNavigate={() => {
-                    router.push(`/instruments/${encodeURIComponent(alert.entity_id)}`);
-                  }}
+                  onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
                 />
@@ -340,6 +389,18 @@ export function AlertsList() {
 
         </div>
       )}
+
+      {/* PLAN-0048 Wave B-3: AlertDetailSheet is rendered alongside the list so
+          the detail panel slides in over the page when ?selected={id} is in the
+          URL. We resolve the selected Alert from the loaded data here so the
+          sheet has access to ack/snooze handlers + the full payload. */}
+      <AlertDetailSheet
+        alert={selectedAlert}
+        open={Boolean(selectedAlert)}
+        onClose={handleCloseSheet}
+        onAck={handleAck}
+        onSnooze={handleSnooze}
+      />
 
     </div>
   );
@@ -356,12 +417,13 @@ export function AlertsList() {
  */
 interface AlertRowProps {
   alert: Alert;
-  onNavigate: () => void;
+  /** Open the detail sheet for this alert (PLAN-0048 Wave B-3). */
+  onSelect: () => void;
   onAck: () => void;
   onSnooze: (minutes: number) => void;
 }
 
-function AlertRow({ alert, onNavigate, onAck, onSnooze }: AlertRowProps) {
+function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
   return (
     <li>
       {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules */}
@@ -382,15 +444,22 @@ function AlertRow({ alert, onNavigate, onAck, onSnooze }: AlertRowProps) {
           {alert.alert_type}
         </span>
 
-        {/* Alert body — truncated, click navigates to instrument */}
+        {/* Alert body — truncated. Click opens AlertDetailSheet via the URL
+            ?selected= contract (B-3) instead of navigating away to /instruments.
+            Trader keeps context — the list stays in view behind the sheet.
+
+            WHY derive the visible label from payload when alert.body is empty:
+            S10's PendingAlertResponse populates `body` only on legacy alerts;
+            new alerts (post-B-1) carry payload.signal_label. We mirror the
+            simplified RecentAlerts logic so both surfaces look consistent. */}
         <button
           type="button"
-          onClick={onNavigate}
+          onClick={onSelect}
           className="flex-1 truncate text-left text-[11px] text-foreground"
-          title={alert.body}
-          aria-label={`Alert: ${alert.title}`}
+          title={alert.body || (alert.payload?.signal_label as string | undefined) || alert.alert_type}
+          aria-label={`Open alert ${alert.alert_id}`}
         >
-          {alert.body}
+          {alert.body || (alert.payload?.signal_label as string | undefined) || `${alert.severity} alert`}
         </button>
 
         {/* Relative timestamp */}

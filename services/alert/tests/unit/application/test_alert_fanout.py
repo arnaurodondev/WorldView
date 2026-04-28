@@ -583,6 +583,124 @@ class TestAlertFanoutSeverity:
         ), "WatchlistCache must implement IWatchlistCache.get_watchers"
 
     @pytest.mark.unit
+    async def test_payload_enriched_with_entity_resolver(self) -> None:
+        """When an entity_resolver is wired, the persisted Alert payload contains
+        entity_name, ticker, and signal_label — covering PLAN-0048 Wave B-1.
+        """
+        from alert.application.ports.entity_resolver import EntityNameResolverPort
+
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        saved_alerts: list[Alert] = []
+
+        # In-memory fake resolver. WHY a class (not AsyncMock): proves the port
+        # accepts a concrete subclass and exercises the abstract contract.
+        class _FakeResolver(EntityNameResolverPort):
+            async def resolve(self, entity_id):  # type: ignore[no-untyped-def]
+                return ("Apple Inc.", "AAPL")
+
+        mock_ws = AsyncMock()
+        mock_ws.send_to_user = AsyncMock(return_value=True)
+        mock_cache = AsyncMock()
+        mock_cache.get_watchers = AsyncMock(return_value=watchers)
+        mock_dedup_repo = AsyncMock()
+        mock_dedup_repo.exists = AsyncMock(return_value=False)
+        mock_alert_repo = AsyncMock()
+        mock_alert_repo.save = AsyncMock(side_effect=lambda a: saved_alerts.append(a))
+        mock_pending_repo = AsyncMock()
+        mock_pending_repo.save = AsyncMock()
+        mock_outbox_repo = AsyncMock()
+        mock_outbox_repo.append = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_sf = MagicMock()
+        mock_sf.return_value = mock_session
+
+        def _repo_factory(_s):  # type: ignore[no-untyped-def]
+            return mock_alert_repo, mock_pending_repo, mock_dedup_repo, mock_outbox_repo
+
+        uc = AlertFanoutUseCase(
+            session_factory=mock_sf,
+            watchlist_cache=mock_cache,
+            notification_publisher=mock_ws,
+            repo_factory=_repo_factory,
+            entity_resolver=_FakeResolver(),
+        )
+        # Use a forward_guidance + positive event so signal_label resolves to the
+        # human-readable variant rather than the severity fallback.
+        signal_event = {
+            **_SIGNAL_EVENT,
+            "claim_type": "forward_guidance",
+            "polarity": "positive",
+        }
+        await uc.execute(signal_event, "nlp.signal.detected.v1", market_impact_score=0.5)
+
+        assert len(saved_alerts) == 1
+        payload = saved_alerts[0].payload
+        assert payload["entity_name"] == "Apple Inc."
+        assert payload["ticker"] == "AAPL"
+        assert payload["signal_label"] == "Bullish guidance"
+
+    @pytest.mark.unit
+    async def test_payload_signal_label_fallback_when_no_claim_type(self) -> None:
+        """Missing claim_type/polarity → label falls back to ``<SEVERITY> signal``."""
+        watchers = [WatcherInfo(user_id=_USER_ID, watchlist_id=_WATCHLIST_ID)]
+        saved_alerts: list[Alert] = []
+
+        mock_ws = AsyncMock()
+        mock_ws.send_to_user = AsyncMock(return_value=True)
+        mock_cache = AsyncMock()
+        mock_cache.get_watchers = AsyncMock(return_value=watchers)
+        mock_dedup_repo = AsyncMock()
+        mock_dedup_repo.exists = AsyncMock(return_value=False)
+        mock_alert_repo = AsyncMock()
+        mock_alert_repo.save = AsyncMock(side_effect=lambda a: saved_alerts.append(a))
+        mock_pending_repo = AsyncMock()
+        mock_pending_repo.save = AsyncMock()
+        mock_outbox_repo = AsyncMock()
+        mock_outbox_repo.append = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.commit = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_sf = MagicMock()
+        mock_sf.return_value = mock_session
+
+        def _repo_factory(_s):  # type: ignore[no-untyped-def]
+            return mock_alert_repo, mock_pending_repo, mock_dedup_repo, mock_outbox_repo
+
+        uc = AlertFanoutUseCase(
+            session_factory=mock_sf,
+            watchlist_cache=mock_cache,
+            notification_publisher=mock_ws,
+            repo_factory=_repo_factory,
+        )
+        # Score 0.90 → CRITICAL severity → label "CRITICAL signal".
+        await uc.execute(_SIGNAL_EVENT, "nlp.signal.detected.v1", market_impact_score=0.90)
+        assert saved_alerts[0].payload["signal_label"] == "CRITICAL signal"
+
+    @pytest.mark.unit
+    def test_signal_label_table_full_coverage(self) -> None:
+        """All 8 (claim_type, polarity) combinations resolve correctly + case-insensitive."""
+        from alert.application.use_cases.alert_fanout import _derive_signal_label
+        from alert.domain.enums import AlertSeverity
+
+        cases = [
+            ("forward_guidance", "positive", "Bullish guidance"),
+            ("forward_guidance", "negative", "Bearish guidance"),
+            ("factual", "positive", "Positive factual"),
+            ("factual", "negative", "Negative factual"),
+            ("projection", "positive", "Bullish projection"),
+            ("projection", "negative", "Bearish projection"),
+            ("opinion", "positive", "Bullish opinion"),
+            ("opinion", "negative", "Bearish opinion"),
+        ]
+        for ct, pol, expected in cases:
+            event = {"claim_type": ct.upper(), "polarity": pol.upper()}  # case-insensitive
+            assert _derive_signal_label(event, AlertSeverity.LOW) == expected, f"failed for ({ct}, {pol})"
+
+    @pytest.mark.unit
     def test_alert_fanout_avro_schema_loads_from_file(self) -> None:
         """_get_parsed_schema() loads from .avsc file, not an inline dict."""
         # Reset cached schema to force a reload

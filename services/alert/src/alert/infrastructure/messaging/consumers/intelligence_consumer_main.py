@@ -31,6 +31,7 @@ async def main() -> None:
     from alert.domain.entities import SeverityThresholds
     from alert.infrastructure.cache.watchlist_cache import WatchlistCache
     from alert.infrastructure.clients.s1_client import S1Client
+    from alert.infrastructure.clients.s7_entity_resolver import S7EntityResolver
     from alert.infrastructure.db.repositories.alert import AlertRepository
     from alert.infrastructure.db.repositories.dedup import DedupRepository
     from alert.infrastructure.db.repositories.outbox import OutboxRepository
@@ -74,6 +75,11 @@ async def main() -> None:
     # Watchlist cache
     watchlist_cache = WatchlistCache(valkey, s1_client, ttl=settings.watchlist_cache_ttl_seconds)  # type: ignore[arg-type]
 
+    # S7 entity resolver — looks up (canonical_name, ticker) for payload
+    # enrichment so the frontend can render readable rows. Cached in Valkey
+    # for 15 min by default (BP-263 follow-up; PLAN-0048 Wave B-1).
+    entity_resolver = S7EntityResolver(settings, valkey)  # type: ignore[arg-type]
+
     # Notification publisher — sends to Valkey pub/sub channel per user
     notification_publisher = ValkeyNotificationPublisher(valkey)
 
@@ -99,6 +105,7 @@ async def main() -> None:
             medium=settings.alert_severity_medium_threshold,
         ),
         metrics=PrometheusAlertMetrics(),
+        entity_resolver=entity_resolver,
     )
 
     # Consumer config
@@ -134,6 +141,8 @@ async def main() -> None:
         log.info("intelligence_consumer_stopped")
     finally:
         await s1_client.close()
+        # Close the resolver's httpx client to release sockets.
+        await entity_resolver.close()
         await valkey.close()
         await _engine.dispose()
 

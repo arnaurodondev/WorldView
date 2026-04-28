@@ -107,6 +107,19 @@ class Settings(BaseSettings):
     s1_internal_jwt: str = ""
     s3_market_data_base_url: str = "http://market-data:8003"
 
+    # ── S7 Knowledge Graph dependency (PLAN-0048 Wave B-1) ─────────────────
+    # WHY: alert fan-out enriches payloads with (entity_name, ticker) for
+    # human-readable rendering on RecentAlerts + AlertDetailSheet. S7 is the
+    # source of truth for canonical_entities. Best-effort: a 5xx response
+    # leaves entity_name/ticker as None — the alert still fans out.
+    s7_knowledge_graph_base_url: str = "http://knowledge-graph:8007"
+    # PRD-0025: S7 also requires X-Internal-JWT. Same pattern as S1/S8.
+    s7_internal_jwt: str = ""
+    # 15 minutes — entities rarely rename. Long TTL maximises cache hit rate
+    # under burst alert load (a single signal can fan out to 100s of alerts
+    # for the same entity). Aligned with PLAN-0048 §B-1 spec.
+    entity_resolver_cache_ttl_seconds: int = 900
+
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ──────
     service_name: str = "alert"
     log_level: str = "INFO"

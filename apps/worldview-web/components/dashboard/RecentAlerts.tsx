@@ -62,6 +62,28 @@ export function RecentAlerts() {
     for (const a of alertsResp?.alerts ?? []) {
       if (!seen.has(a.alert_id)) {
         seen.add(a.alert_id);
+        // PLAN-0048 Wave B-2: payload now ships with `entity_name`, `ticker`,
+        // and `signal_label` injected by AlertFanoutUseCase (Wave B-1). The
+        // 5-step IIFE fallback ladder is gone — backend guarantees these fields
+        // on new alerts and the simple `${ticker || name}: ${label}` format
+        // works in every case. We keep one severity-only fallback for legacy
+        // alerts persisted before B-1.
+        const payload = (a.payload as Record<string, unknown> | undefined) ?? {};
+        const ticker = typeof payload.ticker === "string" ? payload.ticker : null;
+        const entityName = typeof payload.entity_name === "string" ? payload.entity_name : null;
+        const signalLabel = typeof payload.signal_label === "string" ? payload.signal_label : null;
+        // WHY ticker || entity_name: ticker is shorter and faster to scan; fall
+        // back to canonical name when the entity isn't an instrument (e.g. a
+        // person or a regulatory body — those have no ticker).
+        const subject = ticker ?? entityName;
+        const message =
+          subject && signalLabel
+            ? `${subject}: ${signalLabel}`
+            : signalLabel
+              ? signalLabel
+              : // Legacy fallback for pre-B-1 alerts.
+                `${(a.severity ?? "").toUpperCase()} alert`.trim();
+
         combined.push({
           id: a.alert_id,
           // WHY toUpperCase(): S10 AlertSeverity StrEnum returns lowercase ("low", "critical").
@@ -69,14 +91,7 @@ export function RecentAlerts() {
           severity: (a.severity?.toUpperCase() ?? "LOW") as AlertPayload["severity"],
           alert_type: a.alert_type,
           entity_id: a.entity_id ?? null,
-          // WHY fallback chain: REST PendingAlertResponse returns `payload: dict` not `body: string`.
-          // Try payload.message first, then body (legacy), then alert_type as last resort.
-          message: String(
-            (a.payload as Record<string, unknown> | undefined)?.message
-            ?? a.body
-            ?? a.alert_type
-            ?? ""
-          ),
+          message,
           created_at: a.created_at,
         });
       }
@@ -136,10 +151,17 @@ export function RecentAlerts() {
             const timeStr = relativeTime(alert.created_at);
 
             return (
-              <div
+              // WHY <Link>: users expect clicking an alert row to navigate to the
+              // Alerts page — the hover state implies interactivity. Wrapping in
+              // Link makes the entire row a navigation target (BP-263 follow-up).
+              // PLAN-0048 Wave B-3: deep-link to ?selected={id} so the AlertsList
+              // page opens the AlertDetailSheet automatically — much faster path
+              // to "see the full payload" than landing on the list and clicking.
+              <Link
                 key={alert.id}
+                href={`/alerts?selected=${encodeURIComponent(alert.id)}`}
                 // WHY h-[22px]: terminal row height per §0 Terminal CLI Quality Standard
-                className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40"
+                className="flex h-[22px] items-center gap-2 px-2 py-0 hover:bg-muted/40 no-underline"
               >
                 {/* Severity badge — use Tailwind bg/text classes from severityColor */}
                 <span
@@ -158,7 +180,7 @@ export function RecentAlerts() {
                 <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
                   {timeStr}
                 </span>
-              </div>
+              </Link>
             );
           })}
         </div>

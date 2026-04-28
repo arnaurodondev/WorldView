@@ -106,6 +106,13 @@ export default function AlertsPage() {
   // Feed tab, not the Alerts tab — matching user intent from the click origin.
   const defaultTab = searchParams.get("tab") ?? "alerts";
 
+  // PLAN-0048 Wave B-3: deep-link to a specific alert via ?selected={alert_id}.
+  // Reading the param here (rather than inside AlertsList) keeps the URL the
+  // single source of truth — refresh + back/forward navigation Just Work.
+  // When the param is absent we pass null and the AlertDetailSheet stays
+  // closed on initial render.
+  const selectedAlertId = searchParams.get("selected");
+
   // ── Rule count — read from localStorage for Manage Rules badge ────────────
   // WHY not state: rule count updates after AlertRuleBuilder saves; we re-read
   // localStorage synchronously via getAlertRuleCount() on each render.
@@ -175,7 +182,7 @@ export default function AlertsPage() {
             and is independently testable. Keeping it as a component also allows
             WorkspaceAlertPanel (F-12) to reuse it without duplicating logic. */}
         <TabsContent value="alerts">
-          <AlertsList />
+          <AlertsList selectedId={selectedAlertId} />
         </TabsContent>
 
         {/* ── News Feed tab ─────────────────────────────────────────────────── */}
