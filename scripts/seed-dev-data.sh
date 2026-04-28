@@ -50,13 +50,23 @@ INSERT INTO watchlist_members (id, watchlist_id, entity_id, entity_type, added_a
 ON CONFLICT (id) DO NOTHING;
 
 -- Demo holdings for the original 5 instruments
+-- F-201 (QA iter-2): seed must be RESET-idempotent so re-running ``make seed``
+-- fully restores holdings even if a prior run zeroed them. We use ON CONFLICT
+-- DO UPDATE so an existing row's quantity/average_cost are overwritten with
+-- the seed values rather than left at whatever the repair script wrote (or
+-- whatever the live brokerage sync produced). Other columns are also
+-- refreshed for consistency.
 INSERT INTO holdings (id, portfolio_id, instrument_id, tenant_id, quantity, average_cost, currency, updated_at) VALUES
     ('01900000-0000-7000-8000-000000000400', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001001', '01900000-0000-7000-8000-000000000001', 50.00000000, 178.50000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000401', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001002', '01900000-0000-7000-8000-000000000001', 30.00000000, 412.75000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000402', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001003', '01900000-0000-7000-8000-000000000001', 20.00000000, 141.20000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000403', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001004', '01900000-0000-7000-8000-000000000001', 15.00000000, 245.30000000, 'USD', NOW()),
     ('01900000-0000-7000-8000-000000000404', '01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000001005', '01900000-0000-7000-8000-000000000001', 25.00000000, 185.60000000, 'USD', NOW())
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    quantity = EXCLUDED.quantity,
+    average_cost = EXCLUDED.average_cost,
+    currency = EXCLUDED.currency,
+    updated_at = EXCLUDED.updated_at;
 SQL
 
 echo "Seeding market_data_db..."

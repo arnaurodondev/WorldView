@@ -831,11 +831,20 @@ export function createGateway(token?: string | null) {
      */
     async getValueHistory(
       portfolioId: string,
-      params: { from?: string; to?: string; granularity?: "1d" | "1w" | "1m" } = {},
+      params: {
+        from?: string;
+        to?: string;
+        // F-202 (QA iter-2): server now accepts ``days=N`` as an alias for
+        // ``from = today - N``. The frontend uses ``days`` for fixed-period
+        // toggles and omits it for "All".
+        days?: number;
+        granularity?: "1d" | "1w" | "1m";
+      } = {},
     ): Promise<ValueHistoryResponse> {
       const qs = new URLSearchParams({
         ...(params.from ? { from: params.from } : {}),
         ...(params.to ? { to: params.to } : {}),
+        ...(params.days != null ? { days: String(params.days) } : {}),
         ...(params.granularity ? { granularity: params.granularity } : {}),
       }).toString();
       const path =
@@ -848,6 +857,12 @@ export function createGateway(token?: string | null) {
           cost_basis: string;
           cash: string;
         }>;
+        // F-009 (QA iter-2): empty-state hint metadata. Optional on the wire
+        // for forward compat — older S1 builds don't emit it.
+        metadata?: {
+          last_snapshot_at: string | null;
+          next_scheduled_run_utc: string | null;
+        };
       }>(path, { token: t });
       // BP-265 awareness: only default `points` to [] when the server
       // genuinely omitted it (defensive); otherwise pass through what
@@ -858,7 +873,17 @@ export function createGateway(token?: string | null) {
         cost_basis: parseFloat(p.cost_basis),
         cash: parseFloat(p.cash),
       }));
-      return { points };
+      // Map metadata through unchanged — undefined defaults survive so the
+      // chart's empty-state code can null-check the field directly.
+      return {
+        points,
+        metadata: raw.metadata
+          ? {
+              last_snapshot_at: raw.metadata.last_snapshot_at ?? null,
+              next_scheduled_run_utc: raw.metadata.next_scheduled_run_utc ?? null,
+            }
+          : undefined,
+      };
     },
 
     /**
@@ -947,6 +972,11 @@ export function createGateway(token?: string | null) {
           // migration 0009. The DIVIDEND row total comes from this field.
           amount: string | null;
           currency: string;
+          // F-205 (QA iter-2): S1 now populates ``ticker`` and ``name`` server-side
+          // via a JOIN to the local instruments table. Both are nullable when the
+          // instrument hasn't been synced yet.
+          ticker: string | null;
+          name: string | null;
           executed_at: string;
           external_ref: string | null;
           created_at: string;
@@ -985,9 +1015,12 @@ export function createGateway(token?: string | null) {
         transaction_id: tx.id,
         portfolio_id: tx.portfolio_id,
         instrument_id: tx.instrument_id,
-        // WHY empty ticker: S1 does not include ticker on TransactionListItem.
-        // TransactionsTable enriches via the holdingOverviews map keyed by instrument_id.
-        ticker: "",
+        // F-205 (QA iter-2): map server-side ticker through. Empty string is
+        // the safe display value when the instruments cache miss left it null
+        // (matches the previous BP-262 fallback so the table doesn't render
+        // a literal "null"). Older S1 builds that don't yet emit the field
+        // give us undefined → empty string for the same reason.
+        ticker: tx.ticker ?? "",
         type: mappedType,
         quantity: parseFloat(tx.quantity) || 0,
         price: parseFloat(tx.price) || 0,

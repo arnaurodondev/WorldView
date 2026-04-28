@@ -256,12 +256,22 @@ async def add_member(
         uow,
         cache,
     )
+    # F-206 (QA iter-2): mirror the GET-list item shape so the optimistic UI
+    # can render the resolution status without a follow-up fetch. ``member``
+    # is the domain entity returned from the use case which already carries
+    # ticker / name / instrument_id resolved at add-time (or None on cache miss).
     return WatchlistMemberResponse(
         id=member.id,
         watchlist_id=member.watchlist_id,
         entity_id=member.entity_id,
         entity_type=member.entity_type,
         added_at=member.added_at,
+        ticker=member.ticker,
+        name=member.name,
+        instrument_id=member.instrument_id,
+        # Same derivation as the GET-list endpoint — keep it server-side so
+        # the contract is consistent across both routes.
+        resolution="resolved" if member.ticker is not None else "pending",
     )
 
 

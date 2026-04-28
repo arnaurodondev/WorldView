@@ -178,6 +178,12 @@ class TransactionListItem(BaseModel):
     # pre-date Alembic 0009 and for activity types where the broker omits it.
     amount: Decimal | None = None
     currency: str
+    # F-205 (QA iter-2): server-side ticker enrichment so 3rd-party / mobile
+    # consumers (and our own frontend before holdings load) can render the
+    # ticker without hand-rolling a join. Nullable when the instrument_id
+    # isn't yet present in the local instruments cache.
+    ticker: str | None = None
+    name: str | None = None
     executed_at: datetime
     external_ref: str | None = None
     created_at: datetime
@@ -237,11 +243,25 @@ class WatchlistMemberCreateRequest(BaseModel):
 
 
 class WatchlistMemberResponse(BaseModel):
+    """Response from POST /v1/watchlists/{id}/members.
+
+    F-206 (QA iter-2): the response now mirrors the GET-list item shape so
+    the frontend's optimistic UI can display the resolved ticker/name (or
+    a "resolving…" badge) without a follow-up GET. ``ticker`` / ``name`` /
+    ``instrument_id`` are nullable when the local instruments cache had no
+    matching entity at add-time (see Alembic 0010 docstring); ``resolution``
+    is derived from whether ``ticker`` was populated.
+    """
+
     id: UUID
     watchlist_id: UUID
     entity_id: UUID
     entity_type: str
     added_at: datetime
+    ticker: str | None = None
+    name: str | None = None
+    instrument_id: UUID | None = None
+    resolution: str = "resolved"
 
 
 # ── Watchlist member listing (PLAN-0046 / T-46-2-02) ──────────────────────────
@@ -439,10 +459,34 @@ class ValueHistoryPoint(BaseModel):
         return _fmt_decimal(v)
 
 
+class ValueHistoryMetadata(BaseModel):
+    """Hint block for the equity-curve empty state (F-009, QA iter-2).
+
+    ``last_snapshot_at`` — ISO date of the most recent snapshot **inside the
+    returned window**, or ``None`` when the window is empty. The frontend's
+    empty-state card uses this to tell the user "your last snapshot was on X"
+    (or "none yet") rather than rendering a generic message.
+
+    ``next_scheduled_run_utc`` — full ISO-8601 timestamp of the next 21:30 UTC
+    snapshot wake-up. Lets the frontend render a sub-line "Next snapshot
+    scheduled for 2026-04-29 21:30 UTC" so the user knows when to expect new
+    data instead of guessing the worker is broken.
+
+    Both fields are optional in the wire shape so older clients that don't
+    yet read them keep working.
+    """
+
+    last_snapshot_at: str | None = None
+    next_scheduled_run_utc: str | None = None
+
+
 class ValueHistoryResponse(BaseModel):
     """``GET /v1/portfolios/{id}/value-history`` response."""
 
     points: list[ValueHistoryPoint]
+    # F-009: empty-state hint metadata. Always populated server-side; clients
+    # may safely ignore it if they don't render the empty-state caption.
+    metadata: ValueHistoryMetadata = ValueHistoryMetadata()
 
 
 class ExposureResponse(BaseModel):

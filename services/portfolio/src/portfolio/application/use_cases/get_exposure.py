@@ -129,11 +129,19 @@ class GetExposureUseCase:
         else:
             holdings = await uow.holdings.list_by_portfolio(query.portfolio_id)
 
-        if not holdings:
+        # F-203 (QA iter-2): treat "all-zero quantity" the same as the no-holdings
+        # branch. The earlier code only checked ``not holdings``, so a portfolio
+        # with 17 zero-quantity rows (the F-201 incident state) still walked the
+        # quote-fetch loop, marked itself ``prices_stale=True`` because no quote
+        # came back for the orphan rows, and rendered a yellow "Prices stale"
+        # badge over a $0 exposure card — semantically nonsensical (no positions
+        # to be stale). ``sum(quantity) == 0`` covers both cases cleanly.
+        total_quantity = sum((h.quantity for h in holdings), start=Decimal(0))
+        if not holdings or total_quantity == 0:
             zero = Decimal(0)
-            # An empty portfolio is *trivially* not stale — there are no
-            # prices to be missing. Returning False here keeps the UI
-            # from rendering a "stale" badge over a blank exposure card.
+            # An empty (or zero-quantity) portfolio is *trivially* not stale —
+            # there are no prices to be missing. Returning False here keeps the
+            # UI from rendering a "stale" badge over a blank exposure card.
             return ExposureResult(
                 invested=zero,
                 cash=zero,

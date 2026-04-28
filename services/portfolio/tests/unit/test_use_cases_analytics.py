@@ -395,6 +395,45 @@ class TestGetExposureUseCase:
         # invested = 10*110 + 20*60 = 1100 + 1200 = 2300
         assert result.invested == Decimal("2300")
 
+    async def test_zero_quantity_holdings_treated_as_empty(self) -> None:
+        """F-203 (QA iter-2): all-zero quantity → empty-portfolio branch.
+
+        After the F-201 incident every Demo holding read ``quantity = 0``. The
+        old code walked the quote loop, found no quotes for the orphan rows,
+        and returned ``prices_stale=True`` over an exposure card showing $0
+        invested — semantically broken. Now we collapse to the empty branch.
+        """
+        uow = FakeUnitOfWork()
+        owner = uuid4()
+        tenant = uuid4()
+        p = _make_portfolio(owner_id=owner, tenant_id=tenant)
+        await uow.portfolios.save(p)
+        # Two rows with explicit quantity=0 (cost columns can be anything;
+        # they no longer drive the calculation when total qty is zero).
+        h1 = _make_holding(p.id, tenant, qty="0", cost="100")
+        h2 = _make_holding(p.id, tenant, qty="0", cost="200")
+        await uow.holdings.save(h1)
+        await uow.holdings.save(h2)
+
+        prices = _FakeCurrentPriceClient({})
+        uc = GetExposureUseCase(prices)
+        result = await uc.execute(
+            GetExposureQuery(portfolio_id=p.id, owner_id=owner, tenant_id=tenant),
+            uow,
+        )
+        assert result == ExposureResult(
+            invested=Decimal(0),
+            cash=Decimal(0),
+            gross_exposure_pct=Decimal(0),
+            net_exposure_pct=Decimal(0),
+            leverage=Decimal(0),
+            prices_stale=False,
+            prices_as_of=None,
+        )
+        # Crucially: we did NOT call the price client — the early return
+        # short-circuited the loop, avoiding wasted quote round-trips.
+        assert prices.calls == []
+
     async def test_unknown_portfolio_raises_not_found(self) -> None:
         uow = FakeUnitOfWork()
         uc = GetExposureUseCase(_FakeCurrentPriceClient({}))

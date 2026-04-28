@@ -394,6 +394,17 @@ class PortfolioSnapshotWorker:
                             )
                             continue
 
+                        # F-210 (QA iter-2): skip empty portfolios in catch-up
+                        # too — same rationale as the steady-state pass.
+                        holdings = await uow.holdings.list_by_portfolio(portfolio.id)
+                        if not holdings:
+                            logger.info(  # type: ignore[no-any-return]
+                                "portfolio_snapshot_catchup_skip_empty",
+                                portfolio_id=str(portfolio.id),
+                                date=d.isoformat(),
+                            )
+                            continue
+
                         await use_case.execute(
                             ComputePortfolioValueCommand(
                                 portfolio_id=portfolio.id,
@@ -452,6 +463,15 @@ class PortfolioSnapshotWorker:
 
         One UoW + commit per portfolio so a single failure does not
         roll back successful snapshots from earlier in the iteration.
+
+        F-210 (QA iter-2): skip writing snapshots for genuinely empty
+        portfolios (no holdings, total_value == total_cost == 0). The
+        previous behaviour wrote a $0 row every trading day, producing a
+        flat-zero equity curve that the frontend dutifully rendered as a
+        line at $0 — misleading users into thinking the chart was broken.
+        Empty portfolios now stay empty in the time-series; the frontend
+        renders an "Open a position to see your equity curve" empty state
+        instead.
         """
         async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             portfolios = await uow.portfolios.list_all_non_root_active()
@@ -467,6 +487,23 @@ class PortfolioSnapshotWorker:
         for portfolio in portfolios:
             try:
                 async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+                    # F-210: probe holdings first; if the portfolio is empty
+                    # AND the (yet-to-be-computed) snapshot would be a $0
+                    # row, skip writing entirely. We can't precisely predict
+                    # the use case's output without running it, so we use
+                    # holdings as the cheap pre-check: a portfolio with
+                    # zero holdings has no positions to value, so any
+                    # snapshot would necessarily be (total_value=0,
+                    # total_cost=0). Cash is not yet tracked (v1).
+                    holdings = await uow.holdings.list_by_portfolio(portfolio.id)
+                    if not holdings:
+                        logger.info(  # type: ignore[no-any-return]
+                            "portfolio_snapshot_skip_empty",
+                            portfolio_id=str(portfolio.id),
+                            as_of_date=as_of_date.isoformat(),
+                        )
+                        continue
+
                     await use_case.execute(
                         ComputePortfolioValueCommand(
                             portfolio_id=portfolio.id,

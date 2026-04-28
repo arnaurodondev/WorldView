@@ -18,6 +18,22 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 @dataclass
+class EnrichedTransaction:
+    """Transaction joined with instrument metadata (F-205, QA iter-2).
+
+    Same DTO pattern as ``EnrichedHolding``: keeps the domain entity pure
+    while letting the API layer surface ticker/name without a frontend
+    workaround. ``ticker`` and ``name`` are nullable for transactions whose
+    ``instrument_id`` is missing from the local instruments cache (e.g. a
+    pre-existing row whose instrument hasn't synced yet).
+    """
+
+    transaction: Transaction
+    ticker: str | None
+    name: str | None
+
+
+@dataclass
 class EnrichedHolding:
     """Holding with instrument metadata joined from the instruments table.
 
@@ -67,7 +83,24 @@ class ListTransactionsUseCase:
         uow: ReadOnlyUnitOfWork,
         limit: int = 100,
         offset: int = 0,
-    ) -> tuple[list[Transaction], int]:
+    ) -> tuple[list[EnrichedTransaction], int]:
+        """List transactions for a portfolio with instrument enrichment.
+
+        F-205 (QA iter-2): the response now carries ``ticker``/``name`` per
+        row. Previously ``TransactionListItem`` left them empty and the
+        frontend had to maintain a ``tickerByInstrumentId`` workaround keyed
+        on holdings — which broke the moment the user filtered transactions
+        before holdings loaded. Mobile/3rd-party clients had no escape at
+        all. Now we resolve the instruments at the application layer and
+        the API surfaces the enriched fields directly.
+
+        Implementation note: we do NOT add a new ``list_by_instrument_ids``
+        method to the InstrumentRepository — instead we read the small
+        local instruments cache via the existing ``list_all`` and build an
+        in-memory ``{id: ticker/name}`` map. That cache is bounded by the
+        tenants' actual instrument footprint (typically <500 rows) so the
+        cost is negligible vs. wiring a new port method.
+        """
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
@@ -79,11 +112,35 @@ class ListTransactionsUseCase:
         # No aggregation — every original transaction row is preserved.
         if portfolio.kind == PortfolioKind.ROOT:
             sub_ids = await uow.portfolios.list_non_root_active_ids_by_owner(owner_id, tenant_id)
-            return await uow.transactions.list_by_portfolio_ids(
+            transactions, total = await uow.transactions.list_by_portfolio_ids(
                 sub_ids,
                 tenant_id,
                 limit=limit,
                 offset=offset,
             )
+        else:
+            transactions, total = await uow.transactions.list_by_portfolio(
+                portfolio_id,
+                tenant_id,
+                limit=limit,
+                offset=offset,
+            )
 
-        return await uow.transactions.list_by_portfolio(portfolio_id, tenant_id, limit=limit, offset=offset)
+        # F-205 enrichment — build a single instrument_id → (ticker, name) lookup
+        # for every distinct instrument referenced in the page. ``list_all`` is
+        # already bounded by the tenant footprint (no separate query per row).
+        instrument_ids_in_page = {tx.instrument_id for tx in transactions}
+        if instrument_ids_in_page:
+            all_instruments, _ = await uow.instruments.list_all(limit=10_000, offset=0)
+            lookup: dict[UUID, tuple[str | None, str | None]] = {
+                inst.id: (inst.symbol, inst.name) for inst in all_instruments if inst.id in instrument_ids_in_page
+            }
+        else:
+            lookup = {}
+
+        enriched: list[EnrichedTransaction] = []
+        for tx in transactions:
+            ticker, name = lookup.get(tx.instrument_id, (None, None))
+            enriched.append(EnrichedTransaction(transaction=tx, ticker=ticker, name=name))
+
+        return enriched, total

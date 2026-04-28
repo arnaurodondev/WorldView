@@ -90,7 +90,7 @@ async def record_transaction(
 
 
 def _build_transaction_response(
-    transactions: list,  # type: ignore[type-arg]
+    enriched: list,  # type: ignore[type-arg]  # list[EnrichedTransaction]
     total: int,
     limit: int,
     offset: int,
@@ -99,25 +99,30 @@ def _build_transaction_response(
 
     F-012: extracted so both ``GET /transactions`` (flat) and
     ``GET /portfolios/{id}/transactions`` (nested) emit identical bodies.
+    F-205 (QA iter-2): now consumes ``EnrichedTransaction`` so the response
+    carries ``ticker``/``name`` resolved from the local instruments cache.
     """
     return PaginatedResponse(
         items=[
             TransactionListItem(
-                id=t.id,
-                portfolio_id=t.portfolio_id,
-                instrument_id=t.instrument_id,
-                transaction_type=str(t.transaction_type),
-                direction=str(t.direction),
-                quantity=t.quantity,
-                price=t.price,
-                fees=t.fees,
-                amount=t.amount,  # PLAN-0046 / BP-263 — surface SnapTrade cash amount
-                currency=t.currency,
-                executed_at=t.executed_at,
-                external_ref=t.external_ref,
-                created_at=t.created_at,
+                id=e.transaction.id,
+                portfolio_id=e.transaction.portfolio_id,
+                instrument_id=e.transaction.instrument_id,
+                transaction_type=str(e.transaction.transaction_type),
+                direction=str(e.transaction.direction),
+                quantity=e.transaction.quantity,
+                price=e.transaction.price,
+                fees=e.transaction.fees,
+                amount=e.transaction.amount,  # PLAN-0046 / BP-263 — surface SnapTrade cash amount
+                currency=e.transaction.currency,
+                # F-205: enrichment fields (None when instrument not in local cache).
+                ticker=e.ticker,
+                name=e.name,
+                executed_at=e.transaction.executed_at,
+                external_ref=e.transaction.external_ref,
+                created_at=e.transaction.created_at,
             )
-            for t in transactions
+            for e in enriched
         ],
         total=total,
         limit=limit,

@@ -134,6 +134,30 @@ export function SemanticHoldingsTable({
     return <InlineEmptyState message="No holdings yet." />;
   }
 
+  // F-208 (QA iter-2): when every position reads quantity=0 the broker has
+  // either reported nothing on the latest sync or the holdings were zeroed
+  // by the repair script (F-201) and the broker sandbox returned no
+  // activities to repopulate. Render a deliberate empty state instead of a
+  // table of 17 zero rows, which silently misled users into thinking the
+  // app had lost their portfolio. Number(...) handles the Decimal-as-string
+  // edge case cleanly.
+  const allZeroQty = holdings.every((h) => Number(h.quantity) === 0);
+  if (allZeroQty) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-8 px-4 text-center">
+        <div className="text-[12px] font-medium text-foreground">
+          No active positions reported
+        </div>
+        <div className="text-[11px] text-muted-foreground max-w-md">
+          Your broker reported zero quantity for every holding. This can happen
+          right after a sync if the brokerage feed is empty. Try resyncing your
+          broker connection — if the problem persists the portfolio data may
+          need to be repaired by an operator.
+        </div>
+      </div>
+    );
+  }
+
   // ── Compute per-row values ──────────────────────────────────────────────────
   let totalPnl = 0;
   let totalPnlCost = 0;

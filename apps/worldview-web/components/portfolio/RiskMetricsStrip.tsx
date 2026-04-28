@@ -176,6 +176,12 @@ export function RiskMetricsStrip({
     dq?.status === "insufficient_data";
   const benchmarkUnavailable =
     dq?.status === "benchmark_unavailable";
+  // F-209 (QA iter-2): the gateway flags the F-201 wipe pattern (final
+  // snapshot suddenly $0 right after a non-zero snapshot) as a separate
+  // data_quality status. Render an explanatory caption instead of letting
+  // the user see -100% drawdown / -3.4 Sharpe as if it were real data.
+  const dataAnomaly =
+    dq?.status === "data_anomaly_detected";
 
   // Build the caption text from the actual numbers the gateway reports
   // — never hardcode "0/10". When ``data_quality`` is missing entirely
@@ -188,7 +194,25 @@ export function RiskMetricsStrip({
     caption = `Risk metrics will appear after ~${need} trading days of snapshots — currently ${have}/${need}.`;
   } else if (benchmarkUnavailable) {
     caption = "Beta vs SPY is unavailable while the benchmark series is being ingested.";
+  } else if (dataAnomaly) {
+    caption =
+      "Detected a sudden zero in the value series — risk metrics suppressed until the broker resync completes.";
   }
+
+  // F-211 (QA iter-2): a11y. The strip is a logical group of related KPIs
+  // so we mark it with ``role="group"`` and an ``aria-label``; when the
+  // caption is present it becomes the strip's accessible description via
+  // ``aria-describedby``. Each tile also gets its own per-cell aria-label
+  // so a screen reader announces e.g. "Sharpe: 1.20".
+  const captionId = "risk-metrics-strip-caption";
+
+  // Pre-compute per-tile aria labels so the JSX stays readable. ``display``
+  // is already the user-visible string ("—" for nulls) so we reuse it.
+  const drawdownDisplay = fmtPct(safe?.drawdown_max ?? null);
+  const volDisplay = fmtPct(safe?.volatility_annualized ?? null);
+  const sharpeDisplay = fmtRatio(safe?.sharpe ?? null);
+  const sortinoDisplay = fmtRatio(safe?.sortino ?? null);
+  const betaDisplay = fmtRatio(safe?.beta_vs_spy ?? null);
 
   return (
     <div className="flex flex-col">
@@ -197,56 +221,75 @@ export function RiskMetricsStrip({
         // wouldn't surface the reason without hover, and a footnote below
         // the strip is too easy to miss. The caption sits in the user's
         // eye-line directly above the empty values.
-        <div className="px-3 py-1 text-[10px] text-muted-foreground border border-b-0 border-border rounded-t-[2px] bg-muted/20">
+        <div
+          id={captionId}
+          className="px-3 py-1 text-[10px] text-muted-foreground border border-b-0 border-border rounded-t-[2px] bg-muted/20"
+        >
           {caption}
         </div>
       )}
       <div
+        // F-211: strip is a logical group; the caption (when present)
+        // becomes its accessible description.
+        role="group"
+        aria-label="Risk metrics"
+        aria-describedby={caption ? captionId : undefined}
         className={cn(
           // F-023: use the project's divider convention ``divide-x divide-border``
           // identical to PortfolioKPIStrip — replaces the manual per-tile
           // ``border-r border-border last:border-r-0`` pattern in Tile.
           "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-x divide-border",
           // Grey out tiles when there's no usable data so the user reads
-          // them as "absent on purpose" not "still loading".
-          insufficient && "opacity-60",
+          // them as "absent on purpose" not "still loading". Same treatment
+          // for the data-anomaly state (F-209) since every metric is null.
+          (insufficient || dataAnomaly) && "opacity-60",
           caption && "rounded-t-none",
         )}
       >
-        <Tile
-          label="Max Drawdown"
-          display={fmtPct(safe?.drawdown_max ?? null)}
-          valueClassName={drawdownQualityClass(safe?.drawdown_max ?? null)}
-        />
-        <Tile
-          label="Vol (Ann.)"
-          display={fmtPct(safe?.volatility_annualized ?? null)}
-          hint="ann."
-          // Volatility colour: high vol → muted warning. We don't render
-          // "vol = good" in either direction — it's a context number.
-          valueClassName={
-            safe?.volatility_annualized != null && safe.volatility_annualized > 0.30
-              ? "text-negative"
-              : "text-foreground"
-          }
-        />
-        <Tile
-          label="Sharpe"
-          display={fmtRatio(safe?.sharpe ?? null)}
-          valueClassName={ratioQualityClass(safe?.sharpe ?? null)}
-        />
-        <Tile
-          label="Sortino"
-          display={fmtRatio(safe?.sortino ?? null)}
-          valueClassName={ratioQualityClass(safe?.sortino ?? null)}
-        />
-        <Tile
-          label="Beta vs SPY"
-          display={fmtRatio(safe?.beta_vs_spy ?? null)}
-          // Beta is a factor exposure number, not a "good/bad" score —
-          // render in the default foreground colour regardless of value.
-          valueClassName="text-foreground"
-        />
+        <div aria-label={`Max drawdown: ${drawdownDisplay}`}>
+          <Tile
+            label="Max Drawdown"
+            display={drawdownDisplay}
+            valueClassName={drawdownQualityClass(safe?.drawdown_max ?? null)}
+          />
+        </div>
+        <div aria-label={`Volatility annualised: ${volDisplay}`}>
+          <Tile
+            label="Vol (Ann.)"
+            display={volDisplay}
+            hint="ann."
+            // Volatility colour: high vol → muted warning. We don't render
+            // "vol = good" in either direction — it's a context number.
+            valueClassName={
+              safe?.volatility_annualized != null && safe.volatility_annualized > 0.30
+                ? "text-negative"
+                : "text-foreground"
+            }
+          />
+        </div>
+        <div aria-label={`Sharpe ratio: ${sharpeDisplay}`}>
+          <Tile
+            label="Sharpe"
+            display={sharpeDisplay}
+            valueClassName={ratioQualityClass(safe?.sharpe ?? null)}
+          />
+        </div>
+        <div aria-label={`Sortino ratio: ${sortinoDisplay}`}>
+          <Tile
+            label="Sortino"
+            display={sortinoDisplay}
+            valueClassName={ratioQualityClass(safe?.sortino ?? null)}
+          />
+        </div>
+        <div aria-label={`Beta versus SPY: ${betaDisplay}`}>
+          <Tile
+            label="Beta vs SPY"
+            display={betaDisplay}
+            // Beta is a factor exposure number, not a "good/bad" score —
+            // render in the default foreground colour regardless of value.
+            valueClassName="text-foreground"
+          />
+        </div>
       </div>
     </div>
   );
