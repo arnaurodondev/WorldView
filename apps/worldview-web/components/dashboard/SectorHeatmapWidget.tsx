@@ -142,12 +142,15 @@ export function SectorHeatmapWidget() {
   // than 11 per-sector queries and avoids redundant network traffic when
   // multiple sectors are popped open in sequence.
   const { data: moversData } = useQuery({
-    queryKey: ["sector-heatmap-movers", "all", 50],
+    queryKey: ["sector-heatmap-movers", "all", 20],
     // The gateway accepts "gainers" | "losers"; we use "gainers" here as the
     // base list for top-3 popovers because the heatmap's drill-down is about
     // "which names had the biggest moves" — gainers is the closest single
     // call. (Future enhancement: extend gateway to type='all'.)
-    queryFn: () => createGateway(accessToken).getTopMovers("gainers", 50, period),
+    // F-503 (iter-2): the gateway caps `limit` at 20 (returns 422 above
+    // that). Asking for 50 fired a 422 on every dashboard load. 20 is enough
+    // for a top-3-per-sector popover across 11 sectors in practice.
+    queryFn: () => createGateway(accessToken).getTopMovers("gainers", 20, period),
     enabled: !!accessToken,
     staleTime: 300_000,
   });
