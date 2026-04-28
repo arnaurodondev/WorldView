@@ -7028,3 +7028,23 @@ When adding a new `FundamentalsSection` enum value:
 - Add `delete_user` / de-registration to the `IBrokerageClient` protocol alongside `register_user` so recovery paths can always be implemented without protocol changes.
 
 **Regression tests**: `TestInitiateBrokerageConnection::test_already_registered_reuses_existing_db_credentials`, `test_already_registered_no_db_creds_deletes_and_reregisters`
+
+
+---
+
+## BP-252 — S10 AlertSeverity StrEnum Returns Lowercase; Frontend Expects Uppercase
+
+| Field | Value |
+|-------|-------|
+| **Service** | S10 alert → frontend (worldview-web) |
+| **Severity** | HIGH (all severity indicators visually broken; switch/comparison mismatches produce invisible UI elements) |
+| **Discovered** | 2026-04-28 investigation (PLAN-0045) |
+| **Root cause** | S10's `AlertSeverity` StrEnum is defined as `LOW = "low"`, `MEDIUM = "medium"`, `HIGH = "high"`, `CRITICAL = "critical"` (all lowercase). The Python route serialises with `severity=str(alert.severity)` which produces the lowercase string. The frontend TypeScript type `AlertSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"` expects uppercase. `AlarmsPanel.severityDotClass()` switch has uppercase cases — falls through on lowercase input, returns `undefined`, producing no CSS class (invisible dots). |
+| **Symptom** | Severity indicator dots in `AlarmsPanel` are invisible regardless of alert severity. `RecentAlerts` widget already applies `.toUpperCase()` correctly — only `AlarmsPanel` is broken. |
+| **Fix** | In `AlarmsPanel.severityDotClass()`, normalise input: `const norm = severity.toUpperCase() as Alert["severity"]`. Apply same defensive normalisation anywhere `Alert.severity` is used in conditionals or switches. Alternatively, add `.toUpperCase()` when mapping REST alerts in `AlarmsPanel` (same pattern as `RecentAlerts`). |
+
+### Prevention
+
+- When consuming Pydantic StrEnum values from Python APIs in TypeScript, always verify whether the enum serialises as upper or lowercase. Python `StrEnum` preserves the assigned value (`LOW = "low"` → `"low"`), NOT the Python attribute name.
+- Contract tests should verify the `severity` field casing against the TypeScript type.
+- Frontend components consuming `Alert.severity` should normalise to uppercase at the mapping boundary (gateway method or context), not deep inside rendering logic.
