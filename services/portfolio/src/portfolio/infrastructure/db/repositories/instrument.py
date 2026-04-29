@@ -80,6 +80,13 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         return [self._to_entity(r) for r in result.scalars()], total
 
     async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
+        # PLAN-0053 T-D-4-02: normalise None → 'unknown' so the NOT NULL
+        # constraint added in migration 0016 is satisfied even when the
+        # adapter / consumer didn't surface the field. Existing call-sites
+        # (brokerage_sync_worker, instrument_consumer) pass ``data.get``
+        # results which can be None — this keeps them working without a
+        # cross-cutting adapter rewrite.
+        normalised_asset_class = instrument.asset_class or "unknown"
         stmt = (
             pg_insert(InstrumentModel)
             .values(
@@ -88,7 +95,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                 exchange=instrument.exchange,
                 name=instrument.name,
                 currency=instrument.currency,
-                asset_class=instrument.asset_class,
+                asset_class=normalised_asset_class,
                 entity_id=instrument.entity_id,
                 source_event_id=instrument.source_event_id,
                 synced_at=instrument.synced_at,
@@ -101,7 +108,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                     # Without COALESCE, an InstrumentUpdated event would overwrite these with NULL.
                     "name": func.coalesce(instrument.name, InstrumentModel.name),
                     "currency": func.coalesce(instrument.currency, InstrumentModel.currency),
-                    "asset_class": func.coalesce(instrument.asset_class, InstrumentModel.asset_class),
+                    "asset_class": func.coalesce(normalised_asset_class, InstrumentModel.asset_class),
                     "entity_id": instrument.entity_id,
                     "source_event_id": instrument.source_event_id,
                     "synced_at": instrument.synced_at,

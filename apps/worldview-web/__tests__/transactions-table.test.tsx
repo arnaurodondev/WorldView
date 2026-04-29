@@ -71,6 +71,9 @@ function tx(overrides: Partial<Transaction>): Transaction {
     portfolio_id: "p1",
     instrument_id: "ins-x",
     ticker: "AAPL",
+    // PLAN-0053 T-D-4-02: required field on the Transaction type. Tests
+    // that don't care about the badge can leave it null (renders as "—").
+    asset_class: null,
     type: "BUY",
     quantity: 10,
     price: 100,

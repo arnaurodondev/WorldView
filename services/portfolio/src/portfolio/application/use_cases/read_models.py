@@ -24,14 +24,20 @@ class EnrichedTransaction:
 
     Same DTO pattern as ``EnrichedHolding``: keeps the domain entity pure
     while letting the API layer surface ticker/name without a frontend
-    workaround. ``ticker`` and ``name`` are nullable for transactions whose
-    ``instrument_id`` is missing from the local instruments cache (e.g. a
-    pre-existing row whose instrument hasn't synced yet).
+    workaround. ``ticker``, ``name`` and ``asset_class`` are nullable for
+    transactions whose ``instrument_id`` is missing from the local
+    instruments cache (e.g. a pre-existing row whose instrument hasn't
+    synced yet).
+
+    PLAN-0053 T-D-4-02: ``asset_class`` is added so the frontend
+    TransactionsTable can render an asset-class badge without needing a
+    second instruments fetch keyed by id.
     """
 
     transaction: Transaction
     ticker: str | None
     name: str | None
+    asset_class: str | None = None
 
 
 @dataclass
@@ -161,17 +167,30 @@ class ListTransactionsUseCase:
         # for every distinct instrument referenced in the page. ``list_all`` is
         # already bounded by the tenant footprint (no separate query per row).
         instrument_ids_in_page = {tx.instrument_id for tx in transactions}
+        # PLAN-0053 T-D-4-02: pull asset_class through the same lookup so the
+        # API layer can surface it without a second hop. We extend the tuple
+        # rather than introducing a parallel map — same number of keys, more
+        # complete value, no extra memory pressure on a bounded list.
         if instrument_ids_in_page:
             all_instruments, _ = await uow.instruments.list_all(limit=10_000, offset=0)
-            lookup: dict[UUID, tuple[str | None, str | None]] = {
-                inst.id: (inst.symbol, inst.name) for inst in all_instruments if inst.id in instrument_ids_in_page
+            lookup: dict[UUID, tuple[str | None, str | None, str | None]] = {
+                inst.id: (inst.symbol, inst.name, inst.asset_class)
+                for inst in all_instruments
+                if inst.id in instrument_ids_in_page
             }
         else:
             lookup = {}
 
         enriched: list[EnrichedTransaction] = []
         for tx in transactions:
-            ticker, name = lookup.get(tx.instrument_id, (None, None))
-            enriched.append(EnrichedTransaction(transaction=tx, ticker=ticker, name=name))
+            ticker, name, asset_class = lookup.get(tx.instrument_id, (None, None, None))
+            enriched.append(
+                EnrichedTransaction(
+                    transaction=tx,
+                    ticker=ticker,
+                    name=name,
+                    asset_class=asset_class,
+                )
+            )
 
         return enriched, total

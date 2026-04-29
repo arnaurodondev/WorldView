@@ -1174,6 +1174,10 @@ export function createGateway(token?: string | null) {
           // instrument hasn't been synced yet.
           ticker: string | null;
           name: string | null;
+          // PLAN-0053 T-D-4-02: asset_class surfaced via ListTransactionsUseCase
+          // JOIN. Optional on the wire — older S1 builds that pre-date the
+          // enrichment will simply omit it.
+          asset_class?: string | null;
           executed_at: string;
           external_ref: string | null;
           created_at: string;
@@ -1218,6 +1222,9 @@ export function createGateway(token?: string | null) {
         // a literal "null"). Older S1 builds that don't yet emit the field
         // give us undefined → empty string for the same reason.
         ticker: tx.ticker ?? "",
+        // PLAN-0053 T-D-4-02: forward the new field; null is the safe
+        // default when the gateway upstream hasn't been re-deployed yet.
+        asset_class: tx.asset_class ?? null,
         type: mappedType,
         quantity: parseFloat(tx.quantity) || 0,
         price: parseFloat(tx.price) || 0,
@@ -1363,6 +1370,10 @@ export function createGateway(token?: string | null) {
         portfolio_id: raw.portfolio_id,
         instrument_id: raw.instrument_id,
         ticker: "",
+        // PLAN-0053 T-D-4-02: manual-entry path doesn't get asset_class
+        // back from the create-transaction response; null is the safe
+        // default until the next read enriches the row.
+        asset_class: null,
         type: "BUY",
         quantity: parseFloat(raw.quantity) || 0,
         price: parseFloat(raw.price) || 0,
@@ -1424,6 +1435,9 @@ export function createGateway(token?: string | null) {
         portfolio_id: raw.portfolio_id,
         instrument_id: raw.instrument_id,
         ticker: "",
+        // PLAN-0053 T-D-4-02: see sibling addTransaction-style return above —
+        // manual-entry path has no asset_class from the create response.
+        asset_class: null,
         type: raw.direction.toUpperCase() as "BUY" | "SELL",
         quantity: parseFloat(raw.quantity) || 0,
         price: parseFloat(raw.price) || 0,
