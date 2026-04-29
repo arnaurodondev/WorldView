@@ -38,6 +38,13 @@ import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
 import { StatusBar } from "@/components/shell/StatusBar";
 import { AskAiPanel } from "@/components/shell/AskAiPanel";
+// PLAN-0053 Wave G — feedback widget mounted at the shell so every
+// authenticated page exposes the floating Send-Feedback button + modal.
+import { FeedbackButton } from "@/components/feedback/FeedbackButton";
+// PLAN-0053 Wave G T-G-7-08 — global NPS prompt host. Trigger sites
+// dispatch a CustomEvent; this host decides whether to actually pop the
+// modal based on eligibility.
+import { NPSPromptHost } from "@/components/feedback/NPSPromptHost";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { createGateway } from "@/lib/gateway";
@@ -260,6 +267,19 @@ export default function AppLayout({ children }: AppLayoutProps) {
             SSE EventSource off the page while the panel is closed — opening
             it is what initiates the connection. */}
         {askAiOpen && <AskAiPanel onClose={handleAskAiClose} />}
+
+        {/* PLAN-0053 Wave G — fixed bottom-right feedback widget.
+            WHY here (not inside a page): the button + modal are global —
+            available from every authenticated route without each page
+            having to mount its own. The component self-guards on auth
+            and renders nothing for unauthenticated visitors. */}
+        <FeedbackButton />
+
+        {/* PLAN-0053 Wave G T-G-7-08 — NPS prompt host. Listens for
+            `worldview:request-nps` CustomEvents and opens the prompt iff
+            the user is eligible (≥3 sessions, no submission in 30d, none
+            this quarter). */}
+        <NPSPromptHost />
       </div>
     </WorkspaceProvider>
   );
