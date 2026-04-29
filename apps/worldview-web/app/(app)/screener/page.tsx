@@ -400,10 +400,19 @@ export default function ScreenerPage() {
   // WHY only fetch when the sparkline column is visible: bandwidth/latency
   // saving — if the user has hidden the column, there is no point hammering
   // /quotes/bars/batch.
-  const sparklineEnabled = useMemo(
+  //
+  // PLAN-0053 T-F-6-07: also auto-disable when >200 rows are loaded. Each
+  // sparkline = one /quotes/bars/batch fetch entry; with 200+ rows the
+  // batch payload becomes large enough to noticeably stall the table render.
+  // The user's checkbox in ColumnSettingsPopover stays "on" but the actual
+  // fetch is short-circuited; a tooltip in the popover explains why.
+  const SPARKLINE_ROW_LIMIT = 200;
+  const sparklineColumnVisible = useMemo(
     () => columns.some((c) => c.key === "sparkline" && c.visible),
     [columns],
   );
+  const sparklineSuppressed = sparklineColumnVisible && sortedRows.length > SPARKLINE_ROW_LIMIT;
+  const sparklineEnabled = sparklineColumnVisible && !sparklineSuppressed;
   const visibleInstrumentIds = useMemo(
     () => sortedRows.map((r) => r.instrument_id),
     [sortedRows],
@@ -489,8 +498,15 @@ export default function ScreenerPage() {
           >
             Saved Screens
           </button>
-          {/* Column visibility / order (T-B-2-06) */}
-          <ColumnSettingsPopover columns={columns} onChange={handleColumnsChange} />
+          {/* Column visibility / order (T-B-2-06).
+              PLAN-0053 T-F-6-07: pass sparklineSuppressed so the popover can
+              render the "hidden for >200 rows" explainer next to the
+              sparkline checkbox. */}
+          <ColumnSettingsPopover
+            columns={columns}
+            onChange={handleColumnsChange}
+            sparklineSuppressed={sparklineSuppressed}
+          />
           {/* Export menu (T-B-2-07) — disabled while data is loading */}
           <ExportMenu
             rows={sortedRows}
@@ -578,15 +594,25 @@ export default function ScreenerPage() {
          */}
         {canLoadMore && (
           <div className="shrink-0 border-t border-border flex items-center justify-center px-3 py-1.5 bg-card">
+            {/* PLAN-0053 T-H-8-13: button reflects in-flight state. WHY
+                isFetching && offset > 0: the FIRST page is gated by isLoading
+                (shows a different skeleton); subsequent pages flip isFetching
+                to true. Combining lets us show "Loading…" only on Load More
+                clicks. WHY disabled while fetching: prevents double-clicks
+                from queueing redundant offset bumps that would skip pages. */}
             <button
               type="button"
-              aria-label={`Load ${nextBatch} more results`}
+              aria-label={
+                isFetching ? "Loading more results" : `Load ${nextBatch} more results`
+              }
+              aria-busy={isFetching}
               onClick={handleLoadMore}
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors"
+              disabled={isFetching}
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             >
               {/* WHY explicit batch number: the user knows precisely how many will arrive,
                *  avoiding the surprise of "Load More" loading a different number than expected. */}
-              Load {nextBatch} more
+              {isFetching ? "Loading…" : `Load ${nextBatch} more`}
             </button>
             {/* Right-side detail: show "currently showing N of TOTAL" so the user
              *  has continuous reinforcement of where they are in the universe. */}

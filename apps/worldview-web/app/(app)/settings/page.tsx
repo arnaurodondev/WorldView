@@ -25,7 +25,8 @@
 // client-only state. Also: Tabs from shadcn/ui uses Radix state + DOM events,
 // and Switch is interactive — all require the client runtime.
 
-import { User, Bell, Palette } from "lucide-react";
+import { useState } from "react";
+import { User, Bell, Palette, Check, Copy } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
@@ -281,6 +282,23 @@ function NotificationsTab() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* PLAN-0053 T-F-6-08: "Coming soon" banner above the toggles.
+            WHY explicit (was just a footer note): users were toggling switches
+            and expecting changes to take effect. Hoisting the warning above
+            the controls sets correct expectations BEFORE they interact, not
+            after. Yellow/amber border keeps the existing terminal aesthetic. */}
+        <div
+          role="note"
+          className="rounded-[2px] border border-warning/40 bg-warning/5 px-3 py-2 text-xs"
+        >
+          <p className="font-medium text-warning/90">Coming soon</p>
+          <p className="mt-0.5 text-warning/80">
+            Notification delivery is under development. Toggles below are visual
+            placeholders — your selections will not be saved or sent until the
+            preference API ships.
+          </p>
+        </div>
+
         {NOTIFICATION_TYPES.map((notif, index) => (
           <div key={notif.id}>
             {/* WHY flex justify-between: Switch is right-aligned so the label
@@ -443,6 +461,9 @@ function AppearanceTab() {
       </Card>
 
       {/* ── Color palette card ──────────────────────────────────────────── */}
+      {/* See ColorSwatch sub-component (PLAN-0053 T-F-6-09) defined at the
+          bottom of this file — extracted because each swatch needs its own
+          local copied-state which is cleaner than a parent-keyed map. */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium text-foreground">
@@ -458,6 +479,10 @@ function AppearanceTab() {
               These hex values must stay in sync with --variable values in globals.css.
               WHY show usage: traders working on custom charts or exports need the
               exact hex values to match colors in external tools (Excel, Python charts). */}
+          {/* PLAN-0053 T-F-6-09: each swatch is now a click-to-copy ColorSwatch.
+              The whole tile is the click target — a smaller "copy icon" would
+              be easy to miss. Tooltip + inline ✓ confirmation provide both
+              affordance and feedback. */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4">
             {[
               { name: "Background", hex: "#09090B", cssVar: "--background", usage: "Page bg" },
@@ -469,28 +494,100 @@ function AppearanceTab() {
               { name: "Warning", hex: "#F59E0B", cssVar: "--warning", usage: "Alerts / beta" },
               { name: "Text", hex: "#E4E4E7", cssVar: "--foreground", usage: "Primary text" },
             ].map((swatch) => (
-              <div key={swatch.cssVar} className="space-y-1.5">
-                {/* Color swatch — uses inline style so the exact hex is applied
-                    even if the Tailwind class wouldn't be generated for these values */}
-                <div
-                  className="h-8 w-full rounded-[2px] border border-border/60"
-                  style={{ backgroundColor: swatch.hex }}
-                  aria-hidden="true"
-                />
-                <p className="text-xs font-medium text-foreground">
-                  {swatch.name}
-                </p>
-                <p className="font-mono text-[10px] text-muted-foreground">
-                  {swatch.hex}
-                </p>
-                <p className="text-[10px] text-muted-foreground/60">
-                  {swatch.usage}
-                </p>
-              </div>
+              <ColorSwatch key={swatch.cssVar} {...swatch} />
             ))}
           </div>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ── ColorSwatch ───────────────────────────────────────────────────────────────
+
+/**
+ * ColorSwatch — click-to-copy palette tile (PLAN-0053 T-F-6-09).
+ *
+ * WHY a button (not a div with onClick): semantically a button — it triggers
+ * a side effect (clipboard write). Native button gives free keyboard support
+ * (Enter / Space) and a focus ring, both required for keyboard-only users.
+ *
+ * WHY copy the hex (not the cssVar): traders use these values in Excel,
+ * matplotlib, etc. — they need the literal hex code, not a CSS custom
+ * property name. The cssVar is informational metadata only.
+ *
+ * WHY auto-clear after 1.2s: the ✓ feedback should be unobtrusive; longer
+ * delays make rapid copying feel laggy ("did my second click register?").
+ */
+interface ColorSwatchProps {
+  name: string;
+  hex: string;
+  cssVar: string;
+  usage: string;
+}
+
+function ColorSwatch({ name, hex, cssVar, usage }: ColorSwatchProps) {
+  // WHY local state per swatch: we want each swatch to flash its own ✓
+  // independently. Hoisting to a parent map would couple swatches.
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      // WHY navigator.clipboard.writeText: standard clipboard API. Falls back
+      // to a manual document.execCommand only on legacy browsers — those are
+      // out of scope for this terminal (Chrome / Edge / Safari recent only).
+      await navigator.clipboard.writeText(hex);
+      setCopied(true);
+      // WHY window.setTimeout (not setTimeout): satisfies strict-mode TypeScript
+      // typings without an extra cast and is identical at runtime.
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Silent fallback — clipboard.writeText can throw in non-HTTPS contexts.
+      // The user simply doesn't see a ✓; not worth a toast for a "soft" feature.
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      // WHY relative + group: lets the ✓ overlay sit absolutely over the
+      // swatch tile and react to hover via the group-hover Tailwind variant.
+      className="group relative space-y-1.5 rounded-[2px] p-1 text-left hover:bg-muted/40 focus:outline-none focus:ring-1 focus:ring-primary"
+      aria-label={`Copy ${name} hex value ${hex} to clipboard`}
+      title={`Click to copy ${hex}`}
+    >
+      <div
+        className="h-8 w-full rounded-[2px] border border-border/60"
+        style={{ backgroundColor: hex }}
+        aria-hidden="true"
+      />
+      {/* Inline ✓ overlay — appears for ~1.2s on click. WHY top-right: matches
+          common copy-confirmation placement and avoids overlapping the name. */}
+      {copied ? (
+        <span
+          aria-live="polite"
+          className="absolute right-1 top-1 flex items-center gap-0.5 rounded-[2px] bg-positive/15 px-1 py-0.5 text-[9px] font-mono uppercase tracking-[0.06em] text-positive"
+        >
+          <Check className="h-2.5 w-2.5" aria-hidden />
+          Copied
+        </span>
+      ) : (
+        // WHY only-visible-on-hover copy icon (not always-on): keeps the
+        // resting palette clean while signalling interactivity once the user
+        // points at a tile.
+        <Copy
+          className="absolute right-1 top-1 h-3 w-3 text-muted-foreground/40 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+          aria-hidden
+        />
+      )}
+      <p className="text-xs font-medium text-foreground">{name}</p>
+      <p className="font-mono text-[10px] text-muted-foreground">{hex}</p>
+      <p className="text-[10px] text-muted-foreground/60">{usage}</p>
+      {/* cssVar is shown only via the title attribute and aria-label — keeps
+          the visual tile compact. WHY: developers who want the cssVar look at
+          DevTools, not this Settings page. */}
+      <span className="sr-only">{cssVar}</span>
+    </button>
   );
 }

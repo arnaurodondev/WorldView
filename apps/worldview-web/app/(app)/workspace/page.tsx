@@ -67,23 +67,31 @@ const WORKSPACES_STORAGE_KEY = "worldview:workspaces:v2";
 const ACTIVE_KEY = "worldview-active-workspace";
 
 /**
- * appendWorkspaceAndReload — write a new workspace into localStorage and reload.
+ * appendWorkspaceToStorage — write a new workspace into localStorage and notify.
+ *
+ * PLAN-0053 T-F-6-11: previously this function called window.location.reload()
+ * because WorkspaceContext only read storage on mount. We now dispatch a
+ * synthetic 'storage' event after writing — WorkspaceContext (since the same
+ * task) listens for it and re-reads state without a hard reload. Together
+ * with router.replace('/workspace') this gives a clean import path that
+ * preserves the React tree and TanStack Query cache.
  *
  * WHY this approach (vs direct context mutation):
  *   - WorkspaceContext owns persistence; we don't want to fight its setState.
  *   - The page-mount import path is a one-shot operation per user session.
- *   - reload() guarantees the context re-reads localStorage from the freshest
- *     state — no race conditions with the context's own debounced saves.
+ *   - The storage-event handshake mirrors the cross-tab refresh path, so we
+ *     get "open in another tab" parity for free.
  *
  * @param workspace — the WorkspaceConfig to append (minus id; we generate one)
  * @param namePrefix — optional human-friendly prefix for the assigned name
  *                    ("Imported", "Template: Day Trader", etc.)
+ * @returns true on success, false on storage error.
  */
-function appendWorkspaceAndReload(
+function appendWorkspaceToStorage(
   workspace: Omit<WorkspaceConfig, "id">,
   namePrefix = "Imported",
-): void {
-  if (typeof window === "undefined") return;
+): boolean {
+  if (typeof window === "undefined") return false;
 
   // WHY try/catch: localStorage can throw on private browsing modes or quota
   // exhaustion. We don't want a failed import to crash the whole page.
@@ -106,14 +114,23 @@ function appendWorkspaceAndReload(
     window.localStorage.setItem(WORKSPACES_STORAGE_KEY, JSON.stringify(updated));
     window.localStorage.setItem(ACTIVE_KEY, newWs.id);
 
-    // WHY full page reload (not a soft state nudge): the context loaded its
-    // workspaces array via a useState lazy initializer that runs ONCE per
-    // mount. There's no public API to ask the context to re-read storage.
-    // A reload is the simplest, most reliable way to surface the new tab.
-    window.location.reload();
+    // PLAN-0053 T-F-6-11: synthetic 'storage' event — WorkspaceContext
+    // listens for this and re-reads from localStorage. WHY new StorageEvent
+    // (not a CustomEvent): native storage events flow through addEventListener
+    // ('storage', ...) for free; using the native shape keeps the listener
+    // simple and gives cross-tab parity. Modern browsers all support the
+    // StorageEvent constructor (Chrome 6+, Safari 5+, Firefox 3.6+).
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: WORKSPACES_STORAGE_KEY,
+        newValue: JSON.stringify(updated),
+      }),
+    );
+    return true;
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("Failed to append workspace to storage:", err);
+    return false;
   }
 }
 
@@ -155,19 +172,21 @@ function WorkspacePageInner() {
     }
 
     // WHY strip id before append: the encoded workspace had a sender-side id
-    // that we don't want to copy. appendWorkspaceAndReload generates a fresh id.
+    // that we don't want to copy. appendWorkspaceToStorage generates a fresh id.
     const { id: _unused, ...rest } = decoded;
     void _unused;
-    appendWorkspaceAndReload(rest, "Imported");
-    // WHY no router.replace before reload: appendWorkspaceAndReload calls
-    // window.location.reload() which discards the URL state anyway. A pre-
-    // reload router.replace would just race with the reload.
+    const ok = appendWorkspaceToStorage(rest, "Imported");
+    // PLAN-0053 T-F-6-11: replace the URL with /workspace so the ?config=
+    // token is gone (so refresh / share won't re-import) AND the React tree
+    // stays mounted (no full-page reload). The storage event dispatched
+    // inside appendWorkspaceToStorage already nudged the context to refresh.
+    if (ok) router.replace("/workspace");
   }, [searchParams, router]);
 
   /**
    * handleCreateFromTemplate — instantiate a chosen template as a new workspace.
    *
-   * WHY also via appendWorkspaceAndReload: same persistence path as URL import.
+   * WHY also via appendWorkspaceToStorage: same persistence path as URL import.
    * Keeps both "create from URL" and "create from template" using one mechanism,
    * which is easier to reason about than two divergent paths.
    *
@@ -182,7 +201,9 @@ function WorkspacePageInner() {
     // breaking the next instantiation. structuredClone is deep + handles all
     // primitive types we use (string, number, arrays, objects).
     const cloned = structuredClone(template.config);
-    appendWorkspaceAndReload(cloned, `Template`);
+    // PLAN-0053 T-F-6-11: same import path as URL config — write storage,
+    // dispatch a synthetic 'storage' event so WorkspaceContext refreshes.
+    appendWorkspaceToStorage(cloned, `Template`);
   }
 
   return (

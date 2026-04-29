@@ -580,6 +580,13 @@ export default function ChatPage() {
   const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // PLAN-0053 T-F-6-05: preserve thread sidebar scroll across refetches.
+  // Without this, every threads refetch rebuilds the list DOM and the
+  // sidebar springs back to the top — disorienting when the user has
+  // scrolled to find an older thread. We capture scrollTop just before
+  // the refetch invalidation and restore it once the new list is mounted.
+  const sidebarScrollRef = useRef<HTMLDivElement>(null);
+  const savedScrollTopRef = useRef<number>(0);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -631,6 +638,44 @@ export default function ChatPage() {
     const handle = setTimeout(() => setSearchQuery(searchInput), 200);
     return () => clearTimeout(handle);
   }, [searchInput]);
+
+  // PLAN-0053 T-F-6-05: capture+restore sidebar scroll across thread refetches.
+  //
+  // STRATEGY: the actual scroll container is the Radix ScrollArea Viewport,
+  // not the content div the ref points at. We walk up the tree to find the
+  // closest element with `data-radix-scroll-area-viewport`. Capturing scroll
+  // events on a ref (cheap, no re-render) preserves performance for long
+  // lists; restoring after every refetch keeps the user's position stable.
+  //
+  // WHY a ref + native scroll listener: updating React state on every scroll
+  // event would re-render the entire sidebar and tank performance for long
+  // thread lists. The ref pattern is the canonical fix.
+  useEffect(() => {
+    const inner = sidebarScrollRef.current;
+    if (!inner) return;
+    const viewport = inner.closest<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+    const handleScroll = () => {
+      savedScrollTopRef.current = viewport.scrollTop;
+    };
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Restore scrollTop after every refetch (when `threads` identity changes).
+  useEffect(() => {
+    const inner = sidebarScrollRef.current;
+    if (!inner) return;
+    const viewport = inner.closest<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+    if (savedScrollTopRef.current > 0) {
+      viewport.scrollTop = savedScrollTopRef.current;
+    }
+  }, [threads]);
 
   // ── Derived: filtered threads ─────────────────────────────────────────────
 
@@ -990,8 +1035,14 @@ export default function ChatPage() {
         </div>
 
         {/* Thread list body */}
+        {/* PLAN-0053 T-F-6-05: ref attached to the inner content div. The
+            useEffect below walks up to the Radix ScrollArea Viewport (which
+            is the actual scroll container) by reading the
+            `[data-radix-scroll-area-viewport]` attribute on the parent. Direct
+            ref on the content gives a stable handle without forking
+            scroll-area.tsx. */}
         <ScrollArea className="flex-1">
-          <div className="space-y-0.5 p-2">
+          <div ref={sidebarScrollRef} className="space-y-0.5 p-2">
             {threadsLoading && (
               <div className="space-y-1.5 p-1" aria-label="Loading threads">
                 {[...Array(5)].map((_, i) => (
