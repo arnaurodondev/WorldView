@@ -2,14 +2,27 @@
  * contexts/WorkspaceContext.tsx — Named workspace state management
  *
  * WHY THIS EXISTS: Traders need multiple named layout configurations (workspaces)
- * that persist between sessions. Day Trading, Research, and Portfolio Monitor
- * are fundamentally different information environments — this context lets users
- * switch between them without reconfiguring panels every time.
+ * that persist between sessions. Day Trading, Research, and Portfolio Monitor are
+ * fundamentally different information environments — this context lets users switch
+ * between them without reconfiguring panels every time.
  *
  * WHY localStorage (not server state): Workspace layout preferences are purely
- * personal and session-local. They don't need server sync, tenant association,
- * or real-time collaboration. localStorage gives instant reads/writes with zero
- * network cost and survives page refreshes.
+ * personal and session-local. They don't need server sync, tenant association, or
+ * real-time collaboration. localStorage gives instant reads/writes with zero network
+ * cost and survives page refreshes.
+ *
+ * WHY V2 STORAGE KEY (PLAN-0051 T-C-3-01): Earlier builds wrote to
+ * `worldview-workspaces` (v1) without explicit versioning. The Wave C activation
+ * adds a debounced layout-resize writer + an explicit migration path; bumping to
+ * `worldview:workspaces:v2` lets us read v1 once, translate, and from then on write
+ * v2 only. If we ever change the WorkspaceConfig shape again, v3 follows the same
+ * pattern.
+ *
+ * WHY DEBOUNCED LAYOUT WRITES: react-resizable-panels fires onLayoutChanged on
+ * pointer release — already debounced relative to onLayoutChange — but a user can
+ * still drop the handle, immediately drag again, etc. Wrapping persistence in a
+ * 300ms debounce coalesces bursty edits into one localStorage write so we never
+ * thrash the disk with intermediate states.
  *
  * WHO USES IT: app/(app)/layout.tsx (provider), WorkspaceTabs (switcher UI),
  *              workspace/page.tsx (reads activeWorkspace to render panel grid)
@@ -26,6 +39,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -33,8 +47,9 @@ import {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 /**
- * PanelType — 10 supported workspace panel content types.
- * WHY string union not enum: simpler to serialize/deserialize from localStorage JSON.
+ * PanelType — supported workspace panel content types.
+ *
+ * WHY string union (not enum): simpler to JSON-serialise to localStorage.
  * Each value maps to a dedicated widget component in the workspace grid.
  */
 export type PanelType =
@@ -68,6 +83,7 @@ export interface WorkspaceConfig {
   rows: WorkspaceRow[];
   /**
    * Persisted panel size ratios for react-resizable-panels.
+   *
    * WHY stored here (not separately): workspace config is the single source of
    * truth for everything a named workspace contains. Sizes and layout change
    * together — storing them together prevents stale-size bugs on workspace switch.
@@ -81,9 +97,9 @@ export interface WorkspaceConfig {
 // ── Default presets (PRD §5.5) ────────────────────────────────────────────────
 
 /**
- * DEFAULT_WORKSPACES — 4 preset configs every new user starts with.
+ * DEFAULT_WORKSPACES — preset configs every new user starts with.
  *
- * WHY 4 presets (not 1): covers the 4 primary institutional trader workflows:
+ * WHY 4 presets: covers the 4 primary institutional trader workflows:
  * - Day Trading → active intraday monitoring (chart + screener)
  * - Research → deep fundamental + news analysis before a trade
  * - Portfolio Monitor → risk/P&L overview + price context
@@ -127,8 +143,22 @@ const DEFAULT_WORKSPACES: WorkspaceConfig[] = [
   },
 ];
 
-const STORAGE_KEY = "worldview-workspaces";
+// ── Storage keys ──────────────────────────────────────────────────────────────
+
+/** Current versioned key. Bumped from v1 to mark a known-good shape going forward. */
+const STORAGE_KEY = "worldview:workspaces:v2";
+/** Legacy key — read once at boot, then discarded after migration. */
+const LEGACY_STORAGE_KEY = "worldview-workspaces";
+/** Active-workspace selector key (no shape change between v1 and v2 — keep stable). */
 const ACTIVE_KEY = "worldview-active-workspace";
+
+/**
+ * DEBOUNCE_MS — how long to wait after the most recent state change before writing
+ * to localStorage. 300ms is the standard institutional-UI debounce: short enough
+ * to feel instant for the next reload, long enough to coalesce a flurry of edits
+ * (rapid resizes, panel adds + immediate moves) into a single write.
+ */
+const DEBOUNCE_MS = 300;
 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
@@ -141,12 +171,19 @@ interface WorkspaceContextValue {
   addWorkspace: () => void;
   removeWorkspace: (id: string) => void;
   renameWorkspace: (id: string, name: string) => void;
-  /** Add a new panel of the given type to the active workspace (appended to last row or new row) */
+  /** Add a new panel of the given type to the active workspace */
   addPanelToWorkspace: (workspaceId: string, type: PanelType) => void;
   /** Remove a specific panel from the active workspace by panel ID */
   removePanelFromWorkspace: (workspaceId: string, panelId: string) => void;
   /** Persist the panel size ratios after a resize drag event */
   updatePanelSizes: (workspaceId: string, panelSizes: number[][]) => void;
+  /**
+   * Update the layout for one panel after a resize/move. Wired to
+   * onLayoutChanged from WorkspaceGrid's PanelGroup. Currently this delegates
+   * to updatePanelSizes since rows are positioned by index — kept as an explicit
+   * entry point so future drag-to-reorder code has an obvious hook to attach to.
+   */
+  updateWorkspaceLayout: (workspaceId: string, panelSizes: number[][]) => void;
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -155,17 +192,71 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
-/** Safe read from localStorage — returns DEFAULT_WORKSPACES if missing or corrupt */
+/**
+ * migrateV1 — translate the legacy v1 shape (key `worldview-workspaces`, plain
+ * WorkspaceConfig[]) to the v2 shape.
+ *
+ * WHY a dedicated migrator (not "just read both keys"): even though the shape is
+ * presently identical, having an explicit migrator means future v2→v3 work edits
+ * one function. It also gives us a single place to log/observe migration if we
+ * ever need to debug user reports of "I had 8 workspaces and now I have 4".
+ *
+ * @returns parsed v2-shaped config array, or null when the legacy key is absent
+ *          or unreadable.
+ */
+function migrateV1(): WorkspaceConfig[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    // WHY shallow validation: v1 is structurally compatible with v2 (we only added
+    // optional `panelSizes`). A deep type-narrow is overkill — broken entries are
+    // caught by the consumer's defensive rendering.
+    return parsed as WorkspaceConfig[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Safe read from localStorage — returns DEFAULT_WORKSPACES if missing or corrupt.
+ *
+ * Migration path:
+ *   1. If v2 key exists → use v2 directly.
+ *   2. Else if legacy v1 key exists → migrate, write v2, return migrated array.
+ *   3. Else → DEFAULT_WORKSPACES.
+ *
+ * WHY do the v2 write inline during migration: leaves the user's storage in a
+ * clean v2-only state on the very next read; eliminates running both code paths
+ * forever. The legacy key is intentionally left in place so that if v2 is later
+ * cleared (e.g. by a debug tool), we still have a recovery path.
+ */
 function loadWorkspaces(): WorkspaceConfig[] {
-  // WHY typeof window guard: this function runs in the lazy useState initializer
+  // WHY typeof window guard: this function runs in the lazy useState initialiser
   // which can be called during SSR pre-rendering (no window available)
   if (typeof window === "undefined") return DEFAULT_WORKSPACES;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_WORKSPACES;
-    const parsed = JSON.parse(raw) as WorkspaceConfig[];
-    // WHY length guard: if user somehow saved an empty array, recover gracefully
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_WORKSPACES;
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as WorkspaceConfig[];
+      // WHY length guard: if user somehow saved an empty array, recover gracefully
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_WORKSPACES;
+    }
+
+    // No v2 — try v1 migration.
+    const migrated = migrateV1();
+    if (migrated && migrated.length > 0) {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      } catch {
+        // WHY swallow: writing the migrated copy is best-effort. If localStorage is
+        // full or disabled, we still return the migrated value in memory.
+      }
+      return migrated;
+    }
+    return DEFAULT_WORKSPACES;
   } catch {
     // WHY catch: JSON.parse throws on corrupt localStorage data
     return DEFAULT_WORKSPACES;
@@ -175,7 +266,7 @@ function loadWorkspaces(): WorkspaceConfig[] {
 /** Safe read of the last-active workspace ID from localStorage */
 function loadActiveId(workspaces: WorkspaceConfig[]): string {
   if (typeof window === "undefined") return workspaces[0]?.id ?? "";
-  const stored = localStorage.getItem(ACTIVE_KEY);
+  const stored = window.localStorage.getItem(ACTIVE_KEY);
   // WHY validate: stored ID may be stale if user deleted that workspace
   const valid = workspaces.find((w) => w.id === stored);
   return valid?.id ?? workspaces[0]?.id ?? "";
@@ -184,27 +275,47 @@ function loadActiveId(workspaces: WorkspaceConfig[]): string {
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  // WHY lazy initializers: avoids reading localStorage on every render.
-  // Each initializer runs once at mount, returning the persisted state
+  // WHY lazy initialisers: avoid reading localStorage on every render.
+  // Each initialiser runs once at mount, returning the persisted state
   // or defaults if nothing is stored.
   const [workspaces, setWorkspaces] = useState<WorkspaceConfig[]>(loadWorkspaces);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(() =>
     loadActiveId(loadWorkspaces()),
   );
 
-  // Persist workspaces whenever they change
+  // ── Debounced persistence of `workspaces` ─────────────────────────────────
+  /**
+   * WHY ref'd timer: useEffect with a setTimeout is the standard React debounce
+   * pattern. Storing the timer in a ref (not state) means clearing/replacing it
+   * does not trigger a re-render. The cleanup function clears any pending write
+   * when the component unmounts or the effect re-runs.
+   */
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    // WHY window guard in effect: effects run on client only in Next.js App Router,
-    // but the guard makes this explicitly clear and safe for future SSR changes.
-    if (typeof window !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaces));
-    }
+    if (typeof window === "undefined") return;
+    if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    writeTimerRef.current = setTimeout(() => {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaces));
+      } catch {
+        // WHY swallow: QuotaExceededError or storage-disabled mode shouldn't crash
+        // the workspace UI. Worst case, the user's edits don't survive a reload.
+      }
+      writeTimerRef.current = null;
+    }, DEBOUNCE_MS);
+    return () => {
+      if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    };
   }, [workspaces]);
 
-  // Persist active workspace ID whenever it changes
+  // Persist active workspace ID whenever it changes (no debounce — single-key write)
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(ACTIVE_KEY, activeWorkspaceId);
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(ACTIVE_KEY, activeWorkspaceId);
+    } catch {
+      // see above — best-effort write
     }
   }, [activeWorkspaceId]);
 
@@ -315,6 +426,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  /**
+   * updateWorkspaceLayout — public hook the grid invokes after a layout change.
+   *
+   * WHY a separate name from updatePanelSizes: WorkspaceGrid uses this to capture
+   * future layout-related state (panel reorders, drag-to-other-row) without churn
+   * to the persistence path. Today it's a thin alias; tomorrow it's the entry
+   * point for richer layout semantics.
+   */
+  const updateWorkspaceLayout = useCallback(
+    (workspaceId: string, panelSizes: number[][]) => {
+      updatePanelSizes(workspaceId, panelSizes);
+    },
+    [updatePanelSizes],
+  );
+
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
   return (
@@ -330,6 +456,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         addPanelToWorkspace,
         removePanelFromWorkspace,
         updatePanelSizes,
+        updateWorkspaceLayout,
       }}
     >
       {children}
@@ -341,6 +468,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 /**
  * useWorkspace — access workspace state from any client component.
+ *
  * WHY throw on missing provider: fails fast with a clear message instead of
  * silently returning undefined and causing a cryptic downstream error.
  */

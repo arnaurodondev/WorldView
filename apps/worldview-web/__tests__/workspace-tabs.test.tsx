@@ -179,19 +179,26 @@ describe("WorkspaceTabs — rename", () => {
 });
 
 describe("WorkspaceTabs — localStorage persistence", () => {
+  // WHY waitFor here: PLAN-0051 T-C-3-01 introduced a 300ms debounced write to the
+  // versioned v2 key (`worldview:workspaces:v2`). Synchronous reads immediately after
+  // a user action would race the timer; waitFor polls until the debounce flushes.
   it("saves workspaces to localStorage when a workspace is added", async () => {
     const user = userEvent.setup();
+    const { waitFor } = await import("@testing-library/react");
     renderTabs();
 
     await user.click(screen.getByRole("button", { name: "Add workspace" }));
 
-    // WHY check localStorage: persistence is the core contract of WorkspaceContext.
-    // If localStorage is not written, workspace state is lost on page reload.
-    const stored = localStorage.getItem("worldview-workspaces");
-    expect(stored).not.toBeNull();
-    const parsed = JSON.parse(stored!);
-    // 4 defaults + 1 new = 5 total
-    expect(parsed).toHaveLength(5);
+    // WHY check the v2 key: PLAN-0051 T-C-3-01 bumped storage to
+    // `worldview:workspaces:v2` (with a one-shot v1 migrator). If persistence is
+    // not written, workspace state is lost on page reload.
+    await waitFor(() => {
+      const stored = localStorage.getItem("worldview:workspaces:v2");
+      expect(stored).not.toBeNull();
+      const parsed = JSON.parse(stored!);
+      // 4 defaults + 1 new = 5 total
+      expect(parsed).toHaveLength(5);
+    });
   });
 
   it("saves the active workspace ID to localStorage when switching", async () => {
@@ -200,6 +207,7 @@ describe("WorkspaceTabs — localStorage persistence", () => {
 
     await user.click(screen.getByRole("tab", { name: "Workspace: Research" }));
 
+    // active-workspace key is NOT debounced (single-key cheap write); read is sync.
     const activeId = localStorage.getItem("worldview-active-workspace");
     expect(activeId).toBe("ws-research");
   });

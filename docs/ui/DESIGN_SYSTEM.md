@@ -467,6 +467,37 @@ function LivePriceBadge({ price, updatedAt }: { price: string; updatedAt: Date }
 }
 ```
 
+### 6.13 Symbol Linking Color Dot (PLAN-0051 Wave C)
+
+Workspace panels use a 5-color symbol-linking system inspired by Bloomberg's group
+links. Every workspace panel header renders a tiny color dot (8-px circle inside a
+12-px hit area) on the far left:
+
+| Color | Hex | Notes |
+|-------|-----|-------|
+| `red` | `#EF5350` | Reuses `--negative` |
+| `green` | `#26A69A` | Reuses `--positive` |
+| `blue` | `#3B82F6` | Standard blue |
+| `yellow` | `#FFD60A` | Reuses `--primary` |
+| `purple` | `#A855F7` | Violet accent |
+| `none` | (border-only outline) | Panel does not participate in any group |
+
+Behaviour:
+
+- Clicking the dot opens a Popover with all 6 options (one row each).
+- Picking a color persists to `worldview:symbolLinks:v1` in localStorage; survives
+  reload. Active symbols are NOT persisted — only the color choices.
+- When a panel changes its active symbol, the new symbol is broadcast to every
+  other panel sharing the same color. Panels with `color: "none"` stay independent.
+
+Implementation:
+
+- Picker component: `apps/worldview-web/components/workspace/SymbolLinkColorPicker.tsx`
+- Context: `apps/worldview-web/contexts/SymbolLinkingContext.tsx`
+  - Hook `useSymbolLink(panelId)` returns `{ symbol, instrumentId, isLinked }`.
+  - Hook `useSymbolLinking()` exposes the full API (`links`, `setLinkColor`,
+    `setActiveSymbol`, `getSymbolForPanel`).
+
 ### 6.12 Keyboard Navigation (NEW)
 
 Global shortcut registration via `react-hotkeys-hook` in root layout:

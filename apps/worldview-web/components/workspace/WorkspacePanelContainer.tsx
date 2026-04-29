@@ -2,19 +2,30 @@
  * components/workspace/WorkspacePanelContainer.tsx — Individual panel wrapper
  *
  * WHY THIS EXISTS: Every workspace panel needs the same chrome: a 24px terminal
- * header with the color chip, type label, optional symbol selector, and close button.
- * Centralizing this chrome prevents each widget from needing to implement its own
- * header — which would produce visual inconsistency across panel types.
+ * header with the link-color dot, type icon, type label, optional symbol indicator,
+ * maximise + close buttons. Centralising this chrome prevents each widget from
+ * implementing its own header — which would produce visual inconsistency.
+ *
+ * WHY THE COLOR PICKER MOVED OUT (PLAN-0051 T-C-3-05): The earlier inline color
+ * popover lived inside this file as ~50 lines of JSX. Now SymbolLinkColorPicker.tsx
+ * owns the dot + popover; this container just renders it. That keeps the panel
+ * header logic readable and lets us reuse the picker elsewhere.
+ *
+ * WHY useSymbolLink(panelId) (not local state): symbol linking is the source of
+ * truth for which ticker a symbol-aware widget should display. Reading from the
+ * context here lets the container pass the linked symbol down to PanelContent —
+ * widgets that opt into useSymbolLink themselves can also fetch the same value
+ * directly without prop-drilling.
  *
  * WHO USES IT: WorkspaceGrid renders one WorkspacePanelContainer per panel slot.
- * DATA SOURCE: Reads symbol from SymbolLinkingContext based on panel group color.
- * DESIGN REFERENCE: PRD-0031 §5.4 Panel chrome spec, Wave 2 Terminal Quality Additions
+ * DATA SOURCE: SymbolLinkingContext (current symbol per panel id).
+ * DESIGN REFERENCE: PRD-0031 §5.4 Panel chrome spec; DESIGN_SYSTEM.md §6.13.
  */
 
 "use client";
-// WHY "use client": uses React state for color popover and references WorkspaceContext hooks
+// WHY "use client": references context hooks (useWorkspace, useSymbolLink) and
+// renders a Popover (Radix portals require browser DOM).
 
-import { useState } from "react";
 import {
   TrendingUp,
   Newspaper,
@@ -30,8 +41,6 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
-import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { AlertsList } from "@/components/alerts/AlertsList";
 import { WorkspaceScreenerWidget } from "./WorkspaceScreenerWidget";
@@ -40,16 +49,19 @@ import { WorkspaceWatchlistWidget } from "./WorkspaceWatchlistWidget";
 import { WorkspaceBriefWidget } from "./WorkspaceBriefWidget";
 import { WorkspaceNewsPanel } from "./WorkspaceNewsPanel";
 import { WorkspacePortfolioPanel } from "./WorkspacePortfolioPanel";
+import { WorkspaceChartWidget } from "./WorkspaceChartWidget";
+import { WorkspaceFundamentalsWidget } from "./WorkspaceFundamentalsWidget";
+import { SymbolLinkColorPicker } from "./SymbolLinkColorPicker";
 import { useWorkspace, type PanelType, type WorkspacePanel } from "@/contexts/WorkspaceContext";
-import { useSymbolLinking, GROUP_COLOR_HEX, type GroupColor } from "@/contexts/SymbolLinkingContext";
-import { cn } from "@/lib/utils";
+import { useSymbolLink } from "@/contexts/SymbolLinkingContext";
 
 // ── Panel type metadata ────────────────────────────────────────────────────────
 
 /**
- * PANEL_META — display metadata for each of the 10 panel types.
- * WHY separate from widget map: keeps icon/label lookups O(1) by key,
- * independent from the switch statement that renders content.
+ * PANEL_META — display metadata for the supported panel types.
+ *
+ * WHY separate from the widget switch: keeps icon/label lookups O(1) by key,
+ * independent from the render-time dispatch that picks a component.
  */
 const PANEL_META: Record<PanelType, { label: string; icon: LucideIcon }> = {
   chart:        { label: "CHART",        icon: TrendingUp },
@@ -64,51 +76,65 @@ const PANEL_META: Record<PanelType, { label: string; icon: LucideIcon }> = {
   chat:         { label: "CHAT",         icon: MessageSquare },
 };
 
-/** Symbol-aware panel types — these use a linked symbol for data fetching */
-const SYMBOL_AWARE_TYPES = new Set<PanelType>([
-  "chart", "fundamentals", "graph",
-]);
-
-// ── Group color selector ───────────────────────────────────────────────────────
-
 /**
- * GROUP_COLORS — ordered list of available link group colors.
- * WHY include null: "Unlink" removes the panel from any color group.
+ * Symbol-aware panel types — these render symbol-locked content (chart/fundamentals/
+ * graph). When a symbol is broadcast through their link group, they re-render with it.
+ *
+ * WHY a Set: cheaper membership checks than Array.includes for repeated lookups in
+ * the render loop, and the intent ("is this panel symbol-aware?") reads cleanly.
  */
-const GROUP_COLORS: GroupColor[] = ["red", "green", "blue", "yellow", "purple", null];
+const SYMBOL_AWARE_TYPES = new Set<PanelType>(["chart", "fundamentals", "graph"]);
 
 // ── Panel content switch ───────────────────────────────────────────────────────
 
 /**
  * PanelContent — renders the correct widget for a given panel type.
+ *
  * WHY separate function (not inline JSX): keeps WorkspacePanelContainer JSX
  * readable and makes the type→component mapping easy to audit.
  *
- * WHY demoEntityId / demoInstrumentId: workspace panels currently use a demo entity
- * when no symbol is linked. A future wave adds a per-panel symbol picker.
- * When a symbol IS linked via SymbolLinkingContext, this component should prefer it.
+ * WHY linkedSymbol vs linkedInstrumentId: instrument-fetching widgets need an
+ * instrument_id (API contract); chart and entity-graph want the human ticker for
+ * display. Passing both lets each widget pick the value that matches its data path.
  */
 function PanelContent({
   type,
   linkedSymbol,
+  linkedInstrumentId,
 }: {
   type: PanelType;
-  linkedSymbol: string | undefined;
+  linkedSymbol: string | null;
+  linkedInstrumentId: string | null;
 }) {
-  // WHY these demo IDs: S9 has a demo AAPL entity seeded for development.
-  // When symbol linking is active, the linked symbol overrides the demo.
-  const entityId = linkedSymbol ? `entity-${linkedSymbol.toLowerCase()}` : "entity-aapl";
-  const instrumentId = linkedSymbol ? `ins-${linkedSymbol.toLowerCase()}` : "ins-aapl";
+  // WHY graph keeps a demo AAPL fallback: the entity-graph component requires an
+  // entityId to render anything. Without the demo seed it would show a permanently
+  // empty SVG canvas. Until graph gets its own dedicated empty state, we keep the
+  // demo entity so the graph panel always has SOMETHING to display.
+  const entityId = linkedSymbol
+    ? `entity-${linkedSymbol.toLowerCase()}`
+    : "entity-aapl";
+  const centerLabel = linkedSymbol ?? "AAPL";
+
+  // WHY undefined when not linked: the panel-sized widgets (WorkspaceChartWidget,
+  // WorkspaceFundamentalsWidget) render their own "no symbol linked" empty state
+  // when ticker is undefined, prompting the user to pick a color via the
+  // SymbolLinkColorPicker. Falling back to demo AAPL would mask the un-linked state.
+  // (graph keeps the demo fallback below — its empty SVG canvas is a worse UX.)
+  const tickerOrUndefined = linkedSymbol ?? undefined;
+  // WHY void linkedInstrumentId: reserved for future widgets that need a precise
+  // instrument_id (currently chart + fundamentals derive ins-<ticker> internally).
+  // The void expression silences the unused-arg lint without removing the prop.
+  void linkedInstrumentId;
 
   switch (type) {
     case "chart":
-      return <OHLCVChart instrumentId={instrumentId} />;
+      return <WorkspaceChartWidget ticker={tickerOrUndefined} />;
 
     case "fundamentals":
-      return <FundamentalsTab instrumentId={instrumentId} />;
+      return <WorkspaceFundamentalsWidget ticker={tickerOrUndefined} />;
 
     case "graph":
-      return <EntityGraphPanel entityId={entityId} centerLabel={linkedSymbol ?? "AAPL"} />;
+      return <EntityGraphPanel entityId={entityId} centerLabel={centerLabel} />;
 
     case "alerts":
       return <AlertsList />;
@@ -132,7 +158,7 @@ function PanelContent({
       return <WorkspaceBriefWidget />;
 
     default:
-      // TypeScript exhaustiveness guard
+      // TypeScript exhaustiveness guard — every PanelType must have a case above.
       return null;
   }
 }
@@ -141,36 +167,27 @@ function PanelContent({
 
 interface WorkspacePanelContainerProps {
   panel: WorkspacePanel;
-  /** The workspace this panel belongs to — needed for panel removal */
+  /** The workspace this panel belongs to — needed for the close button */
   workspaceId: string;
 }
 
-export function WorkspacePanelContainer({ panel, workspaceId }: WorkspacePanelContainerProps) {
+export function WorkspacePanelContainer({
+  panel,
+  workspaceId,
+}: WorkspacePanelContainerProps) {
   const { removePanelFromWorkspace } = useWorkspace();
-  const { getSymbol, setSymbol } = useSymbolLinking();
-
-  // WHY local state for groupColor: the user picks a color via the chip popover.
-  // This is UI-only state — it doesn't need to be in WorkspaceContext because
-  // the color only matters while the panel is mounted.
-  const [groupColor, setGroupColor] = useState<GroupColor>(null);
-  const [showColorPicker, setShowColorPicker] = useState(false);
+  // WHY useSymbolLink (not useSymbolLinking): we only need this panel's view of the
+  // linked symbol — the convenience hook is narrower and prevents accidentally
+  // reading sibling-panel state we shouldn't react to.
+  const { symbol, instrumentId, isLinked } = useSymbolLink(panel.id);
 
   const meta = PANEL_META[panel.type];
   const Icon = meta.icon;
-  const linkedSymbol = SYMBOL_AWARE_TYPES.has(panel.type)
-    ? getSymbol(groupColor)
-    : undefined;
-
-  function handleColorSelect(color: GroupColor) {
-    setGroupColor(color);
-    setShowColorPicker(false);
-    // WHY propagate existing symbol to new color group: if the panel already
-    // has a symbol context, link it to the new color so other panels in the
-    // same color group immediately show the same symbol.
-    if (color && linkedSymbol) {
-      setSymbol(color, linkedSymbol);
-    }
-  }
+  // WHY only show linked symbol on symbol-aware panels: a "news" panel doesn't lock
+  // to a single ticker; showing [AAPL] in its header would mislead the user. The
+  // symbol-awareness gate scopes the indicator to panels where it makes sense.
+  const showSymbolIndicator =
+    SYMBOL_AWARE_TYPES.has(panel.type) && isLinked && !!symbol;
 
   return (
     // WHY flex flex-col min-h-0: panel must fill the full PanelGroup slot height.
@@ -182,59 +199,13 @@ export function WorkspacePanelContainer({ panel, workspaceId }: WorkspacePanelCo
       {/*
        * WHY h-6 (24px): §0 spec mandates ≤24px panel chrome overhead.
        * The header is the ONLY chrome — no title bar, no card padding.
-       * border-b border-border: the structural divider between header and content.
+       * border-b border-border: structural divider between header and content.
        * shrink-0: prevents the header from shrinking when content is tall.
        */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2 gap-1.5">
 
-        {/* Color group chip — 6px dot, click to open color picker */}
-        {/*
-         * WHY inline style for color: Tailwind purges dynamic `bg-[#hex]` classes
-         * unless explicitly listed. GROUP_COLOR_HEX provides stable hex values.
-         * WHY border on null: unlinked panels show a subtle border-only dot.
-         */}
-        <div className="relative">
-          <button
-            className={cn(
-              "h-1.5 w-1.5 rounded-full shrink-0 cursor-pointer",
-              "ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
-              !groupColor && "border border-border/60",
-            )}
-            style={groupColor ? { backgroundColor: GROUP_COLOR_HEX[groupColor] } : {}}
-            aria-label="Set symbol group color"
-            onClick={() => setShowColorPicker((v) => !v)}
-          />
-
-          {/* Color picker dropdown */}
-          {showColorPicker && (
-            <div
-              className="absolute left-0 top-full z-50 mt-1 flex flex-col gap-0.5 rounded-[2px] border border-border bg-card p-1.5 shadow-none"
-              // WHY onMouseLeave: close picker when user moves away — no explicit close button
-              // needed since the picker is tiny and closing by leave is the most ergonomic UX.
-              onMouseLeave={() => setShowColorPicker(false)}
-            >
-              {GROUP_COLORS.map((color) => (
-                <button
-                  key={color ?? "none"}
-                  className={cn(
-                    "flex items-center gap-1.5 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground rounded-[2px]",
-                    groupColor === color && "text-foreground",
-                  )}
-                  onClick={() => handleColorSelect(color)}
-                >
-                  <span
-                    className={cn(
-                      "h-2 w-2 rounded-full shrink-0",
-                      !color && "border border-border",
-                    )}
-                    style={color ? { backgroundColor: GROUP_COLOR_HEX[color] } : {}}
-                  />
-                  {color ? color.charAt(0).toUpperCase() + color.slice(1) : "Unlink"}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Color group dot — opens a popover for color selection */}
+        <SymbolLinkColorPicker panelId={panel.id} />
 
         {/* Panel type icon — 14px, muted foreground */}
         {/*
@@ -248,15 +219,15 @@ export function WorkspacePanelContainer({ panel, workspaceId }: WorkspacePanelCo
           {meta.label}
         </span>
 
-        {/* Symbol indicator (symbol-aware panels only) */}
+        {/* Symbol indicator — only on symbol-aware panels with a linked symbol */}
         {/*
          * WHY show symbol inline (not a full input): the panel header is only 24px.
-         * A [AAPL ▾] bracketed label is the Bloomberg pattern — click to change symbol.
-         * Future wave: add click handler to open a symbol picker.
+         * A [AAPL] bracketed label is the Bloomberg pattern — instantly readable.
+         * A future wave will add a click handler to open a symbol picker.
          */}
-        {SYMBOL_AWARE_TYPES.has(panel.type) && linkedSymbol && (
+        {showSymbolIndicator && (
           <span className="font-mono text-[11px] text-foreground ml-1 cursor-default">
-            [{linkedSymbol}]
+            [{symbol}]
           </span>
         )}
 
@@ -292,7 +263,11 @@ export function WorkspacePanelContainer({ panel, workspaceId }: WorkspacePanelCo
        * when content exceeds the panel height.
        */}
       <div className="flex-1 min-h-0 overflow-auto">
-        <PanelContent type={panel.type} linkedSymbol={linkedSymbol} />
+        <PanelContent
+          type={panel.type}
+          linkedSymbol={isLinked ? symbol : null}
+          linkedInstrumentId={isLinked ? instrumentId : null}
+        />
       </div>
     </div>
   );
