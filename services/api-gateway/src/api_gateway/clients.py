@@ -636,7 +636,44 @@ async def get_watchlist_insights(
     capped_ids = instrument_ids[:member_overview_cap]
 
     async def _quote(iid: str) -> dict[str, Any]:
-        return await _safe_get(clients.market_data, "market-data", f"/api/v1/quotes/{iid}")
+        # F-Q1-02 fix (PLAN-0050 QA iter-1): switch from the legacy internal
+        # QuoteResponse endpoint (/api/v1/quotes/{iid}) to the PriceSnapshot
+        # endpoint (/internal/v1/price/{iid}).
+        #
+        # WHY: the legacy endpoint returns {last, bid, ask, volume, timestamp}
+        # which has NO change_pct field.  Every mover was showing change_pct=null
+        # because quote.get("change_pct") always returned None.  The PriceSnapshot
+        # endpoint is the authoritative price source for S9 (used by the /v1/quotes
+        # proxy) and returns {price, price_change, price_change_pct, ...}.
+        #
+        # WHY not call S9's own /v1/quotes/{iid}: that would add a loopback HTTP
+        # hop (gateway → gateway).  Calling S3 directly via the market_data client
+        # is cheaper and already the pattern used by the /v1/quotes proxy route.
+        #
+        # F-Q1-08 closed by this same fix: the stale `last` price from the legacy
+        # quote table (e.g. NVDA 199.64 vs 209.53) came from reading the wrong
+        # field.  PriceSnapshot's `price` field is resolved via the freshness chain
+        # (FRESH_QUOTE → BULK_QUOTE → INTRADAY → DAILY_CLOSE → STALE) — same
+        # authoritative source that the instrument detail page uses.
+        snap = await _safe_get(clients.market_data, "market-data", f"/internal/v1/price/{iid}")
+        if not snap:
+            return {}
+        # Map PriceSnapshot fields → the shape the composer reads below:
+        #   price       ← snap["price"]          (best available price string)
+        #   change_pct  ← snap["price_change_pct"] (signed % change string or None)
+        price_str = snap.get("price")
+        pct_str = snap.get("price_change_pct")
+        try:
+            price = float(price_str) if price_str is not None else None
+        except (ValueError, TypeError):
+            price = None
+        try:
+            change_pct = float(pct_str) if pct_str is not None else None
+        except (ValueError, TypeError):
+            change_pct = None
+        # Return a normalised dict that uses the same field names the loop below
+        # reads so we do not have to touch the per-member construction block.
+        return {"price": price, "change_pct": change_pct}
 
     async def _overview(iid: str) -> dict[str, Any]:
         # Just the instrument record gives us GICS sector — the per-member
@@ -717,7 +754,9 @@ async def get_watchlist_insights(
         if idx < len(quote_results):
             quote = quote_results[idx]
             overview = overview_results[idx]
-            last = quote.get("last")
+            # F-Q1-02: _quote() now returns {"price": float|None, "change_pct": float|None}
+            # normalised from PriceSnapshot (not the legacy QuoteResponse {last, bid, ask}).
+            last = quote.get("price")
             change_pct = quote.get("change_pct")
             sector = (overview or {}).get("gics_sector") or member.get("sector")
         else:
@@ -741,6 +780,9 @@ async def get_watchlist_insights(
                 "ticker": ticker,
                 "name": name,
                 "sector": sector,
+                # F-Q1-02: `last` is already a float|None from the PriceSnapshot
+                # normalisation in _quote().  The float() cast remains for the
+                # fallback path (idx >= member_overview_cap) where last is still None.
                 "price": float(last) if last is not None else None,
                 "change_pct": float(change_pct) if change_pct is not None else None,
                 "news_count_24h": len(member_news),
@@ -813,6 +855,24 @@ async def get_watchlist_insights(
 
     # Pending alert count restricted to members.
     alerts_count = sum(alerts_by_entity.get(eid, 0) for eid in entity_ids)
+
+    # F-Q1-13 fix (PLAN-0050 QA iter-1): sort movers by absolute change_pct
+    # descending so the WatchlistMoversWidget's gainers/losers split always
+    # shows the MOST moved instruments, not whatever order S1 returns members.
+    #
+    # WHY server-side (not client-side): the frontend renders the top-N from
+    # this list without re-sorting; the gateway cap (member_overview_cap=25) means
+    # an alphabetically-first watchlist member would monopolise top-5 slots if
+    # we returned them unsorted.  Sorting here guarantees the extremes appear
+    # first regardless of watchlist member order.
+    #
+    # WHY abs(): a -5% mover is equally "interesting" as a +5% mover for the
+    # purpose of identifying the most volatile names.  Members with null
+    # change_pct (no price data) are pushed to the end.
+    movers_out.sort(
+        key=lambda m: abs(m["change_pct"]) if m["change_pct"] is not None else -1.0,
+        reverse=True,
+    )
 
     return {
         "watchlist_id": watchlist_id,

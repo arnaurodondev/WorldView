@@ -11,6 +11,11 @@ from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure.db.fundamentals_snapshot_writer import (
+    _most_recent_financial_row,
+    derive_fundamentals_snapshot,
+    upsert_snapshot,
+)
 from market_data.infrastructure.db.metric_extractor import extract_metrics
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
@@ -479,4 +484,74 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
             exchange=exchange,
             instrument_id=instrument_id,
             sections_processed=section_count,
+        )
+
+        # ── F-Q1-03: UPSERT instrument_fundamentals_snapshot ──────────────────
+        # WHY here (not in a separate consumer): the snapshot is a derived
+        # projection of section data already present in `payload`.  Computing
+        # and writing it in the same transaction (same UoW) is the cheapest
+        # path and avoids a second DB round-trip in a follow-up consumer.
+        #
+        # Best-effort: any exception is caught and logged so a snapshot
+        # failure never dead-letters the Kafka message.  The outer try/except
+        # also protects against errors raised by subclass/test overrides.
+        try:
+            await self._upsert_fundamentals_snapshot(uow, str(instrument_id), payload)
+        except Exception as exc:
+            logger.warning(
+                "fundamentals_consumer.snapshot_upsert_failed",
+                instrument_id=instrument_id,
+                error=str(exc),
+            )
+
+    async def _upsert_fundamentals_snapshot(
+        self,
+        uow: Any,
+        instrument_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Derive and UPSERT the instrument_fundamentals_snapshot row.
+
+        Separated from process_message so tests can mock or override this method
+        without needing a live SQLAlchemy session.  Any exception raised here is
+        caught by the caller (process_message) which logs it and continues — the
+        snapshot is best-effort.
+
+        WHY protected (not private): test overrides can intercept call arguments
+        without touching the DB.
+        """
+        snap_highlights = payload.get("highlights") or {}
+        snap_cash_flow = _most_recent_financial_row(payload.get("cash_flow"))
+        snap_income = _most_recent_financial_row(payload.get("income_statement"))
+        snap_balance = _most_recent_financial_row(payload.get("balance_sheet"))
+        snap_technicals = payload.get("technicals_snapshot") or {}
+
+        # Only derive + upsert when at least one source section is present
+        if not (snap_highlights or snap_cash_flow or snap_income or snap_balance or snap_technicals):
+            return
+
+        snap = derive_fundamentals_snapshot(
+            highlights=snap_highlights,
+            cash_flow=snap_cash_flow,
+            income=snap_income,
+            balance=snap_balance,
+            technicals=snap_technicals,
+        )
+        # Access write session via concrete UoW — we are inside the
+        # infrastructure layer; the cast is safe here (SLF001).
+        write_session_fn = getattr(uow, "_write", None)
+        if write_session_fn is None:
+            # Mock UoW in unit tests — skip the DB write.
+            logger.debug(
+                "fundamentals_consumer.snapshot_skip_no_write_session",
+                instrument_id=instrument_id,
+            )
+            return
+        await upsert_snapshot(write_session_fn(), instrument_id, snap)
+        logger.info(
+            "fundamentals_consumer.snapshot_upserted",
+            instrument_id=instrument_id,
+            eps_ttm=snap.get("eps_ttm"),
+            beta=snap.get("beta"),
+            fcf=snap.get("free_cash_flow"),
         )

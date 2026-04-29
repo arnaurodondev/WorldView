@@ -246,9 +246,14 @@ CREATE TABLE dead_letter_queue (
 );
 
 -- sentiment + impact_score columns on document_source_metadata (migration 0011, PLAN-0050 Wave E).
--- Populated by ArticleRelevanceScoringWorker / PriceImpactLabellingWorker (nullable — null
--- until the respective worker processes the article).
--- Exposed in GET /api/v1/news/top and GET /api/v1/entities/{id}/articles responses.
+-- sentiment: populated by ArticleRelevanceScoringWorker in the SAME LLM call as llm_relevance_score
+--   (single-pass JSON: {"score": float, "reason": str, "sentiment": str}).
+--   Valid values: positive / negative / neutral / mixed.
+--   PLAN-0050 QA iter-1 F-Q1-07: sentiment was extended in ArticleRelevanceScoringWorker
+--   prompt; the worker now writes sentiment alongside score in every UPDATE.
+-- impact_score: populated by PriceImpactLabellingWorker (nullable — null until price
+--   windows are computed).
+-- Both columns exposed in GET /api/v1/news/top and GET /api/v1/entities/{id}/articles.
 ALTER TABLE document_source_metadata
     ADD COLUMN sentiment    TEXT         CHECK (sentiment IN ('positive','negative','neutral','mixed')),
     ADD COLUMN impact_score NUMERIC(6,4) CHECK (impact_score >= 0 AND impact_score <= 1);

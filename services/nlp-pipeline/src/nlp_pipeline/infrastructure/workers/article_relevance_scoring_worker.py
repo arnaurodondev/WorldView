@@ -31,7 +31,15 @@ from sqlalchemy import text
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# Prompt sent to Ollama for relevance scoring (PRD-0026 §6.5 exact spec)
+# Prompt sent to the LLM for relevance scoring + sentiment classification.
+#
+# F-Q1-07 fix (PLAN-0050 QA iter-1): appended "sentiment" field extraction to
+# the SAME LLM call so we write both llm_relevance_score and sentiment in one
+# round-trip rather than adding a separate SentimentClassifierWorker.
+# The sentiment token set is constrained to four values so the LLM cannot
+# hallucinate a non-enum value — the writer validates before persisting.
+# Adding "sentiment" alongside (not instead of) "score" keeps the relevance
+# scoring contract (PRD-0026 §6.5) unchanged.
 _SYSTEM_PROMPT = (
     "You are a financial news relevance assessor. "
     "Rate the market impact of this news article from 0.0 to 1.0.\n"
@@ -41,8 +49,18 @@ _SYSTEM_PROMPT = (
     "0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
     "1.0 = critical (halted trading, major earnings miss, bankruptcy)\n"
     "If the title is absent, vague, or ambiguous, return score 0.3 as a conservative default.\n"
-    'Respond with ONLY valid JSON: {"score": <float 0.0-1.0>, "reason": "<max 10 words in English>"}'
+    "Also classify the market sentiment: "
+    '"positive" (good news for investors), '
+    '"negative" (bad news for investors), '
+    '"neutral" (factual/no clear direction), '
+    '"mixed" (contains both positive and negative signals).\n'
+    "Respond with ONLY valid JSON: "
+    '{"score": <float 0.0-1.0>, "reason": "<max 10 words in English>", '
+    '"sentiment": "positive"|"negative"|"neutral"|"mixed"}'
 )
+
+# Valid sentiment enum values — reject anything the LLM hallucinates.
+_VALID_SENTIMENTS = frozenset({"positive", "negative", "neutral", "mixed"})
 
 
 class ArticleRelevanceScoringWorker:
@@ -94,16 +112,19 @@ class ArticleRelevanceScoringWorker:
 
         # ── Phase 2 — Score: call LLM for each article (no open DB sessions) ────
         # Branches on api_key: DeepInfra OpenAI-compat endpoint when set, Ollama otherwise.
-        scored: list[tuple[UUID, float]] = []
+        # F-Q1-07: each scored tuple now carries (doc_id, score, sentiment | None)
+        # so we can persist both fields in a single write call.
+        scored: list[tuple[UUID, float, str | None]] = []
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 for doc_id, title, source_type in articles:
                     if self._api_key:
-                        score = await self._call_external_api(client, title, source_type, doc_id)
+                        result = await self._call_external_api(client, title, source_type, doc_id)
                     else:
-                        score = await self._call_ollama(client, title, source_type, doc_id)
-                    if score is not None:
-                        scored.append((doc_id, score))
+                        result = await self._call_ollama(client, title, source_type, doc_id)
+                    if result is not None:
+                        score, sentiment = result
+                        scored.append((doc_id, score, sentiment))
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             # Provider unavailable — skip the entire cycle; try again next interval
             logger.warning(  # type: ignore[no-any-return]
@@ -173,8 +194,12 @@ class ArticleRelevanceScoringWorker:
         title: str | None,
         source_type: str | None,
         doc_id: UUID,
-    ) -> float | None:
-        """Phase 2 helper: POST one article to Ollama and parse the score.
+    ) -> tuple[float, str | None] | None:
+        """Phase 2 helper: POST one article to Ollama and parse score + sentiment.
+
+        F-Q1-07: returns (score, sentiment) tuple so both values are written in
+        Phase 3.  Sentiment is None if the LLM omits the field or returns an
+        unexpected value (write is still performed with sentiment=NULL in that case).
 
         Returns None on JSON parse failure (article skipped, cycle continues).
         Raises httpx.ConnectError or httpx.TimeoutException → caller skips cycle.
@@ -192,7 +217,9 @@ class ArticleRelevanceScoringWorker:
                 "think": False,
                 # BP-121 variant: qwen3:0.6b defaults to n_ctx=32768 → GGML_ASSERT abort on CPU.
                 # Relevance prompts are title+source_type, always < 100 tokens; 512 is ample.
-                "options": {"num_ctx": 512},
+                # WHY 768 (up from 512): the extended prompt (with sentiment instruction) is
+                # ~50 tokens longer; 768 provides enough headroom without enabling full reasoning.
+                "options": {"num_ctx": 768},
             },
         )
         raw = resp.text
@@ -202,7 +229,10 @@ class ArticleRelevanceScoringWorker:
             inner = data.get("response", raw)
             parsed = json.loads(inner) if isinstance(inner, str) else inner
             score = float(parsed["score"])
-            return max(0.0, min(1.0, score))
+            # F-Q1-07: extract sentiment — default to None if missing or not a valid enum.
+            raw_sentiment = parsed.get("sentiment", "")
+            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            return max(0.0, min(1.0, score)), sentiment
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "relevance_scoring_json_parse_error",
@@ -218,8 +248,11 @@ class ArticleRelevanceScoringWorker:
         title: str | None,
         source_type: str | None,
         doc_id: UUID,
-    ) -> float | None:
-        """Phase 2 helper: POST one article to DeepInfra (OpenAI-compat) and parse the score.
+    ) -> tuple[float, str | None] | None:
+        """Phase 2 helper: POST one article to DeepInfra (OpenAI-compat) and parse score + sentiment.
+
+        F-Q1-07: returns (score, sentiment) tuple.  Sentiment is None when the LLM
+        omits the field or returns an invalid value.
 
         Uses the chat/completions endpoint with response_format=json_object so the model
         returns a JSON payload directly (no "response" wrapper like Ollama uses).
@@ -238,14 +271,19 @@ class ArticleRelevanceScoringWorker:
                     # Force JSON output — avoids free-form prose wrapping the score object.
                     "response_format": {"type": "json_object"},
                     "temperature": 0.0,
-                    "max_tokens": 64,
+                    # WHY 96 (up from 64): the extended response includes sentiment token
+                    # (~10 extra characters in the JSON).  96 provides headroom without waste.
+                    "max_tokens": 96,
                 },
             )
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             score = float(parsed["score"])
-            return max(0.0, min(1.0, score))
+            # F-Q1-07: extract sentiment — default to None if missing or invalid enum.
+            raw_sentiment = parsed.get("sentiment", "")
+            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            return max(0.0, min(1.0, score)), sentiment
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "relevance_scoring_json_parse_error",
@@ -257,16 +295,28 @@ class ArticleRelevanceScoringWorker:
     @staticmethod
     async def _write_scores(
         session: AsyncSession,
-        scored: list[tuple[UUID, float]],
+        scored: list[tuple[UUID, float, str | None]],
     ) -> None:
-        """Phase 3: write llm_relevance_score + llm_scored_at for each scored article."""
+        """Phase 3: write llm_relevance_score + sentiment + llm_scored_at.
+
+        F-Q1-07: also persists `sentiment` (positive|negative|neutral|mixed|NULL)
+        extracted from the same LLM call that produces the relevance score.
+        NULL is written when the LLM returns an unrecognised value — the column
+        is nullable (migration 0011) so this degrades gracefully.
+
+        WHY a single UPDATE (not UPSERT): the row always exists in
+        document_source_metadata — it was inserted by the article consumer
+        long before the scoring worker runs.  A bare UPDATE is the correct
+        operation; no conflict handling is needed.
+        """
         stmt = text(
             """
             UPDATE document_source_metadata
             SET llm_relevance_score = :score,
+                sentiment           = :sentiment,
                 llm_scored_at       = NOW()
             WHERE doc_id = :doc_id
             """,
         )
-        for doc_id, score in scored:
-            await session.execute(stmt, {"doc_id": str(doc_id), "score": score})
+        for doc_id, score, sentiment in scored:
+            await session.execute(stmt, {"doc_id": str(doc_id), "score": score, "sentiment": sentiment})
