@@ -52,18 +52,24 @@ export function WeekRangeBar({ low, high, current, className = "", showLabels = 
   // ── Guard: if any required value is missing, render a flat unavailable bar ──
   // WHY render the shell (not null): keeps layout stable — the section always
   // takes up the same vertical space regardless of data availability.
+  // F-QA-04 fix: when showLabels=false (compact header row 2), use the same
+  // single-element render as the populated branch below so the parent flex
+  // items-center centers the 4px bar correctly. The prior implementation
+  // re-wrapped in a flex-col here, reintroducing the alignment bug T-F-6-08
+  // closed in the populated branch.
   if (low == null || high == null || current == null) {
+    if (!showLabels) {
+      return <div className={`relative h-1 w-full rounded-full bg-muted ${className}`} />;
+    }
     return (
       <div className={`flex flex-col gap-0.5 ${className}`}>
         {/* Flat muted bar — signals "no data" without showing numbers */}
         <div className="relative h-1 bg-muted rounded-full w-full" />
-        {/* Empty labels maintain height — only if showLabels enabled */}
-        {showLabels && (
-          <div className="flex justify-between">
-            <span className="font-mono text-[10px] text-muted-foreground">—</span>
-            <span className="font-mono text-[10px] text-muted-foreground">—</span>
-          </div>
-        )}
+        {/* Empty labels maintain height */}
+        <div className="flex justify-between">
+          <span className="font-mono text-[10px] text-muted-foreground">—</span>
+          <span className="font-mono text-[10px] text-muted-foreground">—</span>
+        </div>
       </div>
     );
   }

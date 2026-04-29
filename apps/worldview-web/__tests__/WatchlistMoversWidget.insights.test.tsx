@@ -182,6 +182,49 @@ describe("WatchlistMoversWidget — insights enrichments (PLAN-0050 Wave B)", ()
     expect(pfeBadge).toBeTruthy();
   });
 
+  it("switches to OHLCV-derived change_pct when 1W is selected (F-QA-09)", async () => {
+    // The 1W path should still call getOHLCV per instrument and the rendered
+    // change_pct should reflect first→last close, NOT the 1D insights value.
+    mockGetWatchlists.mockResolvedValue([
+      { watchlist_id: "wl-1", name: "Default", created_at: "2026-01-01T00:00:00Z" },
+    ]);
+    mockGetWatchlistInsights.mockResolvedValue(SAMPLE_INSIGHTS);
+    // Per-instrument fixture: AAPL 100→110 (+10%); MSFT 200→180 (-10%); PFE 50→50 (0%).
+    mockGetOHLCV.mockImplementation(async (id: string) => {
+      const closes: Record<string, [number, number]> = {
+        "i-aapl": [100, 110],
+        "i-msft": [200, 180],
+        "i-pfe": [50, 50],
+      };
+      const [first, last] = closes[id] ?? [1, 1];
+      return {
+        instrument_id: id,
+        ticker: "",
+        timeframe: "1W",
+        bars: [
+          { timestamp: "2026-04-22T00:00:00Z", open: first, high: first, low: first, close: first, volume: 1 },
+          { timestamp: "2026-04-29T00:00:00Z", open: last, high: last, low: last, close: last, volume: 1 },
+        ],
+      };
+    });
+
+    const { getByRole, findByText } = render(<WatchlistMoversWidget />, { wrapper: makeWrapper() });
+
+    // Click the "1W" period button.
+    const week = getByRole("button", { name: /^1W$/i });
+    week.click();
+
+    // OHLCV-derived AAPL +10% must replace the 1D +2.10%.
+    await findByText(/\+10\.00%/);
+    // F-QA-07: row badges (alert dot, news icon) must NOT appear on non-1D.
+    // After clicking 1W, the row aria-label should NOT enumerate badges.
+    await waitFor(() => {
+      expect(screen.getByLabelText("Open AAPL instrument page")).toBeInTheDocument();
+    });
+    // Sanity: the OHLCV mock was actually invoked.
+    expect(mockGetOHLCV).toHaveBeenCalled();
+  });
+
   it("hides the summary strip when no watchlist exists", async () => {
     mockGetWatchlists.mockResolvedValue([]);
 
