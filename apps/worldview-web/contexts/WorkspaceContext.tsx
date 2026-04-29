@@ -368,6 +368,35 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [activeWorkspaceId]);
 
+  // PLAN-0053 T-F-6-11: react to external localStorage writes (URL import path).
+  //
+  // The /workspace page's URL-import handler writes a new workspace directly to
+  // localStorage and dispatches a synthetic 'storage' event so the context
+  // refreshes its state without a full page reload. Native cross-tab 'storage'
+  // events also flow through this listener for free, giving us "open the same
+  // workspace in two tabs" parity as a side benefit.
+  //
+  // WHY guard on `key`: a sibling key write (ACTIVE_KEY, anything else) must
+  // NOT trigger a workspace re-read. Filtering by key keeps this listener cheap.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    function handleStorage(e: StorageEvent) {
+      // WHY check both null (manual dispatch with empty detail) and matching key:
+      //   - same-tab synthetic events use key=STORAGE_KEY (we control the dispatch)
+      //   - cross-tab native events provide key + newValue automatically
+      if (e.key !== STORAGE_KEY && e.key !== null) return;
+      // Re-load both arrays + active id from storage so we converge on the
+      // freshest state. WHY load both: the importer also writes ACTIVE_KEY
+      // pointing at the new workspace — if we only refreshed `workspaces`
+      // the new tab would be present but not auto-selected.
+      const refreshed = loadWorkspaces();
+      setWorkspaces(refreshed);
+      setActiveWorkspaceId(loadActiveId(refreshed));
+    }
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   const setActiveWorkspace = useCallback((id: string) => {
     setActiveWorkspaceId(id);
   }, []);

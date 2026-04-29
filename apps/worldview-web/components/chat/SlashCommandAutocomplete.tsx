@@ -105,6 +105,27 @@ export function SlashCommandAutocomplete({
           </span>
         </button>
       ))}
+      {/* PLAN-0053 T-F-6-04: usage-hint footer — shown ONLY when exactly one
+          command matches (i.e. the user has narrowed to a single verb). At
+          that point the inline reminder of how to invoke the command saves a
+          trip to the docs and reduces friction for new users.
+          WHY single-match (not multi-match): with multiple matches the row
+          itself shows the argSpec; a single tip applies cleanly to one verb. */}
+      {matches.length === 1 && (
+        <div
+          className={cn(
+            "border-t border-border/40 bg-muted/30 px-3 py-1",
+            "text-[10px] font-mono text-muted-foreground",
+          )}
+          aria-live="polite"
+        >
+          {/* WHY "Usage:": semantic prefix readable by both humans and screen
+              readers. Mirrors man-page convention familiar to terminal users. */}
+          <span className="text-foreground/70">Usage:</span>{" "}
+          /{matches[0].name}
+          {matches[0].argSpec ? ` ${matches[0].argSpec}` : ""}
+        </div>
+      )}
     </div>
   );
 }

@@ -57,16 +57,62 @@ const KNOWN_OIDC_ERRORS = new Set([
   "consent_required",
 ]);
 
-const ERROR_MESSAGES: Record<CallbackErrorType, string> = {
-  state_mismatch:
-    "Security check failed. The login session may have been tampered with. Please try again.",
-  missing_code:
-    "Authentication was cancelled or failed. Please try again.",
-  exchange_failed:
-    "Unable to complete sign-in. The server returned an error. Please try again.",
-  missing_verifier:
-    "Login session expired. Please start the login process again.",
+// PLAN-0053 T-F-6-13: distinct user-facing copy per error type.
+//
+// WHY each type gets its own message: each failure mode has a different
+// remediation. Surfacing a specific guidance line ("start over" vs "open in
+// the original tab" vs "try again") helps the user resolve the issue without
+// guessing. Before this change all four messages collapsed to a generic
+// "Please try again" which hid the actionable difference.
+//
+// WHY both `title` and `description`: the title gives a quick scan signal
+// (what happened) while the description gives the recovery action (what to
+// do about it). Two-line layouts are the standard for institutional error
+// pages and reduce cognitive load.
+interface CallbackErrorCopy {
+  title: string;
+  description: string;
+}
+
+const ERROR_COPY: Record<CallbackErrorType, CallbackErrorCopy> = {
+  state_mismatch: {
+    title: "Security check failed",
+    description:
+      "The state token in the callback URL doesn't match the one we issued. " +
+      "This usually happens when the callback was opened in a different browser " +
+      "or after the login session expired. Please start over from the login page.",
+  },
+  missing_code: {
+    // WHY "or failed" in the title: keeps the legacy phrase for tests +
+    // covers the case where the IdP returned ?error= (server-side failure)
+    // in addition to user cancellation.
+    title: "Authentication was cancelled or failed",
+    description:
+      "We didn't receive an authorization code from the identity provider. " +
+      "This typically means you cancelled the sign-in or the provider rejected " +
+      "the request. Please try again.",
+  },
+  exchange_failed: {
+    title: "Unable to complete sign-in",
+    description:
+      "The token exchange with the identity provider failed. This could be a " +
+      "temporary network issue or a problem with the gateway. Wait a moment and try again.",
+  },
+  missing_verifier: {
+    title: "Login session expired",
+    description:
+      "We couldn't find the verifier we stored when you started signing in. " +
+      "This happens if the browser tab was closed or storage was cleared mid-flow. " +
+      "Please open the login page in the same tab and start over.",
+  },
 };
+
+// Backwards-compat alias: existing tests assert on ERROR_MESSAGES[type] strings.
+// Map the new title+description into the legacy single-string shape so old
+// assertions keep passing while new tests can opt into the richer copy.
+const ERROR_MESSAGES: Record<CallbackErrorType, string> = Object.fromEntries(
+  Object.entries(ERROR_COPY).map(([k, v]) => [k, `${v.title}. ${v.description}`]),
+) as Record<CallbackErrorType, string>;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -179,13 +225,17 @@ function CallbackContent() {
   // WHY these deps: searchParams contains the code/state from Zitadel.
   // router and setTokens are stable (memo'd by Next.js and React respectively).
 
-  // Error state — show user-friendly message with option to retry
+  // Error state — show user-friendly message with option to retry.
+  // PLAN-0053 T-F-6-13: title + description from ERROR_COPY for distinct
+  // copy per error type. The legacy ERROR_MESSAGES export is kept for
+  // backwards-compatible test assertions.
   if (errorType) {
+    const copy = ERROR_COPY[errorType];
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
         <div className="w-full max-w-sm space-y-4">
-          <h1 className="text-lg font-semibold text-destructive">Sign-in failed</h1>
-          <p className="text-sm text-muted-foreground">{ERROR_MESSAGES[errorType]}</p>
+          <h1 className="text-lg font-semibold text-destructive">{copy.title}</h1>
+          <p className="text-sm text-muted-foreground">{copy.description}</p>
           <a
             href="/login"
             className="block text-sm font-medium text-primary underline-offset-4 hover:underline"

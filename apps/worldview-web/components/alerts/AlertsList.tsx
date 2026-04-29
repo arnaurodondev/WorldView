@@ -137,6 +137,28 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
   // distract from active alerts. User must opt-in to review them.
   const [ackCollapsed, setAckCollapsed] = useState(true);
 
+  // ── Bulk-select state (PLAN-0053 T-F-6-03) ────────────────────────────────
+  // WHY a Set of alert_ids: O(1) membership tests + the bulk toolbar needs to
+  // know how many are selected. We do NOT persist this in localStorage — it
+  // resets on refresh by design. Selection is an in-flight workflow, not a
+  // setting; persisting would surprise users who expect a fresh slate.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  /** Toggle a single id in the selection set. */
+  const toggleSelected = useCallback((alertId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(alertId)) next.delete(alertId);
+      else next.add(alertId);
+      return next;
+    });
+  }, []);
+
+  /** Clear the entire selection set. Used after bulk-ACK and on Clear button. */
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
   // ── Data fetching ────────────────────────────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["alerts-pending-page", { limit: 50 }],
@@ -257,6 +279,40 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
     },
     [alertActions],
   );
+
+  /**
+   * Bulk-ACK every currently selected alert (PLAN-0053 T-F-6-03).
+   *
+   * WHY mirror handleAckAll's optimistic + per-id sync pattern: keeps backend
+   * sync semantics identical (some ACKs succeed, others fall back to
+   * local-only) — the user's mental model is "bulk == many singles in one
+   * click". Rolling our own happy-path-only behaviour would diverge from the
+   * single-row case and create surprises (e.g. one row ACKs but bulk doesn't).
+   */
+  const handleAckSelected = useCallback(() => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setAcknowledged((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      try {
+        localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
+      } catch { /* ignore */ }
+      return next;
+    });
+    ids.forEach((id) => {
+      void alertActions.ack(id).then((res) => {
+        if (res.localOnly) {
+          setLocalOnlyIds((prev) => {
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+          });
+        }
+      });
+    });
+    clearSelection();
+  }, [selectedIds, alertActions, clearSelection]);
 
   /** Acknowledge all alerts of a given severity level */
   const handleAckAll = useCallback(
@@ -424,6 +480,41 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
         </div>
       )}
 
+      {/* ── Bulk action toolbar (PLAN-0053 T-F-6-03) ──────────────────────── */}
+      {/* WHY only when N≥1 selected: at zero selection the toolbar would be
+          dead chrome. Hiding it keeps vertical density at the default state
+          (terminal-grade) and lets the toolbar appear as a clear progressive-
+          disclosure cue when the user starts checking boxes. */}
+      {selectedIds.size > 0 && (
+        <div
+          role="toolbar"
+          aria-label="Bulk alert actions"
+          className="mb-1 flex h-7 items-center justify-between border-b border-primary/40 bg-primary/5 px-2 text-[11px]"
+        >
+          <span className="font-mono tabular-nums text-foreground">
+            {selectedIds.size} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAckSelected}
+              className="rounded-[2px] border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.06em] text-primary hover:bg-primary/20"
+              aria-label={`Acknowledge ${selectedIds.size} selected alerts`}
+            >
+              ACK Selected
+            </button>
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground hover:text-foreground"
+              aria-label="Clear alert selection"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── All-clear state ───────────────────────────────────────────────── */}
       {!hasActiveAlerts && acknowledgedAlerts.length === 0 && (
         <InlineEmptyState message="No pending alerts — you're all caught up." />
@@ -482,6 +573,12 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
                   localOnly={localOnlyIds.has(alert.alert_id)}
+                  // PLAN-0053 T-F-6-03: bulk-select wiring. The checkbox is
+                  // always rendered so the user can multi-select without a
+                  // separate "enter selection mode" click — same affordance
+                  // as Gmail / Slack inboxes.
+                  selected={selectedIds.has(alert.alert_id)}
+                  onToggleSelected={() => toggleSelected(alert.alert_id)}
                 />
               ))}
             </ul>
@@ -574,6 +671,10 @@ export interface AlertRowProps {
    * Snoozed tab so muted rows still appear but recede visually.
    */
   dimmed?: boolean;
+  /** PLAN-0053 T-F-6-03: row is in the bulk-select set. */
+  selected?: boolean;
+  /** PLAN-0053 T-F-6-03: parent toggles bulk-select for this row. */
+  onToggleSelected?: () => void;
 }
 
 /**
@@ -591,7 +692,16 @@ export function minutesUntilEndOfDay(now: Date = new Date()): number {
   return Math.max(1, Math.round((eod.getTime() - now.getTime()) / 60_000));
 }
 
-export function AlertRow({ alert, onSelect, onAck, onSnooze, localOnly, dimmed }: AlertRowProps) {
+export function AlertRow({
+  alert,
+  onSelect,
+  onAck,
+  onSnooze,
+  localOnly,
+  dimmed,
+  selected = false,
+  onToggleSelected,
+}: AlertRowProps) {
   // F-302 follow-up: backend severity may arrive lowercase. SEV_DOT_COLOR is
   // keyed by the uppercase union — looking up `alert.severity` directly when
   // the value is "low" returns undefined and renders an unstyled bg. Normalise
@@ -606,8 +716,29 @@ export function AlertRow({ alert, onSelect, onAck, onSnooze, localOnly, dimmed }
         className={cn(
           "flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
           dimmed && "opacity-60",
+          // PLAN-0053 T-F-6-03: tint selected rows so the bulk set is visible
+          // even when the checkbox column scrolls out of view (rare in this
+          // layout but cheap to express).
+          selected && "bg-primary/5",
         )}
       >
+
+        {/* PLAN-0053 T-F-6-03: bulk-select checkbox.
+            WHY only render when onToggleSelected is provided: the same AlertRow
+            component is reused for the Acknowledged group where bulk-select
+            doesn't make sense (those alerts are already done). */}
+        {onToggleSelected && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            // WHY stopPropagation: clicking the checkbox should NOT also fire
+            // the row's onSelect (which would open the AlertDetailSheet).
+            onClick={(e) => e.stopPropagation()}
+            className="h-3 w-3 shrink-0 accent-primary"
+            aria-label={`Select alert ${alert.alert_id}`}
+          />
+        )}
 
         {/* Severity dot — quick visual severity scan */}
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[severityKey])} />
@@ -694,6 +825,16 @@ export function AlertRow({ alert, onSelect, onAck, onSnooze, localOnly, dimmed }
                 onClick={() => onSnooze(60)}
               >
                 Snooze 1h
+              </DropdownMenuItem>
+              {/* PLAN-0053 T-F-6-01: 4h is the most common "deferred response"
+                  bucket per institutional UX research — long enough to skip a
+                  market session, short enough to re-surface before close. */}
+              <DropdownMenuItem
+                className="text-[11px]"
+                onClick={() => onSnooze(240)}
+                aria-label="Snooze 4 hours"
+              >
+                Snooze 4h
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-[11px]"

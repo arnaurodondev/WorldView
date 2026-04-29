@@ -82,11 +82,29 @@ export default function DashboardPage() {
     //     where the row stack overflows the 100vh-36px height budget.
     // WHY p-3: gives the outermost panel-set the same 12px breathing margin
     // as the gaps between cells — visually centring the grid in the chrome.
+    //
+    // PLAN-0053 T-H-8-01: responsive breakpoints.
+    //   - default (<md, mobile <768px): grid-cols-1 — every widget stacks.
+    //   - md (≥768px, tablet): grid-cols-6 — two-up layout (12-col widgets
+    //     halved). Row heights drop to auto so panels expand to natural
+    //     content height instead of being clipped at 130px.
+    //   - lg (≥1024px, desktop): grid-cols-12 — original Bloomberg-grade
+    //     dense layout with fixed row sizes.
+    // WHY two breakpoints (not one): tablet readers (e.g. iPad in landscape)
+    // benefit from a 2-up layout that's still denser than a single column,
+    // while mobile users get one widget per row for legibility.
     <div
-      className="grid grid-cols-12 gap-3 overflow-auto bg-background p-3"
+      className="grid grid-cols-1 md:grid-cols-6 lg:grid-cols-12 gap-3 overflow-auto bg-background p-3"
       style={{
         height: "calc(100vh - 36px)",
-        gridTemplateRows: "auto 130px minmax(220px, 1fr) minmax(200px, 1fr)",
+        // WHY the responsive gridTemplateRows is applied via inline style only
+        // at >= lg: at smaller breakpoints the cells dictate their own height
+        // via natural content + h-auto, and a fixed-row template would clip
+        // them. Tailwind can't conditionally set inline styles, so we keep
+        // the fixed template only at lg via CSS variable + media query? Easier:
+        // omit the constraint here and rely on per-cell h-full/min-h-0 at lg.
+        gridTemplateRows:
+          "var(--dashboard-grid-rows, auto 130px minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
 
@@ -101,7 +119,11 @@ export default function DashboardPage() {
           WHY p-2 inside the cell: the MorningBriefCard renders its own
           tight content with no padding; this gives it breathing room
           inside the accent frame. */}
-      <div className="col-span-12 min-w-0 border border-primary/60 bg-background p-2">
+      {/* PLAN-0053 T-H-8-01 responsive col-spans: each cell carries
+          mobile→tablet→desktop variants. Pattern is `col-span-1 md:col-span-X
+          lg:col-span-Y`. The mobile single-column stack (col-span-1) is the
+          implicit fallback — every widget gets full row width. */}
+      <div className="col-span-1 md:col-span-6 lg:col-span-12 min-w-0 border border-primary/60 bg-background p-2">
         <MorningBriefCard />
       </div>
 
@@ -118,16 +140,16 @@ export default function DashboardPage() {
           WHY border border-border/40: subtle 1px panel border preserves the
           original Bloomberg-style cell-seam aesthetic while gap-3 supplies
           the breathing room. */}
-      <div className="col-span-3 h-full min-w-0 border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-w-0 border border-border/40">
         <MarketSnapshotWidget />
       </div>
-      <div className="col-span-4 h-full min-w-0 border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-w-0 border border-border/40">
         <SectorHeatmapWidget />
       </div>
       {/* WHY overflow-hidden on this cell: WatchlistMoversWidget contains a
           scroll container (independent-scroll rule) — the cell itself must
           clip so the inner overflow-auto has a definite height. */}
-      <div className="col-span-5 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-6 lg:col-span-5 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <WatchlistMoversWidget />
       </div>
 
@@ -146,13 +168,13 @@ export default function DashboardPage() {
           (bounded height). overflow-hidden on the cell + overflow-y-auto
           inside the widget content area enables independent scrolling per
           panel without page-level overflow. */}
-      <div className="col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PortfolioSummary />
       </div>
-      <div className="col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PredictionMarketsWidget />
       </div>
-      <div className="col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-6 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PreMarketMoversWidget />
       </div>
 
@@ -162,16 +184,16 @@ export default function DashboardPage() {
           space.
           WHY overflow-hidden + min-h-0: independent-scroll rule (see Row 3
           rationale). */}
-      <div className="col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <EconomicCalendar />
       </div>
-      <div className="col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <EarningsCalendarWidget />
       </div>
-      <div className="col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PortfolioNewsWidget />
       </div>
-      <div className="col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
+      <div className="col-span-1 md:col-span-3 lg:col-span-3 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <RecentAlerts />
       </div>
 
