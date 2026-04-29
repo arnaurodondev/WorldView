@@ -661,10 +661,22 @@ async def get_watchlist_insights(
     cutoff = datetime.now(tz=UTC) - timedelta(hours=news_lookback_hours)
     news_by_entity: dict[str, list[dict[str, Any]]] = {}
     for art in news_articles:
-        # PLAN-0049 added top-level entity_id; legacy rows nest it under payload.
-        ents = art.get("entity_ids") or []
-        if not isinstance(ents, list):
-            ents = []
+        # F-QA2-01 fix: S6's RankedArticleResponse emits `primary_entity_id`
+        # (singular, optional UUID) — NOT a `entity_ids` list. The prior
+        # implementation read a non-existent field, so news_by_entity was
+        # always empty and every member's news_count_24h was 0 in
+        # production. We also accept a fallback `entity_ids` list shape
+        # so tests and any future schema change that introduces multiple
+        # tagged entities still flow through.
+        primary_eid = art.get("primary_entity_id")
+        ents: list[str] = []
+        if isinstance(primary_eid, str) and primary_eid:
+            ents.append(primary_eid)
+        legacy = art.get("entity_ids")
+        if isinstance(legacy, list):
+            ents.extend(str(x) for x in legacy if x)
+        if not ents:
+            continue
         # Apply the 24h cutoff. published_at is ISO 8601 — best-effort parse.
         published = art.get("published_at")
         in_window = True
@@ -680,7 +692,7 @@ async def get_watchlist_insights(
         if not in_window:
             continue
         for eid in ents:
-            news_by_entity.setdefault(str(eid), []).append(art)
+            news_by_entity.setdefault(eid, []).append(art)
 
     # Pending alerts indexed by entity_id (each alert may reference one).
     alerts_by_entity: dict[str, int] = {}
