@@ -169,6 +169,16 @@ export function RuleManagerDialog({
       await updateAlertRule(editingId, payload);
     } else {
       await createAlertRule(payload);
+      // PLAN-0053 Wave G T-G-7-08 — post-first-alert NPS trigger.
+      // Only fire on creation (not edits). The NPSPromptHost decides
+      // whether to actually show the prompt — eligibility checks include
+      // session count, last-submitted, and per-quarter cap. We don't need
+      // a "is this the *first* alert?" check here because eligibility
+      // already throttles to once per quarter, which is the spirit of
+      // the requirement (users don't get hassled on every alert create).
+      void import("@/components/feedback/NPSPromptHost").then(
+        ({ requestNPS }) => requestNPS("post_first_alert"),
+      );
     }
     await refresh();
     onRulesChanged?.();

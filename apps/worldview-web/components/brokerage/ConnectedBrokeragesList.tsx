@@ -167,6 +167,17 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
         setSyncJustTriggered(true);
         // Reset the transient success message after 3s (same delay as invalidation)
         setTimeout(() => setSyncJustTriggered(false), 3_500);
+        // PLAN-0053 Wave G T-G-7-08 — post-portfolio-sync NPS trigger.
+        // We fire after the success delay so the prompt doesn't compete
+        // with the "Synced ✓" confirmation. The NPSPromptHost decides
+        // whether to actually show it (eligibility gate).
+        // WHY dynamic import: avoids pulling NPS code into the brokerage
+        // bundle for users who never trigger a sync.
+        setTimeout(() => {
+          void import("@/components/feedback/NPSPromptHost").then(
+            ({ requestNPS }) => requestNPS("post_sync"),
+          );
+        }, 4_000);
       },
     });
   }
