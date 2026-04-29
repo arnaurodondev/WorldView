@@ -147,7 +147,7 @@ async def _insert_event_and_entities(
         text("""
 INSERT INTO events (event_id, doc_id, subject_entity_id, event_type, event_date, event_text, extraction_confidence)
 VALUES (:event_id, :doc_id, :subject_entity_id, :event_type, :event_date, :event_text, :extraction_confidence)
-ON CONFLICT (event_id) DO NOTHING
+ON CONFLICT (event_id, created_at) DO NOTHING
 """),
         {
             "event_id": str(event_id),
@@ -199,7 +199,7 @@ VALUES
     (:claim_id, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
      :claim_type, :polarity, :claim_text, :extraction_confidence, :is_backfill,
      :extraction_model_id)
-ON CONFLICT (claim_id) DO NOTHING
+ON CONFLICT (claim_id, created_at) DO NOTHING
 """),
         {
             "claim_id": str(claim_id),
