@@ -7,7 +7,7 @@
     {"name": "event_id",          "type": "string",                  "doc": "UUIDv7 event identifier"},
     {"name": "event_type",        "type": "string",                  "default": "market.prediction.snapshot", "doc": "Event type discriminator"},
     {"name": "schema_version",    "type": "int",                     "default": 1},
-    {"name": "occurred_at",       "type": "string",                                 "doc": "ISO-8601 UTC timestamp — required, no default"},
+    {"name": "occurred_at",       "type": "string",    "default": "1970-01-01T00:00:00Z",  "doc": "ISO-8601 UTC timestamp. Default is epoch sentinel — callers MUST always supply a real value."},
     {"name": "market_id",         "type": "string",                  "doc": "Polymarket conditionId"},
     {"name": "source",            "type": "string",                  "default": "polymarket", "doc": "polymarket"},
     {"name": "question",          "type": "string",                  "doc": "The market question text"},
@@ -30,7 +30,8 @@
     {"name": "resolution_status", "type": "string",                  "default": "open", "doc": "open | resolved | cancelled"},
     {"name": "resolved_answer",   "type": ["null", "string"],        "default": null, "doc": "Winning outcome name if resolved"},
     {"name": "minio_bronze_key",  "type": ["null", "string"],        "default": null, "doc": "MinIO bronze layer object key for raw JSON"},
-    {"name": "category",          "type": ["null", "string"],        "default": null, "doc": "F-DP1-06: high-level Polymarket market category (politics, crypto, sports, business, etc). Forward-compatible: nullable with null default."},
+    {"name": "market_slug",       "type": ["null", "string"],        "default": null, "doc": "Polymarket event slug for URL construction (e.g. 'will-btc-hit-100k')"},
+    {"name": "category",          "type": ["null", "string"],        "default": null, "doc": "F-DP1-06: high-level Polymarket market category (e.g. politics, crypto, sports, business). Forward-compatible: nullable with null default so older producers/consumers ignore it. Sourced from Gamma API ``category`` field; falls back to first ``tags`` entry when category is absent."},
     {"name": "correlation_id",    "type": ["null", "string"],        "default": null}
   ]
 }
