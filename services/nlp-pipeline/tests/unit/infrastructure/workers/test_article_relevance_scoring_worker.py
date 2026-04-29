@@ -176,6 +176,31 @@ class TestTierFiltering:
         assert count == 0
         client_mock.post.assert_not_called()  # No Ollama calls
 
+    @pytest.mark.asyncio
+    async def test_fetch_query_uses_lower_for_routing_tier(self) -> None:
+        """F-DP1-04: routing_decisions stores LOWERCASE 'medium'/'deep'.
+
+        The earlier query compared against uppercase 'MEDIUM'/'DEEP' and matched
+        zero rows, leaving the worker idle for 3 days while 2,956 articles waited.
+        Regression: assert the SQL applies LOWER() so future enum-case shifts do
+        not silently break tier filtering again.
+        """
+        factory, session = _make_session_factory(articles=[])
+
+        with _mock_http_client():
+            worker = _make_worker(factory)
+            await worker.scoring_cycle()
+
+        # Inspect the SQL string passed to session.execute() — the first call's
+        # first positional argument is the TextClause; its underlying ``.text``
+        # attribute holds the rendered SQL.
+        assert session.execute.await_count >= 1
+        sql_text_clause = session.execute.await_args_list[0].args[0]
+        rendered = str(sql_text_clause)
+        assert "LOWER(" in rendered.upper(), "Expected LOWER() around routing tier compare"
+        assert "'medium'" in rendered.lower()
+        assert "'deep'" in rendered.lower()
+
 
 # ── R24 compliance tests ───────────────────────────────────────────────────────
 

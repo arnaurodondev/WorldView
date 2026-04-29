@@ -53,6 +53,9 @@ def build_prediction_market_payload(result: PredictionMarketFetchResult) -> dict
         # the Avro schema declares this field as ["null", "string"] with default null.
         # Sending "" would be valid Avro but misleading — null is the correct absent signal.
         "market_slug": result.market_slug or None,
+        # F-DP1-06: forward category to the consumer.  Already canonicalised to
+        # lower-case in ``from_gamma_response``; passes through verbatim here.
+        "category": result.category,
         "correlation_id": None,
     }
 

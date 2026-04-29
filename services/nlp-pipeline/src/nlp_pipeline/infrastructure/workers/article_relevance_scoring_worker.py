@@ -174,13 +174,19 @@ class ArticleRelevanceScoringWorker:
         session: AsyncSession,
     ) -> list[tuple[UUID, str | None, str | None]]:
         """Phase 1: fetch MEDIUM/DEEP-tier articles without llm_relevance_score."""
+        # F-DP1-04 (PLAN-0050 QA deep iter-1): RoutingTier StrEnum stores
+        # lowercase values ('medium', 'deep') — see domain/enums.py:50.  Earlier
+        # this filter compared against uppercase 'MEDIUM'/'DEEP', matching zero
+        # rows so the worker silently idled across all 2,956 articles.
+        # WHY case-insensitive: be defensive against either future enum changes
+        # or migrations that normalize to a different case.
         stmt = text(
             """
             SELECT dsm.doc_id, dsm.title, dsm.source_type
             FROM document_source_metadata dsm
             JOIN routing_decisions rd ON rd.doc_id = dsm.doc_id
             WHERE dsm.llm_relevance_score IS NULL
-              AND COALESCE(rd.final_routing_tier, rd.routing_tier) IN ('MEDIUM', 'DEEP')
+              AND LOWER(COALESCE(rd.final_routing_tier, rd.routing_tier)) IN ('medium', 'deep')
             ORDER BY dsm.published_at DESC
             LIMIT :batch_size
             """,

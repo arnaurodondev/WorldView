@@ -30,6 +30,7 @@
     {"name": "resolution_status", "type": "string",                  "default": "open", "doc": "open | resolved | cancelled"},
     {"name": "resolved_answer",   "type": ["null", "string"],        "default": null, "doc": "Winning outcome name if resolved"},
     {"name": "minio_bronze_key",  "type": ["null", "string"],        "default": null, "doc": "MinIO bronze layer object key for raw JSON"},
+    {"name": "category",          "type": ["null", "string"],        "default": null, "doc": "F-DP1-06: high-level Polymarket market category (politics, crypto, sports, business, etc). Forward-compatible: nullable with null default."},
     {"name": "correlation_id",    "type": ["null", "string"],        "default": null}
   ]
 }

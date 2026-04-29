@@ -35,6 +35,10 @@ _AVRO_FIELDS = {
     "resolution_status",
     "resolved_answer",
     "minio_bronze_key",
+    # F-DP1-06: market_slug + category are forward-compatible additions to the
+    # market.prediction.v1 schema; the payload builder MUST include both.
+    "market_slug",
+    "category",
     "correlation_id",
 }
 
@@ -144,3 +148,17 @@ class TestFetchAndWritePredictionMarketsUseCase:
         assert payload["schema_version"] == 1
         assert len(payload["outcomes"]) == 2
         assert payload["outcomes"][0] == {"name": "Yes", "token_id": "tok_yes", "price": 0.6}
+
+    async def test_payload_includes_category_when_present(self) -> None:
+        """F-DP1-06: category passes through from the entity to the outbox payload."""
+        from dataclasses import replace
+
+        result = replace(_make_result(), category="politics")
+        payload = build_prediction_market_payload(result)
+        assert payload["category"] == "politics"
+
+    async def test_payload_category_defaults_to_none(self) -> None:
+        """F-DP1-06: category defaults to None when the adapter could not derive it."""
+        result = _make_result()
+        payload = build_prediction_market_payload(result)
+        assert payload["category"] is None

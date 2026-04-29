@@ -289,6 +289,11 @@ class PredictionMarketFetchResult:
     # construct the Polymarket event URL on the frontend. Absent from older Gamma API
     # responses → default "". Forward-compatible: new field with safe default.
     market_slug: str = ""
+    # F-DP1-06: high-level Polymarket category (politics, crypto, sports, business, ...).
+    # Sourced from Gamma API ``category`` field; falls back to the first ``tags`` entry
+    # when ``category`` is absent. ``None`` means "no category provided" — the downstream
+    # writer leaves the prediction_markets.category column untouched (COALESCE preserve).
+    category: str | None = None
     id: UUID = field(default_factory=common.ids.new_uuid7)
 
     def __post_init__(self) -> None:
@@ -370,6 +375,29 @@ class PredictionMarketFetchResult:
         # snapshots. Prefer whichever is populated; default "" for missing/null values.
         market_slug = raw.get("slug") or raw.get("market_slug") or raw.get("groupItemSlug") or ""
 
+        # F-DP1-06: extract category from Gamma API.  The new Gamma API exposes a
+        # top-level ``category`` string (e.g. "Politics", "Crypto", "Sports").  Some
+        # market records instead have a ``tags`` list of dicts (``[{"label": "Crypto"}]``)
+        # or a ``tags`` list of plain strings.  We accept either shape and fall back to
+        # the first non-empty tag when ``category`` is absent.  None preserves existing
+        # DB values via the consumer's COALESCE upsert.
+        raw_category: Any = raw.get("category")
+        category: str | None = None
+        if isinstance(raw_category, str) and raw_category.strip():
+            category = raw_category.strip().lower()
+        else:
+            tags_raw = raw.get("tags") or []
+            if isinstance(tags_raw, list):
+                for tag in tags_raw:
+                    if isinstance(tag, str) and tag.strip():
+                        category = tag.strip().lower()
+                        break
+                    if isinstance(tag, dict):
+                        label = tag.get("label") or tag.get("name") or ""
+                        if isinstance(label, str) and label.strip():
+                            category = label.strip().lower()
+                            break
+
         return cls(
             source_type=SourceType.POLYMARKET,
             market_id=raw.get("conditionId", ""),
@@ -385,4 +413,5 @@ class PredictionMarketFetchResult:
             fetched_at=fetched_at,
             minio_bronze_key=None,
             market_slug=market_slug,
+            category=category,
         )

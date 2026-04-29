@@ -31,6 +31,7 @@
     {"name": "resolved_answer",   "type": ["null", "string"],        "default": null, "doc": "Winning outcome name if resolved"},
     {"name": "minio_bronze_key",  "type": ["null", "string"],        "default": null, "doc": "MinIO bronze layer object key for raw JSON"},
     {"name": "market_slug",       "type": ["null", "string"],        "default": null, "doc": "Polymarket event slug for URL construction (e.g. 'will-btc-hit-100k')"},
+    {"name": "category",          "type": ["null", "string"],        "default": null, "doc": "F-DP1-06: high-level Polymarket market category (e.g. politics, crypto, sports, business). Forward-compatible: nullable with null default so older producers/consumers ignore it. Sourced from Gamma API ``category`` field; falls back to first ``tags`` entry when category is absent."},
     {"name": "correlation_id",    "type": ["null", "string"],        "default": null}
   ]
 }
