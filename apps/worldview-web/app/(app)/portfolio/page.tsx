@@ -40,6 +40,14 @@ import { ChevronDown, Plus, ChevronRight, Trash2 } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// PLAN-0051 T-A-1-05 — realized P&L now sourced from a dedicated server
+// endpoint rather than the legacy client-side approximation. The hook
+// encapsulates query key + staleTime so we don't have to repeat the
+// invariants here.
+import {
+  useRealizedPnL,
+  defaultRealizedPnLRange,
+} from "@/hooks/useRealizedPnL";
 import { formatPrice, cn } from "@/lib/utils";
 import type { Portfolio } from "@/types/api";
 
@@ -790,6 +798,20 @@ export default function PortfolioPage() {
     staleTime: 0,
   });
 
+  // ── Query 7b: realized P&L (PLAN-0051 T-A-1-05) ───────────────────────────
+  // WHY a separate hook (not inline useQuery): the FIFO endpoint will be
+  // consumed by a future drill-down panel as well. Keeping the staleTime /
+  // queryKey conventions in one place avoids drift between consumers.
+  //
+  // WHY default range = current calendar year: matches the way 1099-B
+  // statements are organised; users can override later via a date picker.
+  const realizedRange = useMemo(() => defaultRealizedPnLRange(), []);
+  const realizedPnLQuery = useRealizedPnL(
+    activePortfolioId,
+    realizedRange.from,
+    realizedRange.to,
+  );
+
   // ── Query 7: portfolio period performance ─────────────────────────────────
   // WHY independent from holdings queries: performance depends on OHLCV data from S3,
   // not live quotes. Re-runs only when the portfolio or period changes — not on the
@@ -1319,16 +1341,33 @@ export default function PortfolioPage() {
           sense before holdings load. But we still render the page shell so the
           tabs are visible immediately (preventing layout shift on data arrival). */}
       {holdingsResp && (
-        <PortfolioKPIStrip
-          totalValue={kpi.totalValue}
-          dayPnl={kpi.dayPnl}
-          unrealisedPnl={kpi.unrealisedPnl}
-          unrealisedPnlPct={kpi.unrealisedPnlPct}
-          topGainer={kpi.topGainer}
-          topLoser={kpi.topLoser}
-          positionCount={kpi.positionCount}
-          realizedPnl={kpi.realizedPnl}
-        />
+        // PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
+        // fall back to the legacy client-side approximation (kpi.realizedPnl)
+        // and surface "(approx)" so traders know the value is not the FIFO
+        // ground truth. The hook never throws — `isError` flips on a 404 /
+        // 503 / network failure, which is exactly when we need the badge.
+        // WHY the IIFE: keeps the branching close to the prop site instead
+        // of polluting the render with extra `let` variables.
+        (() => {
+          const fifo = realizedPnLQuery.data;
+          const useFifo = !realizedPnLQuery.isError && fifo != null;
+          const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
+          return (
+            <PortfolioKPIStrip
+              totalValue={kpi.totalValue}
+              dayPnl={kpi.dayPnl}
+              unrealisedPnl={kpi.unrealisedPnl}
+              unrealisedPnlPct={kpi.unrealisedPnlPct}
+              topGainer={kpi.topGainer}
+              topLoser={kpi.topLoser}
+              positionCount={kpi.positionCount}
+              realizedPnl={realizedPnl}
+              realizedPnlApprox={!useFifo}
+              realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
+              realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+            />
+          );
+        })()
       )}
 
       {/* ── Tabs ──────────────────────────────────────────────────────────── */}

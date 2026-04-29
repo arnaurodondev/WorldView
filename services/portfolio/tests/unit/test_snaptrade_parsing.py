@@ -98,6 +98,88 @@ class TestParseActivityList:
 
         assert activities[0].amount is None
 
+    # ── PLAN-0051 / T-A-1-06 — F-P-010 ───────────────────────────────────────
+
+    def test_dividend_missing_amount_emits_warning(self) -> None:
+        """A DIVIDEND row with no ``amount`` MUST emit a structured warning.
+
+        The row is still persisted (so we don't silently drop data) but
+        operators get a stable log signal — ``snaptrade_dividend_missing_amount``
+        — to triage missing dividend payouts surfaced through SnapTrade.
+        """
+        from structlog.testing import capture_logs
+
+        client = _make_client_without_init()
+        items = [_activity(activity_type="DIVIDEND", units=0, price=0, amount=None)]
+
+        with capture_logs() as cap:
+            activities = client._parse_activity_list(items)
+
+        # Activity is still persisted (visibility, not data loss).
+        assert len(activities) == 1
+        # Exactly one warning, with the expected event name + identifying
+        # fields so log-search can pivot on snaptrade_transaction_id.
+        warnings = [r for r in cap if r.get("event") == "snaptrade_dividend_missing_amount"]
+        assert len(warnings) == 1
+        assert warnings[0]["snaptrade_transaction_id"] == "act-1"
+        assert warnings[0]["symbol"] == "AAPL"
+        # ``log_level`` is added by structlog's testing capture; match on the
+        # canonical "warning" string so the assertion survives stdlib changes.
+        assert warnings[0]["log_level"] == "warning"
+
+    def test_dividend_zero_amount_emits_warning(self) -> None:
+        """Amount==0 is functionally indistinguishable from missing — warn."""
+        from structlog.testing import capture_logs
+
+        client = _make_client_without_init()
+        items = [_activity(activity_type="DIVIDEND", units=0, price=0, amount=0)]
+
+        with capture_logs() as cap:
+            client._parse_activity_list(items)
+
+        events = [r["event"] for r in cap]
+        assert "snaptrade_dividend_missing_amount" in events
+
+    def test_div_alias_emits_warning(self) -> None:
+        """The brokerage may shorten the type to ``DIV`` — same warning."""
+        from structlog.testing import capture_logs
+
+        client = _make_client_without_init()
+        items = [_activity(activity_type="DIV", units=0, price=0, amount=None)]
+
+        with capture_logs() as cap:
+            client._parse_activity_list(items)
+
+        events = [r["event"] for r in cap]
+        assert "snaptrade_dividend_missing_amount" in events
+
+    def test_dividend_with_positive_amount_does_not_warn(self) -> None:
+        """Happy path: a populated dividend amount must NOT warn."""
+        from structlog.testing import capture_logs
+
+        client = _make_client_without_init()
+        items = [_activity(activity_type="DIVIDEND", units=0, price=0, amount=5.25)]
+
+        with capture_logs() as cap:
+            activities = client._parse_activity_list(items)
+
+        events = [r.get("event") for r in cap]
+        assert "snaptrade_dividend_missing_amount" not in events
+        assert activities[0].amount == Decimal("5.25")
+
+    def test_buy_with_missing_amount_does_not_warn(self) -> None:
+        """The dividend warning is scoped — a BUY with no amount stays quiet."""
+        from structlog.testing import capture_logs
+
+        client = _make_client_without_init()
+        items = [_activity(activity_type="BUY", units=10, price=150, amount=None)]
+
+        with capture_logs() as cap:
+            client._parse_activity_list(items)
+
+        events = [r.get("event") for r in cap]
+        assert "snaptrade_dividend_missing_amount" not in events
+
 
 # ── get_account_positions parsing (BP-264) ────────────────────────────────────
 

@@ -6,12 +6,16 @@ Fundamentals records are stored per instrument in the DB.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 
-from market_data.api.dependencies import get_fundamentals_section_uc
-from market_data.api.schemas.fundamentals import FundamentalsRecordResponse, FundamentalsResponse
+from market_data.api.dependencies import get_fundamentals_section_uc, get_fundamentals_snapshot_uc
+from market_data.api.schemas.fundamentals import (
+    FundamentalsRecordResponse,
+    FundamentalsResponse,
+    FundamentalsSnapshotResponse,
+)
 from market_data.application.use_cases.query_fundamentals import GetFundamentalsSectionUseCase
 from market_data.domain.entities import FundamentalsRecord
 from market_data.domain.enums import FundamentalsSection
@@ -37,6 +41,34 @@ def _to_record_response(record: FundamentalsRecord) -> FundamentalsRecordRespons
         source=record.source,
         ingested_at=record.ingested_at,
     )
+
+
+# NOTE: /fundamentals/{instrument_id}/snapshot MUST be registered before
+# /fundamentals/{instrument_id} to prevent FastAPI matching "snapshot" as an
+# instrument_id.  FastAPI evaluates routes in registration order.
+@router.get("/fundamentals/{instrument_id}/snapshot", response_model=FundamentalsSnapshotResponse)
+async def get_fundamentals_snapshot(
+    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
+    uc: Annotated[Any, Depends(get_fundamentals_snapshot_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsSnapshotResponse:
+    """Return the pre-computed flat snapshot of 10 key derived metrics.
+
+    WHY /snapshot sub-path: this endpoint returns a flat typed snapshot
+    (one row per instrument) rather than the raw section records that the
+    parent /fundamentals/{id} returns.  The snapshot is populated by the
+    backfill script and updated on each EODHD ingest cycle.
+
+    Returns 200 with all-null fields if the snapshot row exists but no
+    data has been ingested yet.  Returns 404 only if the instrument itself
+    is unknown — callers should always get a typed response shape.
+    """
+    result = await uc.execute(instrument_id)
+    if result is None:
+        # No snapshot row yet — return a shell with nulls rather than 404.
+        # WHY not 404: the FundamentalsTab must render "—" placeholders (not an
+        # error state) for instruments that haven't been backfilled yet.
+        return FundamentalsSnapshotResponse(instrument_id=instrument_id)
+    return FundamentalsSnapshotResponse(**result)
 
 
 @router.get("/fundamentals/{instrument_id}", response_model=FundamentalsResponse)

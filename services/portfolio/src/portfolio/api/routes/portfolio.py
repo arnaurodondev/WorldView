@@ -21,12 +21,22 @@ from portfolio.api.schemas import (
     PortfolioCreateRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
+    RealizedPnLResponse,
     ValueHistoryMetadata,
     ValueHistoryPoint,
     ValueHistoryResponse,
 )
+from portfolio.api.schemas import (
+    RealizedPnLBreakdownItem as RealizedPnLBreakdownItemResponse,
+)
 from portfolio.application.use_cases.create_portfolio import CreatePortfolioCommand, CreatePortfolioUseCase
 from portfolio.application.use_cases.get_exposure import GetExposureQuery, GetExposureUseCase
+from portfolio.application.use_cases.get_realized_pnl import (
+    GetRealizedPnLQuery,
+    GetRealizedPnLUseCase,
+    default_from_date,
+    default_to_date,
+)
 from portfolio.application.use_cases.get_value_history import (
     GetValueHistoryQuery,
     GetValueHistoryUseCase,
@@ -270,6 +280,79 @@ async def get_value_history(
             last_snapshot_at=last_snapshot_at,
             next_scheduled_run_utc=next_run.isoformat(),
         ),
+    )
+
+
+# ── PLAN-0051 Wave A — realised P&L ───────────────────────────────────────────
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/realized-pnl",
+    response_model=RealizedPnLResponse,
+)
+async def get_realized_pnl(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+) -> RealizedPnLResponse:
+    """Compute realised P&L (FIFO) for a portfolio over ``[from, to]``.
+
+    PLAN-0051 / T-A-1-04. Powers the new "Realised P&L" KPI on the
+    portfolio page. The use case walks the FULL transaction history so
+    cost basis is correct even when the requested window starts long
+    after the original BUYs — see the use-case docstring for the
+    algorithm and edge-case handling.
+
+    Defaults match the YTD convention used elsewhere in the product:
+
+    * ``from`` defaults to the first day of the current UTC year.
+    * ``to`` defaults to today UTC.
+
+    Returns 404 (via the standard exception handler) if the portfolio
+    doesn't exist, isn't in the caller's tenant, or isn't owned by them.
+
+    R27: depends on :class:`ReadOnlyUnitOfWork` (read replica).
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    today = datetime.now(tz=UTC).date()
+    start = from_date if from_date is not None else default_from_date(today)
+    end = to_date if to_date is not None else default_to_date(today)
+    if start > end:
+        raise HTTPException(status_code=400, detail="`from` must be on or before `to`")
+
+    uc = GetRealizedPnLUseCase()
+    result = await uc.execute(
+        GetRealizedPnLQuery(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+            from_date=start,
+            to_date=end,
+        ),
+        uow,
+    )
+
+    return RealizedPnLResponse(
+        total_realized=result.total_realized,
+        realized_long_term=result.realized_long_term,
+        realized_short_term=result.realized_short_term,
+        count=result.count,
+        breakdown_by_instrument=[
+            RealizedPnLBreakdownItemResponse(
+                instrument_id=row.instrument_id,
+                ticker=row.ticker,
+                name=row.name,
+                realized=row.realized,
+            )
+            for row in result.breakdown_by_instrument
+        ],
+        currency=result.currency,
+        from_date=result.from_date,
+        to_date=result.to_date,
     )
 
 

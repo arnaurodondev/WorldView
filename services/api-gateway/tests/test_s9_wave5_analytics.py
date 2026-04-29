@@ -135,6 +135,70 @@ async def test_exposure_proxies_to_s1(authed_app, authed_mock_clients) -> None:
     assert args[0] == "/api/v1/portfolios/p-1/exposure"
 
 
+# ── PLAN-0051 Wave A — realised P&L proxy (T-A-1-04) ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_realized_pnl_requires_auth(app, mock_clients) -> None:
+    """Unauthenticated request → 401, no downstream call."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/portfolios/p-1/realized-pnl")
+    assert resp.status_code == 401
+    mock_clients.portfolio.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_realized_pnl_proxies_to_s1_with_query_params(
+    authed_app,
+    authed_mock_clients,
+) -> None:
+    """T-A-1-04: ``from``/``to`` query params flow through unchanged and
+    the gateway tags successful responses with ``Cache-Control: max-age=300``."""
+    body = (
+        b'{"total_realized":"100.00000000","realized_long_term":"0.00000000",'
+        b'"realized_short_term":"100.00000000","count":1,'
+        b'"breakdown_by_instrument":[],"currency":"USD",'
+        b'"from_date":"2026-01-01","to_date":"2026-04-30"}'
+    )
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, body))
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/realized-pnl",
+            params={"from": "2026-01-01", "to": "2026-04-30"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200
+    args, kwargs = authed_mock_clients.portfolio.get.call_args
+    assert args[0] == "/api/v1/portfolios/p-1/realized-pnl"
+    assert kwargs["params"]["from"] == "2026-01-01"
+    assert kwargs["params"]["to"] == "2026-04-30"
+    # 5-minute edge cache hint on the success path.
+    assert resp.headers.get("cache-control") == "max-age=300"
+
+
+@pytest.mark.asyncio
+async def test_realized_pnl_passes_404_through(
+    authed_app,
+    authed_mock_clients,
+) -> None:
+    """S1 returning 404 (missing portfolio / wrong tenant) must surface unchanged."""
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(404, b'{"detail":"not found"}'),
+    )
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/missing/realized-pnl",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 404
+    # 404 responses MUST NOT be cached — we don't want a brief 404 to be
+    # served from a CDN for 5 minutes after the data lands.
+    assert resp.headers.get("cache-control") is None
+
+
 # ── risk-metrics composition ─────────────────────────────────────────────────
 
 

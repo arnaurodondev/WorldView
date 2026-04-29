@@ -34,6 +34,7 @@ direct market data ingestion, cross-service DB queries.
 | GET | `/api/v1/portfolios/{id}` | Get portfolio | private |
 | PUT | `/api/v1/portfolios/{id}` | Rename portfolio | private |
 | DELETE | `/api/v1/portfolios/{id}` | Archive portfolio | private |
+| GET | `/api/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO) over `[from, to]` — PLAN-0051 / T-A-1-04 | private |
 | POST | `/api/v1/transactions` | Record transaction | private |
 | GET | `/api/v1/transactions` | List transactions (by portfolio) — paginated (`limit`, `offset`) | private |
 | GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio | private |
@@ -537,6 +538,70 @@ make migrate-new MSG="add_column_foo"  # generate new migration
   with `status=deleted` but does not remove it from the DB. `GetWatchlistUseCase` will still
   return it. Consumers must check `status` if they need to filter deleted watchlists.
 
+
+---
+
+## Realised P&L Endpoint (PLAN-0051 / T-A-1-04)
+
+`GET /api/v1/portfolios/{portfolio_id}/realized-pnl` computes realised P&L for
+a portfolio over a date window using **FIFO** (First-In-First-Out) lot
+matching. The use case walks the FULL transaction history (including
+fully-closed positions) so cost basis is correct even when the requested
+window starts long after the original BUYs.
+
+### Query params
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `from` | First day of current UTC year | ISO date `YYYY-MM-DD`. Disposal date filter (inclusive). |
+| `to` | Today UTC | ISO date `YYYY-MM-DD`. Disposal date filter (inclusive). |
+
+`from > to` returns **400**. Missing portfolio (or wrong tenant) returns
+**404**. Wrong owner inside the same tenant returns **403**.
+
+### Response shape
+
+```jsonc
+{
+  "total_realized": "250.00000000",          // sum of long+short
+  "realized_long_term": "0.00000000",        // lots held > 365 days
+  "realized_short_term": "250.00000000",     // lots held ≤ 365 days
+  "count": 1,                                // number of disposals counted
+  "breakdown_by_instrument": [
+    {
+      "instrument_id": "…uuid…",
+      "ticker": "AAPL",                      // null when local cache miss
+      "name": "Apple Inc.",                  // null when local cache miss
+      "realized": "250.00000000"
+    }
+  ],
+  "currency": "USD",
+  "from_date": "2026-01-01",
+  "to_date": "2026-04-30"
+}
+```
+
+### FIFO semantics
+
+- BUY: opens a lot with `cost_per_share = (qty * price + fees) / qty` (buy
+  fees roll into cost basis, so SELLs implicitly recover them).
+- SELL: pops the oldest open lot first, chunk by chunk. The SELL's `fees`
+  are allocated **pro-rata** across matched chunks. Realised P&L for a
+  chunk = `matched_qty * (sell_price - cost_per_share) - allocated_fee`.
+- DIVIDEND / DEPOSIT / WITHDRAWAL / FEE: skipped (not disposition events).
+- Holding period: `(sell.executed_at - lot.executed_at).days`.
+  > 365 → long-term; ≤ 365 → short-term.
+- Short sale (SELL with no open lot): logged as
+  `realized_pnl_short_sale_skipped` warning, the row is dropped from the
+  calculation, the use case never crashes.
+- Disposals **outside** `[from, to]` still consume lots so cost basis
+  stays correct, but their realised P&L is not added to the totals.
+
+### Caching
+
+The S9 proxy adds `Cache-Control: max-age=300` on **200** responses only.
+Realised P&L only changes when a new SELL is recorded, so 5 minutes of
+edge caching is safe and cuts the FIFO walk for read-heavy dashboards.
 
 ---
 

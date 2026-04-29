@@ -29,6 +29,7 @@ import type {
   Quote,
   BatchQuoteResponse,
   Fundamentals,
+  FundamentalsSnapshot,
   FundamentalsSectionResponse,
   FundamentalsTimeseriesResponse,
   EntityGraph,
@@ -69,6 +70,8 @@ import type {
   ValueHistoryResponse,
   ExposureResponse,
   RiskMetricsResponse,
+  // PLAN-0051 Wave A — realized P&L
+  RealizedPnLResponse,
 } from "@/types/api";
 
 // ── Base URL ──────────────────────────────────────────────────────────────
@@ -527,6 +530,32 @@ export function createGateway(token?: string | null) {
       );
     },
 
+    /**
+     * getFundamentalsSnapshot — pre-computed derived metrics snapshot from S3
+     *
+     * WHY SEPARATE FROM getFundamentals: The main getFundamentals call returns
+     * fields assembled from EODHD highlights/technicals JSONB sections (market cap,
+     * P/E, margins). This snapshot contains 10 additional derived metrics that
+     * require multi-section joins (FCF = operating_cf - |capex|, interest coverage
+     * = ebit / interest_expense, net debt/EBITDA, beta, avg_volume_30d, eps_ttm).
+     * Pre-computing these at backfill time keeps the API response fast and avoids
+     * complex JSONB arithmetic in hot query paths.
+     *
+     * WHY NO 404: S3 always returns 200 for this endpoint — all fields are null
+     * when the instrument hasn't been through the backfill yet (e.g. newly-listed
+     * stocks, ETFs with no cash flow statements). The frontend shows "—" for nulls.
+     *
+     * Used by: InstrumentKeyMetrics (EPS TTM, Beta, Avg Volume rows),
+     *          FundamentalsTab Cash Flow section + Debt & Credit section.
+     * PLAN-0050 Wave D (T-D-4-04).
+     */
+    getFundamentalsSnapshot(instrumentId: string): Promise<FundamentalsSnapshot> {
+      return apiFetch<FundamentalsSnapshot>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/snapshot`,
+        { token: t },
+      );
+    },
+
     // ── Knowledge Graph ───────────────────────────────────────────────
 
     /**
@@ -938,6 +967,50 @@ export function createGateway(token?: string | null) {
       const qs = new URLSearchParams({ lookback_days: String(lookbackDays) }).toString();
       return apiFetch<RiskMetricsResponse>(
         `/v1/portfolios/${encodeURIComponent(portfolioId)}/risk-metrics?${qs}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getRealizedPnL — FIFO-computed realized P&L for a portfolio over a
+     * date range. PLAN-0051 T-A-1-04 / T-A-1-05.
+     *
+     * WHY a dedicated endpoint (instead of summing client-side):
+     *   1. The portfolio page's client-side approximation reuses the *current*
+     *      `holdings.average_cost`, which is wrong for fully-closed positions:
+     *      once the last share is sold the holding row is dropped, so the
+     *      client can't recover the cost basis and silently skips that
+     *      contribution. The S1 endpoint reads the full transaction history
+     *      and does FIFO over closed lots, so closed-position realized P&L is
+     *      finally captured.
+     *   2. The endpoint also splits the total into long-term vs short-term
+     *      (holding period > 365 days at sale time), which the client can't
+     *      compute without storing per-lot acquisition dates.
+     *
+     * WHY date-range filtering server-side: the SELL transaction set can be
+     * tens of thousands of rows for an active trader; filtering server-side
+     * is dramatically cheaper than streaming the full history to the browser
+     * just to discard rows older than the window.
+     *
+     * @param portfolioId  S1 portfolio ID
+     * @param from         Optional ISO date "YYYY-MM-DD" (inclusive lower)
+     * @param to           Optional ISO date "YYYY-MM-DD" (inclusive upper)
+     */
+    getRealizedPnL(
+      portfolioId: string,
+      from?: string,
+      to?: string,
+    ): Promise<RealizedPnLResponse> {
+      // WHY URLSearchParams: stable, escaped, and skips undefined keys
+      // automatically because we only set defined values. Hand-rolled
+      // template strings made one trailing "&from=&to=" bug last quarter.
+      const qs = new URLSearchParams();
+      if (from) qs.set("from", from);
+      if (to) qs.set("to", to);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+
+      return apiFetch<RealizedPnLResponse>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}/realized-pnl${suffix}`,
         { token: t },
       );
     },

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, Request
 
@@ -168,6 +168,28 @@ def get_fundamentals_section_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow))
     from market_data.application.use_cases.query_fundamentals import GetFundamentalsSectionUseCase
 
     return GetFundamentalsSectionUseCase(uow)
+
+
+async def get_fundamentals_snapshot_uc(request: Request) -> AsyncIterator[Any]:
+    """Yield GetFundamentalsSnapshotUseCase backed by the read (replica) session.
+
+    WHY async generator with yield: the use case needs an open AsyncSession
+    for the lifetime of the request.  FastAPI dependency injection calls the
+    generator, yields the use case, then resumes after the route handler
+    finishes to close the session cleanly — same pattern as get_uow().
+
+    WHY read_session_factory (not ReadOnlyUnitOfWork): the snapshot use case
+    accepts an AsyncSession directly for simplicity (one SELECT, no repos needed).
+    The read_session_factory is wired at app startup and points to the read
+    replica when one is configured, satisfying R27.
+    """
+    from market_data.application.use_cases.query_fundamentals_snapshot import (
+        GetFundamentalsSnapshotUseCase,
+    )
+
+    read_factory = request.app.state.read_session_factory
+    async with read_factory() as session:
+        yield GetFundamentalsSnapshotUseCase(session)
 
 
 # ── Fundamental metrics use case deps ─────────────────────────────────────────

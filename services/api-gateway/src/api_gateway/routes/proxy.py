@@ -1197,6 +1197,36 @@ async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI
+# matching "snapshot" as an instrument_id path parameter value.
+@router.get("/fundamentals/{instrument_id}/snapshot")
+async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/snapshot → S3 /api/v1/fundamentals/{id}/snapshot.
+
+    WHY THIS ENDPOINT: The InstrumentKeyMetrics sidebar and FundamentalsTab need
+    10 pre-computed derived metrics (eps_ttm, beta, avg_volume_30d, FCF, interest
+    coverage, etc.) in a single flat typed response.  The S3 instrument_fundamentals_snapshot
+    table pre-computes these at backfill time; this proxy exposes them to the frontend
+    via S9 without duplicating the derivation logic.
+
+    WHY ALWAYS 200: S3 returns a valid response even when the instrument has no
+    snapshot row — it returns all fields as null.  The frontend displays "—" for
+    nulls rather than showing an error.  This avoids confusing 404s for instruments
+    that are valid but simply haven't been through the backfill yet.
+
+    PLAN-0050 Wave D (T-D-4-04).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/snapshot",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/fundamentals/{instrument_id}")
 async def get_fundamentals(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.
@@ -1850,6 +1880,44 @@ async def recompute_portfolio_snapshot(portfolio_id: str, request: Request) -> A
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── PLAN-0051 Wave A — realised P&L (T-A-1-04) ───────────────────────────────
+
+
+@router.get("/portfolios/{portfolio_id}/realized-pnl")
+async def get_portfolio_realized_pnl(portfolio_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/portfolios/{id}/realized-pnl → S1 Portfolio service.
+
+    PLAN-0051 / T-A-1-04. Forwards ``from`` / ``to`` query params unchanged.
+    The S1 use case computes FIFO realised P&L over the full transaction
+    history (including fully-closed positions) and returns the result with
+    a per-instrument breakdown the frontend renders as the totals row.
+
+    Cache hint: ``Cache-Control: max-age=300`` — realised P&L only changes
+    when a new SELL is recorded, so 5 minutes of edge caching is safe and
+    cuts back on the FIFO walk for read-heavy dashboards.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/realized-pnl",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    # Mirror S1's status code, body, and content-type. Add the cache header
+    # only on 200 — error responses (404 / 400) must not be cached.
+    response_headers: dict[str, str] = {}
+    if resp.status_code == 200:
+        response_headers["Cache-Control"] = "max-age=300"
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers=response_headers,
+    )
 
 
 @router.get("/portfolios/{portfolio_id}/exposure")

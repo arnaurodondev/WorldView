@@ -48,8 +48,25 @@ export interface PortfolioKPIStripProps {
    * null when transactions have not yet loaded or cannot be computed.
    * WHY optional/null: transactions query may not have resolved; the tile shows "—"
    * rather than a misleading $0 in that case.
+   *
+   * PLAN-0051 T-A-1-05: this is now sourced from the S1
+   * `/realized-pnl` endpoint via useRealizedPnL(); see the page wrapper
+   * for the dispatch logic. When `realizedPnlApprox === true` the tile
+   * appends a small "(approx)" badge so traders know the FIFO endpoint
+   * was unavailable and they're looking at the legacy client-side
+   * approximation (current-avg-cost basis, ignores closed positions).
    */
   realizedPnl?: number | null;
+  /**
+   * When true, the realized P&L value comes from the legacy client-side
+   * approximation rather than the FIFO endpoint. Renders an "(approx)"
+   * suffix on the tile. Default false.
+   */
+  realizedPnlApprox?: boolean;
+  /** Long-term portion of realized P&L for the tooltip. Optional. */
+  realizedPnlLongTerm?: number | null;
+  /** Short-term portion of realized P&L for the tooltip. Optional. */
+  realizedPnlShortTerm?: number | null;
 }
 
 // ── KPI tile ──────────────────────────────────────────────────────────────────
@@ -67,11 +84,40 @@ interface KPITileProps {
   positive?: boolean;
   /** Whether to color the value with text-negative (red) */
   negative?: boolean;
+  /**
+   * Optional native HTML title — renders as a hover tooltip. Used by the
+   * Realized P&L tile to surface the long-term vs short-term breakdown
+   * without occupying additional pixels in the tight 7-tile strip. Native
+   * `title` is intentional rather than a Radix Tooltip: it requires zero
+   * additional DOM, no portal, and surfaces in screen readers for free.
+   */
+  hoverTitle?: string;
+  /**
+   * Optional small muted suffix displayed inline after the value, e.g.
+   * "(approx)" when the realized-P&L FIFO endpoint is unavailable and
+   * we're showing the client-side approximation. Renders one font size
+   * smaller and in muted-foreground so it doesn't dominate the tile.
+   */
+  suffix?: string;
+  /** Test id passthrough so unit tests can target individual tiles. */
+  dataTestId?: string;
 }
 
-function KPITile({ label, value, positive, negative }: KPITileProps) {
+function KPITile({
+  label,
+  value,
+  positive,
+  negative,
+  hoverTitle,
+  suffix,
+  dataTestId,
+}: KPITileProps) {
   return (
-    <div className="flex flex-col px-3 py-1.5 flex-1 min-w-0">
+    <div
+      className="flex flex-col px-3 py-1.5 flex-1 min-w-0"
+      title={hoverTitle}
+      data-testid={dataTestId}
+    >
       {/* Label: 10px ALL CAPS muted — consistent with table header style */}
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground truncate">
         {label}
@@ -86,6 +132,14 @@ function KPITile({ label, value, positive, negative }: KPITileProps) {
         )}
       >
         {value}
+        {suffix && (
+          // WHY ml-1 + smaller / muted: keep the headline number visually
+          // dominant; the badge is metadata that shouldn't compete for
+          // attention. tabular-nums isn't needed on a non-numeric badge.
+          <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+            {suffix}
+          </span>
+        )}
       </span>
     </div>
   );
@@ -102,6 +156,9 @@ export function PortfolioKPIStrip({
   topLoser,
   positionCount,
   realizedPnl,
+  realizedPnlApprox = false,
+  realizedPnlLongTerm = null,
+  realizedPnlShortTerm = null,
 }: PortfolioKPIStripProps) {
   // F-201 fix (PLAN-0048 QA iter-1): formatPercent already prepends "+" for
   // positive values (lib/utils.ts:81). The previous "+${formatPercent()}" wrap
@@ -140,16 +197,59 @@ export function PortfolioKPIStrip({
         negative={unrealisedPnl < 0}
       />
 
-      {/* Tile 4: Realized P&L — sum of (sell_price − avg_cost) × qty across all SELL
-          transactions. Distinct from Unrealised P&L: it captures what has already
-          been locked in, not the mark-to-market on open positions. Shows "—" while
-          the transactions query is still loading (null) so traders aren't misled by $0. */}
-      <KPITile
-        label="Realized P&L"
-        value={realizedPnl == null ? "—" : formatPrice(realizedPnl)}
-        positive={realizedPnl != null && realizedPnl > 0}
-        negative={realizedPnl != null && realizedPnl < 0}
-      />
+      {/* Tile 4: Realized P&L — FIFO-computed cumulative gain/loss across all
+          SELL transactions in the date window (default = current calendar year).
+          Distinct from Unrealised P&L: it captures what has already been locked
+          in, not the mark-to-market on open positions. Shows "—" while the query
+          is still loading (null) so traders aren't misled by $0.
+
+          PLAN-0051 T-A-1-05:
+            - The (approx) badge appears when the S1 endpoint errored and we
+              fell back to the client-side approximation. The hover tooltip
+              explains the degradation so traders don't silently trust a wrong
+              number.
+            - When the endpoint succeeds, the tooltip surfaces the long-term
+              vs short-term breakdown for tax estimation, without spending
+              another tile in the tight 7-tile strip. */}
+      {(() => {
+        // Build the tooltip text once. WHY in-line IIFE: keeps this branchy
+        // string-building logic next to the tile it serves — easier to
+        // read than a top-of-file helper that's only used once.
+        let tooltip: string | undefined;
+        if (realizedPnlApprox) {
+          tooltip =
+            "Backend unavailable — showing client-side approximation. " +
+            "Closed positions and FIFO long/short-term split are not included.";
+        } else if (
+          realizedPnl != null &&
+          (realizedPnlLongTerm != null || realizedPnlShortTerm != null)
+        ) {
+          const lt = realizedPnlLongTerm ?? 0;
+          const st = realizedPnlShortTerm ?? 0;
+          tooltip =
+            `Long-term (>1y held): ${formatPrice(lt)}\n` +
+            `Short-term (≤1y held): ${formatPrice(st)}`;
+        }
+
+        // WHY display "—" on approx + null: the requested behaviour from
+        // T-A-1-05 — gracefully fall back to em-dash when the endpoint
+        // erroed AND the client couldn't compute anything either. Showing
+        // "$0" would mislead.
+        const display =
+          realizedPnl == null ? "—" : formatPrice(realizedPnl);
+
+        return (
+          <KPITile
+            label="Realized P&L"
+            value={display}
+            positive={realizedPnl != null && realizedPnl > 0}
+            negative={realizedPnl != null && realizedPnl < 0}
+            hoverTitle={tooltip}
+            suffix={realizedPnlApprox ? "(approx)" : undefined}
+            dataTestId="kpi-realized-pnl"
+          />
+        );
+      })()}
 
       {/* Tile 5: Top Gainer — best performer in the book; always green when present
           WHY pnlPct / 100: the stored value is already a percentage (e.g. 4.82),

@@ -176,8 +176,12 @@ async def test_insights_happy_path_composes_all_signals(
         "i-msft": {"gics_sector": "Information Technology"},
     }
     _wire_clients(
-        authed_mock_clients, members_payload, news_payload, alerts_payload,
-        quotes=quotes, overviews=overviews,
+        authed_mock_clients,
+        members_payload,
+        news_payload,
+        alerts_payload,
+        quotes=quotes,
+        overviews=overviews,
     )
 
     transport = ASGITransport(app=authed_app)
@@ -308,9 +312,7 @@ async def test_insights_sets_cache_control_header(
 
 
 @pytest.mark.asyncio
-async def test_insights_propagates_s1_auth_error(
-    authed_app, authed_mock_clients, news_payload, alerts_payload
-) -> None:
+async def test_insights_propagates_s1_auth_error(authed_app, authed_mock_clients, news_payload, alerts_payload) -> None:
     """F-QA-05/F-QA-01 regression: S1 returns 403 → gateway returns 403.
 
     The prior _safe_get(members) silently turned auth errors into an empty
@@ -342,9 +344,7 @@ async def test_insights_propagates_s1_auth_error(
 
 
 @pytest.mark.asyncio
-async def test_insights_member_without_entity_id_does_not_falsely_alert(
-    authed_app, authed_mock_clients
-) -> None:
+async def test_insights_member_without_entity_id_does_not_falsely_alert(authed_app, authed_mock_clients) -> None:
     """F-QA-05/F-QA-06 regression: a member with no entity_id must NOT match
     an alert payload that happens to carry an empty-string entity_id."""
     members = {
@@ -356,7 +356,10 @@ async def test_insights_member_without_entity_id_does_not_falsely_alert(
     # Defensive: an alert with an empty-string entity_id should not match.
     alerts = {"alerts": [{"alert_id": "a-1", "entity_id": "", "severity": "high"}]}
     _wire_clients(
-        authed_mock_clients, members, {"articles": []}, alerts,
+        authed_mock_clients,
+        members,
+        {"articles": []},
+        alerts,
         quotes={"i-x": {"last": 1.0, "change_pct": 0.0}},
         overviews={"i-x": {"gics_sector": "Energy"}},
     )

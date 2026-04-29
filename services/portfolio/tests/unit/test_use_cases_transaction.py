@@ -167,6 +167,14 @@ class FakeTransactionRepo(TransactionRepository):
     async def list_by_portfolio_ids(self, portfolio_ids, tenant_id, limit: int = 100, offset: int = 0):
         return [], 0
 
+    # PLAN-0051 / T-A-1-04 — required by abstract base. Returns ASC-sorted
+    # transactions for the portfolio; this fake doesn't filter by tenant
+    # because the existing tests construct a single-tenant world.
+    async def list_all_for_portfolio_asc(self, portfolio_id, tenant_id):
+        items = [t for t in self.saved if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
+
 
 class FakeHoldingRepo(HoldingRepository):
     def __init__(self) -> None:
