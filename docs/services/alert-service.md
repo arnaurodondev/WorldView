@@ -300,7 +300,8 @@ columns), so existing rows have `title IS NULL` until either:
    real production data — alerts are immutable), or
 2. The one-shot backfill script populates them from each row's `payload` JSON.
 
-**Backfill script:** `services/alert/scripts/backfill_alert_titles.py`
+**Backfill script:** `services/alert/src/alert/scripts/backfill_alert_titles.py`
+(lives inside the importable package so it can be invoked via `python -m`).
 
 ```bash
 # Required: ALERT_DB_URL points at the alert_db (postgres:// or
@@ -308,10 +309,10 @@ columns), so existing rows have `title IS NULL` until either:
 export ALERT_DB_URL="postgres://alert:alertpw@localhost:5443/alert_db"
 
 # Dry-run — counts rows with NULL title without mutating anything.
-python services/alert/scripts/backfill_alert_titles.py --dry-run
+python -m alert.scripts.backfill_alert_titles --dry-run
 
 # Live — backfills in 1000-row batches, logs progress every 10k rows.
-python services/alert/scripts/backfill_alert_titles.py
+python -m alert.scripts.backfill_alert_titles
 ```
 
 **Idempotency:** the SELECT and the UPDATE are both guarded by `title IS NULL`,
