@@ -30,6 +30,7 @@ from content_store.domain.entities import (
     MinHashSignature,
 )
 from content_store.domain.enums import DedupOutcome, DocumentStatus
+from content_store.domain.errors import BronzeObjectNotFoundError
 
 if TYPE_CHECKING:
     from content_store.application.ports.lsh import LSHClientPort
@@ -133,10 +134,33 @@ class ProcessArticleUseCase:
         log = logger.bind(article_id=article.doc_id, source=article.source_type)
 
         # 1. Fetch raw bytes from bronze (R24: caller should pre-fetch before opening session)
+        # F-DP2-05 (PLAN-deep-qa-iter2): catch storage.exceptions.ObjectNotFoundError
+        # and translate to BronzeObjectNotFoundError so the consumer can skip the
+        # message gracefully (no traceback in logs, offset committed).  Bronze-tier
+        # corruption is operational — retrying the same key won't help, so we
+        # short-circuit instead of dead-lettering.
         if prefetched_bytes is not None:
             raw_bytes = prefetched_bytes
         else:
-            raw_bytes = await self._bronze_store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
+            try:
+                raw_bytes = await self._bronze_store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
+            except Exception as exc:
+                # WHY broad except: storage adapters live behind a port and may raise
+                # any of: storage.exceptions.ObjectNotFoundError, OSError (per port
+                # contract), or backend-specific errors.  We pattern-match on the
+                # type *name* to cover all "missing key" cases without importing
+                # the storage library here (domain layer purity).
+                exc_name = type(exc).__name__
+                if exc_name in {"ObjectNotFoundError", "NoSuchKey", "FileNotFoundError"}:
+                    log.warning(
+                        "bronze_object_missing",
+                        bronze_key=article.minio_bronze_key,
+                        bronze_bucket=self._bronze_bucket,
+                        error=str(exc),
+                    )
+                    msg = f"bronze object missing: {self._bronze_bucket}/{article.minio_bronze_key}"
+                    raise BronzeObjectNotFoundError(msg) from exc
+                raise
         log.info("bronze_fetched", byte_size=len(raw_bytes))
 
         # 2. Clean text
