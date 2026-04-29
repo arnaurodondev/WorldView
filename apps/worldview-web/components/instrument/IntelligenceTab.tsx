@@ -33,7 +33,7 @@ import dynamic from "next/dynamic";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
 import { useQuery } from "@tanstack/react-query";
 // WHY CheckCircle removed: empty contradictions state now uses inline text only
-import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown } from "lucide-react";
+import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown, Clock } from "lucide-react";
 // WHY MarkdownContent (PLAN-0049 T-D-4-03): the brief block previously rendered
 // markdown via an inline ReactMarkdown + remarkGfm config with a long set of
 // custom Tailwind selectors. That config drifted from MorningBriefCard's and
@@ -48,7 +48,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import type { BriefingResponse, Contradiction } from "@/types/api";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 // ── EntityGraph dynamic import (ssr:false) ────────────────────────────────────
 // WHY next/dynamic with ssr:false: EntityGraph.tsx uses sigma.js which creates a
@@ -291,6 +291,273 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
   );
 }
 
+// ── Intelligence filter types (PLAN-0050 Wave E T-E-5-05) ────────────────────
+// WHY a dedicated section: filter state is hoisted in IntelligenceTab and passed
+// to EntityGraph as props. Defining the types here makes the interface explicit.
+
+/** Graph exploration depth — how many hops from the center entity to show. */
+type DepthValue = 1 | 2 | 3;
+
+/** Time-window filter for relation evidence (how far back to look). */
+type TimeWindow = "7d" | "30d" | "90d" | "all";
+
+/** Force-directed layout options. */
+type LayoutMode = "force" | "circular" | "hierarchical";
+
+/**
+ * IntelligenceFilterState — all filter values for the graph toolbar.
+ *
+ * WHY all in one object (not 6 separate state calls): grouping allows a single
+ * state update to reset all filters at once (Reset button), and makes it easy
+ * to serialise/deserialise filter state to URL params in the future.
+ */
+interface IntelligenceFilterState {
+  depth: DepthValue;
+  relationTypes: string[];    // empty = show all relation types
+  entityTypes: string[];      // empty = show all entity types
+  timeWindow: TimeWindow;
+  layout: LayoutMode;
+  confidenceThreshold: number; // 0.0–1.0; edges below this are hidden
+}
+
+const DEFAULT_FILTERS: IntelligenceFilterState = {
+  depth: 2,
+  relationTypes: [],
+  entityTypes: [],
+  timeWindow: "all",
+  layout: "force",
+  confidenceThreshold: 0.0,
+};
+
+/** All relation types understood by the knowledge graph. */
+const ALL_RELATION_TYPES = [
+  "CEO_OF", "COMPETES_WITH", "SUPPLIER_OF", "PARTNER_OF",
+  "OWNS", "ACQUIRED_BY", "BOARD_MEMBER_OF", "REPORTED",
+] as const;
+
+/** All entity types in the knowledge graph. */
+const ALL_ENTITY_TYPES = ["company", "person", "event", "topic"] as const;
+
+/** Stale threshold: graph data older than 24h shows a warning banner (F-I-030). */
+const GRAPH_STALE_MS = 24 * 60 * 60 * 1000;
+
+// ── IntelligenceFilters toolbar ───────────────────────────────────────────────
+
+/**
+ * IntelligenceFilters — filter toolbar above the entity graph.
+ *
+ * PLAN-0050 Wave E T-E-5-05:
+ *   - Depth slider 1-3: controls how many hops from center to show
+ *   - Relation-type multi-select chips: filter by relationship category
+ *   - Entity-type filter chips: filter by node type
+ *   - Time-window filter: 7d / 30d / 90d / all
+ *   - Layout selector: force / circular / hierarchical
+ *   - Confidence threshold slider: hide low-confidence edges
+ *
+ * WHY COMPACT CHIP STYLE (not full-width dropdown): The filter bar sits above a
+ * 460px graph. A full-width dropdown row would consume too much vertical space.
+ * Chips are scannable and can be toggled without opening a menu.
+ *
+ * WHY all controls collapse below a single scrollable row: the Intelligence tab
+ * is typically opened by power users who want to explore the full graph. The
+ * filter bar should be immediately usable without scrolling.
+ */
+function IntelligenceFilters({
+  filters,
+  onFiltersChange,
+}: {
+  filters: IntelligenceFilterState;
+  onFiltersChange: (f: IntelligenceFilterState) => void;
+}) {
+  /** Helper: toggle a value in a string array filter field. */
+  function toggleArrayFilter(
+    field: "relationTypes" | "entityTypes",
+    value: string,
+  ) {
+    const current = filters[field];
+    const next = current.includes(value)
+      ? current.filter((v) => v !== value)
+      : [...current, value];
+    onFiltersChange({ ...filters, [field]: next });
+  }
+
+  return (
+    <div
+      className="border-b border-border/40 bg-card/30 px-3 py-2 space-y-2"
+      aria-label="Graph filter controls"
+    >
+      {/* ── Row 1: depth slider + layout + time window ─────────────────────── */}
+      <div className="flex flex-wrap items-center gap-3">
+
+        {/* Depth slider 1–3 */}
+        {/* WHY range input (not Select): a slider makes the 1-2-3 relationship
+            intuitive — dragging from 1 to 3 feels like "expanding" the graph.
+            A dropdown for 3 options is heavier UX than a simple slider. */}
+        <div className="flex items-center gap-1.5">
+          <label
+            htmlFor="graph-depth"
+            className="text-[10px] text-muted-foreground uppercase tracking-[0.06em] shrink-0"
+          >
+            Depth
+          </label>
+          <input
+            id="graph-depth"
+            type="range"
+            min={1}
+            max={3}
+            step={1}
+            value={filters.depth}
+            onChange={(e) =>
+              onFiltersChange({ ...filters, depth: Number(e.target.value) as DepthValue })
+            }
+            className="h-1 w-16 accent-primary cursor-pointer"
+            aria-label={`Graph depth: ${filters.depth}`}
+          />
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground w-3">
+            {filters.depth}
+          </span>
+        </div>
+
+        {/* Layout selector — force / circular / hierarchical */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-[0.06em] shrink-0">
+            Layout
+          </span>
+          {(["force", "circular", "hierarchical"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => onFiltersChange({ ...filters, layout: mode })}
+              className={cn(
+                "rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono capitalize transition-colors",
+                filters.layout === mode
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70",
+              )}
+              aria-pressed={filters.layout === mode}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+
+        {/* Time-window filter */}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-[0.06em] shrink-0">
+            Window
+          </span>
+          {(["7d", "30d", "90d", "all"] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => onFiltersChange({ ...filters, timeWindow: w })}
+              className={cn(
+                "rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono transition-colors",
+                filters.timeWindow === w
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70",
+              )}
+              aria-pressed={filters.timeWindow === w}
+            >
+              {w}
+            </button>
+          ))}
+        </div>
+
+        {/* Reset button — appears only when filters differ from defaults */}
+        {(filters.depth !== DEFAULT_FILTERS.depth ||
+          filters.relationTypes.length > 0 ||
+          filters.entityTypes.length > 0 ||
+          filters.timeWindow !== DEFAULT_FILTERS.timeWindow ||
+          filters.layout !== DEFAULT_FILTERS.layout ||
+          filters.confidenceThreshold !== DEFAULT_FILTERS.confidenceThreshold) && (
+          <button
+            onClick={() => onFiltersChange(DEFAULT_FILTERS)}
+            className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="Reset all graph filters"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      {/* ── Row 2: confidence threshold + relation-type chips ─────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
+
+        {/* Confidence threshold slider */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <label
+            htmlFor="graph-confidence"
+            className="text-[10px] text-muted-foreground uppercase tracking-[0.06em]"
+          >
+            Confidence
+          </label>
+          <input
+            id="graph-confidence"
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={filters.confidenceThreshold}
+            onChange={(e) =>
+              onFiltersChange({
+                ...filters,
+                confidenceThreshold: parseFloat(e.target.value),
+              })
+            }
+            className="h-1 w-20 accent-primary cursor-pointer"
+            aria-label={`Confidence threshold: ${(filters.confidenceThreshold * 100).toFixed(0)}%`}
+          />
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground w-6">
+            {/* WHY integer percentage: 0.50 → "50" is more readable than "0.5" in a compact chip */}
+            {(filters.confidenceThreshold * 100).toFixed(0)}%
+          </span>
+        </div>
+
+        {/* Entity-type filter chips */}
+        <div className="flex items-center gap-1">
+          {(ALL_ENTITY_TYPES as readonly string[]).map((type) => (
+            <button
+              key={type}
+              onClick={() => toggleArrayFilter("entityTypes", type)}
+              className={cn(
+                "rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono capitalize transition-colors",
+                filters.entityTypes.includes(type)
+                  ? "bg-primary/20 text-primary"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70",
+              )}
+              aria-pressed={filters.entityTypes.includes(type)}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+
+        {/* Relation-type multi-select chips — collapsed to avoid overwhelming the toolbar */}
+        {/* WHY scrollable wrapper: ALL_RELATION_TYPES has 8 items; wrapping into 2 rows
+            would push the graph down. Horizontal scroll keeps the row height fixed. */}
+        <div className="flex items-center gap-1 overflow-x-auto max-w-[220px]">
+          {(ALL_RELATION_TYPES as readonly string[]).map((rel) => (
+            <button
+              key={rel}
+              onClick={() => toggleArrayFilter("relationTypes", rel)}
+              className={cn(
+                "shrink-0 rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono transition-colors",
+                filters.relationTypes.includes(rel)
+                  ? "bg-positive/20 text-positive"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70",
+              )}
+              aria-pressed={filters.relationTypes.includes(rel)}
+              title={rel.replace(/_/g, " ")} // WHY title: full label on hover for abbreviated chips
+            >
+              {/* Show first 3 letters of each relation type token for compact display */}
+              {rel.split("_").map((w) => w.slice(0, 3)).join("·")}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
@@ -301,6 +568,12 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // filters to only that severity; clicking again clears the filter.
   const [severityFilter, setSeverityFilter] = useState<"HIGH" | "MEDIUM" | "LOW" | null>(null);
 
+  // ── Intelligence graph filter state (PLAN-0050 Wave E T-E-5-05) ─────────────
+  // WHY hoisted here (not inside IntelligenceFilters): EntityGraph needs to know
+  // the active filters to apply them to the graph data. The toolbar and graph are
+  // siblings so state must live in the common parent — this component.
+  const [graphFilters, setGraphFilters] = useState<IntelligenceFilterState>(DEFAULT_FILTERS);
+
   // ── Expanded contradiction row state ─────────────────────────────────────────
   // WHY string|null (not boolean): each contradiction has a unique ID; only one
   // can be expanded at a time (accordion). null = all collapsed.
@@ -308,11 +581,15 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
 
   // ── Entity graph query ──────────────────────────────────────────────────────
   // WHY separate query (not shared with EntityGraphPanel): the Intelligence tab uses
-  // depth=2 (full graph) while the Overview sidebar uses depth=1. Different query
-  // keys ensure they are cached separately by TanStack Query.
-  const { data: graphData } = useQuery({
-    queryKey: ["entity-graph", entityId, 2],
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 2),
+  // configurable depth (1-3 via filter slider) while the Overview sidebar always uses
+  // depth=1. Different query keys ensure they are cached separately by TanStack Query.
+  // WHY graphFilters.depth in query key: changing depth = new S9 request (different data).
+  const {
+    data: graphData,
+    dataUpdatedAt: graphUpdatedAt,
+  } = useQuery({
+    queryKey: ["entity-graph", entityId, graphFilters.depth],
+    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, graphFilters.depth),
     enabled: !!accessToken && !!entityId,
     // WHY 10min: knowledge graph edges don't change frequently
     staleTime: 10 * 60_000,
@@ -326,6 +603,51 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
     // WHY 10min: contradiction detection runs hourly on the backend
     staleTime: 10 * 60_000,
   });
+
+  // ── Client-side graph data filtering (T-E-5-05) ────────────────────────────
+  // WHY client-side filter (not new S9 param): the graph is fetched by depth;
+  // filtering by relation_type / entity_type / confidence is presentation-only.
+  // Sending them as API params would require S9 changes; client filtering is
+  // simpler and adequate for ≤100 nodes.
+  const filteredGraphData = useMemo(() => {
+    if (!graphData) return graphData;
+    const { relationTypes, entityTypes, confidenceThreshold } = graphFilters;
+
+    // Filter edges by confidence threshold and active relation-type chips
+    const filteredEdges = graphData.edges.filter((edge) => {
+      if (edge.weight < confidenceThreshold) return false;
+      if (relationTypes.length > 0 && !relationTypes.includes(edge.label)) return false;
+      return true;
+    });
+
+    // Collect node IDs still reachable after edge filtering
+    const reachableIds = new Set<string>([graphData.entity_id]);
+    for (const e of filteredEdges) {
+      reachableIds.add(e.source);
+      reachableIds.add(e.target);
+    }
+
+    // Filter nodes by entity type and reachability
+    const filteredNodes = graphData.nodes.filter(
+      (node) =>
+        reachableIds.has(node.id) &&
+        (entityTypes.length === 0 || entityTypes.includes(node.type)),
+    );
+
+    return { ...graphData, nodes: filteredNodes, edges: filteredEdges };
+  }, [graphData, graphFilters]);
+
+  // ── Stale-graph indicator (T-E-5-06, F-I-030) ──────────────────────────────
+  // WHY graphUpdatedAt (TanStack internal timestamp): dataUpdatedAt is the JS
+  // Date.now() value at which the last successful fetch resolved. We compare it
+  // to GRAPH_STALE_MS (24h) to decide whether to show the staleness banner.
+  // WHY NOT graphData.fetched_at (server-side): S9 doesn't include a fetch_timestamp
+  // on entity graph responses. The client's fetch time is a good proxy — if the user
+  // has had the page open for 24h without reloading, the graph is effectively stale.
+  const isGraphStale = graphUpdatedAt > 0 && Date.now() - graphUpdatedAt > GRAPH_STALE_MS;
+  const graphAgeHours = graphUpdatedAt > 0
+    ? Math.floor((Date.now() - graphUpdatedAt) / (60 * 60 * 1000))
+    : 0;
 
   // ── Contradictions data ─────────────────────────────────────────────────────
   const contradictions = resp?.contradictions ?? [];
@@ -351,10 +673,33 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
       <section className="p-3">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Entity Knowledge Graph</h3>
-          <span className="text-[10px] text-muted-foreground">
-            depth 2 · {graphData?.nodes?.length ?? 0} entities
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            depth {graphFilters.depth} · {filteredGraphData?.nodes?.length ?? 0} entities
           </span>
         </div>
+
+        {/* ── Intelligence filter toolbar (T-E-5-05) ──────────────────────── */}
+        {/* WHY above the graph (not below): filters change what the graph shows;
+            placing them above follows the standard UI pattern of "controls → output". */}
+        <div className="mb-2">
+          <IntelligenceFilters
+            filters={graphFilters}
+            onFiltersChange={setGraphFilters}
+          />
+        </div>
+
+        {/* ── Stale-graph indicator (T-E-5-06, F-I-030) ─────────────────── */}
+        {/* WHY only when isGraphStale: a banner on every page load would be noisy.
+            24h is the threshold because knowledge-graph edges are typically updated
+            daily by the S7 extraction pipeline. */}
+        {isGraphStale && (
+          <div className="mb-2 flex items-center gap-2 rounded-[2px] border border-warning/30 bg-warning/5 px-3 py-1.5">
+            <Clock className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" />
+            <span className="text-[11px] text-warning">
+              Graph last updated {graphAgeHours}h ago — newer relations may not be reflected.
+            </span>
+          </div>
+        )}
 
         {/* WHY conditional render: show spinner while graphData is loading,
             then render the sigma.js graph once data arrives.
@@ -363,9 +708,9 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             error boundary so a sigma.js crash (e.g. headless browser with
             no WebGL, or graphology rejecting malformed data) does not tear
             down the whole Intelligence tab. */}
-        {graphData ? (
+        {filteredGraphData ? (
           <EntityGraphErrorBoundary>
-            <EntityGraph data={graphData} centerEntityId={entityId} />
+            <EntityGraph data={filteredGraphData} centerEntityId={entityId} />
           </EntityGraphErrorBoundary>
         ) : (
           <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">

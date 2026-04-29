@@ -31,10 +31,11 @@ performs read/write operations only.
 | GET | `/healthz` | Liveness | — |
 | GET | `/readyz` | Readiness (DB + Ollama) | — |
 | GET | `/metrics` | Prometheus | — |
+| GET | `/api/v1/news/top` | Top-ranked news articles (params: hours, limit, offset, min_display_score, routing_tier) — returns `RankedArticleResponse` list with `sentiment` and `impact_score` fields (PLAN-0050 Wave E) | fast |
 | GET | `/api/v1/signals` | Signal feed (query: doc_id, min_impact_score, order_by) — returns `market_impact_score` per signal | fast |
 | GET | `/api/v1/entities` | Search entities | medium |
 | GET | `/api/v1/entities/{id}` | Entity detail + aliases | medium |
-| GET | `/api/v1/entities/{id}/articles` | Articles linked to entity | fast |
+| GET | `/api/v1/entities/{id}/articles` | Articles linked to entity — response includes `sentiment` (positive/negative/neutral/mixed/null) and `impact_score` (FLOAT 0-1, null until price windows computed) | fast |
 | POST | `/api/v1/search/vector` | Vector similarity search (body: query_text, top_k) | fast |
 | POST | `/api/v1/reprocess/{article_id}` | Re-run NLP on an article (admin) | — |
 | GET | `/api/v1/topics` | Active topic clusters | fast |
@@ -243,6 +244,16 @@ CREATE TABLE dead_letter_queue (
     resolved_at       TIMESTAMPTZ,
     resolution_note   TEXT
 );
+
+-- sentiment + impact_score columns on document_source_metadata (migration 0011, PLAN-0050 Wave E).
+-- Populated by ArticleRelevanceScoringWorker / PriceImpactLabellingWorker (nullable — null
+-- until the respective worker processes the article).
+-- Exposed in GET /api/v1/news/top and GET /api/v1/entities/{id}/articles responses.
+ALTER TABLE document_source_metadata
+    ADD COLUMN sentiment    TEXT         CHECK (sentiment IN ('positive','negative','neutral','mixed')),
+    ADD COLUMN impact_score NUMERIC(6,4) CHECK (impact_score >= 0 AND impact_score <= 1);
+CREATE INDEX idx_dsm_sentiment ON document_source_metadata (sentiment, published_at DESC)
+    WHERE sentiment IS NOT NULL;
 
 -- Retroactive price-impact labels for processed articles (migration 0005, PRD-0020).
 -- One row per article (UNIQUE on article_id).

@@ -117,6 +117,32 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
         )
         return [self._to_entity(r) for r in result.scalars()], total
 
+    async def list_all_for_portfolio_asc(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> list[Transaction]:
+        """Stream every transaction in chronological order.
+
+        PLAN-0051 / T-A-1-04. The FIFO realised-P&L use case requires the
+        complete history (including transactions for fully-closed positions),
+        so we deliberately do NOT paginate. The unique index on
+        ``(portfolio_id, executed_at)`` keeps this query cheap even for the
+        thesis-scale data volumes we expect (a few thousand rows per
+        portfolio). If we ever need to scale beyond that, the use case can
+        switch to streaming via an async generator without changing the port
+        contract.
+        """
+        result = await self._session.execute(
+            select(TransactionModel)
+            .where(
+                TransactionModel.portfolio_id == portfolio_id,
+                TransactionModel.tenant_id == tenant_id,
+            )
+            .order_by(TransactionModel.executed_at.asc(), TransactionModel.created_at.asc()),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
     async def save(self, transaction: Transaction) -> None:
         row = await self._session.get(TransactionModel, transaction.id)
         if row is None:

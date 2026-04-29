@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,8 +14,11 @@ from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 
-if TYPE_CHECKING:
-    from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository  # noqa: TCH004
+# WHY unconditional import (not TYPE_CHECKING): EntityMentionRepository is used at
+# module-level in EntityMentionRepoDep = Annotated[EntityMentionRepository, ...].
+# Annotated[] evaluates its type argument at import time, so TYPE_CHECKING-guarded
+# imports (which are None at runtime) cause NameError. Pre-existing bug fixed here.
+from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 

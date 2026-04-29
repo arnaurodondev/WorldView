@@ -215,6 +215,13 @@ class RankedArticleResponse(BaseModel):
     primary_entity_symbol: str | None = None
     # Nested window scores; None when the article has no price-impact data yet.
     impact_windows: ImpactWindows | None = None
+    # PLAN-0050 Wave E: article-level sentiment + convenience impact score.
+    # sentiment: "positive" | "negative" | "neutral" | "mixed"; null until the
+    # ArticleRelevanceScoringWorker processes this article (LIGHT-tier skipped).
+    # impact_score: MAX(day_t0, day_t1) aggregated from article_impact_windows;
+    # null until PriceImpactLabellingWorker computes price windows (< 25h articles).
+    sentiment: str | None = None
+    impact_score: float | None = None
 
 
 class RankedNewsResponse(BaseModel):

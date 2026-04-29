@@ -227,6 +227,24 @@ class TransactionRepository(ABC):
         ...
 
     @abstractmethod
+    async def list_all_for_portfolio_asc(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> list[Transaction]:
+        """Return EVERY transaction for the portfolio, ordered by ``executed_at``
+        then ``created_at`` ascending.
+
+        PLAN-0051 / T-A-1-04. Used by ``GetRealizedPnLUseCase`` to walk the full
+        history (including transactions from fully-closed positions) so the
+        FIFO lot-matching algorithm can reconstruct cost basis from inception.
+        Pagination is intentionally absent — this is a read for analytics over
+        the entire portfolio history. Tenant-scoped to honour the multi-tenant
+        invariant.
+        """
+        ...
+
+    @abstractmethod
     async def save(self, transaction: Transaction) -> None: ...
 
 
