@@ -71,15 +71,21 @@ export function WorkspaceTabs() {
   }
 
   return (
-    // WHY h-8 (32px): sub-bar below TopBar (36px chrome) — distinct but subordinate.
-    // WHY border-b: separates the tab row from workspace content below it.
-    // WHY overflow-x-auto: when many workspaces are open, the strip scrolls horizontally
-    // rather than wrapping or truncating tab labels.
-    <div
-      role="tablist"
-      aria-label="Workspaces"
-      className="flex h-8 items-end gap-0 border-b border-border bg-background px-2 overflow-x-auto shrink-0"
-    >
+    // PLAN-0053 T-F-6-10: outer wrapper hosts the right-edge fade gradient.
+    //   - `relative` lets the gradient overlay position absolutely
+    //   - `overflow-x-auto` is moved to the inner role="tablist" so the
+    //     gradient sits OUTSIDE the scroll container (otherwise it would
+    //     scroll with the tabs and never look like a fade).
+    //   - The gradient uses a CSS linear-gradient with stop at 100% to
+    //     match the page background colour exactly. Tailwind's bg-gradient-*
+    //     utilities can't reference our `--background` token directly so
+    //     we inline the style.
+    <div className="relative shrink-0">
+      <div
+        role="tablist"
+        aria-label="Workspaces"
+        className="flex h-8 items-end gap-0 border-b border-border bg-background px-2 overflow-x-auto"
+      >
       {workspaces.map((ws) => {
         const isActive = ws.id === activeWorkspaceId;
         const isRenaming = ws.id === renamingId;
@@ -155,6 +161,22 @@ export function WorkspaceTabs() {
       >
         + Add
       </button>
+      </div>
+      {/* PLAN-0053 T-F-6-10: right-edge fade gradient signalling overflow.
+          WHY pointer-events-none: must let pointer events pass through to the
+          tabs underneath, otherwise the gradient blocks clicks on the rightmost
+          tabs. WHY w-8 (32px) gradient: enough to fade the last tab letter
+          smoothly without blocking too much usable space. WHY aria-hidden:
+          purely decorative; the role="tablist" + arrow keys remain the a11y
+          path for keyboard-only users. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute right-0 top-0 h-full w-8"
+        style={{
+          background:
+            "linear-gradient(to right, transparent 0%, hsl(var(--background)) 100%)",
+        }}
+      />
     </div>
   );
 }
