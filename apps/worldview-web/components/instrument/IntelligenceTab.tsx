@@ -335,8 +335,10 @@ const ALL_RELATION_TYPES = [
   "OWNS", "ACQUIRED_BY", "BOARD_MEMBER_OF", "REPORTED",
 ] as const;
 
-/** All entity types in the knowledge graph. */
-const ALL_ENTITY_TYPES = ["company", "person", "event", "topic"] as const;
+// WHY no ALL_ENTITY_TYPES constant: entity types are not a fixed enum in the KG.
+// Real KG nodes may have types like "organization", "financial_instrument", "macro_event",
+// etc. — types that a hardcoded list would miss. Dynamic types are derived from the
+// live graph data in IntelligenceTab via useMemo and passed as a prop.
 
 /** Stale threshold: graph data older than 24h shows a warning banner (F-I-030). */
 const GRAPH_STALE_MS = 24 * 60 * 60 * 1000;
@@ -365,9 +367,15 @@ const GRAPH_STALE_MS = 24 * 60 * 60 * 1000;
 function IntelligenceFilters({
   filters,
   onFiltersChange,
+  // WHY availableEntityTypes prop (not constant): entity types are derived from
+  // live graph data (see useMemo in IntelligenceTab). The filter chips only show
+  // types that actually exist in the current graph — no phantom chips for types
+  // with zero matching nodes. Passed from parent after graphData resolves.
+  availableEntityTypes,
 }: {
   filters: IntelligenceFilterState;
   onFiltersChange: (f: IntelligenceFilterState) => void;
+  availableEntityTypes: string[];
 }) {
   /** Helper: toggle a value in a string array filter field. */
   function toggleArrayFilter(
@@ -512,23 +520,33 @@ function IntelligenceFilters({
           </span>
         </div>
 
-        {/* Entity-type filter chips */}
+        {/* Entity-type filter chips — rendered from live graph data (see availableEntityTypes prop).
+            WHY loading placeholder: while graphData is fetching, availableEntityTypes is [].
+            Showing a subtle "loading types…" span prevents layout shift when chips appear. */}
         <div className="flex items-center gap-1">
-          {(ALL_ENTITY_TYPES as readonly string[]).map((type) => (
-            <button
-              key={type}
-              onClick={() => toggleArrayFilter("entityTypes", type)}
-              className={cn(
-                "rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono capitalize transition-colors",
-                filters.entityTypes.includes(type)
-                  ? "bg-primary/20 text-primary"
-                  : "bg-muted text-muted-foreground hover:bg-muted/70",
-              )}
-              aria-pressed={filters.entityTypes.includes(type)}
-            >
-              {type}
-            </button>
-          ))}
+          {availableEntityTypes.length === 0 ? (
+            <span className="text-[9px] text-muted-foreground/50 font-mono italic">
+              loading types…
+            </span>
+          ) : (
+            availableEntityTypes.map((type) => (
+              <button
+                key={type}
+                onClick={() => toggleArrayFilter("entityTypes", type)}
+                className={cn(
+                  "rounded-[2px] px-1.5 py-0.5 text-[9px] font-mono capitalize transition-colors",
+                  filters.entityTypes.includes(type)
+                    ? "bg-primary/20 text-primary"
+                    : "bg-muted text-muted-foreground hover:bg-muted/70",
+                )}
+                aria-pressed={filters.entityTypes.includes(type)}
+              >
+                {/* WHY replace /_/g: KG node types like "financial_instrument" render
+                    better as "financial instrument" — underscores are internal conventions. */}
+                {type.replace(/_/g, " ")}
+              </button>
+            ))
+          )}
         </div>
 
         {/* Relation-type multi-select chips — collapsed to avoid overwhelming the toolbar */}
@@ -584,16 +602,34 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // configurable depth (1-3 via filter slider) while the Overview sidebar always uses
   // depth=1. Different query keys ensure they are cached separately by TanStack Query.
   // WHY graphFilters.depth in query key: changing depth = new S9 request (different data).
+  // WHY graphFilters.timeWindow in query key: changing the time window sends a different
+  // ?time_window= param to S9 — the response graph is different, so it must be cached
+  // separately. Without this, switching from "7d" to "all" would return cached 7d data.
   const {
     data: graphData,
     dataUpdatedAt: graphUpdatedAt,
   } = useQuery({
-    queryKey: ["entity-graph", entityId, graphFilters.depth],
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, graphFilters.depth),
+    queryKey: ["entity-graph", entityId, graphFilters.depth, graphFilters.timeWindow],
+    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, graphFilters.depth, graphFilters.timeWindow),
     enabled: !!accessToken && !!entityId,
     // WHY 10min: knowledge graph edges don't change frequently
     staleTime: 10 * 60_000,
   });
+
+  // ── Dynamic entity types (derived from graph data) ─────────────────────────
+  // WHY useMemo: the set of entity types present in the graph is derived from the
+  // graph nodes. We compute it once when graphData changes and pass it to
+  // IntelligenceFilters as a prop. This avoids repeating the derivation in the
+  // filter component and avoids re-renders when graphFilters changes (different memo).
+  // WHY sort(): stable alphabetical order prevents chip order flickering across fetches.
+  const availableEntityTypes = useMemo<string[]>(() => {
+    if (!graphData?.nodes?.length) return [];
+    const typeSet = new Set<string>();
+    for (const node of graphData.nodes) {
+      if (node.type) typeSet.add(node.type);
+    }
+    return Array.from(typeSet).sort();
+  }, [graphData]);
 
   // ── Contradictions query ────────────────────────────────────────────────────
   const { data: resp, isLoading, isError } = useQuery({
@@ -609,6 +645,13 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // filtering by relation_type / entity_type / confidence is presentation-only.
   // Sending them as API params would require S9 changes; client filtering is
   // simpler and adequate for ≤100 nodes.
+  //
+  // WHY timeWindow is NOT applied client-side here: filtering edges by time window
+  // requires each GraphEdge to carry a `last_seen` or `created_at` timestamp. The
+  // current GraphEdge type (types/api.ts) only has `source`, `target`, `label`,
+  // and `weight` fields — no temporal field. Until S9/S7 exposes last_seen on edges,
+  // time-window filtering is handled server-side via the ?time_window= query param
+  // (which is part of the queryKey and triggers a fresh fetch on change).
   const filteredGraphData = useMemo(() => {
     if (!graphData) return graphData;
     const { relationTypes, entityTypes, confidenceThreshold } = graphFilters;
@@ -685,6 +728,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           <IntelligenceFilters
             filters={graphFilters}
             onFiltersChange={setGraphFilters}
+            availableEntityTypes={availableEntityTypes}
           />
         </div>
 
@@ -709,9 +753,30 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             no WebGL, or graphology rejecting malformed data) does not tear
             down the whole Intelligence tab. */}
         {filteredGraphData ? (
-          <EntityGraphErrorBoundary>
-            <EntityGraph data={filteredGraphData} centerEntityId={entityId} />
-          </EntityGraphErrorBoundary>
+          <>
+            {/* WHY empty-state check (not relying on EntityGraph to show it):
+                filteredGraphData may have 0 nodes after the user applies aggressive filters
+                (e.g., entity-type = "person" but the graph has no person nodes). EntityGraph
+                with 0 nodes renders a blank WebGL canvas with no visual feedback. We
+                intercept here and show an actionable message instead. */}
+            {filteredGraphData.nodes.length === 0 ? (
+              <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
+                <p className="text-[11px] text-muted-foreground">
+                  No nodes match the current filters.{" "}
+                  <button
+                    onClick={() => setGraphFilters(DEFAULT_FILTERS)}
+                    className="text-primary underline underline-offset-2 hover:no-underline"
+                  >
+                    Reset filters
+                  </button>
+                </p>
+              </div>
+            ) : (
+              <EntityGraphErrorBoundary>
+                <EntityGraph data={filteredGraphData} centerEntityId={entityId} />
+              </EntityGraphErrorBoundary>
+            )}
+          </>
         ) : (
           <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />

@@ -589,6 +589,12 @@ export function createGateway(token?: string | null) {
     getEntityGraph(
       entityId: string,
       depth = 2,
+      // WHY timeWindow param: the Intelligence tab filter toolbar lets analysts select
+      // 7d / 30d / 90d / all. Changing the time window busts the TanStack Query cache
+      // (queryKey includes timeWindow) and sends the new value to S9 as ?time_window=.
+      // S9 may ignore unknown params gracefully — the query is additive and never breaks
+      // the response shape. "all" is the default (no param sent).
+      timeWindow = "all",
     ): Promise<EntityGraph> {
       // WHY separate limits: depth=1 sidebar has limited visual space (320×280px
       // SVG); fetching more than 15 relations causes N+1 lookups in S7 with no
@@ -603,6 +609,13 @@ export function createGateway(token?: string | null) {
         limit: String(limit),
         min_confidence: String(minConfidence),
       });
+
+      // WHY only add time_window when not "all": S9 default is already "all" — sending
+      // the parameter explicitly is unnecessary and adds URL noise. Omitting it for "all"
+      // keeps the request URL stable (no spurious cache misses across browser sessions).
+      if (timeWindow !== "all") {
+        params.set("time_window", timeWindow);
+      }
 
       return apiFetch<EntityGraph>(
         `/v1/entities/${encodeURIComponent(entityId)}/graph?${params.toString()}`,

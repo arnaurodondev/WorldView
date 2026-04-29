@@ -562,13 +562,6 @@ export function FundamentalsTab({
             )}
           </MetricRow>
 
-          {/* Debt/Equity: green <1.0, amber 1.0-2.0, red >2.0 */}
-          <MetricRow label="Debt / Equity">
-            <span className={getMetricClass(fund.debt_to_equity, 1.0, 2.0)}>
-              {formatRatio(fund.debt_to_equity)}
-            </span>
-          </MetricRow>
-
           {/* Credit Rating: S&P/Moody's credit rating string (e.g. "A+", "BBB-").
               Always null until a credit data provider is integrated — EODHD does not
               expose ratings via their standard fundamentals API. */}
@@ -675,7 +668,7 @@ export function FundamentalsTab({
             (e.g., during earnings season). The muted/50 opacity keeps it clearly
             subordinate to the data above — it's reference info, not a headline. */}
         <p className="mx-4 mt-4 border-t border-border/40 pt-2 text-[10px] text-muted-foreground/70">
-          Data sourced from S3 fundamentals pipeline · Updated {formatRelativeTime(fund.updated_at)}
+          Data sourced from S3 fundamentals pipeline · Updated {fund.updated_at ? formatRelativeTime(fund.updated_at) : "—"}
         </p>
       </div>
 

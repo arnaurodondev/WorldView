@@ -99,11 +99,19 @@ export interface DrawingPaletteProps {
    * Passing `null` means "exit drawing mode" (CURSOR button clicked).
    */
   onSelectTool: (tool: DrawingToolId | null) => void;
+  /**
+   * Number of saved annotations for the current instrument.
+   * WHY count here (not annotations array): the palette only needs the count
+   * for display — it doesn't render the annotations themselves. Passing the full
+   * array would cause unnecessary re-renders every time an annotation is added.
+   * OHLCVChart passes `annotations.length` from its state.
+   */
+  annotationCount: number;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function DrawingPalette({ activeTool, onSelectTool }: DrawingPaletteProps) {
+export function DrawingPalette({ activeTool, onSelectTool, annotationCount }: DrawingPaletteProps) {
   return (
     // WHY flex-col: tools stack vertically (one per row).
     // WHY w-7: 28px width — enough for a single glyph character at 11px.
@@ -167,9 +175,25 @@ export function DrawingPalette({ activeTool, onSelectTool }: DrawingPaletteProps
         );
       })}
 
-      {/* WHY separator + annotation count at the bottom: shows how many annotations
-          are saved for this instrument. Gives analysts confidence that their drawings
-          are persisted even after a tab close. */}
+      {/* ── Annotation count badge ─────────────────────────────────────────
+          WHY show count: analysts need confidence that their drawings are saved
+          for this instrument even after a tab close (IndexedDB persistence).
+          Seeing "3" at the bottom of the palette is a quick "yes, they're there".
+          WHY only when count > 0: showing "0" is noisy and adds no information.
+          WHY separator (mt-auto): pushes the count to the very bottom of the
+          palette, visually separating it from the tool buttons. */}
+      {annotationCount > 0 && (
+        <div className="mt-auto border-t border-border/30 pt-1 pb-0.5 flex flex-col items-center gap-0.5">
+          <span
+            className="font-mono tabular-nums text-[10px] text-muted-foreground"
+            title={`${annotationCount} saved annotation${annotationCount === 1 ? "" : "s"}`}
+            aria-label={`${annotationCount} saved annotation${annotationCount === 1 ? "" : "s"}`}
+            data-testid="annotation-count"
+          >
+            {annotationCount}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
