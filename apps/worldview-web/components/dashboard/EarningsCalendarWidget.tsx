@@ -45,7 +45,8 @@ export function EarningsCalendarWidget() {
       {/* WHY two-line message: first line tells what is missing; second line tells
           WHY it is missing (data not ingested). This avoids confusion where traders
           might think the widget is broken rather than awaiting data ingest. */}
-      <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2">
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
+      <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
         <p className="text-xs text-muted-foreground">No upcoming earnings events scheduled.</p>
         <p className="text-[10px] text-muted-foreground/60">
           Earnings calendar data populates as company reporting schedules are ingested.

@@ -99,8 +99,9 @@ export function RecentAlerts() {
       </div>
 
       {/* ── Loading state ──────────────────────────────────────────────── */}
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1) */}
       {isLoading && merged.length === 0 && (
-        <div className="flex-1 space-y-2 px-2 pt-1">
+        <div className="flex-1 space-y-2 px-3 py-2">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="flex gap-2">
               <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
@@ -115,8 +116,9 @@ export function RecentAlerts() {
           new traders into thinking alerts are disabled. Telling them where to create
           alert rules guides them to the action that will populate this widget.
           The second line is a softer hint about where to go — not an error state. */}
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
       {!isLoading && merged.length === 0 && (
-        <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2">
+        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
           <p className="text-xs text-muted-foreground">No recent alerts.</p>
           <p className="text-[10px] text-muted-foreground/60">
             Create alert rules on the{" "}
