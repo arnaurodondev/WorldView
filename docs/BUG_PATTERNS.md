@@ -7604,3 +7604,25 @@ Orchestration logic that needs the routing cache or UoW factory belongs in the *
 **Prevention**:
 - Before adding any startup hook to a service, read the service's `app.py` (or `main.py`) lifespan and list every attribute stored on `app.state`. Only reference attributes that actually exist.
 - In multi-process services (R22), never assume the API process has the same wired dependencies as the scheduler or worker processes.
+
+
+## BP-275 — Kafka `MemberIdRequiredException` On First JoinGroup (Cosmetic)
+
+**Category**: Kafka / startup race
+**Severity**: NIT (one-shot, auto-recovers; no operator action required)
+**Affected areas**: Any consumer that joins a fresh group with a brand-new broker (compose `up` from a clean volume)
+**First seen**: 2026-04-29 (PLAN-deep-QA F-DP1-19)
+
+**Symptoms**:
+- Single log line at boot from `worldview-kafka-1`: `client reason: rebalance failed due to MemberIdRequiredException`
+- The same consumer group successfully rebalances on the next iteration; never observed steady-state.
+
+**Root Cause**:
+The first time a consumer issues a `JoinGroup` request to the coordinator, it has no `member.id` (empty string is sent). KIP-394 mandates that the broker reject this with `MEMBER_ID_REQUIRED`, returning an assigned `member.id` in the response. The client is then expected to retry the JoinGroup with that member.id. This is a **protocol-level handshake**, not a fault — the rdkafka client does the retry automatically and the rebalance completes within a second.
+
+**Fix**:
+None required. The exception is emitted once per consumer-group bootstrap from a clean slate. Subsequent restarts re-use the cached member.id so the message does not recur.
+
+**Prevention**:
+- If the noise is undesirable in CI logs, set `group.instance.id` on the consumer for static membership — the broker then trusts the client's identity across restarts and skips the initial empty-ID JoinGroup.
+- Do NOT alarm on this log line in `alertmanager` rules; reserve rebalance alerts for *repeated* `RebalanceInProgressException` or sustained `consumer_lag` growth.
