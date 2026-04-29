@@ -206,6 +206,11 @@ class PredictionMarket:
     # WHY default None: added in migration 009; existing rows populated on next
     # consumer poll. None = "slug not yet known" (distinct from "" which is invalid).
     market_slug: str | None = None
+    # PLAN-0049 T-C-3-03 — high-level category tag (``macro`` | ``politics`` |
+    # ``sports`` | ``crypto`` | ``general``).  Forward-compatible: defaults to
+    # None so existing call-sites and tests are unaffected; the polymarket
+    # adapter populates the field once it starts emitting it on the wire.
+    category: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 

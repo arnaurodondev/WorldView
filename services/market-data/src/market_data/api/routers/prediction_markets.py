@@ -73,15 +73,37 @@ async def list_prediction_markets(
     query: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    # PLAN-0049 T-C-3-03 — high-level category tag.  Documented values:
+    # ``macro`` | ``politics`` | ``sports`` | ``crypto`` | ``general``.
+    # The backend does NOT validate the enum: future Polymarket tags can
+    # be passed through without a code change here.  ``max_length=50``
+    # mirrors the column width.
+    category: Annotated[
+        str | None,
+        Query(
+            max_length=50,
+            description=(
+                "Optional category filter. Suggested values: macro, "
+                "politics, sports, crypto, general (non-binding — backend "
+                "does case-insensitive equality only)."
+            ),
+        ),
+    ] = None,
     uc: Annotated[ListPredictionMarketsUseCase, Depends(get_list_prediction_markets_uc)] = ...,  # type: ignore[assignment]
 ) -> PredictionMarketsListResponse:
-    """List prediction markets with optional status/text filters and pagination."""
+    """List prediction markets with optional status/text/category filters and pagination."""
     if status not in _VALID_STATUS_VALUES:
         raise HTTPException(
             status_code=422,
             detail=f"status must be one of: {', '.join(sorted(_VALID_STATUS_VALUES))}",
         )
-    pairs, total = await uc.execute(status=status, query=query, limit=limit, offset=offset)
+    pairs, total = await uc.execute(
+        status=status,
+        query=query,
+        limit=limit,
+        offset=offset,
+        category=category,
+    )
     # WHY float() with None-guard: ``volume_24h`` is a ``Decimal`` from the DB
     # (precision-preserving on the wire side).  PLAN-0048 D-1: previously this
     # was hardcoded to ``None`` because it required a separate query; the

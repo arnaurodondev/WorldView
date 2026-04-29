@@ -26,6 +26,29 @@ The Alert service fans out intelligence signals to users who are watching releva
 Core entity stored in `alerts` table. Key fields:
 - `alert_id` (UUIDv7), `entity_id`, `alert_type`, `source_event_id`, `source_topic`
 - `payload` (JSONB), `dedup_key` (sha256, UNIQUE), `created_at` (UTC)
+- **Enrichment columns** (PLAN-0049 T-A-1-01, migration `0006`):
+  - `title` (VARCHAR(255), NULL) — pre-composed UI subject (entity / ticker + signal label)
+  - `ticker` (VARCHAR(20), NULL) — denormalised ticker; partial index `idx_alerts_ticker` covers non-NULL rows
+  - `entity_name` (VARCHAR(500), NULL) — denormalised display name
+  - `signal_label` (VARCHAR(200), NULL) — derived label, e.g. `Bullish guidance`
+
+#### Title composition (signal_label fallback contract — PLAN-0049 T-A-1-03 / F-D-006)
+
+`AlertFanoutUseCase` populates `title` deterministically from
+`(claim_type, polarity)` → `signal_label` and the resolved entity context.
+Fallback chain (top to bottom; first non-empty wins):
+
+1. `"<entity_name>: <signal_label>"` — both present and `signal_label` is not bare-severity.
+2. `"<ticker>: <signal_label>"` — ticker present, `signal_label` not bare-severity.
+3. `signal_label` — meaningful label but no entity / ticker context.
+4. `entity_name` (when `signal_label` was the bare-severity fallback).
+5. `ticker` (when neither entity_name nor a meaningful label is available).
+6. Humanised `alert_type` (`"Graph Change Alert"`) — final fallback.
+
+**Invariant:** `title` MUST NEVER expose the bare `"<SEVERITY> signal"` string
+(e.g. `"LOW signal"`).  Frontend widgets (`RecentAlerts`, `AlarmsPanel`) read
+`title` first; the fallback chain above guarantees they never have to render
+severity-as-label themselves.
 
 ### Dedup Key (AD-9)
 ```
@@ -263,6 +286,43 @@ The REST and WebSocket endpoints accept `user_id` as a required query parameter 
 **Security invariant**: S10 must never be exposed directly to end-user traffic. All external requests must flow through S9, which enforces authentication and injects the `user_id` claim. S10 endpoints reject connections without `user_id` (returns 422/403), but do not verify it corresponds to a valid session.
 
 This is noted in the docstrings of the REST and WebSocket route handlers in `services/alert/src/alert/api/routes.py`.
+
+---
+
+## Migration Ops
+
+### Backfilling enrichment columns on legacy alerts
+
+Migration `0006_add_alert_enrichment_columns` is purely additive (nullable
+columns), so existing rows have `title IS NULL` until either:
+
+1. They are superseded by a newer alert with the same `dedup_key` (no-op for
+   real production data — alerts are immutable), or
+2. The one-shot backfill script populates them from each row's `payload` JSON.
+
+**Backfill script:** `services/alert/scripts/backfill_alert_titles.py`
+
+```bash
+# Required: ALERT_DB_URL points at the alert_db (postgres:// or
+# postgresql+asyncpg:// — the script normalises both).
+export ALERT_DB_URL="postgres://alert:alertpw@localhost:5443/alert_db"
+
+# Dry-run — counts rows with NULL title without mutating anything.
+python services/alert/scripts/backfill_alert_titles.py --dry-run
+
+# Live — backfills in 1000-row batches, logs progress every 10k rows.
+python services/alert/scripts/backfill_alert_titles.py
+```
+
+**Idempotency:** the SELECT and the UPDATE are both guarded by `title IS NULL`,
+so the script is safe to re-run; rows already populated (by the consumer or by
+a previous backfill run) are filtered out.  A racing fan-out write that
+populates `title` in between the SELECT and the UPDATE wins — the `WHERE
+title IS NULL` clause causes our update to no-op for that row.
+
+The script reuses the **same derivation helpers** (`_derive_signal_label`,
+`_compose_alert_title`) as `AlertFanoutUseCase`, so backfilled titles are
+indistinguishable from natively-enriched ones.
 
 ---
 

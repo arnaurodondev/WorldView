@@ -36,12 +36,19 @@ class ListPredictionMarketsUseCase:
         query: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        category: str | None = None,
     ) -> tuple[list[tuple[PredictionMarket, dict[str, float], Decimal | None]], int]:
         """Return ``([(market, outcomes_prices, volume_24h), ...], total)``.
 
         ``volume_24h`` is the most recent snapshot's volume (or ``None`` when
         the market has no snapshots / no volume).  Forward-compatible: callers
         that don't care about volume can ignore the third tuple element.
+
+        ``category`` (PLAN-0049 T-C-3-03) is a free-form string forwarded to
+        the read repo; values like ``macro`` / ``politics`` / ``sports`` /
+        ``crypto`` / ``general`` are non-binding suggestions for callers — the
+        backend only checks equality, never validates the enum, so future tags
+        coming out of Polymarket roll out without a code change here.
         """
         effective_status = None if status == "all" else status
         pairs, total = await self._uow.prediction_markets_read.list_markets(
@@ -49,6 +56,7 @@ class ListPredictionMarketsUseCase:
             query=query,
             limit=limit,
             offset=offset,
+            category=category,
         )
         if not pairs:
             return [], total

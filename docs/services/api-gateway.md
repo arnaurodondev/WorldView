@@ -78,6 +78,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/ohlcv/{instrument_id}` | OHLCV price history | Yes |
+| POST | `/v1/ohlcv/batch` | Batch OHLCV bars for up to 50 instruments (PLAN-0049 T-A-1-05) — fans out per-symbol calls in parallel; per-symbol failures populate `error` instead of failing the whole batch | Yes |
 | GET | `/v1/quotes/{instrument_id}` | Latest quote | Yes |
 | POST | `/v1/quotes/batch` | Batch quotes for multiple instruments | Yes |
 | GET | `/v1/fundamentals/{instrument_id}` | All fundamentals sections (composite) | Yes |
@@ -91,6 +92,39 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/v1/fundamentals/screen/fields` | Available screener fields | No |
 | GET | `/v1/fundamentals/timeseries` | Fundamental timeseries | No |
 | GET | `/v1/fundamentals/economic-calendar` | Economic events (→ S7 temporal_events, passes `event_type=economic`) | Yes |
+
+**Request body** for `POST /v1/ohlcv/batch` (PLAN-0049 T-A-1-05):
+
+```python
+{
+    "requests": [
+        {
+            "instrument_id": str,    # required, ≤64 chars
+            "timeframe": str,        # 1m | 5m | 15m | 30m | 1h | 4h | 1d | 1w | 1M (default "1d")
+            "start": str | None,     # ISO date; defaults to lookback (3d for ≤5m, 30d for 1h, 90d otherwise)
+            "end": str | None,
+            "limit": int | None      # 1–2000
+        },
+        ...
+    ]                                # max 50 entries (BP-026 — bounds external blast radius)
+}
+```
+
+**Response** — partial-success batch (one entry per request, same order):
+
+```python
+{
+    "results": [
+        {"instrument_id": str, "timeframe": str, "bars": [...], "error"?: str},
+        ...
+    ],
+    "fetched_at": str  # ISO-8601 UTC
+}
+```
+
+Per-symbol failures populate `error` (e.g. `"market-data returned 502"`,
+`"HTTPError: timeout"`) instead of failing the whole batch — partial success is
+preferable to all-or-nothing for dashboard widgets.
 
 ### Entity & Knowledge Graph Endpoints (→ S7)
 
@@ -164,6 +198,13 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/v1/signals/prediction-markets` | List prediction markets | Yes |
 | GET | `/v1/signals/prediction-markets/{id}` | Get market detail | Yes |
 | GET | `/v1/signals/prediction-markets/{id}/history` | Market price history | Yes |
+
+**Query params** for `GET /v1/signals/prediction-markets`:
+- `status` (optional, default `open`; choices: `open`, `resolved`, `cancelled`, `all`)
+- `query` (optional, max 200 chars) — case-insensitive `question ILIKE` filter
+- `category` (optional, max 50 chars) — PLAN-0049 T-C-3-03.  Suggested values: `macro`, `politics`, `sports`, `crypto`, `general` (non-binding — backend does case-insensitive equality only and never validates the enum, so future Polymarket tags pass through without a code change).  Rows with `category IS NULL` never match a filter.
+- `limit` (optional, 1–200, default 50)
+- `offset` (optional, default 0)
 
 ### Briefing Endpoints (→ S8 RAG/Chat, stub)
 

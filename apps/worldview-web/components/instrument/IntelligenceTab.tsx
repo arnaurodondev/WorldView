@@ -34,11 +34,15 @@ import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErr
 import { useQuery } from "@tanstack/react-query";
 // WHY CheckCircle removed: empty contradictions state now uses inline text only
 import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown } from "lucide-react";
-// WHY ReactMarkdown: S8 returns instrument briefs as markdown (headers, bold, lists).
-// ReactMarkdown renders these as proper HTML elements with semantic structure.
-import ReactMarkdown from "react-markdown";
-// WHY remarkGfm: enables GFM extensions (tables, task lists, strikethrough)
-import remarkGfm from "remark-gfm";
+// WHY MarkdownContent (PLAN-0049 T-D-4-03): the brief block previously rendered
+// markdown via an inline ReactMarkdown + remarkGfm config with a long set of
+// custom Tailwind selectors. That config drifted from MorningBriefCard's and
+// InstrumentAISubheader's — three surfaces, three slightly different stylesheets.
+// The shared <MarkdownContent size="comfortable"> centralises typography so the
+// dashboard / instrument-header / intelligence-tab brief surfaces are visually
+// identical. "comfortable" uses 12px base + slightly looser spacing, suited to
+// the full-width Intelligence tab (vs the dense 10px "compact" used elsewhere).
+import { MarkdownContent } from "@/components/ui/markdown-content";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -261,19 +265,12 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
             </div>
           )}
 
-          {/* WHY custom selectors (was prose prose-sm prose-invert):
-              The @tailwindcss/typography prose plugin adds opinionated margins and
-              font sizes that clash with our terminal dense layout. Custom selectors
-              on the wrapper div give the same rendered structure (headers, bold,
-              lists) without the forced whitespace. Pattern mirrors MorningBriefCard. */}
-          <div className="text-[13px] leading-relaxed text-foreground [&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:text-foreground [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_li]:ml-3 [&_p]:mb-1.5 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-3">
-            {/* WHY brief.narrative (not brief.content): BriefingResponse.narrative
-                is the canonical field name from S8's PublicBriefingResponse schema.
-                See types/api.ts for the full interface definition. */}
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {brief.narrative}
-            </ReactMarkdown>
-          </div>
+          {/* WHY MarkdownContent (T-D-4-03): centralised renderer — see imports
+              above for the full rationale. The "comfortable" variant gives the
+              brief block 12px text and looser spacing appropriate for the
+              full-width Intelligence tab. brief.narrative is the canonical
+              field name from S8's PublicBriefingResponse schema. */}
+          <MarkdownContent size="comfortable">{brief.narrative}</MarkdownContent>
 
           {/* WHY generated_at timestamp: traders need to know how fresh the
               intelligence is — a brief from yesterday may be stale after
