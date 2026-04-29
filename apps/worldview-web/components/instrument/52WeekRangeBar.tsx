@@ -76,6 +76,24 @@ export function WeekRangeBar({ low, high, current, className = "", showLabels = 
   // ── Clamp to [0, 100] — handles live price outside stale 52W bounds ──────
   const clampedPercent = Math.max(0, Math.min(100, rawPercent));
 
+  // PLAN-0050 T-F-6-08 (closes F-I-010): when the labels are NOT shown
+  // (compact header row 2), the prior `flex flex-col gap-0.5` wrapper put
+  // the 4px bar at the top of its column box. Inside a parent `flex
+  // items-center h-7` row that pushed the bar visually above the
+  // mid-line of the row's text. Switching to a single-element render in
+  // the no-labels branch lets the parent's `items-center` align the bar
+  // with the text baseline. The labels branch keeps the column.
+  if (!showLabels) {
+    return (
+      <div className={`relative h-1 w-full rounded-full bg-muted ${className}`}>
+        <div
+          className="absolute -top-0.5 h-2 w-1.5 rounded-full bg-primary"
+          style={{ left: `${clampedPercent}%`, transform: "translateX(-50%)" }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={`flex flex-col gap-0.5 ${className}`}>
       {/* ── Bar + marker ──────────────────────────────────────────────────── */}
@@ -94,19 +112,15 @@ export function WeekRangeBar({ low, high, current, className = "", showLabels = 
       </div>
 
       {/* ── Low / High labels ──────────────────────────────────────────────── */}
-      {/* WHY font-mono text-[10px]: terminal data label typography (§0.1)
-          WHY conditional: showLabels=false used in compact header row where
-          the 14px label row would overflow the 28px row height. */}
-      {showLabels && (
-        <div className="flex justify-between">
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {formatPrice(low)}
-          </span>
-          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-            {formatPrice(high)}
-          </span>
-        </div>
-      )}
+      {/* WHY font-mono text-[10px]: terminal data label typography (§0.1) */}
+      <div className="flex justify-between">
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+          {formatPrice(low)}
+        </span>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+          {formatPrice(high)}
+        </span>
+      </div>
     </div>
   );
 }

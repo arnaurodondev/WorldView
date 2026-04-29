@@ -39,6 +39,7 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/useAuth";
+import { useNewsLinkTarget } from "@/hooks/useNewsLinkTarget";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -337,6 +338,11 @@ function NotificationsTab() {
  * so they don't think it's a bug.
  */
 function AppearanceTab() {
+  // PLAN-0050 T-F-6-20: news-article tab-target preference. Read + write
+  // localStorage under the namespaced key so the choice persists across
+  // sessions and propagates to other open tabs via the storage event.
+  const [newsTarget, setNewsTarget] = useNewsLinkTarget();
+
   return (
     <div className="space-y-4">
       {/* ── Theme card ──────────────────────────────────────────────────── */}
@@ -394,6 +400,44 @@ function AppearanceTab() {
                 measurable user benefit for this audience
               </li>
             </ul>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Reading preferences card (PLAN-0050 T-F-6-20) ─────────────────
+          Lets the user choose how external news links open. Default is
+          "new tab" (the prior hardcoded behaviour) — single-screen users
+          can switch to same-tab to keep their browser stack tidy. */}
+      <Card className="border-border/60 bg-card">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium text-foreground">
+            Reading preferences
+          </CardTitle>
+          <CardDescription className="text-xs">
+            How news article links open from dashboard widgets and instrument pages.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <Label
+                htmlFor="news-link-target"
+                className="text-sm font-medium text-foreground"
+              >
+                Open news in a new tab
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                When enabled, clicking a news article opens it in a new tab so
+                the dashboard stays in view. Turn off if you prefer single-tab
+                browsing.
+              </p>
+            </div>
+            <Switch
+              id="news-link-target"
+              checked={newsTarget === "new-tab"}
+              onCheckedChange={(c) => setNewsTarget(c ? "new-tab" : "same-tab")}
+              aria-label="Open news in a new tab"
+            />
           </div>
         </CardContent>
       </Card>

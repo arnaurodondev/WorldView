@@ -20,6 +20,7 @@ from api_gateway.clients import (
     get_market_heatmap,
     get_relevant_news,
     get_top_movers,
+    get_watchlist_insights,
 )
 from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -2067,6 +2068,46 @@ async def remove_watchlist_member(watchlist_id: str, entity_id: str, request: Re
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/watchlists/{watchlist_id}/insights")
+async def watchlist_insights(watchlist_id: str, request: Request) -> Response:
+    """Composite insights for a single watchlist (PLAN-0050 Wave B / T-B-2-01).
+
+    Combines members + live quotes + per-member sectors + 24h news linkage +
+    pending alerts in one server-side fan-out, replacing the prior 5-query
+    chain in the WatchlistMoversWidget. Returns the shape
+    ``{watchlist_id, members_count, movers, weighted_return_1d, sectors,
+    biggest_news, alerts_count}``.
+
+    Auth: required — operates over the user's own watchlist members.
+    Cache-Control: ``private, max-age=60`` — the watchlist's makeup is
+    user-specific (private) and the live quote slice goes stale within ~60s,
+    matching the WatchlistMoversWidget's intra-day refetch cadence.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        payload = await get_watchlist_insights(
+            _clients(request),
+            watchlist_id,
+            make_headers=lambda: _auth_headers(request),
+        )
+    except DownstreamError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+    body = json.dumps(payload).encode()
+    # WHY private: the response is user-scoped (their watchlist's members
+    # + alert flags). A shared CDN must never serve one user's response to
+    # another. WHY max-age=60: matches the underlying widget's quote refresh
+    # cadence — anything tighter wastes round-trips, anything wider would
+    # show stale gainers/losers during the trading day.
+    return Response(
+        content=body,
+        status_code=200,
+        media_type="application/json",
+        headers={"Cache-Control": "private, max-age=60"},
+    )
 
 
 # ── Search (PRD-0028 Wave S9-3, OQ-01) ──────────────────────────────────────

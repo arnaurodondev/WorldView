@@ -45,12 +45,15 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { Bell, Newspaper } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useNewsLinkTarget, newsLinkAttrs } from "@/hooks/useNewsLinkTarget";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
 import { cn } from "@/lib/utils";
+import type { WatchlistMoverEnriched } from "@/types/api";
 // PLAN-0048 Wave F-2: shared sector pill module (also used by F-1
 // SectorHeatmapWidget and F-2 PreMarketMoversWidget). Importing the same
 // constants/predicate guarantees consistent ordering, labels, and matching
@@ -72,20 +75,30 @@ import {
 type WatchlistPeriod = "1D" | "1W" | "1M";
 
 /**
- * MoverRow — internal shape for a row in the gainers/losers columns. We
- * normalise both 1D (live quote) and 1W/1M (OHLCV-derived) into the same
- * shape so the rendering loop stays simple.
+ * MoverRow — internal shape for a row in the gainers/losers columns.
+ *
+ * PLAN-0050 Wave B: extended with the per-row enrichment columns so the row
+ * sub-component can render the news icon + alert dot without a second lookup.
+ * - For 1D: backed by `WatchlistInsights.movers[]` from the composite endpoint.
+ * - For 1W/1M: change_pct comes from per-instrument OHLCV; the enrichment
+ *   columns (sector, news, alerts) are still sourced from the insights payload
+ *   so the badges remain consistent across periods.
  */
 interface WatchlistMover {
   instrumentId: string;
   ticker: string;
   name: string;
+  sector: string | null;
   // For 1D: latest live price. For 1W/1M: latest close from OHLCV.
   price: number | null;
   // Percentage change over the selected period (already in percent units,
   // e.g. 2.34 not 0.0234). May be null while we are still loading the
   // backing data for that row.
   changePct: number | null;
+  newsCount24h: number;
+  hasActiveAlert: boolean;
+  topNewsTitle: string | null;
+  topNewsUrl: string | null;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -128,9 +141,6 @@ export function WatchlistMoversWidget() {
   // same object.
   const firstWatchlist = useMemo(() => {
     if (!watchlists || watchlists.length === 0) return null;
-    // Sort ascending by created_at (oldest first). Date.parse handles the
-    // ISO 8601 strings the gateway returns. Fallback to lexicographic
-    // compare if for some reason the timestamp is unparseable.
     const sorted = [...watchlists].sort((a, b) => {
       const ta = Date.parse(a.created_at);
       const tb = Date.parse(b.created_at);
@@ -140,70 +150,43 @@ export function WatchlistMoversWidget() {
     return sorted[0] ?? null;
   }, [watchlists]);
 
-  // ── 2. Fetch members of the chosen watchlist ────────────────────────────
-  // WHY enabled gated on firstWatchlist: skip the network call entirely
-  // when the user has no watchlists — prevents an unnecessary 404/empty
-  // round-trip and keeps the empty-state instant.
-  const { data: members, isLoading: membersLoading } = useQuery({
+  // ── 2. PLAN-0050 Wave B: composite insights endpoint ────────────────────
+  // Replaces the prior 5-query chain (members + quotes + per-member overviews
+  // + news + alerts) with a single round-trip. The gateway composes everything
+  // server-side so the widget only owns presentation.
+  //
+  // WHY 60s staleTime + 60s refetchInterval: matches the prior batch-quote
+  // cadence. The composite endpoint's Cache-Control: max-age=60 also pins
+  // the upstream cache to the same window so we don't hammer the gateway.
+  const { data: insights, isLoading: insightsLoading } = useQuery({
     queryKey: [
-      "dashboard-watchlist-movers-members",
+      "dashboard-watchlist-movers-insights",
       firstWatchlist?.watchlist_id,
     ],
     queryFn: () =>
-      createGateway(accessToken).getWatchlistMembers(
+      createGateway(accessToken).getWatchlistInsights(
         firstWatchlist!.watchlist_id,
       ),
     enabled: !!accessToken && !!firstWatchlist,
     staleTime: 60_000,
-  });
-
-  // Filter to members that have a resolved instrument_id — pending /
-  // unresolved members can't be priced.
-  const resolvedMembers = useMemo(
-    () => (members ?? []).filter((m) => !!m.instrument_id),
-    [members],
-  );
-
-  const instrumentIds = useMemo(
-    () =>
-      resolvedMembers
-        .map((m) => m.instrument_id)
-        .filter((id): id is string => !!id),
-    [resolvedMembers],
-  );
-
-  // ── 3a. 1D path — live batch quotes ────────────────────────────────────
-  // WHY a single batch quotes call: avoids N round-trips. S9 already has
-  // a 5s Valkey cache so this is cheap server-side.
-  // WHY staleTime 60_000: live ticks change second-by-second but for a
-  // dashboard widget a 1-min refresh is the right cost/value tradeoff —
-  // matches PreMarketMoversWidget.
-  // WHY enabled gates on period === "1D": we only want to incur the cost
-  // when this is the active path.
-  const {
-    data: batchQuotes,
-    isLoading: quotesLoading,
-  } = useQuery({
-    queryKey: [
-      "dashboard-watchlist-movers-quotes",
-      firstWatchlist?.watchlist_id,
-      instrumentIds,
-    ],
-    queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
-    enabled:
-      !!accessToken &&
-      period === "1D" &&
-      instrumentIds.length > 0,
-    staleTime: 60_000,
     refetchInterval: 60_000,
   });
 
-  // ── 3b. 1W / 1M path — per-instrument OHLCV ─────────────────────────────
-  // WHY useQueries (not Promise.all in a single query): each instrument's
-  // OHLCV cache is keyed on (id, timeframe), so we get free per-instrument
-  // memoisation. If the user toggles sectors the cached responses persist.
-  // WHY enabled gates on period !== "1D" AND instrumentIds.length > 0:
-  // we don't fan out 50 OHLCV requests just because the page mounted.
+  // The insights envelope is the canonical source for sector/news/alerts;
+  // we still need instrument_ids for the 1W/1M OHLCV fan-out path below.
+  const enrichedMovers: WatchlistMoverEnriched[] = useMemo(
+    () => insights?.movers ?? [],
+    [insights],
+  );
+  const instrumentIds = useMemo(
+    () => enrichedMovers.map((m) => m.instrument_id),
+    [enrichedMovers],
+  );
+
+  // ── 3. 1W / 1M path — per-instrument OHLCV ─────────────────────────────
+  // The insights endpoint covers 1D internally. For 1W/1M we still need
+  // per-instrument OHLCV bars to derive change_pct over the period — the
+  // composite endpoint deliberately omits this to keep the response small.
   const ohlcvQueries = useQueries({
     queries: instrumentIds.map((id) => ({
       queryKey: ["dashboard-watchlist-movers-ohlcv", id, period],
@@ -221,117 +204,52 @@ export function WatchlistMoversWidget() {
     })),
   });
 
-  // ── 4. Per-instrument sector lookup (Wave F-2 reuse) ───────────────────
-  // WHY dedupe by instrument_id: a watchlist shouldn't have duplicates
-  // but defensive — duplicate query keys produce TanStack warnings.
-  // WHY staleTime 600_000: GICS sector almost never changes for a stock
-  // (and never within a session) — cache aggressively.
-  const overviewQueries = useQueries({
-    queries: instrumentIds.map((id) => ({
-      queryKey: ["mover-overview-sector", id],
-      // Same query key as PreMarketMoversWidget so TanStack dedupes the
-      // network call — the dashboard doesn't fetch the same overview
-      // twice across two widgets.
-      queryFn: () => createGateway(accessToken).getCompanyOverview(id),
-      enabled: !!accessToken && !!id,
-      staleTime: 600_000,
-    })),
-  });
-
-  const sectorByInstrumentId = useMemo(() => {
-    const map = new Map<string, string | null | undefined>();
-    instrumentIds.forEach((id, i) => {
-      map.set(id, overviewQueries[i]?.data?.instrument?.gics_sector);
-    });
-    return map;
-  }, [instrumentIds, overviewQueries]);
-
-  // ── 5. Build the mover rows (period-aware) ────────────────────────────
-  // We map every member into a `WatchlistMover` then sort and split into
-  // gainers / losers below. Computing once via useMemo prevents the work
-  // from running on every keystroke / hover.
+  // ── 4. Build the mover rows (period-aware) ────────────────────────────
+  // Insights provides 1D fields directly. For 1W/1M we override change_pct
+  // from the per-instrument OHLCV chain. All other enrichment (sector, news,
+  // alerts) is period-agnostic and comes from insights.
   const movers: WatchlistMover[] = useMemo(() => {
-    return resolvedMembers
-      .map((m, idx) => {
-        const instrumentId = m.instrument_id!;
-        // Member name/ticker may be null when local instrument cache missed
-        // at add-time (BP-126-ish: "—" fallback in the gateway). Prefer
-        // ticker, then "—".
-        const ticker = m.ticker ?? "—";
-        const name = m.name ?? "—";
+    return enrichedMovers.map((em, idx) => {
+      const base: WatchlistMover = {
+        instrumentId: em.instrument_id,
+        ticker: em.ticker,
+        name: em.name,
+        sector: em.sector,
+        price: em.price,
+        changePct: em.change_pct,
+        newsCount24h: em.news_count_24h,
+        hasActiveAlert: em.has_active_alert,
+        topNewsTitle: em.top_news_title,
+        topNewsUrl: em.top_news_url,
+      };
+      if (period === "1D") return base;
 
-        if (period === "1D") {
-          const q = batchQuotes?.quotes?.[instrumentId];
-          if (!q) {
-            return {
-              instrumentId,
-              ticker,
-              name,
-              price: null,
-              changePct: null,
-            } satisfies WatchlistMover;
-          }
-          return {
-            instrumentId,
-            ticker,
-            name,
-            price: q.price ?? null,
-            changePct: q.change_pct ?? null,
-          } satisfies WatchlistMover;
-        }
+      // 1W / 1M: override price + change_pct from the OHLCV first→last close.
+      const ohlcv = ohlcvQueries[idx]?.data;
+      const bars = ohlcv?.bars ?? [];
+      if (bars.length < 2) return { ...base, price: null, changePct: null };
+      const first = bars[0]!.close;
+      const last = bars[bars.length - 1]!.close;
+      if (first <= 0) return { ...base, price: last, changePct: null };
+      return {
+        ...base,
+        price: last,
+        changePct: ((last - first) / first) * 100,
+      };
+    });
+  }, [enrichedMovers, period, ohlcvQueries]);
 
-        // 1W / 1M: derive from first→last close in the OHLCV bars array.
-        const ohlcv = ohlcvQueries[idx]?.data;
-        const bars = ohlcv?.bars ?? [];
-        if (bars.length < 2) {
-          return {
-            instrumentId,
-            ticker,
-            name,
-            price: null,
-            changePct: null,
-          } satisfies WatchlistMover;
-        }
-        const first = bars[0]!.close;
-        const last = bars[bars.length - 1]!.close;
-        if (first <= 0) {
-          // Defensive: avoid divide-by-zero / negative-price garbage from a
-          // bad ingestion.
-          return {
-            instrumentId,
-            ticker,
-            name,
-            price: last,
-            changePct: null,
-          } satisfies WatchlistMover;
-        }
-        const pct = ((last - first) / first) * 100;
-        return {
-          instrumentId,
-          ticker,
-          name,
-          price: last,
-          changePct: pct,
-        } satisfies WatchlistMover;
-      });
-    // We deliberately keep rows with `changePct === null` in the array;
-    // the gainers/losers split below filters them out via the
-    // `m.changePct != null && > 0 / < 0` predicates, which avoids
-    // the loaded vs. loading flicker.
-  }, [resolvedMembers, period, batchQuotes, ohlcvQueries]);
-
-  // ── 6. Apply sector filter ────────────────────────────────────────────
-  // WHY graceful "still loading" behaviour (don't hide unloaded sectors):
-  // matches PreMarketMoversWidget — overview queries stream in
-  // independently and we don't want flicker.
+  // ── 5. Apply sector filter ────────────────────────────────────────────
+  // WHY graceful "still loading" behaviour: matches PreMarketMoversWidget —
+  // we keep rows with unknown sector visible so the user doesn't see a
+  // shrinking list during a refetch.
   const filtered = useMemo(() => {
     if (selectedSector === ALL_SECTORS_VALUE) return movers;
     return movers.filter((m) => {
-      const sector = sectorByInstrumentId.get(m.instrumentId);
-      if (sector === undefined) return true; // overview not loaded yet
-      return matchesSectorFilter(sector, selectedSector);
+      if (m.sector == null) return true; // sector lookup not loaded yet
+      return matchesSectorFilter(m.sector, selectedSector);
     });
-  }, [movers, selectedSector, sectorByInstrumentId]);
+  }, [movers, selectedSector]);
 
   // ── 7. Sort by absolute |change_pct| desc, split into gainers / losers ─
   // WHY |change_pct| sort BEFORE the split: spec calls for "biggest absolute
@@ -361,17 +279,14 @@ export function WatchlistMoversWidget() {
     [sortedByAbs],
   );
 
-  // ── 8. Loading composition ────────────────────────────────────────────
-  // WHY combine watchlist + members + (period-specific data) loading: the
+  // ── 7. Loading composition ────────────────────────────────────────────
+  // WHY combine watchlist + insights + (period-specific data) loading: the
   // user shouldn't see a partially-rendered widget. Once *any* of these
   // complete unsuccessfully we fall through to the empty/no-data branch.
   const periodDataLoading =
-    period === "1D"
-      ? quotesLoading
-      : ohlcvQueries.some((q) => q.isLoading);
+    period === "1D" ? false : ohlcvQueries.some((q) => q.isLoading);
   const isLoading =
-    watchlistsLoading ||
-    (!!firstWatchlist && (membersLoading || periodDataLoading));
+    watchlistsLoading || (!!firstWatchlist && (insightsLoading || periodDataLoading));
 
   // ── 9. Empty state (no watchlist) ─────────────────────────────────────
   const noWatchlist = !watchlistsLoading && !firstWatchlist;
@@ -450,6 +365,27 @@ export function WatchlistMoversWidget() {
         </div>
       )}
 
+      {/* ── Per-watchlist summary strip (PLAN-0050 T-B-2-02) ────────────
+          Shows the watchlist's equal-weighted day return + sector
+          concentration mini-bar (T-B-2-03) + alert/news total counts.
+          Hidden in 1W/1M because the underlying weighted_return_1d is
+          a 1D figure; showing it next to a 1M label would be misleading.
+          WHY equal-weighted (not market-cap-weighted): the widget shows
+          a watchlist, not a portfolio — users hand-pick names they want
+          to track equally. A market-cap weight would silently dominate
+          the readout with whichever megacap they happen to follow. */}
+      {!noWatchlist && period === "1D" && insights && (
+        <WatchlistSummaryStrip insights={insights} />
+      )}
+
+      {/* ── Single-biggest-news callout (PLAN-0050 T-B-2-06) ───────────
+          Above the gainers/losers split so the highest-impact story
+          touching any watchlist member is the first thing the user
+          reads. Click opens the article (new tab, noopener). */}
+      {!noWatchlist && period === "1D" && insights?.biggest_news?.title && (
+        <BiggestNewsRow news={insights.biggest_news} />
+      )}
+
       {/* ── Sub-headers: GAINERS | LOSERS ─────────────────────────────── */}
       {/* WHY render these even in the empty-state path: keeping the static
           chrome consistent makes the empty state feel like a deliberate
@@ -477,25 +413,19 @@ export function WatchlistMoversWidget() {
           would prevent the overflow-auto from clipping. */}
       <div className="flex min-h-0 flex-1 overflow-auto">
 
-        {/* Empty: no watchlist at all */}
+        {/* Empty: no watchlist at all (PLAN-0050 T-F-6-04 — DashboardEmptyState).
+            Why the shared component: the prior bespoke 3-element JSX block
+            duplicated the heading/message/CTA pattern that already lived in
+            DashboardEmptyState. Using the shared component pins the visual
+            voice across all dashboard widgets — no widget can drift on the
+            empty-state pattern after this. */}
         {noWatchlist && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-2 text-center">
-            <span className="text-[12px] text-muted-foreground">
-              No watchlist yet
-            </span>
-            <span className="text-[11px] leading-snug text-muted-foreground/80">
-              Add instruments to your watchlist to see daily movers here.
-            </span>
-            {/* WHY a Link (not a router.push button): semantic anchor
-                gives "open in new tab" middle-click and keyboard
-                navigation for free. /screener is the canonical entry
-                point for adding new tickers to a watchlist. */}
-            <Link
-              href="/screener"
-              className="text-[11px] text-primary hover:underline"
-            >
-              Browse Screener →
-            </Link>
+          <div className="flex flex-1 items-center justify-center">
+            <DashboardEmptyState
+              title="No watchlist yet"
+              message="Add instruments to your watchlist to see daily movers here."
+              cta={{ label: "Browse Screener →", href: "/screener" }}
+            />
           </div>
         )}
 
@@ -611,6 +541,13 @@ interface WatchlistMoverRowProps {
  * across rows even when the digit count varies (e.g. $9.99 vs $192.50).
  */
 function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
+  // Build the aria-label so SR users hear ticker + state badges in one pass
+  // (instead of the dot + icon being unlabelled and silent).
+  const badgeBits: string[] = [];
+  if (mover.hasActiveAlert) badgeBits.push("active alert");
+  if (mover.newsCount24h > 0) badgeBits.push(`${mover.newsCount24h} recent news`);
+  const ariaLabel = `Open ${mover.ticker} instrument page${badgeBits.length ? `; ${badgeBits.join(", ")}` : ""}`;
+
   return (
     // WHY role="button" + tabIndex=0: rows are interactive but not <button>
     // elements (so we can layout-as-a-flex row with full bleed). Adding the
@@ -623,8 +560,25 @@ function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
       }}
       role="button"
       tabIndex={0}
-      aria-label={`Open ${mover.ticker} instrument page`}
+      aria-label={ariaLabel}
     >
+      {/* PLAN-0050 T-B-2-05: active-alert dot — 6px destructive when there
+          is at least one pending alert tagged to this member's entity_id.
+          aria-hidden because the row's aria-label already enumerates the
+          alert state textually for AT users. */}
+      {mover.hasActiveAlert ? (
+        <span
+          className="h-[6px] w-[6px] shrink-0 rounded-full bg-destructive"
+          aria-hidden="true"
+          title="Active alert"
+        />
+      ) : (
+        // Reserve the slot so ticker columns align across rows even when
+        // a row has no dot — otherwise the slot collapses and tickers
+        // shift left by 8px on rows with alerts.
+        <span className="h-[6px] w-[6px] shrink-0" aria-hidden="true" />
+      )}
+
       {/* Ticker — fixed slot for column alignment across rows */}
       <span className="w-[40px] shrink-0 font-mono text-[11px] font-bold tabular-nums text-foreground">
         {mover.ticker}
@@ -637,6 +591,25 @@ function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
       <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
         {mover.name}
       </span>
+
+      {/* PLAN-0050 T-B-2-04: news-of-the-day icon with badge count.
+          Renders only when news_count_24h > 0. Tooltip shows the top-news
+          title so users can decide whether to click before navigating.
+          WHY render in-row (not out of row): the user is scanning the
+          gainers list and asking "did this move because of news?" — the
+          icon next to the % change answers that without leaving the row. */}
+      {mover.newsCount24h > 0 && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 text-warning"
+          title={mover.topNewsTitle ?? `${mover.newsCount24h} recent`}
+          aria-hidden="true"
+        >
+          <Newspaper className="h-3 w-3" />
+          <span className="font-mono text-[9px] tabular-nums">
+            {mover.newsCount24h > 9 ? "9+" : mover.newsCount24h}
+          </span>
+        </span>
+      )}
 
       {/* Price — right-aligned in a fixed slot. Muted color because change%
           is the primary signal; price is supporting context. */}
@@ -659,5 +632,144 @@ function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
           : "—"}
       </span>
     </div>
+  );
+}
+
+// ── Summary strip (PLAN-0050 T-B-2-02 + T-B-2-03) ──────────────────────────
+
+interface WatchlistSummaryStripProps {
+  insights: import("@/types/api").WatchlistInsights;
+}
+
+/**
+ * WatchlistSummaryStrip — single-row header showing equal-weighted return,
+ * sector concentration mini-bar, and totals.
+ *
+ * WHY a single 22px strip (not three): the dashboard cell is height-bounded
+ * (Row 2 = 130px). Stacking three header strips eats data rows. One strip
+ * with three logical zones gives the user the same information density as
+ * Bloomberg's account summary line.
+ *
+ * Sector mini-bar visual: a flex row of fills proportional to sector.weight.
+ * Top-3 sectors get distinct hsl(var(--positive/warning/primary)) tints so
+ * the user can tell at a glance whether their watchlist is concentrated in
+ * one bucket. A 4th+ sector shows muted ("Other") to keep the strip readable.
+ */
+function WatchlistSummaryStrip({ insights }: WatchlistSummaryStripProps) {
+  const wr = insights.weighted_return_1d;
+  const wrColor =
+    wr == null
+      ? "text-muted-foreground"
+      : wr > 0.005
+        ? "text-positive"
+        : wr < -0.005
+          ? "text-negative"
+          : "text-muted-foreground";
+
+  // Top-3 sectors get colour; everything else collapses into "Other" so the
+  // mini-bar stays scannable even on diverse 20+ symbol watchlists.
+  const top3 = insights.sectors.slice(0, 3);
+  const otherWeight = insights.sectors.slice(3).reduce((s, x) => s + x.weight, 0);
+  // Slot colours for the top-3 buckets — chosen for legibility on the dark
+  // panel background, not by sector identity (sectors aren't colour-coded
+  // canonically anywhere in the design system).
+  const slotColors = [
+    "bg-[hsl(var(--primary))]",
+    "bg-[hsl(var(--warning))]",
+    "bg-[hsl(var(--positive))]",
+  ] as const;
+
+  return (
+    <div
+      className="flex h-[22px] shrink-0 items-center gap-2 border-b border-border/30 px-2"
+      aria-label="Watchlist summary"
+    >
+      {/* Equal-weighted return slot */}
+      <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+        <span className="text-muted-foreground">RET</span>
+        <span className={wrColor}>
+          {wr == null ? "—" : `${wr >= 0 ? "+" : ""}${wr.toFixed(2)}%`}
+        </span>
+      </span>
+
+      {/* Members count */}
+      <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+        · {insights.members_count} {insights.members_count === 1 ? "name" : "names"}
+      </span>
+
+      {/* Sector concentration mini-bar — flex-1 so it fills the remaining slot. */}
+      <div
+        className="flex h-2 flex-1 overflow-hidden rounded-[2px] bg-muted/40"
+        aria-label="Sector concentration"
+        title={top3.map((s) => `${s.sector} ${(s.weight * 100).toFixed(0)}%`).join(", ")}
+      >
+        {top3.map((s, i) => (
+          <span
+            key={s.sector}
+            className={cn("h-full", slotColors[i])}
+            style={{ width: `${s.weight * 100}%` }}
+          />
+        ))}
+        {otherWeight > 0 && (
+          <span
+            className="h-full bg-muted-foreground/40"
+            style={{ width: `${otherWeight * 100}%` }}
+          />
+        )}
+      </div>
+
+      {/* Pending-alerts counter — only shown when > 0 to keep the strip
+          quiet on calm days. */}
+      {insights.alerts_count > 0 && (
+        <span className="flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums text-destructive">
+          <Bell className="h-3 w-3" aria-hidden="true" />
+          <span>{insights.alerts_count}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Biggest-news row (PLAN-0050 T-B-2-06) ──────────────────────────────────
+
+interface BiggestNewsRowProps {
+  news: import("@/types/api").WatchlistBiggestNews;
+}
+
+/**
+ * BiggestNewsRow — single-line callout above the gainers/losers split.
+ *
+ * WHY h-7 (28px): one row's worth of vertical real estate. The article title
+ * truncates with a tooltip — clicking opens the article in a new tab.
+ *
+ * WHY noopener,noreferrer: prevents the opened tab from accessing window.opener
+ * (security — the article URL is external) and omits the Referer header.
+ */
+function BiggestNewsRow({ news }: BiggestNewsRowProps) {
+  // PLAN-0050 T-F-6-20: honour the user's tab-target preference.
+  // Defaults to new-tab so existing users see no change.
+  const [target] = useNewsLinkTarget();
+  const linkAttrs = newsLinkAttrs(target);
+  if (!news.url || !news.title) return null;
+  return (
+    <a
+      href={news.url}
+      target={linkAttrs.target}
+      rel={linkAttrs.rel}
+      className="flex h-7 shrink-0 items-center gap-2 border-b border-border/30 bg-warning/5 px-2 transition-colors hover:bg-warning/10"
+      aria-label={`Open biggest news: ${news.title}`}
+    >
+      {/* Newspaper icon + ticker chip pinned left so the title can truncate
+          without pushing context off-screen. */}
+      <Newspaper className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" />
+      {news.ticker && (
+        <span className="shrink-0 font-mono text-[10px] font-bold uppercase tabular-nums text-foreground">
+          {news.ticker}
+        </span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={news.title}>
+        {news.title}
+      </span>
+    </a>
   );
 }

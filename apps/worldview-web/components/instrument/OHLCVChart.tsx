@@ -454,15 +454,38 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
       )}
 
       {/* ── Chart container ─────────────────────────────────────────────── */}
-      {/* WHY flex-1 when fullscreen: the container should fill all remaining height
-          in the fixed overlay. In normal mode, the chart height is controlled by
-          CHART_HEIGHT passed to lightweight-charts via applyOptions. */}
+      {/* WHY flex-1 when fullscreen: the container should fill all remaining
+          height in the fixed overlay. In normal mode, the chart height is
+          controlled by CHART_HEIGHT passed to lightweight-charts via
+          applyOptions.
+          PLAN-0050 T-F-6-15 (closes F-I-027): the prior style applied
+          opacity:0.5 whenever isLoading was true — including the (extremely
+          common) case where placeholderData was already showing the chart.
+          That meant every refetch dimmed the candles to half opacity for a
+          fraction of a second before snapping back, producing a visible
+          flicker on every period change and every TanStack background
+          refresh. The chart now stays at full opacity once any data is
+          present — a tiny "refreshing" pill in the corner conveys the
+          background activity without disturbing the visual surface. */}
       {!chartError && (
-        <div
-          ref={containerRef}
-          className={`w-full ${isFullscreen ? "flex-1" : ""}`}
-          style={{ opacity: isLoading ? 0.5 : 1 }}
-        />
+        <div className="relative w-full">
+          <div
+            ref={containerRef}
+            className={`w-full ${isFullscreen ? "flex-1" : ""}`}
+          />
+          {isLoading && data && (
+            // Quiet refresh affordance: small muted pill in the top-right.
+            // aria-live="polite" so a screen reader announces the state
+            // without interrupting the user's current task.
+            <span
+              role="status"
+              aria-live="polite"
+              className="pointer-events-none absolute right-2 top-2 rounded-[2px] bg-muted/80 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground"
+            >
+              refreshing
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

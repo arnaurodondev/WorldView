@@ -27,6 +27,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { formatRelativeTime } from "@/lib/utils";
+import { getNewsLinkTarget } from "@/hooks/useNewsLinkTarget";
 import type { RankedArticle } from "@/types/api";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -163,8 +164,14 @@ function ArticleRow({ article }: { article: RankedArticle }) {
   // URL (e.g. article is from an internal source without a public URL), we
   // silently no-op rather than navigating to "#" or throwing an error.
   function handleClick() {
-    if (article.url) {
-      // Open external article in new tab — keeps dashboard open in original tab
+    if (!article.url) return;
+    // PLAN-0050 T-F-6-20: honour the user's tab-target preference. Default is
+    // "new-tab" (the prior hardcoded behaviour) so existing users see no change
+    // unless they opt in via Settings → Appearance.
+    const pref = getNewsLinkTarget();
+    if (pref === "same-tab") {
+      window.location.href = article.url;
+    } else {
       window.open(article.url, "_blank", "noopener,noreferrer");
     }
   }

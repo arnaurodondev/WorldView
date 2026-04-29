@@ -683,6 +683,71 @@ export interface Watchlist {
   updated_at: string;
 }
 
+// ── Watchlist insights (PLAN-0050 Wave B / T-B-2-01) ──────────────────────────
+//
+// Composite payload returned by GET /v1/watchlists/{id}/insights — the
+// WatchlistMoversWidget consumes this in lieu of fanning out 5 separate
+// queries client-side. Every numeric field is nullable because the gateway's
+// per-member sub-calls are best-effort (a flaky news service must not break
+// the dashboard's primary movers list).
+
+/** One member-level row in the insights payload — superset of the prior
+ * `WatchlistMover` shape with cross-service enrichment columns. */
+export interface WatchlistMoverEnriched {
+  instrument_id: string;
+  /** KG entity_id when known — null for unresolved members. */
+  entity_id: string | null;
+  ticker: string;
+  name: string;
+  /** GICS sector (Information Technology, Health Care, …) — null when the
+   *  per-member overview lookup did not return a sector. */
+  sector: string | null;
+  /** Latest price; null while loading or when the quote endpoint failed. */
+  price: number | null;
+  /** Change_pct in percent units (e.g. 1.5 means +1.50%). */
+  change_pct: number | null;
+  /** Articles in the last 24h whose entity_ids include this member. */
+  news_count_24h: number;
+  /** True when there is at least one pending alert for this member's entity. */
+  has_active_alert: boolean;
+  /** Top-impact 24h article title for this member (for the per-row badge). */
+  top_news_title: string | null;
+  /** External URL for the top-news article (opens in new tab). */
+  top_news_url: string | null;
+}
+
+/** GICS sector breakdown row — for the stacked horizontal mini-bar. */
+export interface WatchlistSectorBucket {
+  sector: string;
+  count: number;
+  /** count / members_count — pre-computed so the widget renders without math. */
+  weight: number;
+}
+
+/** Single-biggest-news callout row above the gainers/losers split. */
+export interface WatchlistBiggestNews {
+  article_id: string | null;
+  title: string | null;
+  url: string | null;
+  published_at: string | null;
+  ticker: string | null;
+  /** market_impact_score in [0..1]; null when the article had no impact score. */
+  impact_score: number | null;
+}
+
+export interface WatchlistInsights {
+  watchlist_id: string;
+  members_count: number;
+  movers: WatchlistMoverEnriched[];
+  /** Equal-weighted average change_pct across members with a live quote.
+   *  Null when no member has a quote yet (loading) or the watchlist is empty. */
+  weighted_return_1d: number | null;
+  sectors: WatchlistSectorBucket[];
+  biggest_news: WatchlistBiggestNews | null;
+  /** Total pending alerts that match any member's entity_id. */
+  alerts_count: number;
+}
+
 // ── Alerts ─────────────────────────────────────────────────────────────────
 
 export type AlertSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";

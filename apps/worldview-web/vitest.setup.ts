@@ -31,3 +31,45 @@ if (typeof window !== "undefined" && !window.ResizeObserver) {
   }
   window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 }
+
+// PLAN-0050 T-F-6-20: jsdom's `localStorage` shim in this project's vitest
+// config does not expose getItem/setItem/clear on the prototype — every
+// test that calls a hook backed by localStorage explodes with
+// "X is not a function". Install a minimal Map-backed Storage on both
+// `window.localStorage` and the global so every test sees a working
+// implementation. Reset the contents in vitest's beforeEach below.
+if (typeof window !== "undefined") {
+  const storeMap = new Map<string, string>();
+  const storage: Storage = {
+    get length() {
+      return storeMap.size;
+    },
+    clear() {
+      storeMap.clear();
+    },
+    getItem(k) {
+      return storeMap.get(k) ?? null;
+    },
+    key(i) {
+      return Array.from(storeMap.keys())[i] ?? null;
+    },
+    removeItem(k) {
+      storeMap.delete(k);
+    },
+    setItem(k, v) {
+      storeMap.set(k, String(v));
+    },
+  };
+  // Some specs explicitly Object.defineProperty(window, "localStorage", ...)
+  // — keep our shim configurable so they can replace it without erroring.
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  // Also expose on the bare `globalThis` so non-DOM module code that calls
+  // `localStorage` directly (no `window.` prefix) sees the same store.
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+}

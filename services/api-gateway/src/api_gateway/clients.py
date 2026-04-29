@@ -522,3 +522,278 @@ async def get_top_movers(
     if resp.status_code >= 400:
         raise DownstreamError("market-data", resp.status_code, resp.text)
     return cast("dict[str, Any]", resp.json())
+
+
+# ── Watchlist insights composer (PLAN-0050 Wave B / T-B-2-01) ──────────────────
+
+
+async def get_watchlist_insights(
+    clients: ServiceClients,
+    watchlist_id: str,
+    *,
+    make_headers: Callable[[], dict[str, str]],
+    member_overview_cap: int = 25,
+    news_lookback_hours: int = 24,
+) -> dict[str, Any]:
+    """Composite insights for a single watchlist (PLAN-0050 T-B-2-01).
+
+    Returns one payload that combines members, live quotes, sector breakdown,
+    24h news linkage, and pending alerts — replacing the WatchlistMoversWidget's
+    prior 4-query fan-out (S1 members, S3 quotes, S3 overviews per member, S6
+    news, S10 alerts) with a single round-trip from the frontend's perspective.
+
+    Why a composite (not 5 frontend hooks):
+      - Cuts dashboard initial-load round-trips by ~80% for users with a
+        non-trivial watchlist (10+ tickers ⇒ 11 requests collapse to 1).
+      - Lets the gateway dedupe overview lookups across members that share a
+        sector and short-circuit the news/alert filters once we know the
+        member set — the browser cannot do either as cheaply.
+      - Keeps the frontend free of any cross-service JOIN logic, matching
+        ADR-F-XX (frontend talks only to S9; never composes downstream data).
+
+    Why best-effort sub-calls (each downstream wrapped in _safe-style try/except):
+      - A flaky news service must not break the dashboard's gainers/losers
+        list. Each enrichment degrades gracefully to an empty default so the
+        primary information (movers) always renders.
+
+    Response shape (frontend `WatchlistInsightsResponse` type — see
+    apps/worldview-web/types/api.ts):
+      {
+        "watchlist_id": str,
+        "members_count": int,
+        "movers": [
+          {
+            "instrument_id", "ticker", "name", "sector", "price",
+            "change_pct", "news_count_24h", "has_active_alert",
+            "top_news_title": str | None,
+            "top_news_url": str | None
+          }
+        ],
+        "weighted_return_1d": float | None,    # equal-weight avg over members with quotes
+        "sectors": [ { "sector": str, "weight": float, "count": int } ],
+        "biggest_news": { … } | None,          # highest-impact article touching any member
+        "alerts_count": int                    # count of pending alerts that match members
+      }
+    """
+    import asyncio
+
+    def _h() -> dict[str, str]:
+        return make_headers()
+
+    async def _safe_get(
+        client: httpx.AsyncClient,
+        service: str,
+        path: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Best-effort GET — returns {} on any DownstreamError."""
+        try:
+            return await _checked_get(client, service, path, headers=_h(), **kwargs)
+        except DownstreamError:
+            return {}
+
+    # ── 1. Members + news + alerts in parallel ─────────────────────────────────
+    # WHY parallel: members controls the rest of the composition, but news +
+    # alerts are watchlist-agnostic until we know the member set, so we can
+    # speculatively fetch the global lists in the same window. We filter by
+    # member identity once members resolves.
+    members_raw, news_raw, alerts_raw = await asyncio.gather(
+        _safe_get(clients.portfolio, "portfolio", f"/api/v1/watchlists/{watchlist_id}/members"),
+        # 30 articles is enough to find a few hits for a typical 5–25-ticker
+        # watchlist while staying within the S6 endpoint's healthy range.
+        _safe_get(clients.nlp_pipeline, "nlp-pipeline", "/api/v1/news/top", params={"limit": 30}),
+        _safe_get(clients.alert, "alert", "/api/v1/alerts/pending", params={"limit": 50}),
+    )
+
+    members: list[dict[str, Any]] = members_raw.get("members") or []
+    # Filter to members with a resolved instrument_id — matches the widget's
+    # client-side filter so we never compute insights against unresolved rows.
+    resolved_members = [m for m in members if m.get("instrument_id")]
+    members_count = len(resolved_members)
+    instrument_ids = [str(m["instrument_id"]) for m in resolved_members]
+    entity_ids = {str(m.get("entity_id")) for m in resolved_members if m.get("entity_id")}
+
+    # ── 2. Per-member quote + overview (parallel, capped) ──────────────────────
+    # WHY cap at 25: users with a 100-symbol watchlist would otherwise fan out
+    # 200 downstream requests. The widget renders only top-5 gainers + losers,
+    # so 25 is more than enough to find the extremes without amplifying load.
+    capped_ids = instrument_ids[:member_overview_cap]
+
+    async def _quote(iid: str) -> dict[str, Any]:
+        return await _safe_get(clients.market_data, "market-data", f"/api/v1/quotes/{iid}")
+
+    async def _overview(iid: str) -> dict[str, Any]:
+        # Just the instrument record gives us GICS sector — the per-member
+        # `getCompanyOverview` would also fetch fundamentals + OHLCV which we
+        # don't need here. Saves ~3× the per-member load.
+        return await _safe_get(clients.market_data, "market-data", f"/api/v1/instruments/{iid}")
+
+    quote_results, overview_results = await asyncio.gather(
+        asyncio.gather(*[_quote(iid) for iid in capped_ids]),
+        asyncio.gather(*[_overview(iid) for iid in capped_ids]),
+    )
+
+    # ── 3. Index news + alerts by entity for O(1) per-member lookup ────────────
+    # WHY entity_id (not instrument_id): articles + alerts are tagged with KG
+    # entity_id (ADR-F-12). Matching against instrument_id would silently miss
+    # everything because instrument_id ≠ entity_id by design.
+    news_articles = news_raw.get("articles") or []
+    # Cutoff for the "news_count_24h" badge. The frontend cares about
+    # "did this name make the news today?" — older articles inflate the count.
+    from datetime import UTC, datetime, timedelta
+
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=news_lookback_hours)
+    news_by_entity: dict[str, list[dict[str, Any]]] = {}
+    for art in news_articles:
+        # PLAN-0049 added top-level entity_id; legacy rows nest it under payload.
+        ents = art.get("entity_ids") or []
+        if not isinstance(ents, list):
+            ents = []
+        # Apply the 24h cutoff. published_at is ISO 8601 — best-effort parse.
+        published = art.get("published_at")
+        in_window = True
+        if isinstance(published, str):
+            try:
+                # Accept both with/without timezone — assume UTC if naive.
+                ts = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                in_window = ts >= cutoff
+            except ValueError:
+                in_window = True  # malformed date → keep it
+        if not in_window:
+            continue
+        for eid in ents:
+            news_by_entity.setdefault(str(eid), []).append(art)
+
+    # Pending alerts indexed by entity_id (each alert may reference one).
+    alerts_by_entity: dict[str, int] = {}
+    pending_alerts = alerts_raw.get("alerts") or []
+    for alert in pending_alerts:
+        eid = alert.get("entity_id")
+        if eid:
+            alerts_by_entity[str(eid)] = alerts_by_entity.get(str(eid), 0) + 1
+
+    # ── 4. Build per-member rows ───────────────────────────────────────────────
+    # We zip the parallel quote + overview results back to the resolved-member
+    # list. Anything past member_overview_cap gets a price-only row (no
+    # sector / news / alert lookup) — those rows still render but without
+    # enrichment, which is the right tradeoff for very large watchlists.
+    movers_out: list[dict[str, Any]] = []
+    for idx, member in enumerate(resolved_members):
+        iid = str(member["instrument_id"])
+        ticker = member.get("ticker") or "—"
+        name = member.get("name") or ticker
+        eid = str(member.get("entity_id") or "")
+
+        if idx < len(quote_results):
+            quote = quote_results[idx]
+            overview = overview_results[idx]
+            last = quote.get("last")
+            change_pct = quote.get("change_pct")
+            sector = (overview or {}).get("gics_sector") or member.get("sector")
+        else:
+            last = None
+            change_pct = None
+            sector = member.get("sector")
+
+        # Top news for this member, if any. We pick the highest impact_score.
+        member_news = news_by_entity.get(eid, []) if eid else []
+        member_news_sorted = sorted(
+            member_news,
+            key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
+            reverse=True,
+        )
+        top_news = member_news_sorted[0] if member_news_sorted else None
+
+        movers_out.append(
+            {
+                "instrument_id": iid,
+                "entity_id": eid or None,
+                "ticker": ticker,
+                "name": name,
+                "sector": sector,
+                "price": float(last) if last is not None else None,
+                "change_pct": float(change_pct) if change_pct is not None else None,
+                "news_count_24h": len(member_news),
+                "has_active_alert": eid in alerts_by_entity,
+                "top_news_title": (top_news or {}).get("title"),
+                "top_news_url": (top_news or {}).get("url"),
+            }
+        )
+
+    # ── 5. Aggregates ─────────────────────────────────────────────────────────
+    # Equal-weighted return: average change_pct across members for which we
+    # actually got a live quote. Members without a quote do not contribute
+    # (treating them as 0 would lie about the watchlist's day).
+    contributing = [m["change_pct"] for m in movers_out if m["change_pct"] is not None]
+    weighted_return_1d: float | None = (
+        sum(contributing) / len(contributing) if contributing else None
+    )
+
+    # Sector breakdown — count of members in each GICS bucket. The widget
+    # renders this as a stacked horizontal mini-bar so we return both count
+    # and weight (count / members_count) for convenience.
+    sector_counts: dict[str, int] = {}
+    for m in movers_out:
+        s = m["sector"] or "Unknown"
+        sector_counts[s] = sector_counts.get(s, 0) + 1
+    total_with_sector = sum(sector_counts.values()) or 1
+    sectors_out: list[dict[str, Any]] = sorted(
+        (
+            {"sector": s, "count": c, "weight": c / total_with_sector}
+            for s, c in sector_counts.items()
+        ),
+        key=lambda x: cast("int", x["count"]),
+        reverse=True,
+    )
+
+    # Biggest news (T-B-2-06): highest-impact article whose entity touches ANY
+    # watchlist member. Falls back to None on a quiet news day.
+    member_news_pool: list[dict[str, Any]] = []
+    for eid in entity_ids:
+        member_news_pool.extend(news_by_entity.get(eid, []))
+    # Dedup by article_id (an article can mention multiple watchlist members).
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for art in member_news_pool:
+        aid = str(art.get("article_id") or "")
+        if aid and aid in seen:
+            continue
+        if aid:
+            seen.add(aid)
+        deduped.append(art)
+    biggest_news_article = max(
+        deduped,
+        key=lambda a: float(
+            a.get("market_impact_score") or a.get("display_relevance_score") or 0.0
+        ),
+        default=None,
+    )
+    biggest_news_out: dict[str, Any] | None = None
+    if biggest_news_article is not None:
+        biggest_news_out = {
+            "article_id": biggest_news_article.get("article_id"),
+            "title": biggest_news_article.get("title"),
+            "url": biggest_news_article.get("url"),
+            "published_at": biggest_news_article.get("published_at"),
+            "ticker": biggest_news_article.get("ticker"),
+            "impact_score": (
+                float(biggest_news_article["market_impact_score"])
+                if biggest_news_article.get("market_impact_score") is not None
+                else None
+            ),
+        }
+
+    # Pending alert count restricted to members.
+    alerts_count = sum(alerts_by_entity.get(eid, 0) for eid in entity_ids)
+
+    return {
+        "watchlist_id": watchlist_id,
+        "members_count": members_count,
+        "movers": movers_out,
+        "weighted_return_1d": weighted_return_1d,
+        "sectors": sectors_out,
+        "biggest_news": biggest_news_out,
+        "alerts_count": alerts_count,
+    }

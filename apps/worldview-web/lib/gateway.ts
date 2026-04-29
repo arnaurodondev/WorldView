@@ -47,6 +47,7 @@ import type {
   TransactionRequest,
   Transaction,
   Watchlist,
+  WatchlistInsights,
   WatchlistMember,
   AlertsResponse,
   Thread,
@@ -1352,6 +1353,28 @@ export function createGateway(token?: string | null) {
         // the field — matches the previous behaviour (no badge).
         resolution: m.resolution ?? "resolved",
       }));
+    },
+
+    /**
+     * getWatchlistInsights — composite insights for the WatchlistMoversWidget
+     * (PLAN-0050 T-B-2-01).
+     *
+     * Replaces the widget's prior 5-query chain (members + quotes + per-member
+     * overviews + news + alerts) with one round-trip. The gateway composes the
+     * payload server-side so the dashboard can render gainers/losers + sector
+     * concentration + active-alert flags + biggest-news callout from a single
+     * cache slot.
+     *
+     * WHY a typed wrapper here (and not a bare apiFetch in the widget):
+     * the response shape is non-trivial and shared by the widget + future
+     * surfaces (e.g. an account sheet). Owning the type at the gateway boundary
+     * means consumers can rely on a single source of truth for the contract.
+     */
+    async getWatchlistInsights(watchlistId: string): Promise<WatchlistInsights> {
+      return apiFetch<WatchlistInsights>(
+        `/v1/watchlists/${encodeURIComponent(watchlistId)}/insights`,
+        { token: t },
+      );
     },
 
     /**

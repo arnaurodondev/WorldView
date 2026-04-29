@@ -115,7 +115,11 @@ export function SessionStatsStrip({
     // WHY bg-card: sits visually between the chart (bg-background) and the tabs row.
     // WHY border-b: separates from the timeframe selector bar below.
     <div
-      className="flex h-5 items-center gap-3 border-b border-border bg-card px-3"
+      // PLAN-0050 T-F-6-10 (closes F-I-022): added overflow-x-auto + min-w-0
+      // so the strip can scroll horizontally on tablet-width viewports (the
+      // O/H/L/V/VWAP cluster is ~280px and would clip on narrow shells).
+      // Children keep whitespace-nowrap via the inline Stat component.
+      className="flex h-5 min-w-0 items-center gap-3 overflow-x-auto border-b border-border bg-card px-3"
       aria-label="Session statistics"
     >
       <Stat label="O" value={fmtPrice(open)} />
