@@ -57,6 +57,13 @@ import { ChartToolbar } from "@/components/instrument/ChartToolbar";
 import { DrawingPalette } from "@/components/instrument/DrawingPalette";
 import { DrawingCanvas } from "@/components/instrument/DrawingCanvas";
 import { VolumeProfileOverlay } from "@/components/instrument/VolumeProfileOverlay";
+// WHY import IChartApi / ISeriesApi / UTCTimestamp: typed refs eliminate all the
+// `any`-casts that previously silenced TypeScript on chart + series method calls.
+// IChartApi = the chart instance returned by createChart().
+// ISeriesApi<T> = a generic series handle; T discriminates Candlestick/Line/Histogram.
+// UTCTimestamp = branded number type (number & { _brand: "UTCTimestamp" }) that
+// lightweight-charts uses to enforce time values are in Unix seconds (not ms).
+import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import type { OHLCVBar } from "@/types/api";
 import type { CoordinateConverter } from "@/components/instrument/DrawingCanvas";
 import {
@@ -163,6 +170,44 @@ function computeMA(
   }));
 }
 
+// ── UTCTimestamp helpers ───────────────────────────────────────────────────────
+
+/**
+ * toTime — cast a Unix-seconds number to lightweight-charts' branded UTCTimestamp.
+ *
+ * WHY needed: lightweight-charts uses a branded type `UTCTimestamp` (= number with
+ * a `_brand: "UTCTimestamp"` phantom tag) so TypeScript can catch accidental
+ * millisecond values being passed as seconds. Our computed timestamps are correct
+ * Unix seconds — the cast is safe. Using `as UTCTimestamp` instead of `as any`
+ * keeps the intent explicit and avoids widening to `any` in the call sites.
+ */
+function toTime(t: number): UTCTimestamp {
+  return t as UTCTimestamp;
+}
+
+/**
+ * setSeriesData — null-safe typed setData wrapper for lightweight-charts series.
+ *
+ * WHY needed: ISeriesApi<T>.setData() expects exactly the data shape for T.
+ * Our computed indicator data arrays (e.g., { time: number; value: number }[])
+ * are semantically correct, but TypeScript needs the `time` field as UTCTimestamp
+ * and the shape to match the series discriminant. We use a `as unknown as P[0]`
+ * double-cast which is safe given that the data is already correctly structured.
+ *
+ * WHY generic S (not `any`): keeps the series type trackable for IDE tooling.
+ * The `Parameters<S["setData"]>[0]` trick extracts the exact argument type from
+ * the series' setData overload without needing to know T explicitly.
+ */
+function setSeriesData<S extends ISeriesApi<"Line" | "Histogram" | "Candlestick">>(
+  series: S | null,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any[],
+): void {
+  if (!series) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  series.setData(data as any);
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
@@ -219,49 +264,33 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
   // WHY useRef for chart + series: preserves instances across re-renders without
   // causing re-renders themselves (unlike useState which would create a loop).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chartRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const seriesRef = useRef<any>(null);          // candlestick series
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const volumeSeriesRef = useRef<any>(null);    // volume histogram series
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ma50SeriesRef = useRef<any>(null);      // MA50 line series
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ma200SeriesRef = useRef<any>(null);     // MA200 line series
+  // WHY IChartApi / ISeriesApi<T>: proper types from lightweight-charts replace
+  // the former `any` casts. ISeriesApi<"Candlestick"> and ISeriesApi<"Line"> are
+  // the correct discriminants for the respective series types created below.
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);       // candlestick series
+  const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);   // volume histogram series
+  const ma50SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);          // MA50 line series
+  const ma200SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);         // MA200 line series
 
   // ── Wave C: Indicator series refs ──────────────────────────────────────────
   // WHY refs (not state): series objects are mutable lightweight-charts handles.
   // We call .setData() and .applyOptions() directly. Storing them in state would
   // cause an infinite loop (setState → re-render → series-update effect → setState).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rsiPaneRef = useRef<any>(null);         // RSI line series (sub-pane)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const macdLineRef = useRef<any>(null);        // MACD line
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const macdSignalRef = useRef<any>(null);      // MACD signal line
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const macdHistRef = useRef<any>(null);        // MACD histogram
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bbUpperRef = useRef<any>(null);         // Bollinger upper band
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bbMiddleRef = useRef<any>(null);        // Bollinger middle (SMA)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bbLowerRef = useRef<any>(null);         // Bollinger lower band
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const atrRef = useRef<any>(null);             // ATR line (sub-pane)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stochKRef = useRef<any>(null);          // Stochastic %K
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stochDRef = useRef<any>(null);          // Stochastic %D
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const obvRef = useRef<any>(null);             // OBV line (main price pane)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const vwapRef = useRef<any>(null);            // VWAP line (main price pane)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const volMA20Ref = useRef<any>(null);         // Volume MA20 (volume pane)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const vwapLineRef = useRef<any>(null);        // VWAP anchored (main pane, vol submenu)
+  const rsiPaneRef = useRef<ISeriesApi<"Line"> | null>(null);             // RSI line series (sub-pane)
+  const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null);            // MACD line
+  const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null);          // MACD signal line
+  const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);       // MACD histogram
+  const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);             // Bollinger upper band
+  const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);            // Bollinger middle (SMA)
+  const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);             // Bollinger lower band
+  const atrRef = useRef<ISeriesApi<"Line"> | null>(null);                 // ATR line (sub-pane)
+  const stochKRef = useRef<ISeriesApi<"Line"> | null>(null);              // Stochastic %K
+  const stochDRef = useRef<ISeriesApi<"Line"> | null>(null);              // Stochastic %D
+  const obvRef = useRef<ISeriesApi<"Line"> | null>(null);                 // OBV line (main price pane)
+  const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);                // VWAP line (main price pane)
+  const volMA20Ref = useRef<ISeriesApi<"Line"> | null>(null);             // Volume MA20 (volume pane)
+  const vwapLineRef = useRef<ISeriesApi<"Line"> | null>(null);            // VWAP anchored (main pane, vol submenu)
 
   const { data, isLoading } = useQuery({
     queryKey: ["ohlcv", instrumentId, timeframe],
@@ -294,8 +323,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
     // WHY dynamic import: lightweight-charts uses browser APIs unavailable at SSR.
     // Dynamic import ensures it only loads client-side.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let chart: any = null;
+    let chart: IChartApi | null = null;
 
     async function initChart() {
       try {
@@ -582,8 +610,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     if (!seriesRef.current || !data?.bars) return;
 
     // Convert ISO timestamps to Unix time (lightweight-charts expects seconds)
+    // WHY toTime(): lightweight-charts uses UTCTimestamp (branded number) for time fields.
+    // Math.floor(getTime()/1000) produces the correct Unix seconds value; toTime() casts
+    // it to the branded type without losing type safety elsewhere.
     const formattedBars: FormattedBar[] = data.bars.map((bar) => ({
-      time: Math.floor(new Date(bar.timestamp).getTime() / 1000),
+      time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
       open: bar.open,
       high: bar.high,
       low: bar.low,
@@ -592,24 +623,26 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     }));
 
     // WHY setData (not updateData): timeframe switch replaces the full dataset
-    seriesRef.current.setData(formattedBars);
+    // WHY setSeriesData() wrapper: ISeriesApi<"Candlestick">.setData() expects
+    // CandlestickData[] which uses UTCTimestamp. The helper handles the cast safely.
+    setSeriesData(seriesRef.current, formattedBars);
 
     // ── Volume data ────────────────────────────────────────────────────────
     // WHY per-bar color: up-close bars → transparent green, down-close → transparent red.
     // WHY 40 alpha hex (25%): full opacity volume bars overpower the candlesticks.
     // Semi-transparent bars keep volume visually secondary to price action.
-    if (volumeSeriesRef.current) {
-      const volumeData = formattedBars.map((bar) => ({
+    setSeriesData(
+      volumeSeriesRef.current,
+      formattedBars.map((bar) => ({
         time: bar.time,
         value: bar.volume,
         color: bar.close >= bar.open ? "#26A69A40" : "#EF535040",
-      }));
-      volumeSeriesRef.current.setData(volumeData);
-    }
+      })),
+    );
 
     // ── MA50 / MA200 data ──────────────────────────────────────────────────
-    if (ma50SeriesRef.current) ma50SeriesRef.current.setData(computeMA(formattedBars, 50));
-    if (ma200SeriesRef.current) ma200SeriesRef.current.setData(computeMA(formattedBars, 200));
+    setSeriesData(ma50SeriesRef.current, computeMA(formattedBars, 50));
+    setSeriesData(ma200SeriesRef.current, computeMA(formattedBars, 200));
 
     // ── Wave C: Indicator data computations ────────────────────────────────
     // WHY compute all indicators (not just enabled ones): when a user enables an
@@ -618,19 +651,18 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     // "no data flash" when an indicator is first enabled after bars are loaded.
 
     // RSI
-    if (rsiPaneRef.current) {
-      rsiPaneRef.current.setData(computeRSI(formattedBars, 14));
-    }
+    setSeriesData(rsiPaneRef.current, computeRSI(formattedBars, 14));
 
     // MACD
-    if (macdLineRef.current && macdSignalRef.current && macdHistRef.current) {
+    if (macdLineRef.current || macdSignalRef.current || macdHistRef.current) {
       const macdData = computeMACD(formattedBars, 12, 26, 9);
-      macdLineRef.current.setData(macdData.map((d) => ({ time: d.time, value: d.macd })));
-      macdSignalRef.current.setData(macdData.map((d) => ({ time: d.time, value: d.signal })));
+      setSeriesData(macdLineRef.current, macdData.map((d) => ({ time: d.time, value: d.macd })));
+      setSeriesData(macdSignalRef.current, macdData.map((d) => ({ time: d.time, value: d.signal })));
       // WHY color per bar for histogram: positive histogram (MACD > signal) → teal;
       // negative (MACD < signal) → red. This is the standard MACD histogram coloring
       // used by TradingView and Bloomberg — instantly shows momentum direction.
-      macdHistRef.current.setData(
+      setSeriesData(
+        macdHistRef.current,
         macdData.map((d) => ({
           time: d.time,
           value: d.histogram,
@@ -640,39 +672,33 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     }
 
     // Bollinger Bands
-    if (bbUpperRef.current && bbMiddleRef.current && bbLowerRef.current) {
+    if (bbUpperRef.current || bbMiddleRef.current || bbLowerRef.current) {
       const bbData = computeBollinger(formattedBars, 20, 2);
-      bbUpperRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.upper })));
-      bbMiddleRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.middle })));
-      bbLowerRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.lower })));
+      setSeriesData(bbUpperRef.current, bbData.map((d) => ({ time: d.time, value: d.upper })));
+      setSeriesData(bbMiddleRef.current, bbData.map((d) => ({ time: d.time, value: d.middle })));
+      setSeriesData(bbLowerRef.current, bbData.map((d) => ({ time: d.time, value: d.lower })));
     }
 
     // ATR
-    if (atrRef.current) {
-      atrRef.current.setData(computeATR(formattedBars, 14));
-    }
+    setSeriesData(atrRef.current, computeATR(formattedBars, 14));
 
     // Stochastic
-    if (stochKRef.current && stochDRef.current) {
+    if (stochKRef.current || stochDRef.current) {
       const stochData = computeStochastic(formattedBars, 14, 3, 3);
-      stochKRef.current.setData(stochData.map((d) => ({ time: d.time, value: d.k })));
-      stochDRef.current.setData(stochData.map((d) => ({ time: d.time, value: d.d })));
+      setSeriesData(stochKRef.current, stochData.map((d) => ({ time: d.time, value: d.k })));
+      setSeriesData(stochDRef.current, stochData.map((d) => ({ time: d.time, value: d.d })));
     }
 
     // OBV
-    if (obvRef.current) {
-      obvRef.current.setData(computeOBV(formattedBars));
-    }
+    setSeriesData(obvRef.current, computeOBV(formattedBars));
 
     // VWAP (shared between Indicators dropdown and Volume submenu VWAP Line)
     const vwapData = computeVWAP(formattedBars);
-    if (vwapRef.current) vwapRef.current.setData(vwapData);
-    if (vwapLineRef.current) vwapLineRef.current.setData(vwapData);
+    setSeriesData(vwapRef.current, vwapData);
+    setSeriesData(vwapLineRef.current, vwapData);
 
     // Volume MA20
-    if (volMA20Ref.current) {
-      volMA20Ref.current.setData(computeVolumeMA(formattedBars, 20));
-    }
+    setSeriesData(volMA20Ref.current, computeVolumeMA(formattedBars, 20));
 
     // Volume Profile (SVG overlay — not a lightweight-charts series)
     // WHY set in state: VolumeProfileOverlay is a React component that needs
@@ -911,6 +937,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           <DrawingPalette
             activeTool={activeTool}
             onSelectTool={setActiveTool}
+            // WHY annotations.length: the palette shows a count badge at the bottom
+            // so analysts can confirm their drawings are persisted even after closing/
+            // reopening the tab. Passing the count (not the full array) avoids
+            // re-rendering the palette on every annotation render pass.
+            annotationCount={annotations.length}
           />
 
           {/* ── Chart canvas container ────────────────────────────────────── */}

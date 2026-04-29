@@ -141,7 +141,7 @@ export interface Fundamentals {
   week_52_low: number | null;
   // Daily
   daily_return: number | null;
-  updated_at: string; // ISO 8601 UTC
+  updated_at: string | null; // ISO 8601 UTC; null if no fundamentals backfill has run yet
 }
 
 /**

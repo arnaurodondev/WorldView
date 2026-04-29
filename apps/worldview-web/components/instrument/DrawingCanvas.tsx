@@ -40,7 +40,10 @@
 // WHY "use client": uses useState (in-progress annotation points), useEffect
 // (sync annotations → SVG on data change), mouse event handlers.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+// WHY useId: generates a stable React-managed unique string for the text-input's
+// htmlFor/id pair. This is SSR-safe (unlike Date.now() or Math.random()) and
+// survives React StrictMode double-invocation without collision.
 import type {
   Annotation,
   DrawingToolId,
@@ -182,6 +185,22 @@ export function DrawingCanvas({
   const [inProgress, setInProgress] = useState<InProgressDrawing | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // ── TEXT tool inline input overlay ────────────────────────────────────────
+  // WHY NOT inside the SVG: SVG cannot contain HTML <input> elements — only SVG
+  // elements are valid children. We render the <input> as a sibling outside the
+  // SVG and use absolute positioning to place it at the click point.
+  // WHY pending state holds chartPoint: when the user types and commits, we call
+  // commitAnnotation("TEXT", [chartPoint], enteredText) — we need the chart
+  // coordinates of the original click, not the input's screen position.
+  const [pendingTextPixel, setPendingTextPixel] = useState<{
+    x: number;
+    y: number;
+    chartPoint: ChartPoint;
+  } | null>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  // WHY useId: SSR-safe stable ID for the <label>/<input> pair
+  const textInputId = useId();
+
   // WHY reset inProgress when activeTool changes: if the analyst switches tools
   // mid-drawing (e.g., starts a trend line then switches to arrow), we discard
   // the incomplete annotation. This matches TradingView's behaviour.
@@ -195,8 +214,21 @@ export function DrawingCanvas({
   // is defined. Using useCallback here avoids the react-hooks/exhaustive-deps warning
   // about the missing dependency in handleSvgClick.
 
-  const commitAnnotation = useCallback((tool: DrawingToolId, points: ChartPoint[]) => {
-    const id = `ann-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const commitAnnotation = useCallback((
+    tool: DrawingToolId,
+    points: ChartPoint[],
+    // WHY optional text param: the TEXT tool collects label text via an inline
+    // <input> overlay (see pendingTextPixel state below). The input's commit
+    // handler calls commitAnnotation("TEXT", points, enteredText). Other tools
+    // never pass text (their annotations have no text field).
+    text?: string,
+  ) => {
+    // WHY crypto.randomUUID(): browser-native UUID v4 generator. Cryptographically
+    // random — zero collision risk even for power users with hundreds of annotations.
+    // Replaces the former `Date.now() + Math.random()` which had measurable
+    // collision probability when multiple annotations were created in rapid succession
+    // (same millisecond, same Math.random() seed in some V8 builds).
+    const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const color = ANNOTATION_COLOR;
 
@@ -241,12 +273,11 @@ export function DrawingCanvas({
         };
         break;
       case "TEXT": {
-        // WHY prompt: text input in a modal is out of scope for Wave C.
-        // A browser prompt is the simplest possible text entry — it's functional
-        // and avoids adding a Radix Dialog dep for a single use case.
-        // FUTURE: replace with a shadcn/ui Popover with an Input (PLAN-0053).
-        const text = window.prompt("Annotation text:");
-        if (!text) return; // user cancelled
+        // WHY no window.prompt(): blocking synchronous prompts freeze the browser
+        // tab and are a UX anti-pattern. They also break in headless test environments
+        // (Playwright must accept/dismiss alerts separately). The inline <input>
+        // overlay (rendered below the SVG) provides an equivalent non-blocking UX.
+        if (!text) return; // user cancelled (empty commit from blur/Escape)
         annotation = {
           id, tool, createdAt, color,
           anchor: points[0],
@@ -280,6 +311,15 @@ export function DrawingCanvas({
       const chartPoint = pixelToChartPoint(x, y, converters);
       if (!chartPoint) return;
 
+      // WHY TEXT tool short-circuit: TEXT requires only 1 click point (the anchor),
+      // but the text content must be collected via the inline <input> overlay before
+      // committing. We store the pending position and return — the input's onBlur /
+      // Enter key handler calls commitAnnotation() when the user finishes typing.
+      if (activeTool === "TEXT") {
+        setPendingTextPixel({ x, y, chartPoint });
+        return;
+      }
+
       const currentPoints = inProgress?.points ?? [];
       const newPoints = [...currentPoints, chartPoint];
       const required = POINTS_REQUIRED[activeTool];
@@ -294,6 +334,46 @@ export function DrawingCanvas({
       }
     },
     [activeTool, converters, inProgress, commitAnnotation],
+  );
+
+  // ── TEXT input overlay: focus on appearance ───────────────────────────────
+  // WHY useEffect (not autoFocus attr): autoFocus fires on initial mount only.
+  // pendingTextPixel changes AFTER mount — we need a side-effect to call focus()
+  // each time a new text annotation is started.
+  useEffect(() => {
+    if (pendingTextPixel) {
+      textInputRef.current?.focus();
+    }
+  }, [pendingTextPixel]);
+
+  // ── TEXT input commit handler ─────────────────────────────────────────────
+  // WHY separate commit function: called by both the Enter key handler and the
+  // onBlur handler (clicking outside the input should commit if text was entered,
+  // or cancel if empty). Centralising the logic avoids duplication.
+  const handleTextInputCommit = useCallback(
+    (value: string) => {
+      if (!pendingTextPixel) return;
+      if (value.trim()) {
+        // Non-empty text → commit the annotation at the pending chart point
+        commitAnnotation("TEXT", [pendingTextPixel.chartPoint], value.trim());
+      }
+      // Empty text → user cancelled (no annotation created)
+      setPendingTextPixel(null);
+    },
+    [pendingTextPixel, commitAnnotation],
+  );
+
+  const handleTextInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleTextInputCommit(e.currentTarget.value);
+      } else if (e.key === "Escape") {
+        // Cancel text annotation — discard without committing
+        setPendingTextPixel(null);
+      }
+    },
+    [handleTextInputCommit],
   );
 
   // ── Mouse move handler (preview line) ───────────────────────────────────
@@ -344,38 +424,77 @@ export function DrawingCanvas({
     zIndex: 5, // above chart canvas (z-index ~0), below palette (z-10)
   };
 
+  // WHY React Fragment (not single SVG): the TEXT tool needs an absolutely-positioned
+  // <input> HTML element rendered as a sibling to the SVG. HTML inputs cannot be
+  // placed inside an SVG element — the browser ignores them. A Fragment lets us
+  // return both the SVG and the input without adding a wrapper div (which would
+  // affect the absolutely-positioned layout used by OHLCVChart).
   return (
-    <svg
-      ref={svgRef}
-      style={svgStyle}
-      onClick={handleSvgClick}
-      onMouseMove={handleMouseMove}
-      data-testid="drawing-canvas"
-      aria-label="Chart annotation layer"
-    >
-      {/* ── Persisted annotations ────────────────────────────────────────── */}
-      {converters && annotations.map((ann) => (
-        <AnnotationShape
-          key={ann.id}
-          annotation={ann}
-          converters={converters}
-          onContextMenu={(e) => handleContextMenu(e, ann.id)}
-        />
-      ))}
+    <>
+      <svg
+        ref={svgRef}
+        style={svgStyle}
+        onClick={handleSvgClick}
+        onMouseMove={handleMouseMove}
+        data-testid="drawing-canvas"
+        aria-label="Chart annotation layer"
+      >
+        {/* ── Persisted annotations ────────────────────────────────────────── */}
+        {converters && annotations.map((ann) => (
+          <AnnotationShape
+            key={ann.id}
+            annotation={ann}
+            converters={converters}
+            onContextMenu={(e) => handleContextMenu(e, ann.id)}
+          />
+        ))}
 
-      {/* ── In-progress preview ──────────────────────────────────────────── */}
-      {/* WHY dashed line: the preview line shows where the annotation will go
-          before the user commits it with the second click. Dashed distinguishes
-          it from already-committed annotations (solid lines). */}
-      {inProgress && inProgress.points.length > 0 && inProgress.mousePixel && converters && (
-        <PreviewLine
-          startPoint={inProgress.points[0]}
-          mousePixel={inProgress.mousePixel}
-          converters={converters}
-          color={ANNOTATION_COLOR}
+        {/* ── In-progress preview ──────────────────────────────────────────── */}
+        {/* WHY dashed line: the preview line shows where the annotation will go
+            before the user commits it with the second click. Dashed distinguishes
+            it from already-committed annotations (solid lines). */}
+        {inProgress && inProgress.points.length > 0 && inProgress.mousePixel && converters && (
+          <PreviewLine
+            startPoint={inProgress.points[0]}
+            mousePixel={inProgress.mousePixel}
+            converters={converters}
+            color={ANNOTATION_COLOR}
+          />
+        )}
+      </svg>
+
+      {/* ── TEXT tool inline label input ────────────────────────────────────
+          WHY absolutely positioned sibling: placed at the click pixel so it
+          appears inline on the chart, like TradingView's text annotation input.
+          WHY z-20: must appear above the SVG canvas (z-5) and palette (z-10).
+          WHY min-w-[80px] max-w-[200px]: minimum fits a short ticker symbol;
+          maximum prevents the input from overflowing the chart edges.
+          WHY font-mono text-[11px]: matches the Terminal Dark data density
+          convention. Users annotate with ticker/event names, not prose. */}
+      {pendingTextPixel && (
+        <input
+          id={textInputId}
+          ref={textInputRef}
+          type="text"
+          placeholder="Label…"
+          data-testid="text-annotation-input"
+          className="absolute z-20 rounded-[2px] px-2 py-0.5 border border-border bg-card text-foreground font-mono text-[11px] tabular-nums min-w-[80px] max-w-[200px] focus:outline focus:outline-1 focus:outline-primary"
+          style={{
+            // WHY top = y pixel: places the input at the vertical click position.
+            top: pendingTextPixel.y,
+            // WHY left = x + paletteWidth: the SVG starts at paletteWidth from
+            // the wrapper left edge. pendingTextPixel.x is relative to the SVG.
+            // Adding paletteWidth converts to wrapper-relative coordinates.
+            left: pendingTextPixel.x + paletteWidth,
+          }}
+          onKeyDown={handleTextInputKeyDown}
+          // WHY onBlur commit: clicking outside the input (e.g., clicking another
+          // chart area) should commit the typed text rather than discard it.
+          // Empty onBlur cancels (no annotation created).
+          onBlur={(e) => handleTextInputCommit(e.currentTarget.value)}
         />
       )}
-    </svg>
+    </>
   );
 }
 

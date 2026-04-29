@@ -349,7 +349,7 @@ import { DrawingPalette } from "@/components/instrument/DrawingPalette";
 describe("DrawingPalette — Wave C", () => {
   it("renders all 8 palette buttons (CURSOR + 7 drawing tools)", () => {
     const onSelectTool = vi.fn();
-    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} />);
+    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} annotationCount={0} />);
 
     // WHY check data-testid pattern: each button has a unique testid derived from
     // the tool name (e.g., "drawing-tool-trend-line").
@@ -364,28 +364,28 @@ describe("DrawingPalette — Wave C", () => {
   });
 
   it("CURSOR button is active when activeTool is null", () => {
-    render(<DrawingPalette activeTool={null} onSelectTool={vi.fn()} />);
+    render(<DrawingPalette activeTool={null} onSelectTool={vi.fn()} annotationCount={0} />);
     // WHY aria-pressed: the button uses aria-pressed="true" for the active state.
     // This is the standard accessibility pattern for toggle buttons.
     expect(screen.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("TREND_LINE button is active when activeTool is TREND_LINE", () => {
-    render(<DrawingPalette activeTool="TREND_LINE" onSelectTool={vi.fn()} />);
+    render(<DrawingPalette activeTool="TREND_LINE" onSelectTool={vi.fn()} annotationCount={0} />);
     expect(screen.getByTestId("drawing-tool-trend-line")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("drawing-tool-cursor")).toHaveAttribute("aria-pressed", "false");
   });
 
   it("calls onSelectTool(TREND_LINE) when trend line button clicked", () => {
     const onSelectTool = vi.fn();
-    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} />);
+    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} annotationCount={0} />);
     fireEvent.click(screen.getByTestId("drawing-tool-trend-line"));
     expect(onSelectTool).toHaveBeenCalledWith("TREND_LINE");
   });
 
   it("calls onSelectTool(null) when CURSOR button clicked", () => {
     const onSelectTool = vi.fn();
-    render(<DrawingPalette activeTool="TREND_LINE" onSelectTool={onSelectTool} />);
+    render(<DrawingPalette activeTool="TREND_LINE" onSelectTool={onSelectTool} annotationCount={0} />);
     fireEvent.click(screen.getByTestId("drawing-tool-cursor"));
     expect(onSelectTool).toHaveBeenCalledWith(null);
   });
@@ -393,14 +393,14 @@ describe("DrawingPalette — Wave C", () => {
   it("calls onSelectTool(null) when the same active tool is clicked again (toggle off)", () => {
     const onSelectTool = vi.fn();
     // WHY toggle-off: clicking an already-armed tool should disarm it (same UX as TradingView)
-    render(<DrawingPalette activeTool="HORIZONTAL_LEVEL" onSelectTool={onSelectTool} />);
+    render(<DrawingPalette activeTool="HORIZONTAL_LEVEL" onSelectTool={onSelectTool} annotationCount={0} />);
     fireEvent.click(screen.getByTestId("drawing-tool-horizontal-level"));
     expect(onSelectTool).toHaveBeenCalledWith(null);
   });
 
   it("calls onSelectTool(RECTANGLE) when rectangle button clicked", () => {
     const onSelectTool = vi.fn();
-    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} />);
+    render(<DrawingPalette activeTool={null} onSelectTool={onSelectTool} annotationCount={0} />);
     fireEvent.click(screen.getByTestId("drawing-tool-rectangle"));
     expect(onSelectTool).toHaveBeenCalledWith("RECTANGLE");
   });
