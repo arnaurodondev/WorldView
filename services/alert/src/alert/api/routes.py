@@ -1,20 +1,40 @@
 """Alert service REST and WebSocket routes.
 
 Endpoints:
-  GET  /api/v1/alerts/pending          — list unacknowledged alerts for the authenticated user
-  DELETE /api/v1/alerts/{alert_id}/ack — acknowledge (mark delivered) an alert for the user
-  WS   /api/v1/alerts/stream           — WebSocket real-time alert stream
+  GET    /api/v1/alerts/pending                   — list unacknowledged alerts for the authenticated user
+  DELETE /api/v1/alerts/{alert_id}/ack            — acknowledge a per-user pending alert
+  PATCH  /api/v1/alerts/{alert_id}/acknowledge    — tenant-level alert ack (PLAN-0051 T-D-4-02)
+  PATCH  /api/v1/alerts/{alert_id}/snooze         — set snooze_until (PLAN-0051 T-D-4-02)
+  GET    /api/v1/alerts/history                   — paginated tenant history (PLAN-0051 T-D-4-02)
+  WS     /api/v1/alerts/stream                    — WebSocket real-time alert stream
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 import jwt
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
-from alert.api.dependencies import AckUseCaseDep, CurrentUserIdDep, GetPendingAlertsUseCaseDep
-from alert.api.schemas import PendingAlertResponse, PendingAlertsResponse
+from alert.api.dependencies import (
+    AckAlertUseCaseDep,
+    AckUseCaseDep,
+    CurrentUserIdDep,
+    GetPendingAlertsUseCaseDep,
+    HistoryUseCaseDep,
+    SnoozeUseCaseDep,
+    TenantUserDep,
+)
+from alert.api.schemas import (
+    AcknowledgeAlertRequest,
+    AlertHistoryResponse,
+    AlertResponse,
+    PendingAlertResponse,
+    PendingAlertsResponse,
+    SnoozeAlertRequest,
+)
+from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -114,6 +134,176 @@ async def acknowledge_alert(
         user_id=str(user_id),
     )
     return {"status": "acknowledged"}
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _alert_to_response(alert: Alert) -> AlertResponse:
+    """Map a domain Alert to the wire AlertResponse schema.
+
+    Centralised so ack/snooze/history routes all serialise consistently.
+    """
+    return AlertResponse(
+        alert_id=alert.alert_id,
+        entity_id=alert.entity_id,
+        alert_type=str(alert.alert_type),
+        source_topic=alert.source_topic,
+        payload=alert.payload,
+        created_at=alert.created_at,
+        severity=str(alert.severity),
+        tenant_id=alert.tenant_id,
+        title=alert.title,
+        ticker=alert.ticker,
+        entity_name=alert.entity_name,
+        signal_label=alert.signal_label,
+        acknowledged_at=alert.acknowledged_at,
+        acknowledged_by_user_id=alert.acknowledged_by_user_id,
+        snooze_until=alert.snooze_until,
+    )
+
+
+# ── REST: PATCH /api/v1/alerts/{alert_id}/acknowledge (PLAN-0051 T-D-4-02) ───
+
+
+@router.patch("/alerts/{alert_id}/acknowledge", response_model=AlertResponse)
+async def acknowledge_alert_entity(
+    alert_id: UUID,
+    uc: AckAlertUseCaseDep,
+    tenant_user: TenantUserDep,
+    body: AcknowledgeAlertRequest | None = None,
+) -> AlertResponse:
+    """Acknowledge an alert at the tenant level (sets ``acknowledged_at``).
+
+    Idempotent: re-acking returns the existing acknowledged_at + user_id
+    untouched (no overwrite). Returns 404 if the alert is missing or belongs
+    to a different tenant (we collapse 403 → 404 to avoid alert-existence
+    enumeration).
+    """
+    # body is currently informational; reserved for a future audit log table.
+    _ = body
+    tenant_id, user_id = tenant_user
+    outcome, alert = await uc.execute(alert_id, user_id, tenant_id)
+
+    if outcome == "not_found" or outcome == "forbidden":
+        # Collapse 403 → 404: don't leak alert existence to other tenants.
+        raise HTTPException(status_code=404, detail="Alert not found")
+    if alert is None:
+        # Defensive — should be unreachable when outcome is "ok"/"already".
+        raise HTTPException(status_code=500, detail="Alert vanished mid-request")
+
+    logger.debug(  # type: ignore[no-any-return]
+        "alert_entity_acknowledged",
+        alert_id=str(alert_id),
+        user_id=str(user_id),
+        tenant_id=str(tenant_id),
+        outcome=outcome,
+    )
+    return _alert_to_response(alert)
+
+
+# ── REST: PATCH /api/v1/alerts/{alert_id}/snooze (PLAN-0051 T-D-4-02) ────────
+
+
+@router.patch("/alerts/{alert_id}/snooze", response_model=AlertResponse)
+async def snooze_alert_entity(
+    alert_id: UUID,
+    body: SnoozeAlertRequest,
+    uc: SnoozeUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertResponse:
+    """Snooze an alert until a future timestamp (max 30 days out).
+
+    Returns 422 when ``until`` is in the past, naive (no tz), or > 30 days
+    out. Returns 404 when the alert is missing OR belongs to a different
+    tenant (same enumeration-avoidance policy as acknowledge).
+    """
+    tenant_id, _user_id = tenant_user
+    outcome, alert = await uc.execute(alert_id, body.until, tenant_id)
+
+    if outcome == "invalid":
+        raise HTTPException(
+            status_code=422,
+            detail="snooze_until must be timezone-aware, in the future, and <= 30 days out",
+        )
+    if outcome == "not_found" or outcome == "forbidden":
+        raise HTTPException(status_code=404, detail="Alert not found")
+    if alert is None:
+        raise HTTPException(status_code=500, detail="Alert vanished mid-request")
+
+    logger.debug(  # type: ignore[no-any-return]
+        "alert_entity_snoozed",
+        alert_id=str(alert_id),
+        snooze_until=body.until.isoformat(),
+        tenant_id=str(tenant_id),
+    )
+    return _alert_to_response(alert)
+
+
+# ── REST: GET /api/v1/alerts/history (PLAN-0051 T-D-4-02) ────────────────────
+
+
+@router.get("/alerts/history", response_model=AlertHistoryResponse)
+async def list_alert_history(
+    uc: HistoryUseCaseDep,
+    tenant_user: TenantUserDep,
+    severity: str | None = Query(default=None, description="low|medium|high|critical"),
+    entity_id: UUID | None = Query(default=None),
+    from_dt: datetime | None = Query(default=None, alias="from"),
+    to_dt: datetime | None = Query(default=None, alias="to"),
+    status: str = Query(default="all", description="active|acknowledged|snoozed|all"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> AlertHistoryResponse:
+    """Return paginated, tenant-scoped alert history.
+
+    Read-only — uses ``ReadOnlyUnitOfWork`` (R27) via the read replica.
+    Tenant filtering is enforced by the use case using the JWT-derived
+    ``tenant_id`` (never a header — F-CRIT-001 / PRD-0025).
+    """
+    tenant_id, _user_id = tenant_user
+
+    # Validate severity enum; keep a helpful 422 instead of silently filtering
+    # out everything when the caller mistypes a tier.
+    severity_filter: AlertSeverity | None = None
+    if severity is not None:
+        try:
+            severity_filter = AlertSeverity(severity)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid severity: must be low|medium|high|critical",
+            ) from None
+
+    # Validate status enum the same way (forward-compat: use case will fall
+    # back to "all" but we surface a 422 here to give callers explicit feedback).
+    if status not in ("active", "acknowledged", "snoozed", "all"):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid status: must be active|acknowledged|snoozed|all",
+        )
+
+    alerts = await uc.execute(
+        tenant_id,
+        status=status,
+        severity=severity_filter,
+        entity_id=entity_id,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        limit=limit,
+        offset=offset,
+    )
+
+    return AlertHistoryResponse(
+        alerts=[_alert_to_response(a) for a in alerts],
+        total=len(alerts),
+        limit=limit,
+        offset=offset,
+        # ``has_more`` is a heuristic: when we receive exactly ``limit`` rows,
+        # there *might* be another page. The frontend can use it to decide
+        # whether to render a "Load more" button without a separate count(*).
+        has_more=len(alerts) == limit,
+    )
 
 
 # ── WebSocket: /api/v1/alerts/stream ─────────────────────────────────────────

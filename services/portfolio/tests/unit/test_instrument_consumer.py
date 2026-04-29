@@ -130,6 +130,32 @@ class FakeUoW(UnitOfWork):
     def portfolio_value_snapshots(self):
         return MagicMock()
 
+    # PLAN-0052 Wave D — feedback subsystem repos (unused by this consumer
+    # but required to satisfy the UnitOfWork ABC).
+    @property
+    def feedback_submissions(self):
+        return MagicMock()
+
+    @property
+    def nps_scores(self):
+        return MagicMock()
+
+    @property
+    def feature_requests(self):
+        return MagicMock()
+
+    @property
+    def feature_votes(self):
+        return MagicMock()
+
+    @property
+    def micro_surveys(self):
+        return MagicMock()
+
+    @property
+    def beta_enrollments(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 

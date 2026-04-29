@@ -893,6 +893,18 @@ export interface Alert {
   metadata: Record<string, unknown>;
   created_at: string;
   acknowledged_at: string | null;
+  // PLAN-0051 Wave D additions — backend may set these via PATCH /acknowledge
+  // and /snooze. All optional so legacy responses (pre-migration) still parse.
+  // ISO-8601 UTC datetime when the alert is muted. `null` once the snooze
+  // expires or has never been set.
+  snooze_until?: string | null;
+  // Optional analyst note attached at ACK time; never displayed on the
+  // sidebar/list — surfaced only inside the AlertDetailSheet.
+  ack_note?: string | null;
+  // _localOnly is a CLIENT-SIDE marker injected when the backend endpoint
+  // returns 404 — we still ACK/snooze in localStorage and tag the row so the
+  // UI can render a "(local only)" badge until the backend ships.
+  _localOnly?: boolean;
 }
 
 export interface AlertsResponse {
@@ -900,6 +912,25 @@ export interface AlertsResponse {
   total: number;
   offset: number;
   limit: number;
+}
+
+/**
+ * AlertHistoryParams — filters for the /v1/alerts/history endpoint.
+ *
+ * WHY all optional: an empty object means "everything, paginated 50 at a
+ * time" which is the History tab default state. Each filter narrows the
+ * server-side query.
+ */
+export interface AlertHistoryParams {
+  status?: "active" | "acknowledged" | "snoozed" | "all";
+  severity?: AlertSeverity;
+  /** ISO-8601 UTC datetime — lower bound on `created_at`. */
+  from?: string;
+  /** ISO-8601 UTC datetime — upper bound on `created_at`. */
+  to?: string;
+  entity_id?: string;
+  limit?: number;
+  offset?: number;
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────

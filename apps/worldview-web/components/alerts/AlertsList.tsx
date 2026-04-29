@@ -31,6 +31,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAlertActions } from "@/hooks/useAlertActions";
 import { SeverityBadge } from "@/components/alerts/SeverityBadge";
 import { AlertDetailSheet } from "@/components/alerts/AlertDetailSheet";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime, cn } from "@/lib/utils";
@@ -100,6 +102,16 @@ export interface AlertsListProps {
 export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
   const { accessToken } = useAuth();
   const router = useRouter();
+
+  // PLAN-0051 T-D-4-03: backend-synced ack + snooze (with localStorage
+  // fallback when the endpoints return 404). The hook hides the sync logic
+  // so the existing handlers stay terse.
+  const alertActions = useAlertActions();
+
+  // Track which alerts are persisted only client-side (backend 404). Used
+  // to render a small "(local only)" badge so the user understands the
+  // ACK won't sync across devices until the backend ships.
+  const [localOnlyIds, setLocalOnlyIds] = useState<Set<string>>(new Set());
 
   // ── ACK state — set of acknowledged alert_ids ──────────────────────────────
   // WHY lazy initialiser for localStorage: avoids reading localStorage on every
@@ -181,19 +193,49 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
   /** Acknowledged alerts — shown in collapsed section at bottom */
   const acknowledgedAlerts = allAlerts.filter((a) => acknowledged.has(a.alert_id));
 
+  // PLAN-0051 T-D-4-04: snoozed-alerts derivation lives here only
+  // implicitly — they are filtered out of the active groups via isVisible()
+  // and re-surfaced in the dedicated Snoozed tab via AlertHistoryTab
+  // (which queries /v1/alerts/history?status=snoozed). Keeping the snooze
+  // localStorage map as the source of truth would diverge from the backend;
+  // we let the server-side history endpoint render the dedicated tab.
+
   // ── ACK handlers ──────────────────────────────────────────────────────────
 
-  /** Acknowledge a single alert — adds to Set and persists to localStorage */
-  const handleAck = useCallback((alertId: string) => {
-    setAcknowledged((prev) => {
-      const next = new Set(prev);
-      next.add(alertId);
-      try {
-        localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
-      } catch { /* ignore localStorage quota errors */ }
-      return next;
-    });
-  }, []);
+  /**
+   * Acknowledge a single alert — adds to local Set + fires backend PATCH.
+   *
+   * PLAN-0051 T-D-4-03: ACK is now backend-synced. The localStorage write
+   * still happens up-front so the UI updates instantly; the backend call
+   * runs in the background. On 404 (endpoint not deployed) we mark the
+   * alert `_localOnly` so the user sees a "(local only)" badge.
+   */
+  const handleAck = useCallback(
+    (alertId: string) => {
+      // Optimistic local update — UI moves the alert to the Acknowledged
+      // section immediately, regardless of network outcome.
+      setAcknowledged((prev) => {
+        const next = new Set(prev);
+        next.add(alertId);
+        try {
+          localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
+        } catch { /* ignore localStorage quota errors */ }
+        return next;
+      });
+      // Fire-and-forget backend sync. We don't await so the click handler
+      // remains synchronous (matching the parent's expected signature).
+      void alertActions.ack(alertId).then((res) => {
+        if (res.localOnly) {
+          setLocalOnlyIds((prev) => {
+            const next = new Set(prev);
+            next.add(alertId);
+            return next;
+          });
+        }
+      });
+    },
+    [alertActions],
+  );
 
   /** Acknowledge all alerts of a given severity level */
   const handleAckAll = useCallback(
@@ -207,24 +249,56 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
         } catch { /* ignore */ }
         return next;
       });
+      // Fire backend ACK for every target id. Parallel so batch ACK still
+      // feels instant — failures fall back to local-only per-id.
+      targetIds.forEach((id) => {
+        void alertActions.ack(id).then((res) => {
+          if (res.localOnly) {
+            setLocalOnlyIds((prev) => {
+              const next = new Set(prev);
+              next.add(id);
+              return next;
+            });
+          }
+        });
+      });
     },
-    [activeAlertsBySeverity],
+    [activeAlertsBySeverity, alertActions],
   );
 
-  /** Snooze an alert for N minutes — stores expiry timestamp in Map */
-  const handleSnooze = useCallback((alertId: string, minutes: number) => {
-    setSnoozed((prev) => {
-      const next = new Map(prev);
-      next.set(alertId, Date.now() + minutes * 60 * 1000);
-      try {
-        localStorage.setItem(
-          LS_SNOOZE_KEY,
-          JSON.stringify(Object.fromEntries(next)),
-        );
-      } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
+  /**
+   * Snooze an alert for N minutes — stores expiry timestamp + fires backend.
+   *
+   * PLAN-0051 T-D-4-03: snooze is now backend-synced via PATCH /snooze. We
+   * still update localStorage immediately so the row dims without waiting
+   * for the network round-trip.
+   */
+  const handleSnooze = useCallback(
+    (alertId: string, minutes: number) => {
+      const until = new Date(Date.now() + minutes * 60 * 1000);
+      setSnoozed((prev) => {
+        const next = new Map(prev);
+        next.set(alertId, until.getTime());
+        try {
+          localStorage.setItem(
+            LS_SNOOZE_KEY,
+            JSON.stringify(Object.fromEntries(next)),
+          );
+        } catch { /* ignore */ }
+        return next;
+      });
+      void alertActions.snooze(alertId, until).then((res) => {
+        if (res.localOnly) {
+          setLocalOnlyIds((prev) => {
+            const next = new Set(prev);
+            next.add(alertId);
+            return next;
+          });
+        }
+      });
+    },
+    [alertActions],
+  );
 
   // ── Selection handlers (PLAN-0048 Wave B-3) ───────────────────────────────
 
@@ -354,6 +428,7 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
                   onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                  localOnly={localOnlyIds.has(alert.alert_id)}
                 />
               ))}
             </ul>
@@ -395,6 +470,8 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
                   onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                  localOnly={localOnlyIds.has(alert.alert_id)}
+                  dimmed
                 />
               ))}
             </ul>
@@ -428,15 +505,40 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
  * Acknowledge + Snooze options keeps the row compact (single ACK ▾ button)
  * while exposing multiple time-window snooze choices.
  */
-interface AlertRowProps {
+export interface AlertRowProps {
   alert: Alert;
   /** Open the detail sheet for this alert (PLAN-0048 Wave B-3). */
   onSelect: () => void;
   onAck: () => void;
   onSnooze: (minutes: number) => void;
+  /**
+   * PLAN-0051 T-D-4-03: when true, render a "(local only)" badge next to the
+   * alert label so the user knows the ACK/snooze didn't sync to the backend.
+   */
+  localOnly?: boolean;
+  /**
+   * PLAN-0051 T-D-4-03: when true, dim the row (opacity-60) — used by the
+   * Snoozed tab so muted rows still appear but recede visually.
+   */
+  dimmed?: boolean;
 }
 
-function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
+/**
+ * minutesUntilEndOfDay — quick-snooze helper for the "until EOD" option.
+ *
+ * WHY local time: end-of-day means "the user's evening", not 00:00 UTC. We
+ * compute a local Date for tonight at 23:59 and diff against now.
+ *
+ * WHY exported: the Snooze popover composer in AlertRow + the AlertDetailSheet
+ * footer (future) both need the same value.
+ */
+export function minutesUntilEndOfDay(now: Date = new Date()): number {
+  const eod = new Date(now);
+  eod.setHours(23, 59, 0, 0);
+  return Math.max(1, Math.round((eod.getTime() - now.getTime()) / 60_000));
+}
+
+export function AlertRow({ alert, onSelect, onAck, onSnooze, localOnly, dimmed }: AlertRowProps) {
   // F-302 follow-up: backend severity may arrive lowercase. SEV_DOT_COLOR is
   // keyed by the uppercase union — looking up `alert.severity` directly when
   // the value is "low" returns undefined and renders an unstyled bg. Normalise
@@ -444,8 +546,15 @@ function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
   const severityKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
   return (
     <li>
-      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules */}
-      <div className="flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40">
+      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules.
+          dimmed=true (snoozed / acked) drops opacity to 60% so the row
+          remains scannable but visibly de-emphasised. */}
+      <div
+        className={cn(
+          "flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
+          dimmed && "opacity-60",
+        )}
+      >
 
         {/* Severity dot — quick visual severity scan */}
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", SEV_DOT_COLOR[severityKey])} />
@@ -488,7 +597,21 @@ function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
           {formatRelativeTime(alert.created_at)}
         </time>
 
-        {/* ACK / Snooze dropdown */}
+        {/* localOnly badge — surfaces when ACK/snooze couldn't sync to backend */}
+        {localOnly && (
+          <span
+            className="shrink-0 rounded-[2px] border border-border/40 px-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground/80"
+            title="Stored in browser only — backend endpoint not yet shipped"
+          >
+            local only
+          </span>
+        )}
+
+        {/* ACK / Snooze dropdown.
+            PLAN-0051 T-D-4-03: snooze options expanded to 15m/1h/EOD/24h
+            plus a "Custom…" entry that pops a small datetime picker. The
+            "until EOD" entry uses minutesUntilEndOfDay() so the duration
+            scales with the time of day (morning → big, evening → tiny). */}
         <div className="relative shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -505,6 +628,14 @@ function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
               <DropdownMenuItem className="text-[11px]" onClick={onAck}>
                 Acknowledge
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-[11px]"
+                onClick={() => onSnooze(15)}
+                aria-label="Snooze 15 minutes"
+              >
+                Snooze 15m
+              </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-[11px]"
                 onClick={() => onSnooze(60)}
@@ -513,15 +644,41 @@ function AlertRow({ alert, onSelect, onAck, onSnooze }: AlertRowProps) {
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-[11px]"
-                onClick={() => onSnooze(240)}
+                onClick={() => onSnooze(minutesUntilEndOfDay())}
+                aria-label="Snooze until end of day"
               >
-                Snooze 4h
+                Snooze until EOD
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-[11px]"
                 onClick={() => onSnooze(1440)}
               >
                 Snooze 24h
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* Custom datetime picker — uses a native datetime-local prompt
+                  so we don't pull in another popover dep. The picker is a
+                  one-shot native dialog; cancel = no-op. */}
+              <DropdownMenuItem
+                className="text-[11px]"
+                onSelect={(e) => {
+                  // WHY preventDefault: we open a native prompt; without
+                  // preventDefault the dropdown closes BEFORE the prompt
+                  // appears and focus restoration becomes confusing.
+                  e.preventDefault();
+                  const value = window.prompt(
+                    "Snooze until (YYYY-MM-DDTHH:MM, local time):",
+                    new Date(Date.now() + 60 * 60_000).toISOString().slice(0, 16),
+                  );
+                  if (!value) return;
+                  const target = new Date(value);
+                  if (isNaN(target.getTime())) return;
+                  const minutes = Math.max(1, Math.round((target.getTime() - Date.now()) / 60_000));
+                  onSnooze(minutes);
+                }}
+                aria-label="Snooze custom datetime"
+              >
+                Snooze custom…
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

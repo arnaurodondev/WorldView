@@ -101,6 +101,15 @@ class Settings(BaseSettings):
     # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
     market_data_service_url: str = "http://market-data:8003"
 
+    # Feedback subsystem (PLAN-0052 Wave D)
+    # Screenshot URLs are stored as S3 keys / pre-signed URLs; the upload itself
+    # is performed by the frontend via a pre-signed PUT (not yet implemented —
+    # follow-up wave). The bucket and TTLs below are the source-of-truth for
+    # the lifecycle policy that DevOps applies in worldview-gitops.
+    feedback_s3_bucket: str = "worldview-feedback-screenshots"
+    feedback_screenshot_ttl_days: int = 90
+    feedback_console_logs_ttl_days: int = 7
+
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
     log_json: bool = True

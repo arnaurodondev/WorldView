@@ -84,6 +84,16 @@ class Alert:
     ticker: str | None = None
     entity_name: str | None = None
     signal_label: str | None = None
+    # ── Acknowledgement + snooze fields (PLAN-0051 T-D-4-01) ──────────────────
+    # All three nullable / Optional so existing constructors and existing DB rows
+    # remain valid — these are forward-compatible additions (BP-007, BP-019).
+    # ``acknowledged_at`` and ``acknowledged_by_user_id`` are set together by
+    # the AcknowledgeAlertUseCase; idempotent (subsequent acks are no-ops).
+    # ``snooze_until`` is a future UTC timestamp at which the alert reappears
+    # in the active list. SnoozeAlertUseCase enforces (now < until <= now+30d).
+    acknowledged_at: datetime | None = None
+    acknowledged_by_user_id: UUID | None = None
+    snooze_until: datetime | None = None
 
     @staticmethod
     def compute_dedup_key(

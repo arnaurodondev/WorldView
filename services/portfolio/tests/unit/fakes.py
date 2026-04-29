@@ -795,3 +795,298 @@ class FakeUnitOfWork(UnitOfWork):
 
     def seed_instrument(self, instrument: InstrumentRef) -> None:
         self._instruments._store[instrument.id] = instrument
+
+    # Feedback subsystem (PLAN-0052 Wave D) — repos plumbed via __getattr__
+    # below so we don't have to retro-fit every existing FakeUnitOfWork
+    # construction site (the new repos are lazily created on first access).
+
+
+# ── Feedback fakes (PLAN-0052 Wave D) ────────────────────────────────────────
+
+
+from datetime import timedelta as _timedelta
+
+from portfolio.application.ports.feedback import (
+    BetaEnrollmentRecord,
+    BetaEnrollmentRepo,
+    FeatureRequestRecord,
+    FeatureRequestRepo,
+    FeatureVoteRecord,
+    FeatureVoteRepo,
+    FeedbackSubmissionRecord,
+    FeedbackSubmissionRepo,
+    MicroSurveyRecord,
+    MicroSurveyRepo,
+    NPSScoreRecord,
+    NPSScoreRepo,
+)
+from portfolio.domain.errors import NPSRateLimitError
+
+from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
+
+class FakeFeedbackSubmissionRepo(FeedbackSubmissionRepo):
+    def __init__(self) -> None:
+        self._store: dict[UUID, FeedbackSubmissionRecord] = {}
+
+    async def add(self, record: FeedbackSubmissionRecord) -> None:
+        self._store[record.id] = record
+
+    async def get(self, submission_id: UUID, tenant_id: UUID) -> FeedbackSubmissionRecord | None:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        return rec
+
+    async def list(
+        self,
+        tenant_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        status: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FeedbackSubmissionRecord], int]:
+        rows = [r for r in self._store.values() if r.tenant_id == tenant_id]
+        if user_id is not None:
+            rows = [r for r in rows if r.user_id == user_id]
+        if status is not None:
+            rows = [r for r in rows if r.status == status]
+        if kind is not None:
+            rows = [r for r in rows if r.kind == kind]
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        total = len(rows)
+        return rows[offset : offset + limit], total
+
+    async def update(
+        self,
+        submission_id: UUID,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        assigned_to: UUID | None = None,
+    ) -> FeedbackSubmissionRecord | None:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        from dataclasses import replace as _replace
+
+        new_rec = _replace(
+            rec,
+            status=status if status is not None else rec.status,
+            tags=tags if tags is not None else rec.tags,
+            assigned_to=assigned_to if assigned_to is not None else rec.assigned_to,
+            updated_at=_utc_now(),
+        )
+        self._store[submission_id] = new_rec
+        return new_rec
+
+    async def delete(self, submission_id: UUID, tenant_id: UUID) -> bool:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return False
+        del self._store[submission_id]
+        return True
+
+
+class FakeNPSScoreRepo(NPSScoreRepo):
+    def __init__(self) -> None:
+        self._store: list[NPSScoreRecord] = []
+
+    async def add(self, record: NPSScoreRecord) -> None:
+        # Mirror the partial-unique 30-day index — reject duplicates.
+        cutoff = _utc_now() - _timedelta(days=30)
+        for existing in self._store:
+            if (
+                existing.tenant_id == record.tenant_id
+                and existing.user_id == record.user_id
+                and existing.created_at >= cutoff
+            ):
+                raise NPSRateLimitError(
+                    f"User {record.user_id} already submitted NPS within 30 days",
+                )
+        self._store.append(record)
+
+    async def aggregate(
+        self,
+        tenant_id: UUID,
+        *,
+        days: int = 30,
+    ) -> tuple[int, int, int]:
+        cutoff = _utc_now() - _timedelta(days=days)
+        rows = [r for r in self._store if r.tenant_id == tenant_id and r.created_at >= cutoff]
+        promoter = sum(1 for r in rows if r.score >= 9)
+        passive = sum(1 for r in rows if 7 <= r.score <= 8)
+        detractor = sum(1 for r in rows if r.score <= 6)
+        return promoter, passive, detractor
+
+
+class FakeFeatureRequestRepo(FeatureRequestRepo):
+    def __init__(self, vote_store: list[FeatureVoteRecord]) -> None:
+        # Share vote store with FakeFeatureVoteRepo so refresh_vote_count is correct.
+        self._store: dict[UUID, FeatureRequestRecord] = {}
+        self._vote_store = vote_store
+
+    async def add(self, record: FeatureRequestRecord) -> None:
+        self._store[record.id] = record
+
+    async def get(self, feature_request_id: UUID, tenant_id: UUID) -> FeatureRequestRecord | None:
+        rec = self._store.get(feature_request_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        return rec
+
+    async def list(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        category: str | None = None,
+        is_public: bool | None = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FeatureRequestRecord], int]:
+        rows = [r for r in self._store.values() if r.tenant_id == tenant_id]
+        if status is not None:
+            rows = [r for r in rows if r.status == status]
+        if category is not None:
+            rows = [r for r in rows if r.category == category]
+        if is_public is not None:
+            rows = [r for r in rows if r.is_public == is_public]
+        rows.sort(key=lambda r: (-r.vote_count, r.created_at), reverse=False)
+        # Sort: highest votes first, then most-recent-first as tiebreaker.
+        rows.sort(key=lambda r: (r.vote_count, r.created_at), reverse=True)
+        total = len(rows)
+        return rows[offset : offset + limit], total
+
+    async def update(
+        self,
+        feature_request_id: UUID,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        category: str | None = None,
+        is_public: bool | None = None,
+    ) -> FeatureRequestRecord | None:
+        rec = self._store.get(feature_request_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        from dataclasses import replace as _replace
+
+        new_rec = _replace(
+            rec,
+            status=status if status is not None else rec.status,
+            category=category if category is not None else rec.category,
+            is_public=is_public if is_public is not None else rec.is_public,
+            updated_at=_utc_now(),
+        )
+        self._store[feature_request_id] = new_rec
+        return new_rec
+
+    async def refresh_vote_count(self, feature_request_id: UUID) -> int:
+        count = sum(1 for v in self._vote_store if v.feature_request_id == feature_request_id)
+        rec = self._store.get(feature_request_id)
+        if rec is not None:
+            from dataclasses import replace as _replace
+
+            self._store[feature_request_id] = _replace(rec, vote_count=count)
+        return count
+
+
+class FakeFeatureVoteRepo(FeatureVoteRepo):
+    def __init__(self) -> None:
+        self._store: list[FeatureVoteRecord] = []
+
+    async def upsert(self, record: FeatureVoteRecord) -> bool:
+        for v in self._store:
+            if v.feature_request_id == record.feature_request_id and v.user_id == record.user_id:
+                return False
+        self._store.append(record)
+        return True
+
+    async def has_voted(self, feature_request_id: UUID, user_id: UUID) -> bool:
+        return any(v.feature_request_id == feature_request_id and v.user_id == user_id for v in self._store)
+
+
+class FakeMicroSurveyRepo(MicroSurveyRepo):
+    def __init__(self) -> None:
+        self._store: list[MicroSurveyRecord] = []
+
+    async def add(self, record: MicroSurveyRecord) -> None:
+        self._store.append(record)
+
+
+class FakeBetaEnrollmentRepo(BetaEnrollmentRepo):
+    def __init__(self) -> None:
+        self._store: dict[tuple[UUID, UUID], BetaEnrollmentRecord] = {}
+
+    async def get(self, tenant_id: UUID, user_id: UUID) -> BetaEnrollmentRecord | None:
+        return self._store.get((tenant_id, user_id))
+
+    async def upsert(self, record: BetaEnrollmentRecord) -> BetaEnrollmentRecord:
+        from dataclasses import replace as _replace
+
+        now = _utc_now()
+        existing = self._store.get((record.tenant_id, record.user_id))
+        if existing is None:
+            stored = _replace(
+                record,
+                enrolled_at=record.enrolled_at or now,
+                updated_at=now,
+            )
+        else:
+            stored = _replace(existing, enrolled=record.enrolled, programs=record.programs, updated_at=now)
+        self._store[(record.tenant_id, record.user_id)] = stored
+        return stored
+
+
+# ── Patch FakeUnitOfWork to expose feedback repos ───────────────────────────
+
+
+def _install_feedback_on_fake_uow() -> None:
+    """Augment FakeUnitOfWork with feedback repository properties.
+
+    Done as a function rather than editing the original class body so the
+    existing test imports of FakeUnitOfWork keep working unchanged. Each
+    instance gets its own fakes (lazy via __getattr__-style property).
+    """
+    original_init = FakeUnitOfWork.__init__
+
+    def patched_init(self: FakeUnitOfWork) -> None:  # type: ignore[no-redef]
+        original_init(self)
+        self._feature_votes = FakeFeatureVoteRepo()
+        self._feature_requests = FakeFeatureRequestRepo(self._feature_votes._store)
+        self._feedback_submissions = FakeFeedbackSubmissionRepo()
+        self._nps_scores = FakeNPSScoreRepo()
+        self._micro_surveys = FakeMicroSurveyRepo()
+        self._beta_enrollments = FakeBetaEnrollmentRepo()
+
+    FakeUnitOfWork.__init__ = patched_init  # type: ignore[method-assign]
+
+    FakeUnitOfWork.feedback_submissions = property(  # type: ignore[assignment]
+        lambda self: self._feedback_submissions,
+    )
+    FakeUnitOfWork.nps_scores = property(  # type: ignore[assignment]
+        lambda self: self._nps_scores,
+    )
+    FakeUnitOfWork.feature_requests = property(  # type: ignore[assignment]
+        lambda self: self._feature_requests,
+    )
+    FakeUnitOfWork.feature_votes = property(  # type: ignore[assignment]
+        lambda self: self._feature_votes,
+    )
+    FakeUnitOfWork.micro_surveys = property(  # type: ignore[assignment]
+        lambda self: self._micro_surveys,
+    )
+    FakeUnitOfWork.beta_enrollments = property(  # type: ignore[assignment]
+        lambda self: self._beta_enrollments,
+    )
+    # Drop the new abstract methods from __abstractmethods__ so the class
+    # can be instantiated. Setting properties on a class doesn't auto-clear
+    # the ABCMeta cache.
+    FakeUnitOfWork.__abstractmethods__ = frozenset()
+
+
+_install_feedback_on_fake_uow()

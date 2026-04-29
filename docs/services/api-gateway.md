@@ -174,7 +174,10 @@ preferable to all-or-nothing for dashboard widgets.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/alerts/pending` | List pending alerts | Yes |
-| DELETE | `/v1/alerts/{alert_id}/ack` | Acknowledge (dismiss) alert | Yes |
+| DELETE | `/v1/alerts/{alert_id}/ack` | Acknowledge per-user delivery row | Yes |
+| PATCH | `/v1/alerts/{alert_id}/acknowledge` | Tenant-level ack (sets `alerts.acknowledged_at`); idempotent. PLAN-0051 T-D-4-02. `Cache-Control: no-store`. | Yes |
+| PATCH | `/v1/alerts/{alert_id}/snooze` | Set `alerts.snooze_until` (body `{until: datetime}`; max 30 days out). PLAN-0051 T-D-4-02. `Cache-Control: no-store`. | Yes |
+| GET | `/v1/alerts/history` | Paginated tenant alert history; query: `severity`, `entity_id`, `from`, `to`, `status` (`active\|acknowledged\|snoozed\|all`), `limit` (≤200), `offset`. PLAN-0051 T-D-4-02. `Cache-Control: no-store`. | Yes |
 
 ### Admin Endpoints (PLAN-0033)
 
@@ -224,6 +227,28 @@ preferable to all-or-nothing for dashboard widgets.
 |--------|------|-------------|------|
 | GET | `/v1/search/instruments` | Search instruments by name/ticker | No |
 | GET | `/v1/signals/ai` | AI signals (stub — returns empty) | Yes |
+
+### Feedback Endpoints (→ S1 Portfolio, PLAN-0052 Wave D)
+
+Thin proxy from `/v1/feedback/*` → portfolio service `/api/v1/feedback/*`. Anonymous routes accept unauthenticated requests; the gateway issues a system JWT for those.
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/v1/feedback/submissions` | Create bug/feature/UX/design feedback | Optional (anon needs `email`) |
+| GET | `/v1/feedback/submissions` | List submissions (admin) or own (`?mine=true`) | Yes |
+| GET | `/v1/feedback/submissions/{id}` | Read one submission (admin or owner) | Yes |
+| PATCH | `/v1/feedback/submissions/{id}` | Update status / tags / assigned_to | Admin |
+| DELETE | `/v1/feedback/submissions/{id}` | Hard-delete submission | Admin |
+| POST | `/v1/feedback/nps` | Submit NPS score (rate-limited to one per 30 days) | Yes |
+| GET | `/v1/feedback/nps/aggregate?days=30` | Promoter / passive / detractor counts + NPS score | Admin |
+| GET | `/v1/feedback/features` | Public roadmap (vote-sorted) | Public |
+| POST | `/v1/feedback/features` | Submit a new feature request | Yes |
+| POST | `/v1/feedback/features/{id}/vote` | Idempotent upvote | Yes |
+| POST | `/v1/feedback/micro-survey` | Thumbs-up/down with `survey_key` (used by docs widget) | Optional (anon ok) |
+| GET | `/v1/feedback/beta-program/enrollment` | Read user's beta-program state | Yes |
+| PATCH | `/v1/feedback/beta-program/enrollment` | Toggle enrolled / programs list | Yes |
+
+PII redaction: all user-supplied free-text fields (`description`, `comment`, `console_logs`) are scrubbed for Bearer/JWT/API-key/email/CC/SSN patterns before persist (see `services/portfolio/src/portfolio/security/pii_redaction.py`).
 
 ---
 

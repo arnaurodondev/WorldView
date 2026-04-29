@@ -11,13 +11,19 @@ class Base(DeclarativeBase):
 
 from portfolio.infrastructure.db.models.alert_preference import AlertPreferenceModel  # noqa: E402
 from portfolio.infrastructure.db.models.auth_audit_log import AuthAuditLogModel  # noqa: E402
+from portfolio.infrastructure.db.models.beta_enrollment import BetaEnrollmentModel  # noqa: E402
 from portfolio.infrastructure.db.models.brokerage_connection import BrokerageConnectionModel  # noqa: E402
 from portfolio.infrastructure.db.models.brokerage_sync_error import BrokerageTransactionSyncErrorModel  # noqa: E402
 from portfolio.infrastructure.db.models.entity_suppression import EntitySuppressionModel  # noqa: E402
+from portfolio.infrastructure.db.models.feature_request import FeatureRequestModel  # noqa: E402
+from portfolio.infrastructure.db.models.feature_vote import FeatureVoteModel  # noqa: E402
+from portfolio.infrastructure.db.models.feedback_submission import FeedbackSubmissionModel  # noqa: E402
 from portfolio.infrastructure.db.models.holding import HoldingModel  # noqa: E402
 from portfolio.infrastructure.db.models.idempotency import IdempotencyModel  # noqa: E402
 from portfolio.infrastructure.db.models.instrument import InstrumentModel  # noqa: E402
 from portfolio.infrastructure.db.models.invitation import InvitationModel  # noqa: E402
+from portfolio.infrastructure.db.models.micro_survey_response import MicroSurveyResponseModel  # noqa: E402
+from portfolio.infrastructure.db.models.nps_score import NPSScoreModel  # noqa: E402
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel  # noqa: E402
 from portfolio.infrastructure.db.models.portfolio import PortfolioModel  # noqa: E402
 from portfolio.infrastructure.db.models.portfolio_value_snapshot import PortfolioValueSnapshotModel  # noqa: E402
@@ -31,13 +37,19 @@ __all__ = [
     "AlertPreferenceModel",
     "AuthAuditLogModel",
     "Base",
+    "BetaEnrollmentModel",
     "BrokerageConnectionModel",
     "BrokerageTransactionSyncErrorModel",
     "EntitySuppressionModel",
+    "FeatureRequestModel",
+    "FeatureVoteModel",
+    "FeedbackSubmissionModel",
     "HoldingModel",
     "IdempotencyModel",
     "InstrumentModel",
     "InvitationModel",
+    "MicroSurveyResponseModel",
+    "NPSScoreModel",
     "OutboxEventModel",
     "PortfolioModel",
     "PortfolioValueSnapshotModel",

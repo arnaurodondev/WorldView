@@ -106,3 +106,59 @@ class DigestTriggerResponse(BaseModel):
 
     job_id: UUID
     status: str = "queued"
+
+
+# ── Alert acknowledgement / snooze / history (PLAN-0051 T-D-4-02) ─────────────
+
+
+class AcknowledgeAlertRequest(BaseModel):
+    """Body for ``PATCH /api/v1/alerts/{alert_id}/acknowledge``.
+
+    ``note`` is informational only and not currently persisted (reserved for a
+    future audit_log table). Accepted today so frontends can already pass it
+    forward-compatibly.
+    """
+
+    # Optional free-text note describing why the alert was acked.
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SnoozeAlertRequest(BaseModel):
+    """Body for ``PATCH /api/v1/alerts/{alert_id}/snooze``.
+
+    ``until`` MUST be timezone-aware and in the future, no more than 30 days
+    out (enforced server-side in SnoozeAlertUseCase, not Pydantic, because
+    the upper bound depends on ``utc_now()`` at request time).
+    """
+
+    until: datetime
+
+
+class AlertResponse(BaseModel):
+    """Full alert response — used by ack/snooze responses + history list."""
+
+    alert_id: UUID
+    entity_id: UUID
+    alert_type: str
+    source_topic: str
+    payload: dict  # type: ignore[type-arg]
+    created_at: datetime
+    severity: str  # "low" | "medium" | "high" | "critical"
+    tenant_id: UUID | None
+    title: str | None = None
+    ticker: str | None = None
+    entity_name: str | None = None
+    signal_label: str | None = None
+    acknowledged_at: datetime | None = None
+    acknowledged_by_user_id: UUID | None = None
+    snooze_until: datetime | None = None
+
+
+class AlertHistoryResponse(BaseModel):
+    """Paginated list of alerts in a tenant's history."""
+
+    alerts: list[AlertResponse]
+    total: int  # count of items in this page (not the universe — clients can use ``has_more``)
+    limit: int
+    offset: int
+    has_more: bool

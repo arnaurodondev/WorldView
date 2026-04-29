@@ -80,12 +80,24 @@ class AlertModel(Base):
     ticker: Mapped[str | None] = mapped_column(String(20), nullable=True)
     entity_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     signal_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Ack + snooze columns added in migration 0007_add_alert_ack_and_snooze.
+    # All nullable, forward-compatible — old rows simply read NULL.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by_user_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("idx_alerts_entity", "entity_id", created_at.desc()),
         Index("idx_alerts_severity", "severity", created_at.desc()),
         Index("idx_alerts_tenant", "tenant_id", postgresql_where="tenant_id IS NOT NULL"),
         Index("idx_alerts_ticker", "ticker", postgresql_where="ticker IS NOT NULL"),
+        # Partial index for the "active alerts" query — see migration 0007.
+        Index(
+            "idx_alerts_unack_unsnoozed",
+            "severity",
+            created_at.desc(),
+            postgresql_where="acknowledged_at IS NULL",
+        ),
     )
 
 

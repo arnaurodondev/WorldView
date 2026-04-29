@@ -20,9 +20,14 @@
 // WHY "use client": uses Sheet (Radix Dialog client runtime) and onClose callbacks.
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { ExternalLink, MessageSquare, Plus, Settings } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { SeverityBadge } from "@/components/alerts/SeverityBadge";
+import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";
+import { AddToWatchlistDialog } from "@/components/alerts/AddToWatchlistDialog";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import type { Alert } from "@/types/api";
 
@@ -103,6 +108,11 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
         {/* WHY flex-1 + overflow-y-auto: long jsonb payloads (e.g. graph events
             with many fields) shouldn't push the footer off-screen. */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
+
+          {/* PLAN-0051 T-D-4-05: Suggested Actions — quick links a trader runs
+              after seeing an alert. Rendered above metadata so the most useful
+              actions are immediately visible without scrolling. */}
+          {alert && <SuggestedActions alert={alert} />}
 
           {!alert ? (
             // WHY this state exists: a deep-link to ?selected={id} where the id
@@ -218,6 +228,156 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
 
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ── SuggestedActions (PLAN-0051 T-D-4-05) ────────────────────────────────────
+
+/**
+ * SuggestedActions — context-sensitive quick actions for the open alert.
+ *
+ * WHY four buttons (View / Watchlist / Rule / Chat): these are the most
+ * common follow-ups after a trader inspects an alert. View Instrument is
+ * the deep-dive; Add to Watchlist captures rising interest; Set Alert Rule
+ * codifies "tell me again next time"; Open in Chat lets the AI summarise
+ * context without leaving the desk.
+ *
+ * WHY DISABLED-WITH-TOOLTIP (rather than hidden): consistency — buttons
+ * always present, but greyed-out when context is missing. This teaches
+ * the user what's possible even when this particular alert can't trigger
+ * the action.
+ */
+function SuggestedActions({ alert }: { alert: Alert }) {
+  const router = useRouter();
+  const [watchlistOpen, setWatchlistOpen] = useState(false);
+
+  // Some alerts target an entity that isn't an instrument (e.g. macro events
+  // with a region key, or graph events for sectors). The "View Instrument"
+  // button must be disabled in that case.
+  // WHY heuristic on entity_id: the typed Alert model doesn't carry
+  // entity_type, so we infer "is instrument" from "entity_id present + ticker
+  // present". Macro/region events have a non-empty entity_id but no ticker.
+  const hasEntity = Boolean(alert.entity_id);
+  const hasInstrument = hasEntity && Boolean(alert.ticker || (alert.payload?.ticker as string | undefined));
+  const entityId = alert.entity_id;
+
+  /** Navigate to /instrument/{entity_id}. Disabled when no instrument. */
+  function handleViewInstrument() {
+    if (!hasInstrument || !entityId) return;
+    router.push(`/instruments/${encodeURIComponent(entityId)}`);
+  }
+
+  /**
+   * handleOpenInChat — navigate to /chat with entity_id + a starter that
+   * carries this specific alert id so the AI can fetch the full context.
+   *
+   * WHY query-string params (not POST body): /chat is a route, not an API.
+   * A bookmarkable URL means the user can resume the conversation.
+   */
+  function handleOpenInChat() {
+    const search = new URLSearchParams();
+    if (entityId) search.set("entity_id", entityId);
+    search.set("starter", `alert_${alert.alert_id}`);
+    router.push(`/chat?${search.toString()}`);
+  }
+
+  return (
+    <div className="mb-3 rounded-[2px] border border-border/40 bg-muted/10 p-2">
+      <div className="mb-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+        Suggested actions
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {/* View instrument — only when we know it's an instrument entity */}
+        <ActionButton
+          icon={<ExternalLink className="h-3 w-3" aria-hidden="true" />}
+          label="View instrument"
+          onClick={handleViewInstrument}
+          disabled={!hasInstrument}
+          disabledReason={!hasEntity ? "Alert has no entity" : "Entity is not an instrument"}
+        />
+
+        {/* Add to watchlist — needs an entity_id of any type */}
+        <ActionButton
+          icon={<Plus className="h-3 w-3" aria-hidden="true" />}
+          label="Add to watchlist"
+          onClick={() => setWatchlistOpen(true)}
+          disabled={!hasEntity}
+          disabledReason="Alert has no entity"
+        />
+
+        {/* Set alert rule — opens the manager pre-filled with the entity
+            search if we have a ticker. */}
+        <RuleManagerDialog
+          prefillEntity={alert.ticker ?? undefined}
+          trigger={
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded-[2px] border border-border/40 bg-muted/20 px-2 py-1 text-[10px] text-foreground hover:bg-muted/40"
+            >
+              <Settings className="h-3 w-3" aria-hidden="true" />
+              Set alert rule
+            </button>
+          }
+        />
+
+        {/* Open in chat — requires an entity to be useful */}
+        <ActionButton
+          icon={<MessageSquare className="h-3 w-3" aria-hidden="true" />}
+          label="Open in chat"
+          onClick={handleOpenInChat}
+          disabled={!hasEntity}
+          disabledReason="Alert has no entity"
+        />
+      </div>
+
+      {/* AddToWatchlist dialog — controlled */}
+      <AddToWatchlistDialog
+        open={watchlistOpen}
+        onClose={() => setWatchlistOpen(false)}
+        entityId={entityId}
+        entityLabel={alert.ticker ?? alert.entity_name ?? null}
+      />
+    </div>
+  );
+}
+
+/**
+ * ActionButton — uniform button styling for the SuggestedActions row.
+ *
+ * WHY a sub-component: four variants share the same shape. Centralising the
+ * disabled affordance here means every button gets the same tooltip pattern
+ * for free.
+ */
+function ActionButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  disabledReason,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? disabledReason : label}
+      className={cn(
+        "flex items-center gap-1 rounded-[2px] border border-border/40 px-2 py-1 text-[10px]",
+        disabled
+          ? "cursor-not-allowed bg-muted/10 text-muted-foreground/50"
+          : "bg-muted/20 text-foreground hover:bg-muted/40",
+      )}
+      aria-label={label}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

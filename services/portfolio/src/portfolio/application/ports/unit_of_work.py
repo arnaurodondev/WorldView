@@ -15,6 +15,14 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from portfolio.application.ports.feedback import (
+        BetaEnrollmentRepo,
+        FeatureRequestRepo,
+        FeatureVoteRepo,
+        FeedbackSubmissionRepo,
+        MicroSurveyRepo,
+        NPSScoreRepo,
+    )
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
         AuthAuditLogRepository,
@@ -110,6 +118,32 @@ class ReadOnlyUnitOfWork(ABC):
     @property
     @abstractmethod
     def portfolio_value_snapshots(self) -> PortfolioValueSnapshotRepository: ...
+
+    # ── Feedback subsystem (PLAN-0052 Wave D) ─────────────────────────────────
+
+    @property
+    @abstractmethod
+    def feedback_submissions(self) -> FeedbackSubmissionRepo: ...
+
+    @property
+    @abstractmethod
+    def nps_scores(self) -> NPSScoreRepo: ...
+
+    @property
+    @abstractmethod
+    def feature_requests(self) -> FeatureRequestRepo: ...
+
+    @property
+    @abstractmethod
+    def feature_votes(self) -> FeatureVoteRepo: ...
+
+    @property
+    @abstractmethod
+    def micro_surveys(self) -> MicroSurveyRepo: ...
+
+    @property
+    @abstractmethod
+    def beta_enrollments(self) -> BetaEnrollmentRepo: ...
 
     async def __aenter__(self) -> ReadOnlyUnitOfWork:
         return self

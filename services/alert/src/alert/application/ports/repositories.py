@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from alert.domain.entities import Alert, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
+    from alert.domain.enums import AlertSeverity
 
 
 class DLQRepositoryPort(ABC):
@@ -34,10 +37,38 @@ class DLQRepositoryPort(ABC):
 
 
 class AlertRepositoryPort(ABC):
-    """Port for alert reads."""
+    """Port for alert reads + ack/snooze writes (PLAN-0051 T-D-4-02)."""
 
     @abstractmethod
     async def get_by_id(self, alert_id: UUID) -> Alert | None: ...
+
+    @abstractmethod
+    async def acknowledge(
+        self,
+        alert_id: UUID,
+        user_id: UUID,
+        ack_time: datetime | None = None,
+    ) -> bool:
+        """Mark an alert acknowledged. Idempotent — returns False if already acked."""
+
+    @abstractmethod
+    async def snooze(self, alert_id: UUID, snooze_until: datetime) -> bool:
+        """Set ``snooze_until``. Returns True iff a row was updated."""
+
+    @abstractmethod
+    async def list_history(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str = "all",
+        severity: AlertSeverity | None = None,
+        entity_id: UUID | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Alert]:
+        """Return alerts in tenant history matching filters, newest first."""
 
 
 class PendingAlertRepositoryPort(ABC):
