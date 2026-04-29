@@ -1166,7 +1166,10 @@ export default function ChatPage() {
               {entityIdFromUrl && (
                 <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
                   <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
-                    Context: {entityTicker ?? entityIdFromUrl}
+                    {/* QA-iter2 N-MIN-1: never expose the raw UUID in the
+                       chrome — fall back to "Loading…" while the entity
+                       resolves and to "—" if resolution fails outright. */}
+                    Context: {entityTicker ?? (looksLikeUuid ? "Loading…" : entityIdFromUrl)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">
                     questions will focus on this entity

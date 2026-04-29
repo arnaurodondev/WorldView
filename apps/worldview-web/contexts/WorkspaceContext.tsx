@@ -67,23 +67,31 @@ export type PanelType =
 /**
  * SUPPORTED_PANEL_TYPES — runtime mirror of the PanelType union.
  *
- * QA-iter1 MIN-2: used by ``migrateV1`` to drop panels whose type was
- * removed from the catalogue — without this, legacy v1 configs with a stale
- * type rendered as empty placeholders (``default:`` branch in
- * WorkspacePanelContainer). Keep this set in lockstep with the union above.
+ * QA-iter1 MIN-2 introduced this set so ``migrateV1`` can drop panels whose
+ * type was removed from the catalogue — without it, legacy v1 configs with
+ * a stale type rendered as empty placeholders (``default:`` branch in
+ * WorkspacePanelContainer).
+ *
+ * QA-iter2 N-NIT-1: the set is now derived from ``Record<PanelType, true>``
+ * so adding a new ``PanelType`` member without listing it here becomes a
+ * TypeScript error at compile time (the record is exhaustive on the union).
+ * The previous hand-maintained list was a silent-drift hazard.
  */
-const SUPPORTED_PANEL_TYPES: ReadonlySet<PanelType> = new Set<PanelType>([
-  "chart",
-  "watchlist",
-  "screener",
-  "alerts",
-  "fundamentals",
-  "news",
-  "graph",
-  "portfolio",
-  "brief",
-  "chat",
-]);
+const PANEL_TYPE_REGISTRY: Record<PanelType, true> = {
+  chart: true,
+  watchlist: true,
+  screener: true,
+  alerts: true,
+  fundamentals: true,
+  news: true,
+  graph: true,
+  portfolio: true,
+  brief: true,
+  chat: true,
+};
+const SUPPORTED_PANEL_TYPES: ReadonlySet<PanelType> = new Set(
+  Object.keys(PANEL_TYPE_REGISTRY) as PanelType[],
+);
 
 /** A single panel within a workspace row */
 export interface WorkspacePanel {
