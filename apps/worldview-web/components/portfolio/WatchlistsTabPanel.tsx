@@ -380,15 +380,13 @@ function AddSymbolBar({
   const [addErrorMsg, setAddErrorMsg] = useState<string | null>(null);
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    // PLAN-0053 T-A-1-04 (tier-1): S3 instrument search currently queries
-    // ``symbol.ilike()`` + ``exchange.ilike()`` only — never the company
-    // ``name`` field. As a result "apple" matches nothing while "AAPL" works.
-    // Tier-2 (Wave B) adds ``name`` to the SQL search; this tier-1 fix
-    // auto-uppercases the input so users typing "aapl" / "msft" in any case
-    // hit the ticker index reliably.
-    const upper = e.target.value.toUpperCase();
-    setSearchQuery(upper);
-    setShowDropdown(upper.length > 0);
+    // PLAN-0053 T-B-2-02: with the Wave B backend fix (T-B-2-01) the S3
+    // instrument search now matches the ``name`` column too — "apple" finds
+    // Apple Inc. via the pg_trgm GIN index. Auto-uppercase is no longer
+    // required; preserve the user's casing so the dropdown reflects their
+    // intent. Empty error on every change so a fresh query starts clean.
+    setSearchQuery(e.target.value);
+    setShowDropdown(e.target.value.length > 0);
     setAddErrorMsg(null);
   }
 
@@ -412,7 +410,7 @@ function AddSymbolBar({
           onFocus={() => {
             if (searchQuery.length > 0) setShowDropdown(true);
           }}
-          placeholder="Add ticker (e.g. AAPL)…"
+          placeholder="Add ticker or company name…"
           className="flex-1 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
           aria-label="Search to add instrument"
           role="combobox"
