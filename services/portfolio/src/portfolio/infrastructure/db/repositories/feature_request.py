@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from portfolio.application.ports.feedback import FeatureRequestRecord, FeatureRequestRepo
 from portfolio.infrastructure.db.models.feature_request import FeatureRequestModel
-from portfolio.infrastructure.db.models.feature_vote import FeatureVoteModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,26 +118,32 @@ class SqlAlchemyFeatureRequestRepo(FeatureRequestRepo):
             row.category = category
         if is_public is not None:
             row.is_public = is_public
-        from common.time import utc_now  # type: ignore[import-untyped]
-
         row.updated_at = utc_now()
         await self._session.flush()
         return self._to_record(row)
 
     async def refresh_vote_count(self, feature_request_id: UUID) -> int:
-        # Recompute vote_count from feature_votes inside the same transaction
-        # so the denorm column never lags reality. Returns the new count so
-        # callers can echo it back to the client without a re-fetch.
-        count_result = await self._session.execute(
-            select(func.count())
-            .select_from(FeatureVoteModel)
-            .where(
-                FeatureVoteModel.feature_request_id == feature_request_id,
+        # F-Q1-06: atomic single-statement update — the SELECT and UPDATE
+        # run in one statement so concurrent voters cannot lose updates
+        # under READ COMMITTED. The previous implementation read count() into
+        # Python, then UPDATEd the row — two concurrent transactions both saw
+        # count=N and both wrote N, dropping a vote silently.
+        stmt = text(
+            """
+            UPDATE feature_requests
+            SET vote_count = (
+                SELECT COUNT(*) FROM feature_votes
+                WHERE feature_request_id = :id
             ),
+            updated_at = now()
+            WHERE id = :id
+            RETURNING vote_count
+            """,
         )
-        new_count = int(count_result.scalar_one())
-        row = await self._session.get(FeatureRequestModel, feature_request_id)
-        if row is not None:
-            row.vote_count = new_count
-            await self._session.flush()
-        return new_count
+        result = await self._session.execute(stmt, {"id": str(feature_request_id)})
+        row = result.first()
+        # The row is guaranteed to exist by the caller (UpsertFeatureVoteUseCase
+        # checks tenant ownership before invoking refresh) but we defend
+        # against None to satisfy mypy and against a hypothetical race where
+        # the feature was deleted concurrently.
+        return int(row[0]) if row else 0

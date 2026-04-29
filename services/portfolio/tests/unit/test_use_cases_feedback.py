@@ -436,3 +436,71 @@ async def test_upsert_beta_enrollment_creates_then_updates() -> None:
     )
     assert rec2.enrolled is False
     assert rec2.programs == []
+
+
+# ── F-Q1-01: NPS rate limit via use case (not DB index) ─────────────────────
+
+
+async def test_nps_rate_limit_via_use_case() -> None:
+    """F-Q1-01: ``SubmitNPSScoreUseCase`` enforces the 30-day rate limit
+    via :meth:`NPSScoreRepo.find_recent_by_user` BEFORE inserting.
+
+    The original migration tried a partial unique index with ``now() -
+    INTERVAL '30 days'`` predicate which Postgres rejects (now() is not
+    IMMUTABLE). The fix moves the check into the application layer.
+    """
+    uow = FakeUnitOfWork()
+    tenant_id = uuid4()
+    user_id = uuid4()
+    cmd = SubmitNPSScoreCommand(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        score=9,
+        comment=None,
+        surface=None,
+    )
+    rec = await SubmitNPSScoreUseCase().execute(cmd, uow)
+    # First submission persists.
+    assert rec.score == 9
+    # Second submission within 30 days raises NPSRateLimitError BEFORE the
+    # repo's add() runs (verified by checking the store size).
+    with pytest.raises(NPSRateLimitError):
+        await SubmitNPSScoreUseCase().execute(cmd, uow)
+    assert len(uow.nps_scores._store) == 1  # type: ignore[attr-defined]
+
+
+# ── F-Q1-06: Sequential votes accumulate to vote_count == N ─────────────────
+
+
+async def test_five_sequential_votes_yield_count_five() -> None:
+    """F-Q1-06: atomic refresh_vote_count must report N=5 after 5 votes.
+
+    The fake repo simulates ordered execution; this verifies the contract
+    that ``refresh_vote_count`` always returns a count consistent with the
+    number of distinct voters (no lost updates in the fake; SQL repo uses
+    a single-statement UPDATE so the same invariant holds).
+    """
+    uow = FakeUnitOfWork()
+    tenant_id = uuid4()
+    feature = await CreateFeatureRequestUseCase().execute(
+        CreateFeatureRequestCommand(
+            tenant_id=tenant_id,
+            user_id=uuid4(),
+            title="Heatmap drilldown",
+            description="Click a heat cell to open the constituent list",
+            category=None,
+        ),
+        uow,
+    )
+    final_count = 0
+    for _ in range(5):
+        rec, _ = await UpsertFeatureVoteUseCase().execute(
+            UpsertFeatureVoteCommand(
+                feature_request_id=feature.id,
+                tenant_id=tenant_id,
+                user_id=uuid4(),  # different voter every iteration
+            ),
+            uow,
+        )
+        final_count = rec.vote_count
+    assert final_count == 5

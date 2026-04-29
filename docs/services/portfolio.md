@@ -170,7 +170,7 @@ The portfolio service hosts the in-app feedback / NPS / public roadmap / micro-s
 | Table | Purpose | PK |
 |-------|---------|----|
 | `feedback_submissions` | Bug / feature / UX / design free-text submissions | `id` (UUID v7) |
-| `nps_scores` | One NPS rating per (tenant, user) per 30 days (partial unique index) | `id` |
+| `nps_scores` | One NPS rating per (tenant, user) per 30 days (rate-limited at use-case layer; index `ix_nps_scores_user_recent`) | `id` |
 | `feature_requests` | Public roadmap items (admin-curated) | `id` |
 | `feature_votes` | One upvote per (feature, user) | `(feature_request_id, user_id)` |
 | `micro_survey_responses` | Thumbs up/down keyed on `survey_key` (e.g. `docs:/instruments/overview`) | `id` |
@@ -186,7 +186,7 @@ Use cases (`portfolio.application.use_cases.feedback`):
 - `CreateFeedbackSubmissionUseCase` — applies PII redaction before persist
 - `ListFeedbackSubmissionsUseCase` (`mine=true` filters to caller; otherwise admin-only at the route layer)
 - `GetFeedbackSubmissionUseCase`, `UpdateFeedbackSubmissionUseCase` (admin), `DeleteFeedbackSubmissionUseCase` (admin)
-- `SubmitNPSScoreUseCase` — DB partial-unique-index conflict surfaces as `NPSRateLimitError` → 409
+- `SubmitNPSScoreUseCase` — application-layer rate limit (SELECT-then-INSERT via `find_recent_by_user`) raises `NPSRateLimitError` → 409. WHY application-layer: Postgres rejects `now()` in index predicates (must be IMMUTABLE), so a partial-unique index on `WHERE created_at > now() - INTERVAL '30 days'` is non-deployable. The repo's `add()` also maps `IntegrityError` → `NPSRateLimitError` as belt-and-suspenders against a tiny SELECT-then-INSERT race window.
 - `GetNPSAggregateUseCase` — promoter/passive/detractor counts + NPS score over the last N days
 - `ListFeatureRequestsUseCase` (returns `(record, has_voted)` tuples), `CreateFeatureRequestUseCase`, `UpdateFeatureRequestUseCase` (admin)
 - `UpsertFeatureVoteUseCase` — idempotent (PK conflict → no-op), recomputes denorm `vote_count`
@@ -216,6 +216,11 @@ Redaction is idempotent (running it twice produces the same output). The dedicat
 | `PORTFOLIO_FEEDBACK_S3_BUCKET` | `worldview-feedback-screenshots` | Bucket for screenshot uploads (frontend pre-signed PUT) |
 | `PORTFOLIO_FEEDBACK_SCREENSHOT_TTL_DAYS` | `90` | Lifecycle policy applied by DevOps in worldview-gitops |
 | `PORTFOLIO_FEEDBACK_CONSOLE_LOGS_TTL_DAYS` | `7` | Console-log JSONB retention (cron purge — follow-up wave) |
+| `PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | Tenant id under which anonymous submissions land. The gateway's `issue_public_jwt` carries this same nil-UUID; admins read the anon backlog via `GET /api/v1/feedback/submissions/anonymous` (admin-only). |
+
+### Anonymous tenant routing (F-Q1-04)
+
+Anonymous (no-JWT) feedback submissions land under the configured "platform support" tenant id (`feedback_anonymous_tenant_id`, default nil-UUID). Real-tenant admins **cannot** see anon submissions via the standard `GET /submissions` endpoint because that route filters strictly by the caller's `tenant_id`. Admins therefore have a dedicated route `GET /submissions/anonymous` that pulls submissions from the configured anon tenant. This was added to fix the original bug where anonymous feedback was effectively black-holed in production.
 
 The S3 PUT itself is out of scope for Wave D — only the schema field `screenshot_url` is persisted.
 

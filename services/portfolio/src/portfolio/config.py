@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     feedback_s3_bucket: str = "worldview-feedback-screenshots"
     feedback_screenshot_ttl_days: int = 90
     feedback_console_logs_ttl_days: int = 7
+    # F-Q1-04: anonymous (no-JWT) feedback submissions land under a
+    # "platform support" tenant id. Admins read these via
+    # ``GET /api/v1/feedback/submissions/anonymous`` (admin-only).
+    # Defaults to the nil UUID — matches the gateway's issue_public_jwt()
+    # tenant claim. Override via PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID
+    # if you provision a dedicated tenant for anon traffic.
+    feedback_anonymous_tenant_id: str = "00000000-0000-0000-0000-000000000000"
 
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"

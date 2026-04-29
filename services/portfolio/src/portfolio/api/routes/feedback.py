@@ -61,6 +61,8 @@ from portfolio.application.use_cases.feedback import (
     SubmitMicroSurveyUseCase,
     SubmitNPSScoreCommand,
     SubmitNPSScoreUseCase,
+    UpdateFeatureRequestCommand,
+    UpdateFeatureRequestUseCase,
     UpdateFeedbackSubmissionCommand,
     UpdateFeedbackSubmissionUseCase,
     UpsertBetaEnrollmentCommand,
@@ -76,11 +78,19 @@ router = APIRouter(tags=["feedback"])
 
 
 def _extract_tenant_id(request: Request) -> UUID:
-    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    """Read tenant_id from request.state set by InternalJWTMiddleware.
+
+    F-Q1-03: defensive parsing — system / dev JWTs may carry a non-UUID
+    sentinel for tenant_id. Anything that does not parse as a UUID is
+    treated as missing.
+    """
     raw = getattr(request.state, "tenant_id", None)
     if not raw:
         raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
-    return UUID(str(raw))
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail="Malformed tenant_id in JWT") from exc
 
 
 def _extract_user_id_optional(request: Request) -> UUID | None:
@@ -89,18 +99,30 @@ def _extract_user_id_optional(request: Request) -> UUID | None:
     Used by routes that allow anon submissions (POST /submissions,
     POST /micro-survey). All other routes use ``_extract_user_id``
     which raises 401 when absent.
+
+    F-Q1-03: the gateway issues a system JWT for unauthenticated public
+    routes with ``sub: "system:api-gateway"``. That string is truthy but
+    not a UUID — without the explicit guard ``UUID("system:api-gateway")``
+    raised ValueError → 500 on every anon submission. We treat any
+    non-UUID sub as anonymous.
     """
     raw = getattr(request.state, "user_id", None)
-    if not raw:
+    if not raw or raw == "system:api-gateway":
         return None
-    return UUID(str(raw))
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
 
 
 def _extract_user_id(request: Request) -> UUID:
     raw = getattr(request.state, "user_id", None)
-    if not raw:
+    if not raw or raw == "system:api-gateway":
         raise HTTPException(status_code=401, detail="Missing user_id in JWT")
-    return UUID(str(raw))
+    try:
+        return UUID(str(raw))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail="Malformed user_id in JWT") from exc
 
 
 def _is_admin(request: Request) -> bool:
@@ -217,6 +239,46 @@ async def list_submissions(
             limit=limit,
             offset=offset,
         )
+    items, total = await ListFeedbackSubmissionsUseCase().execute(query, uow)
+    return FeedbackListResponse(
+        items=[_to_response(r) for r in items],
+        total=total,
+    )
+
+
+@router.get("/submissions/anonymous", response_model=FeedbackListResponse)
+async def list_anonymous_submissions(
+    uow: ReadUoWDep,
+    request: Request,
+    status: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> FeedbackListResponse:
+    """List submissions made anonymously (admin-only).
+
+    F-Q1-04: anonymous submissions land under the configured "platform
+    support" tenant id (``feedback_anonymous_tenant_id`` — default nil
+    UUID, matches the gateway's issue_public_jwt). Real-tenant admins
+    can never see these via ``GET /submissions`` because that endpoint
+    filters by their own tenant. This endpoint exists so admins can
+    review the anon backlog.
+
+    Defined BEFORE ``GET /submissions/{submission_id}`` so FastAPI's
+    path-matching resolves "anonymous" as the literal segment, not as
+    a UUID id.
+    """
+    _require_admin(request)
+    settings = request.app.state.settings
+    anon_tenant_id = UUID(settings.feedback_anonymous_tenant_id)
+    query = ListFeedbackSubmissionsQuery(
+        tenant_id=anon_tenant_id,
+        user_id=None,
+        status=status,
+        kind=kind,
+        limit=limit,
+        offset=offset,
+    )
     items, total = await ListFeedbackSubmissionsUseCase().execute(query, uow)
     return FeedbackListResponse(
         items=[_to_response(r) for r in items],
@@ -406,11 +468,6 @@ async def update_feature(
 ) -> FeatureRequestResponse:
     _require_admin(request)
     tenant_id = _extract_tenant_id(request)
-    from portfolio.application.use_cases.feedback import (
-        UpdateFeatureRequestCommand,
-        UpdateFeatureRequestUseCase,
-    )
-
     cmd = UpdateFeatureRequestCommand(
         feature_request_id=feature_request_id,
         tenant_id=tenant_id,

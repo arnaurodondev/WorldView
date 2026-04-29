@@ -33,15 +33,23 @@ def issue_user_jwt(
     oidc_sub: str,
     private_key: RSAPrivateKey,
     kid: str,
+    role: str | None = None,
 ) -> str:
-    """Issue a user-scoped RS256 internal JWT (valid 5 min)."""
+    """Issue a user-scoped RS256 internal JWT (valid 5 min).
+
+    F-Q1-02: ``role`` is optional and defaults to ``"user"``. Callers that
+    have determined the user is an admin (e.g. via the OIDC payload or a
+    dev-admin allow-list) pass ``role="admin"`` so backends can authorize
+    admin-only endpoints (``request.state.role`` is set by the InternalJWT
+    middleware from this claim).
+    """
     iat = int(utc_now().timestamp())
     payload = {
         "iss": _ISSUER,
         "sub": user_id,
         "tenant_id": tenant_id,
         "oidc_sub": oidc_sub,
-        "role": "user",
+        "role": role or "user",
         "jti": str(new_uuid7()),
         "iat": iat,
         "exp": iat + _USER_TTL,

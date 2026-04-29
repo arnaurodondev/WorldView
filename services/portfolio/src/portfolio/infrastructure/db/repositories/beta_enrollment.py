@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from portfolio.application.ports.feedback import BetaEnrollmentRecord, BetaEnrollmentRepo
 from portfolio.infrastructure.db.models.beta_enrollment import BetaEnrollmentModel
 
@@ -44,8 +45,6 @@ class SqlAlchemyBetaEnrollmentRepo(BetaEnrollmentRepo):
         # SELECT/UPDATE/INSERT dance manually rather than using Postgres's
         # ON CONFLICT clause to keep the repository portable across
         # SQLAlchemy dialects (the rest of the portfolio service does the same).
-        from common.time import utc_now  # type: ignore[import-untyped]
-
         existing = await self._session.execute(
             select(BetaEnrollmentModel).where(
                 BetaEnrollmentModel.tenant_id == record.tenant_id,

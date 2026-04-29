@@ -143,8 +143,25 @@ class NPSScoreRepo(ABC):
     async def add(self, record: NPSScoreRecord) -> None:
         """Persist an NPS score.
 
-        Implementations MUST raise ``NPSRateLimitError`` if the partial
-        unique index ``uq_nps_scores_tenant_user_30d`` rejects the row.
+        Rate limiting (one per user per 30 days) is enforced primarily in
+        ``SubmitNPSScoreUseCase`` via :meth:`find_recent_by_user`. The
+        repository ALSO maps any ``IntegrityError`` to ``NPSRateLimitError``
+        as belt-and-suspenders against a tiny SELECT-then-INSERT race window.
+        """
+        ...
+
+    @abstractmethod
+    async def find_recent_by_user(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> NPSScoreRecord | None:
+        """Return the most recent NPS row for (tenant, user) since ``since``.
+
+        Used by ``SubmitNPSScoreUseCase`` to enforce the 30-day rate limit
+        in the application layer (the original DB-level partial-unique
+        index used a non-IMMUTABLE ``now()`` predicate that Postgres rejects).
         """
         ...
 
@@ -202,7 +219,15 @@ class FeatureVoteRepo(ABC):
         ...
 
     @abstractmethod
-    async def has_voted(self, feature_request_id: UUID, user_id: UUID) -> bool: ...
+    async def has_voted(self, feature_request_id: UUID, user_id: UUID, tenant_id: UUID) -> bool:
+        """True if (feature, user, tenant) has a vote row.
+
+        WHY tenant_id is required: feature_votes carries tenant_id and votes
+        are tenant-scoped; omitting the predicate could let a user belonging
+        to two tenants probe whether they voted on a feature in the *other*
+        tenant by enumerating feature ids (F-Q1-09).
+        """
+        ...
 
 
 class MicroSurveyRepo(ABC):

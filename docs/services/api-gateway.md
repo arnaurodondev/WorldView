@@ -236,13 +236,15 @@ Thin proxy from `/v1/feedback/*` → portfolio service `/api/v1/feedback/*`. Ano
 |--------|------|-------------|------|
 | POST | `/v1/feedback/submissions` | Create bug/feature/UX/design feedback | Optional (anon needs `email`) |
 | GET | `/v1/feedback/submissions` | List submissions (admin) or own (`?mine=true`) | Yes |
+| GET | `/v1/feedback/submissions/anonymous` | List submissions made by unauthenticated users (anon-tenant) | Admin |
 | GET | `/v1/feedback/submissions/{id}` | Read one submission (admin or owner) | Yes |
 | PATCH | `/v1/feedback/submissions/{id}` | Update status / tags / assigned_to | Admin |
-| DELETE | `/v1/feedback/submissions/{id}` | Hard-delete submission | Admin |
-| POST | `/v1/feedback/nps` | Submit NPS score (rate-limited to one per 30 days) | Yes |
+| DELETE | `/v1/feedback/submissions/{id}` | Hard-delete submission (returns 204) | Admin |
+| POST | `/v1/feedback/nps` | Submit NPS score (rate-limited to one per 30 days, application-layer) | Yes |
 | GET | `/v1/feedback/nps/aggregate?days=30` | Promoter / passive / detractor counts + NPS score | Admin |
 | GET | `/v1/feedback/features` | Public roadmap (vote-sorted) | Public |
 | POST | `/v1/feedback/features` | Submit a new feature request | Yes |
+| PATCH | `/v1/feedback/features/{id}` | Update status / category / is_public on a feature | Admin |
 | POST | `/v1/feedback/features/{id}/vote` | Idempotent upvote | Yes |
 | POST | `/v1/feedback/micro-survey` | Thumbs-up/down with `survey_key` (used by docs widget) | Optional (anon ok) |
 | GET | `/v1/feedback/beta-program/enrollment` | Read user's beta-program state | Yes |

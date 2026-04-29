@@ -40,11 +40,15 @@ class SqlAlchemyFeatureVoteRepo(FeatureVoteRepo):
                 # PK violation — vote already exists. Treat as idempotent success.
                 return False
 
-    async def has_voted(self, feature_request_id: UUID, user_id: UUID) -> bool:
+    async def has_voted(self, feature_request_id: UUID, user_id: UUID, tenant_id: UUID) -> bool:
+        # F-Q1-09: tenant_id MUST be in the predicate. feature_votes is
+        # tenant-scoped; without this filter a user belonging to two tenants
+        # could probe feature ids in the *other* tenant.
         result = await self._session.execute(
             select(FeatureVoteModel).where(
                 FeatureVoteModel.feature_request_id == feature_request_id,
                 FeatureVoteModel.user_id == user_id,
+                FeatureVoteModel.tenant_id == tenant_id,
             ),
         )
         return result.scalar_one_or_none() is not None
