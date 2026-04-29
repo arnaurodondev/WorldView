@@ -120,7 +120,12 @@ def _derive_for_row(row: asyncpg.Record) -> tuple[str, str, str | None, str | No
     :func:`alert_fanout._compose_alert_title` exactly so backfilled rows
     are indistinguishable from rows written natively by the consumer.
     """
-    payload: dict[str, Any] = row["payload"] or {}
+    # N-02 fix: a row whose JSONB happens to be a top-level array (list)
+    # would survive the truthy ``or {}`` and crash on ``.get(...)``. The
+    # outer try/except in the driver catches it, but coercing to {} here
+    # makes the contract honest and keeps the per-row logging clean.
+    raw = row["payload"]
+    payload: dict[str, Any] = raw if isinstance(raw, dict) else {}
     severity = _safe_severity(row["severity"])
     alert_type = _safe_alert_type(row["alert_type"])
 
