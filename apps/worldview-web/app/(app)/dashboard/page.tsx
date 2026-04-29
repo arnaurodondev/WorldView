@@ -51,7 +51,11 @@
 import { MorningBriefCard } from "@/components/dashboard/MorningBriefCard";
 import { MarketSnapshotWidget } from "@/components/dashboard/MarketSnapshotWidget";
 import { SectorHeatmapWidget } from "@/components/dashboard/SectorHeatmapWidget";
-import { WatchlistMoversWidget } from "@/components/dashboard/WatchlistMoversWidget";
+// PLAN-0053 T-B-2-03: replaced direct WatchlistMoversWidget mount with the
+// MoversWidgetTabs wrapper which hosts Holdings + Watchlist movers behind a
+// tab toggle. The tab defaults to Holdings so users with a brokerage see
+// their owned names first, but Watchlist remains one click away.
+import { MoversWidgetTabs } from "@/components/dashboard/MoversWidgetTabs";
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary";
 import { PreMarketMoversWidget } from "@/components/dashboard/PreMarketMoversWidget";
 import { PredictionMarketsWidget } from "@/components/dashboard/PredictionMarketsWidget";
@@ -124,11 +128,13 @@ export default function DashboardPage() {
       <div className="col-span-4 h-full min-w-0 border border-border/40">
         <SectorHeatmapWidget />
       </div>
-      {/* WHY overflow-hidden on this cell: WatchlistMoversWidget contains a
-          scroll container (independent-scroll rule) — the cell itself must
-          clip so the inner overflow-auto has a definite height. */}
+      {/* PLAN-0053 T-B-2-03: was <WatchlistMoversWidget />; now hosts
+          MoversWidgetTabs (Holdings | Watchlist), default Holdings.
+          WHY overflow-hidden on this cell: the inner widgets contain
+          scroll containers (independent-scroll rule) — the cell itself
+          must clip so the inner overflow-auto has a definite height. */}
       <div className="col-span-5 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
-        <WatchlistMoversWidget />
+        <MoversWidgetTabs />
       </div>
 
       {/* ── Row 3: Portfolio (4) · Prediction Markets (4) · Top Movers (4) ── */}

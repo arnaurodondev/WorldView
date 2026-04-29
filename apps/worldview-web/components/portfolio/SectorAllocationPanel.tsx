@@ -20,6 +20,9 @@
 
 "use client";
 
+import { useState } from "react";
+import { Treemap, ResponsiveContainer } from "recharts";
+
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
 // F-307 fix (PLAN-0048 QA iter-1): allocation shares are NOT directional
@@ -37,6 +40,13 @@ export interface SectorAllocationItem {
   value: number;
   /** % of total portfolio value [0, 100] */
   pct: number;
+  /**
+   * PLAN-0053 T-D-4-04: optional weighted-avg daily return (%) for this bucket.
+   * When provided, the treemap colours tiles on a teal-to-red gradient. When
+   * omitted, tiles fall back to a neutral primary tint so the chart still
+   * renders meaningfully on portfolios where return data isn't computed yet.
+   */
+  dailyReturnPct?: number | null;
 }
 
 export interface SectorAllocationPanelProps {
@@ -158,12 +168,189 @@ function BarChart({
   );
 }
 
+// ── Treemap helpers ──────────────────────────────────────────────────────────
+
+/**
+ * sectorTileColor — gradient from negative red → neutral muted → positive teal.
+ *
+ * WHY a continuous gradient (not 3 hard buckets):
+ *   A 0.05% gain shouldn't look identical to a 5% gain. Continuous mapping
+ *   gives the user a meaningful read on intensity at a glance.
+ *
+ * The lerp clamp at ±5% is tuned to typical daily moves — anything beyond
+ * is rare enough that capping it at the most-saturated colour is the right
+ * UX (extreme outliers visually pop without dominating the palette).
+ */
+function sectorTileColor(returnPct: number | null | undefined): string {
+  if (returnPct == null) {
+    // Unknown / missing return — neutral tint so the tile still renders but
+    // doesn't communicate a directional signal.
+    return "hsl(var(--primary) / 0.35)";
+  }
+  // Clamp into the [-5, +5] band; outside that we saturate.
+  const clamped = Math.max(-5, Math.min(5, returnPct));
+  const intensity = Math.abs(clamped) / 5; // 0..1
+  // Use the design tokens — positive (teal-green) for gains, negative (red)
+  // for losses. Opacity ramps from 25% to 90% based on intensity so small
+  // moves still read as "barely there" while big moves dominate.
+  const alpha = 0.25 + intensity * 0.65;
+  if (clamped >= 0) {
+    return `hsl(var(--positive) / ${alpha.toFixed(2)})`;
+  }
+  return `hsl(var(--negative) / ${alpha.toFixed(2)})`;
+}
+
+interface TreemapTileData {
+  name: string;
+  size: number;
+  pct: number;
+  dailyReturnPct: number | null | undefined;
+}
+
+/**
+ * SectorTreemap — recharts-based treemap visualisation.
+ *
+ * WHY recharts (not d3-treemap directly): the codebase already pulls
+ * recharts for the BarChart and equity-curve components — adding a second
+ * tree-laying lib would be redundant weight. Recharts' Treemap is built on
+ * d3-hierarchy under the hood and gives us the tile geometry for free.
+ *
+ * WHY a custom content renderer: the default content shows recharts' built-in
+ * tile labels which don't render the dual percent + sector pattern well
+ * inside small tiles. A custom shape lets us drop labels gracefully on
+ * narrow tiles (≤80px wide) while keeping them on the larger ones.
+ */
+function SectorTreemap({ items }: { items: SectorAllocationItem[] }) {
+  // recharts Treemap consumes `dataKey="size"` so we map our shape into
+  // {name, size, pct, dailyReturnPct} — keeping pct + return on the node
+  // so the custom tile renderer can colour and label without extra prop
+  // drilling.
+  const treemapData: TreemapTileData[] = items.map((it) => ({
+    name: it.label,
+    size: it.pct, // tile area driven by % of portfolio
+    pct: it.pct,
+    dailyReturnPct: it.dailyReturnPct,
+  }));
+
+  return (
+    <div className="h-[220px] w-full" data-testid="sector-treemap">
+      <ResponsiveContainer width="100%" height="100%">
+        <Treemap
+          data={treemapData}
+          dataKey="size"
+          stroke="hsl(var(--background))"
+          // The default fill is overridden by our content renderer; setting
+          // it here is a fallback for any rendering edge case.
+          fill="hsl(var(--primary) / 0.4)"
+          isAnimationActive={false}
+          content={<TreemapTile />}
+        />
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * TreemapTile — custom tile renderer for the recharts Treemap.
+ *
+ * WHY custom: the default tile content renders the name centred but ignores
+ * tile size, so 1% slivers get a label that overflows. We branch on width
+ * to either show name+pct, name only, or no label — the user can always
+ * hover to see the full info.
+ */
+// recharts injects geometry props at runtime; types are declared loose to
+// stay decoupled from internal recharts shapes.
+interface TreemapTileProps {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  name?: string;
+  pct?: number;
+  dailyReturnPct?: number | null;
+}
+function TreemapTile(props: TreemapTileProps) {
+  const { x = 0, y = 0, width = 0, height = 0, name, pct, dailyReturnPct } = props;
+  const fill = sectorTileColor(dailyReturnPct);
+
+  // Label visibility heuristics — derived from real-world tile rendering:
+  //   - <60px width → no label (sliver)
+  //   - <100px width → name only (one line)
+  //   - otherwise → name + pct stacked
+  const showLabel = width >= 60 && height >= 24;
+  const showPct = width >= 100 && height >= 36;
+
+  // Defensive: pct may be undefined on the synthetic root node injected by
+  // recharts. Treat it as 0 for the label.
+  const safePct = pct ?? 0;
+  const safeName = name ?? "";
+  const returnLabel =
+    dailyReturnPct == null
+      ? null
+      : `${dailyReturnPct >= 0 ? "+" : ""}${dailyReturnPct.toFixed(2)}%`;
+
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={fill}
+        stroke="hsl(var(--background))"
+        strokeWidth={1}
+      >
+        <title>
+          {`${safeName} — ${safePct.toFixed(1)}% of portfolio${
+            returnLabel ? ` · ${returnLabel} today` : ""
+          }`}
+        </title>
+      </rect>
+      {showLabel && (
+        <text
+          x={x + 6}
+          y={y + 14}
+          fill="hsl(var(--foreground))"
+          fontSize={10}
+          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+          fontWeight={600}
+          // pointer-events:none so the title-tooltip on the rect still
+          // surfaces even when the cursor is over the label text.
+          style={{ pointerEvents: "none" }}
+        >
+          {safeName}
+        </text>
+      )}
+      {showPct && (
+        <text
+          x={x + 6}
+          y={y + 28}
+          fill="hsl(var(--muted-foreground))"
+          fontSize={9}
+          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+          style={{ pointerEvents: "none" }}
+        >
+          {safePct.toFixed(1)}%
+          {returnLabel ? ` · ${returnLabel}` : ""}
+        </text>
+      )}
+    </g>
+  );
+}
+
 // ── SectorAllocationPanel ─────────────────────────────────────────────────────
 
 export function SectorAllocationPanel({
   bySector,
   byType,
 }: SectorAllocationPanelProps) {
+  // PLAN-0053 T-D-4-04: view toggle between the legacy two-bar layout and
+  // the new treemap. Default to "treemap" so users get the upgraded
+  // experience by default — the toggle preserves the bar view for users
+  // who prefer the old quantitative read (or are colour-blind on the
+  // gradient — though the title-tooltip still surfaces the data).
+  const [view, setView] = useState<"treemap" | "bars">("treemap");
+
   // WHY don't render the panel at all when no data: the Holdings tab already
   // shows an InlineEmptyState for 0 holdings; this panel is secondary chrome
   // that only makes sense when there's data to visualise.
@@ -174,32 +361,58 @@ export function SectorAllocationPanel({
   return (
     // WHY border-t: visually separates the allocation section from the holdings table
     // above it, without needing a full card/panel wrapper.
-    // WHY pt-2 mt-2 (was pt-3 mt-3): terminal density — 8px gap above and
-    // 8px padding inside is enough breathing room without the section
-    // feeling like a separate card. Matches the rhythm of the rest of the
-    // page where every gap is 8/12px, never 24px.
     // F-P-023 (PLAN-0051 W6): ``border-border/60`` — soft intra-tab
     // divider; the holdings table and the allocation panel sit inside
     // the same Holdings tab so the divider should be subtle, not the
     // hard between-panel ``border-border`` line we use above the KPI
     // strip.
     <div className="border-t border-border/60 pt-2 mt-2">
-      {/* Section label.
-          WHY mb-2 (was mb-3): tighter so the two BarCharts start closer to
-          their parent label — the visual hierarchy still reads clearly
-          because the BarChart's own "BY SECTOR" sub-label has its own mb-1. */}
-      <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground mb-2">
-        ALLOCATION
+      {/* Section label + view toggle */}
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          ALLOCATION
+        </div>
+        <div className="flex gap-px">
+          {(["treemap", "bars"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={cn(
+                "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                view === v
+                  ? "bg-primary/20 text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              aria-pressed={view === v}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Two charts side-by-side.
-          WHY gap-4 (was gap-6): 16px column gap is plenty of separation at
-          terminal density. 24px was leaving a noticeable empty band that
-          made the panel feel half-empty. */}
-      <div className={cn("flex gap-4")}>
-        <BarChart items={bySector} title="BY SECTOR" />
-        <BarChart items={byType} title="BY TYPE" />
-      </div>
+      {view === "treemap" ? (
+        // WHY only show the sector treemap (not by-type as treemap too):
+        // sector concentration is the canonical risk read; asset-type tends
+        // to be a binary "mostly equity" answer that doesn't gain from a
+        // treemap. Keeping the by-type bar visible alongside preserves the
+        // signal at minimal screen cost.
+        <div className="space-y-2">
+          <SectorTreemap items={bySector} />
+          {byType.length > 0 && (
+            <div className="border-t border-border/40 pt-2">
+              <BarChart items={byType} title="BY TYPE" />
+            </div>
+          )}
+        </div>
+      ) : (
+        // Legacy two-bar layout — preserved for users who toggle off the
+        // treemap view.
+        <div className={cn("flex gap-4")}>
+          <BarChart items={bySector} title="BY SECTOR" />
+          <BarChart items={byType} title="BY TYPE" />
+        </div>
+      )}
     </div>
   );
 }
