@@ -264,7 +264,10 @@ Purpose-built components for financial data. Implement these consistently:
 | `FeedbackDialog` | `components/feedback/FeedbackDialog.tsx` | Category + description form, POST /v1/feedback |
 | `52WeekRangeBar` | `components/instrument/52WeekRangeBar.tsx` | Visual slider showing current price vs 52w range; exported as `WeekRangeBar`; `showLabels` prop hides low/high labels for compact header use |
 | `FundamentalSparkline` | `components/instrument/FundamentalSparkline.tsx` | SVG mini trend-line for any fundamentals metric; fetches timeseries data via S9 public endpoint; trend-colors positive/negative/flat |
-| `ChartToolbar` | `components/instrument/ChartToolbar.tsx` | h-7 strip with Vol / MA50 / MA200 / Fullscreen toggles; parent-controlled state; renders inside OHLCVChart |
+| `ChartToolbar` | `components/instrument/ChartToolbar.tsx` | h-7 strip with MA50/MA200 toggles + VOL submenu (Base/MA20/Profile/VWAP Line) + IND dropdown (RSI/MACD/BB/ATR/STOCH/OBV/VWAP) + Fullscreen; parent-controlled state via `indicators: Record<IndicatorId, IndicatorConfig>` (PLAN-0050 Wave C) |
+| `DrawingPalette` | `components/instrument/DrawingPalette.tsx` | Left-side 28px vertical palette with 7 drawing tools (Trend Line, Horizontal Level, Rectangle, Arrow, Fib Retracement, Parallel Channel, Text) + CURSOR (exit mode); click-to-arm model; `aria-pressed` state; renders absolutely inside OHLCVChart chart wrapper |
+| `DrawingCanvas` | `components/instrument/DrawingCanvas.tsx` | Absolutely-positioned SVG overlay covering the chart canvas (right of palette); renders persisted `Annotation[]` as SVG shapes; handles multi-click tool-arm → point-capture → commit workflow; right-click to delete; `pointer-events:none` when no tool armed |
+| `VolumeProfileOverlay` | `components/instrument/VolumeProfileOverlay.tsx` | Right-side 60px SVG histogram overlay showing volume-per-price-level; Point of Control (highest volume bucket) highlighted in brand yellow; only renders when `showVolProfile=true` |
 | `OverviewSidebarMetrics` | `components/instrument/InstrumentKeyMetrics.tsx` | 12-row sidebar metrics panel (Wave C-1); exported as `OverviewSidebarMetrics`; WeekRangeBar row for 52W range; placeholder rows for EPS/BETA/AVG-VOL (Wave D-3) |
 | `TechnicalSnapshot` | `components/instrument/TechnicalSnapshot.tsx` | Strip: Beta, MA50↑↓, MA200↑↓, RSI, Short Interest |
 
@@ -538,6 +541,104 @@ Inactive nav item: `text-muted-foreground hover:text-foreground hover:bg-muted/5
 | Types | For unions / intersections |
 | Error boundary | Per page section (use `react-error-boundary`) |
 | `"use client"` | Only when needed (DOM, hooks, event handlers) |
+
+---
+
+## 8b. Chart-Toolbar Pattern (PLAN-0050 Wave C)
+
+> **Added**: 2026-04-29. Documents the TradingView-style chart toolbar added in Wave C.
+> The chart now has 4 layers: timeframe tabs | ChartToolbar | DrawingPalette | DrawingCanvas SVG overlay.
+
+### 8b.1 Toolbar Layout
+
+```
+[5M] [1H] [1D] [1W] [1M]    [MA50] [MA200] [VOL N▾] [IND N▾] [⛶]
+^— timeframe tabs (left)                     ^— ChartToolbar (ml-auto, right)
+```
+
+- `h-7` (28px) total toolbar height — Bloomberg terminal density
+- No label text, only compact abbreviations + Unicode glyphs
+- Active state: `bg-primary/20 text-primary` (brand yellow fill)
+- Inactive state: `text-muted-foreground hover:text-foreground`
+
+### 8b.2 Indicators Dropdown (IND N)
+
+Uses `shadcn/ui DropdownMenu` with `DropdownMenuCheckboxItem` per indicator.
+
+```
+IND 3  ← trigger button; shows count of active indicators
+├─ [✓] RSI    Relative Strength Index (14)
+├─ [✓] MACD   MACD (12, 26, 9)
+├─ [✓] BB     Bollinger Bands (20, 2σ)
+├─ [ ] ATR    Average True Range (14)
+├─ [ ] STOCH  Stochastic Oscillator (14, 3, 3)
+├─ [ ] OBV    On-Balance Volume
+└─ [ ] VWAP   Volume Weighted Avg Price
+```
+
+**State**: `indicators: Record<IndicatorId, IndicatorConfig>` in OHLCVChart state.
+**Persistence**: `localStorage` key `worldview:chart:indicators:v1` (JSON). Merges with defaults on load.
+**Computation**: All 7 indicators computed client-side in `lib/instrument-context.ts` — no new API endpoints.
+
+**Sub-pane indicators** (render below main chart on their own Y scale):
+- RSI → `priceScaleId: "rsi"` — amber (#F59E0B), scaleMargins top:0.85
+- MACD → `priceScaleId: "macd"` — line=purple, signal=amber, histogram=teal/red
+- ATR → `priceScaleId: "atr"` — emerald (#10B981), scaleMargins top:0.80
+- Stochastic → `priceScaleId: "stoch"` — %K=teal, %D=red, scaleMargins top:0.80
+
+**Main-pane indicators** (overlay on main candlestick Y scale):
+- Bollinger Bands → `priceScaleId: "right"` — indigo (#6366F1), dashed lines (lineStyle:2)
+- OBV → `priceScaleId: "obv"` — sky (#38BDF8), separate volume scale
+- VWAP → `priceScaleId: "right"` — pink (#EC4899), dotted line (lineStyle:1)
+
+### 8b.3 Volume Submenu (VOL N)
+
+```
+VOL 2  ← trigger; count of active volume sub-indicators
+├─ [✓] Base Volume      (histogram, existing)
+├─ [ ] Volume MA20      (lime line on volume scale, period 20)
+├─ [✓] Volume Profile   (right-side SVG overlay, 60px wide)
+└─ [ ] VWAP Line        (pink dotted on price scale, anchored daily)
+```
+
+Volume Profile renders as `VolumeProfileOverlay.tsx` — an absolutely-positioned SVG, NOT a lightweight-charts series (no native horizontal histogram support in v4). The Point of Control (highest volume bucket) is highlighted in brand yellow (#FFD60A).
+
+### 8b.4 Drawing Palette + Canvas
+
+**Left-side 28px palette** (`DrawingPalette.tsx`):
+- Absolutely positioned `inset-y-0 left-0`, `w-7 z-10`
+- Tools: ✕ CURSOR, ╱ Trend Line, ─ Horizontal Level, □ Rectangle, ↗ Arrow, φ Fib Retracement, ≡ Parallel Channel, T Text
+- Active tool: `bg-primary/20 text-primary` + `aria-pressed="true"`
+- Click-to-arm; click again to disarm; CURSOR always disarms
+- `data-testid="drawing-tool-{tool-id-kebab}"` on each button
+
+**SVG annotation overlay** (`DrawingCanvas.tsx`):
+- Sibling of chart container (not child), absolutely positioned `left: 28px`, `width: calc(100% - 28px)`, same height as chart
+- `pointer-events: all` when tool armed; `pointer-events: none` (pass-through) when in cursor mode
+- Multi-click model: click → capture point; when required points collected → commit annotation
+- Annotation shapes: TrendLine (line), HorizontalLevel (full-width dashed + price label), Rectangle (stroke + 10% fill), Arrow (line + marker), FibRetracement (7 horizontal levels at 0/23.6/38.2/50/61.8/78.6/100%), ParallelChannel (2 lines + fill polygon), Text (anchor circle + label)
+- Right-click any annotation → context menu → delete
+
+**Persistence** (`lib/instrument-context.ts`):
+- Annotations → IndexedDB (`worldview-chart-annotations`, store: `annotations`, key: `instrumentId`)
+- Per-annotation record: `{ id, tool, createdAt, color, ...tool-specific fields }`
+- Load on mount: `loadAnnotationsFromIDB(instrumentId)` (async, returns `[]` on any failure)
+- Save on add/delete: `saveAnnotationsToIDB(instrumentId, annotations[])` (fire-and-forget)
+
+### 8b.5 Coordinate System
+
+```
+lightweight-charts            SVG overlay
+─────────────────────         ─────────────────────
+chart.timeScale()             x: timeToCoordinate(unixSeconds) → pixel X
+  .timeToCoordinate(time)     (null when off-screen → -9999 for SVG)
+  .coordinateToTime(x)
+
+series.priceToCoordinate(p)   y: priceToCoordinate(price) → pixel Y
+series.coordinateToPrice(y)   (null when off-screen → -9999 for SVG)
+```
+
+Both converters are stored in `converters: CoordinateConverter | null` state. The SVG renders stale coordinates when the user pans the chart (no "viewport changed" event in v4 — see PLAN-0053 deferred).
 
 ---
 

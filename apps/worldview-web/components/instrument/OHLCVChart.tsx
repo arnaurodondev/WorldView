@@ -28,26 +28,57 @@
  * computation with a simple SMA algorithm is fast even for 500 bars. The 200-day
  * MA requires at least 200 bars; if the timeframe has fewer, the line is empty.
  *
+ * WAVE C ADDITIONS (PLAN-0050 §T-C-3-01, T-C-3-02, T-C-3-03, T-C-3-04):
+ *   - 7 technical indicators (RSI, MACD, BB, ATR, STOCH, OBV, VWAP) with
+ *     client-side computation and lightweight-charts series registration.
+ *   - Left-side DrawingPalette + sibling SVG DrawingCanvas for annotations.
+ *   - Volume submenu: Vol MA20, Volume Profile SVG overlay, VWAP Line.
+ *   - Indicator + annotation state persisted via lib/instrument-context.ts.
+ *
  * WHY 280px chart height (was 360px): Volume uses scaleMargins to occupy the
  * bottom 20% of the chart area. At 280px total, the candlestick area has ~224px
  * and volume has ~56px — matching TradingView's default proportion.
  *
  * WHO USES IT: OverviewLayout (within the chart+sidebar upper section)
  * DATA SOURCE: S9 GET /v1/ohlcv/{instrumentId}?timeframe=1D
- * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail chart, PLAN-0041 §T-C-2-02
+ * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail chart, PLAN-0050 §Wave C
  */
 
 "use client";
 // WHY "use client": uses useEffect (DOM manipulation for chart init),
 // useRef (chart instance), useState (timeframe + toolbar controls).
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartToolbar } from "@/components/instrument/ChartToolbar";
+import { DrawingPalette } from "@/components/instrument/DrawingPalette";
+import { DrawingCanvas } from "@/components/instrument/DrawingCanvas";
+import { VolumeProfileOverlay } from "@/components/instrument/VolumeProfileOverlay";
 import type { OHLCVBar } from "@/types/api";
+import type { CoordinateConverter } from "@/components/instrument/DrawingCanvas";
+import {
+  loadIndicatorsFromStorage,
+  saveIndicatorsToStorage,
+  loadAnnotationsFromIDB,
+  saveAnnotationsToIDB,
+  computeRSI,
+  computeMACD,
+  computeBollinger,
+  computeATR,
+  computeStochastic,
+  computeOBV,
+  computeVWAP,
+  computeVolumeMA,
+  computeVolumeProfile,
+  type IndicatorId,
+  type IndicatorConfig,
+  type Annotation,
+  type FormattedBar,
+  type VolumeProfileBucket,
+} from "@/lib/instrument-context";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +99,10 @@ interface OHLCVChartProps {
 // WHY 280 (was 360): volume histogram uses the bottom 20% (~56px), candlesticks
 // use the top 80% (~224px). Total 280px matches TradingView's default proportion.
 const CHART_HEIGHT = 280;
+
+// WHY 28px palette width: w-7 Tailwind = 28px. The chart container gets pl-7 to
+// offset the drawing palette. The SVG drawing canvas accounts for this offset.
+const PALETTE_WIDTH = 28;
 
 // ── Terminal Dark chart theme ──────────────────────────────────────────────────
 // WHY inline object (not CSS): lightweight-charts applies these via its own theming
@@ -102,7 +137,7 @@ const CHART_THEME = {
   },
 };
 
-// ── MA computation ─────────────────────────────────────────────────────────────
+// ── MA computation (simple SMA) ────────────────────────────────────────────────
 
 /**
  * computeMA — simple moving average over an array of time/close pairs.
@@ -134,7 +169,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const { accessToken } = useAuth();
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
 
-  // ── Toolbar toggle state ───────────────────────────────────────────────────
+  // ── Original toolbar toggle state ──────────────────────────────────────────
   // WHY default showVolume=true: volume is standard in all financial charting UIs.
   // MA50/MA200 default off — adding them is an intentional analyst decision.
   const [showVolume, setShowVolume] = useState(true);
@@ -145,6 +180,29 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // with empty deps, so it holds a stale closure over `isFullscreen`. A ref stays
   // current across renders and can be read inside the stale closure safely.
   const isFullscreenRef = useRef(false);
+
+  // ── Wave C: Indicator state (T-C-3-01, T-C-3-04) ─────────────────────────
+  // WHY lazy init via function: loadIndicatorsFromStorage reads localStorage.
+  // Using a lazy initialiser avoids calling it on every re-render.
+  const [indicators, setIndicators] = useState<Record<IndicatorId, IndicatorConfig>>(
+    () => loadIndicatorsFromStorage(),
+  );
+
+  // ── Wave C: Volume submenu state (T-C-3-03) ────────────────────────────────
+  const [showVolMA20, setShowVolMA20] = useState(false);
+  const [showVolProfile, setShowVolProfile] = useState(false);
+  const [showVWAPLine, setShowVWAPLine] = useState(false);
+
+  // ── Wave C: Volume profile data (computed from bars, not lightweight-charts) ─
+  const [volumeProfileBuckets, setVolumeProfileBuckets] = useState<VolumeProfileBucket[]>([]);
+
+  // ── Wave C: Drawing palette + annotation state (T-C-3-02, T-C-3-04) ────────
+  const [activeTool, setActiveTool] = useState<import("@/lib/instrument-context").DrawingToolId | null>(null);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+
+  // ── Coordinate converters for DrawingCanvas ────────────────────────────────
+  // WHY null initial: chart hasn't init'd yet. DrawingCanvas checks for null.
+  const [converters, setConverters] = useState<CoordinateConverter | null>(null);
 
   // WHY chartError state: if the dynamic import for lightweight-charts fails (e.g.,
   // CDN down, bundle corruption, network timeout), we show a fallback instead of
@@ -172,6 +230,39 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ma200SeriesRef = useRef<any>(null);     // MA200 line series
 
+  // ── Wave C: Indicator series refs ──────────────────────────────────────────
+  // WHY refs (not state): series objects are mutable lightweight-charts handles.
+  // We call .setData() and .applyOptions() directly. Storing them in state would
+  // cause an infinite loop (setState → re-render → series-update effect → setState).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rsiPaneRef = useRef<any>(null);         // RSI line series (sub-pane)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const macdLineRef = useRef<any>(null);        // MACD line
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const macdSignalRef = useRef<any>(null);      // MACD signal line
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const macdHistRef = useRef<any>(null);        // MACD histogram
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bbUpperRef = useRef<any>(null);         // Bollinger upper band
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bbMiddleRef = useRef<any>(null);        // Bollinger middle (SMA)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bbLowerRef = useRef<any>(null);         // Bollinger lower band
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const atrRef = useRef<any>(null);             // ATR line (sub-pane)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stochKRef = useRef<any>(null);          // Stochastic %K
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stochDRef = useRef<any>(null);          // Stochastic %D
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const obvRef = useRef<any>(null);             // OBV line (main price pane)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vwapRef = useRef<any>(null);            // VWAP line (main price pane)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const volMA20Ref = useRef<any>(null);         // Volume MA20 (volume pane)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vwapLineRef = useRef<any>(null);        // VWAP anchored (main pane, vol submenu)
+
   const { data, isLoading } = useQuery({
     queryKey: ["ohlcv", instrumentId, timeframe],
     queryFn: () => createGateway(accessToken).getOHLCV(instrumentId, { timeframe }),
@@ -182,6 +273,20 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
       ? { instrument_id: instrumentId, ticker: "", timeframe: "1D", bars: initialBars }
       : undefined,
   });
+
+  // ── Load annotations from IndexedDB on mount / instrumentId change ─────────
+  // WHY separate effect (not combined with chart init): chart init is a one-time
+  // operation that runs once and holds state in refs. Annotation loading is
+  // per-instrument — it must re-run when the user navigates to a different instrument.
+  // Combining them would require clearing and re-creating chart series on instrument
+  // change, which is complex. Separate effects are simpler.
+  useEffect(() => {
+    let cancelled = false;
+    loadAnnotationsFromIDB(instrumentId).then((savedAnnotations) => {
+      if (!cancelled) setAnnotations(savedAnnotations);
+    });
+    return () => { cancelled = true; };
+  }, [instrumentId]);
 
   // ── Chart init & cleanup ───────────────────────────────────────────────────
   useEffect(() => {
@@ -267,6 +372,162 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         });
         ma200SeriesRef.current = ma200Series;
 
+        // ── Wave C: Indicator series (all hidden by default) ───────────────
+
+        // RSI — orange line in a dedicated sub-pane (0-100 scale separate from price)
+        // WHY priceScaleId "rsi": creates a separate price scale for the RSI oscillator
+        // so it doesn't affect the candlestick Y axis range.
+        const rsiSeries = chart.addLineSeries({
+          color: "#F59E0B",           // amber — oscillator convention
+          lineWidth: 1,
+          priceScaleId: "rsi",
+          visible: false,
+        });
+        chart.priceScale("rsi").applyOptions({
+          scaleMargins: { top: 0.85, bottom: 0 },
+          // WHY autoScale:false: RSI is always 0-100. AutoScale would shrink the
+          // range to the actual RSI values (e.g., 30-70) and lose the overbought/
+          // oversold context. We let the scale clamp naturally via the data range.
+          autoScale: true,
+        });
+        rsiPaneRef.current = rsiSeries;
+
+        // MACD — three series: MACD line (purple), signal line (orange), histogram (teal/red)
+        // WHY priceScaleId "macd": separate sub-pane below price and RSI
+        const macdLine = chart.addLineSeries({
+          color: "#A78BFA",           // purple-400 — MACD line (TradingView convention)
+          lineWidth: 1,
+          priceScaleId: "macd",
+          visible: false,
+        });
+        const macdSignal = chart.addLineSeries({
+          color: "#F59E0B",           // amber — signal line
+          lineWidth: 1,
+          priceScaleId: "macd",
+          visible: false,
+        });
+        const macdHist = chart.addHistogramSeries({
+          color: "#26A69A",           // teal/red per bar in data
+          priceScaleId: "macd",
+          visible: false,
+        });
+        chart.priceScale("macd").applyOptions({
+          scaleMargins: { top: 0.75, bottom: 0.05 },
+        });
+        macdLineRef.current = macdLine;
+        macdSignalRef.current = macdSignal;
+        macdHistRef.current = macdHist;
+
+        // Bollinger Bands — three lines on the main price scale
+        // WHY priceScaleId "right": BB overlays the candlesticks (same scale)
+        // WHY dashed style: distinguishes BB from the solid MA50/MA200 lines
+        const bbUpper = chart.addLineSeries({
+          color: "#6366F1",           // indigo-500
+          lineWidth: 1,
+          lineStyle: 2,               // dashed (lightweight-charts LineStyle.Dashed = 2)
+          priceScaleId: "right",
+          visible: false,
+        });
+        const bbMiddle = chart.addLineSeries({
+          color: "#6366F199",         // indigo-500 at 60% opacity (middle band = SMA)
+          lineWidth: 1,
+          priceScaleId: "right",
+          visible: false,
+        });
+        const bbLower = chart.addLineSeries({
+          color: "#6366F1",
+          lineWidth: 1,
+          lineStyle: 2,
+          priceScaleId: "right",
+          visible: false,
+        });
+        bbUpperRef.current = bbUpper;
+        bbMiddleRef.current = bbMiddle;
+        bbLowerRef.current = bbLower;
+
+        // ATR — green line in a sub-pane (absolute $ volatility measure)
+        const atrSeries = chart.addLineSeries({
+          color: "#10B981",           // emerald-500 — volatility = green convention
+          lineWidth: 1,
+          priceScaleId: "atr",
+          visible: false,
+        });
+        chart.priceScale("atr").applyOptions({
+          scaleMargins: { top: 0.8, bottom: 0 },
+        });
+        atrRef.current = atrSeries;
+
+        // Stochastic — %K (teal) and %D (red) in a sub-pane
+        const stochK = chart.addLineSeries({
+          color: "#26A69A",           // teal — %K fast line
+          lineWidth: 1,
+          priceScaleId: "stoch",
+          visible: false,
+        });
+        const stochD = chart.addLineSeries({
+          color: "#EF5350",           // red — %D slow signal line
+          lineWidth: 1,
+          priceScaleId: "stoch",
+          visible: false,
+        });
+        chart.priceScale("stoch").applyOptions({
+          scaleMargins: { top: 0.8, bottom: 0 },
+        });
+        stochKRef.current = stochK;
+        stochDRef.current = stochD;
+
+        // OBV — sky-blue line on a separate OBV scale (cumulative volume units)
+        const obvSeries = chart.addLineSeries({
+          color: "#38BDF8",           // sky-400 — OBV (volume-based, not price)
+          lineWidth: 1,
+          priceScaleId: "obv",
+          visible: false,
+        });
+        chart.priceScale("obv").applyOptions({
+          scaleMargins: { top: 0.75, bottom: 0.05 },
+        });
+        obvRef.current = obvSeries;
+
+        // VWAP — pink line overlaid on the main price scale
+        // WHY pink (#EC4899): VWAP is a price-level overlay (on the main scale)
+        // but it's NOT a moving average (no smoothing). Pink distinguishes it
+        // from MA50 (yellow) and MA200 (blue). TradingView uses pink for VWAP.
+        const vwapSeries = chart.addLineSeries({
+          color: "#EC4899",
+          lineWidth: 1,
+          lineStyle: 1,               // dotted (VWAP convention — not a trend line)
+          priceScaleId: "right",
+          visible: false,
+        });
+        vwapRef.current = vwapSeries;
+
+        // Volume MA20 — yellow-green line overlaid on the volume scale
+        const volMA20Series = chart.addLineSeries({
+          color: "#84CC16",           // lime-500 — distinguishable on dark background
+          lineWidth: 1,
+          priceScaleId: "volume",
+          visible: false,
+        });
+        volMA20Ref.current = volMA20Series;
+
+        // VWAP Line (volume submenu variant) — same VWAP data, pink, anchored-daily label
+        // WHY duplicate: the Indicators dropdown "VWAP" is for advanced users who know
+        // the abbreviation. The Volume submenu "VWAP Line" is labeled more descriptively
+        // for users browsing volume sub-indicators. Both drive the same data computation.
+        const vwapLineSeries = chart.addLineSeries({
+          color: "#EC4899",
+          lineWidth: 1,
+          lineStyle: 1,
+          priceScaleId: "right",
+          visible: false,
+        });
+        vwapLineRef.current = vwapLineSeries;
+
+        // ── Expose coordinate converters for DrawingCanvas ─────────────────
+        // WHY after all series init: series ref (seriesRef.current) must be set
+        // before we expose converters so DrawingCanvas can call priceToCoordinate.
+        setConverters({ chart, series });
+
       } catch (err) {
         // WHY error boundary: if lightweight-charts CDN fails or the module is
         // missing (broken build, network issue), show a fallback UI instead of a
@@ -297,6 +558,22 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
       volumeSeriesRef.current = null;
       ma50SeriesRef.current = null;
       ma200SeriesRef.current = null;
+      // Wave C series
+      rsiPaneRef.current = null;
+      macdLineRef.current = null;
+      macdSignalRef.current = null;
+      macdHistRef.current = null;
+      bbUpperRef.current = null;
+      bbMiddleRef.current = null;
+      bbLowerRef.current = null;
+      atrRef.current = null;
+      stochKRef.current = null;
+      stochDRef.current = null;
+      obvRef.current = null;
+      vwapRef.current = null;
+      volMA20Ref.current = null;
+      vwapLineRef.current = null;
+      setConverters(null);
     };
   }, []); // WHY empty deps: chart init runs once on mount, cleanup on unmount
 
@@ -305,12 +582,13 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     if (!seriesRef.current || !data?.bars) return;
 
     // Convert ISO timestamps to Unix time (lightweight-charts expects seconds)
-    const formattedBars = data.bars.map((bar) => ({
-      time: Math.floor(new Date(bar.timestamp).getTime() / 1000) as number,
+    const formattedBars: FormattedBar[] = data.bars.map((bar) => ({
+      time: Math.floor(new Date(bar.timestamp).getTime() / 1000),
       open: bar.open,
       high: bar.high,
       low: bar.low,
       close: bar.close,
+      volume: bar.volume ?? 0,
     }));
 
     // WHY setData (not updateData): timeframe switch replaces the full dataset
@@ -321,27 +599,85 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     // WHY 40 alpha hex (25%): full opacity volume bars overpower the candlesticks.
     // Semi-transparent bars keep volume visually secondary to price action.
     if (volumeSeriesRef.current) {
-      const volumeData = data.bars.map((bar, i) => ({
-        time: formattedBars[i].time,
-        value: bar.volume ?? 0,
+      const volumeData = formattedBars.map((bar) => ({
+        time: bar.time,
+        value: bar.volume,
         color: bar.close >= bar.open ? "#26A69A40" : "#EF535040",
       }));
       volumeSeriesRef.current.setData(volumeData);
     }
 
-    // ── MA50 data ──────────────────────────────────────────────────────────
-    // WHY guard with formattedBars.length: computeMA returns [] if not enough bars.
-    // setData([]) is valid and simply clears the series.
-    if (ma50SeriesRef.current) {
-      ma50SeriesRef.current.setData(computeMA(formattedBars, 50));
+    // ── MA50 / MA200 data ──────────────────────────────────────────────────
+    if (ma50SeriesRef.current) ma50SeriesRef.current.setData(computeMA(formattedBars, 50));
+    if (ma200SeriesRef.current) ma200SeriesRef.current.setData(computeMA(formattedBars, 200));
+
+    // ── Wave C: Indicator data computations ────────────────────────────────
+    // WHY compute all indicators (not just enabled ones): when a user enables an
+    // indicator, it needs data immediately without waiting for the next bar fetch.
+    // Computing all upfront is fast (all O(n) for n≤500 bars) and avoids the
+    // "no data flash" when an indicator is first enabled after bars are loaded.
+
+    // RSI
+    if (rsiPaneRef.current) {
+      rsiPaneRef.current.setData(computeRSI(formattedBars, 14));
     }
 
-    // ── MA200 data ─────────────────────────────────────────────────────────
-    // WHY no special handling for <200 bars: computeMA returns [], which is valid.
-    // The MA200 line simply doesn't render when the timeframe has <200 bars.
-    if (ma200SeriesRef.current) {
-      ma200SeriesRef.current.setData(computeMA(formattedBars, 200));
+    // MACD
+    if (macdLineRef.current && macdSignalRef.current && macdHistRef.current) {
+      const macdData = computeMACD(formattedBars, 12, 26, 9);
+      macdLineRef.current.setData(macdData.map((d) => ({ time: d.time, value: d.macd })));
+      macdSignalRef.current.setData(macdData.map((d) => ({ time: d.time, value: d.signal })));
+      // WHY color per bar for histogram: positive histogram (MACD > signal) → teal;
+      // negative (MACD < signal) → red. This is the standard MACD histogram coloring
+      // used by TradingView and Bloomberg — instantly shows momentum direction.
+      macdHistRef.current.setData(
+        macdData.map((d) => ({
+          time: d.time,
+          value: d.histogram,
+          color: d.histogram >= 0 ? "#26A69A80" : "#EF535080",
+        })),
+      );
     }
+
+    // Bollinger Bands
+    if (bbUpperRef.current && bbMiddleRef.current && bbLowerRef.current) {
+      const bbData = computeBollinger(formattedBars, 20, 2);
+      bbUpperRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.upper })));
+      bbMiddleRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.middle })));
+      bbLowerRef.current.setData(bbData.map((d) => ({ time: d.time, value: d.lower })));
+    }
+
+    // ATR
+    if (atrRef.current) {
+      atrRef.current.setData(computeATR(formattedBars, 14));
+    }
+
+    // Stochastic
+    if (stochKRef.current && stochDRef.current) {
+      const stochData = computeStochastic(formattedBars, 14, 3, 3);
+      stochKRef.current.setData(stochData.map((d) => ({ time: d.time, value: d.k })));
+      stochDRef.current.setData(stochData.map((d) => ({ time: d.time, value: d.d })));
+    }
+
+    // OBV
+    if (obvRef.current) {
+      obvRef.current.setData(computeOBV(formattedBars));
+    }
+
+    // VWAP (shared between Indicators dropdown and Volume submenu VWAP Line)
+    const vwapData = computeVWAP(formattedBars);
+    if (vwapRef.current) vwapRef.current.setData(vwapData);
+    if (vwapLineRef.current) vwapLineRef.current.setData(vwapData);
+
+    // Volume MA20
+    if (volMA20Ref.current) {
+      volMA20Ref.current.setData(computeVolumeMA(formattedBars, 20));
+    }
+
+    // Volume Profile (SVG overlay — not a lightweight-charts series)
+    // WHY set in state: VolumeProfileOverlay is a React component that needs
+    // re-render when profile data changes. Refs would prevent the re-render.
+    setVolumeProfileBuckets(computeVolumeProfile(formattedBars, 24));
 
     if (formattedBars.length > 0) {
       chartRef.current?.timeScale().fitContent();
@@ -362,6 +698,93 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   useEffect(() => {
     ma200SeriesRef.current?.applyOptions({ visible: showMA200 });
   }, [showMA200]);
+
+  // ── Wave C: Indicator visibility effects ──────────────────────────────────
+  // WHY separate effect per indicator (not one combined): each indicator has a
+  // different number of series to show/hide (RSI=1, MACD=3, BB=3, STOCH=2, etc.).
+  // A single combined effect would need complex switch logic. Separate effects
+  // are smaller and clearer — each one only cares about its indicator's series.
+
+  useEffect(() => {
+    const enabled = indicators.RSI.enabled;
+    rsiPaneRef.current?.applyOptions({ visible: enabled });
+  }, [indicators.RSI.enabled]);
+
+  useEffect(() => {
+    const enabled = indicators.MACD.enabled;
+    macdLineRef.current?.applyOptions({ visible: enabled });
+    macdSignalRef.current?.applyOptions({ visible: enabled });
+    macdHistRef.current?.applyOptions({ visible: enabled });
+  }, [indicators.MACD.enabled]);
+
+  useEffect(() => {
+    const enabled = indicators.BOLLINGER.enabled;
+    bbUpperRef.current?.applyOptions({ visible: enabled });
+    bbMiddleRef.current?.applyOptions({ visible: enabled });
+    bbLowerRef.current?.applyOptions({ visible: enabled });
+  }, [indicators.BOLLINGER.enabled]);
+
+  useEffect(() => {
+    atrRef.current?.applyOptions({ visible: indicators.ATR.enabled });
+  }, [indicators.ATR.enabled]);
+
+  useEffect(() => {
+    const enabled = indicators.STOCHASTIC.enabled;
+    stochKRef.current?.applyOptions({ visible: enabled });
+    stochDRef.current?.applyOptions({ visible: enabled });
+  }, [indicators.STOCHASTIC.enabled]);
+
+  useEffect(() => {
+    obvRef.current?.applyOptions({ visible: indicators.OBV.enabled });
+  }, [indicators.OBV.enabled]);
+
+  useEffect(() => {
+    vwapRef.current?.applyOptions({ visible: indicators.VWAP.enabled });
+  }, [indicators.VWAP.enabled]);
+
+  // ── Wave C: Volume submenu visibility effects ──────────────────────────────
+  useEffect(() => {
+    volMA20Ref.current?.applyOptions({ visible: showVolMA20 });
+  }, [showVolMA20]);
+
+  useEffect(() => {
+    vwapLineRef.current?.applyOptions({ visible: showVWAPLine });
+  }, [showVWAPLine]);
+
+  // ── Indicator toggle callback ──────────────────────────────────────────────
+  // WHY useCallback: this is passed to ChartToolbar. Without useCallback, a new
+  // function reference is created on every render, causing ChartToolbar to
+  // re-render even when unrelated state changes.
+  const handleToggleIndicator = useCallback((id: IndicatorId) => {
+    setIndicators((prev) => {
+      const updated = {
+        ...prev,
+        [id]: { ...prev[id], enabled: !prev[id].enabled },
+      };
+      // Persist to localStorage on every toggle
+      saveIndicatorsToStorage(updated);
+      return updated;
+    });
+  }, []);
+
+  // ── Annotation handlers ────────────────────────────────────────────────────
+
+  const handleAnnotationAdd = useCallback((annotation: Annotation) => {
+    setAnnotations((prev) => {
+      const next = [...prev, annotation];
+      // Fire-and-forget IndexedDB persist
+      void saveAnnotationsToIDB(instrumentId, next);
+      return next;
+    });
+  }, [instrumentId]);
+
+  const handleAnnotationDelete = useCallback((id: string) => {
+    setAnnotations((prev) => {
+      const next = prev.filter((a) => a.id !== id);
+      void saveAnnotationsToIDB(instrumentId, next);
+      return next;
+    });
+  }, [instrumentId]);
 
   // ── Escape key handler for fullscreen ───────────────────────────────────────
   // WHY separate useEffect: listens for Escape key only when fullscreen is active,
@@ -435,6 +858,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           onToggleMA200={() => setShowMA200((v) => !v)}
           isFullscreen={isFullscreen}
           onFullscreen={() => setIsFullscreen((v) => !v)}
+          indicators={indicators}
+          onToggleIndicator={handleToggleIndicator}
+          showVolMA20={showVolMA20}
+          onToggleVolMA20={() => setShowVolMA20((v) => !v)}
+          showVolProfile={showVolProfile}
+          onToggleVolProfile={() => setShowVolProfile((v) => !v)}
+          showVWAPLine={showVWAPLine}
+          onToggleVWAPLine={() => setShowVWAPLine((v) => !v)}
         />
       </div>
 
@@ -448,34 +879,83 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         </div>
       )}
 
-      {/* ── Chart wrapper with loading + refresh affordances ───────────────
-          The container ref MUST stay mounted regardless of data state so
-          lightweight-charts can initialise its WebGL context as soon as
-          the parent paints (init effect runs on every render and short-
-          circuits on `!containerRef.current`). We layer the Skeleton + the
-          "refreshing" pill OVER the container as positioned overlays:
-            - Skeleton overlay: covers the empty chart area on first load
-              (isLoading && !data). Overlay (not sibling) means the chart
-              container is always in the DOM with a populated ref, so init
-              completes without waiting for Skeleton unmount — closes the
-              effect-ordering race F-QA-10 flagged.
-            - Refresh pill: small absolute marker top-right while a
-              background fetch is in flight on already-rendered candles.
-              aria-live="polite" announces refresh state to SR users.
-          PLAN-0050 T-F-6-15 (F-I-027): the chart stays at full opacity
-          once any data (placeholder or real) is present. */}
+      {/* ── Chart wrapper with drawing palette + annotation overlay ─────────
+          Layout (left to right):
+            [28px DrawingPalette] [chart canvas + DrawingCanvas SVG] [right edge]
+
+          The wrapper uses position:relative so the absolutely-positioned
+          palette, SVG drawing canvas, and volume profile overlay can be
+          positioned relative to the chart container boundary.
+
+          WHY the chart container gets padding-left (pl-7): lightweight-charts
+          renders into containerRef. If the palette sits above the containerRef
+          div (not inside it), the chart would render under the palette. By
+          applying pl-7 to the containerRef, the chart starts 28px from the left
+          edge — exactly where the palette ends. The ResizeObserver reads
+          containerRef.clientWidth which already excludes the padding.
+
+          WHY keep chart container always in DOM (not conditional): the chart's
+          WebGL context must persist. Removing and re-mounting containerRef would
+          destroy and recreate the context — expensive and causes a flash.
+
+          NOTE: The Skeleton and "refreshing" pill overlay the entire wrapper
+          (including the palette area) for simplicity. At 280px total, the
+          overlap is negligible. */}
       {!chartError && (
-        <div className="relative w-full">
+        <div className="relative w-full" data-testid="chart-wrapper">
+
+          {/* ── Left-side drawing palette ─────────────────────────────────── */}
+          {/* WHY inset-y-0: palette spans the full chart height (280px), not
+              just the canvas area. The toolbar above and the stats strip below
+              are outside the chart wrapper, so the palette won't overlap them. */}
+          <DrawingPalette
+            activeTool={activeTool}
+            onSelectTool={setActiveTool}
+          />
+
+          {/* ── Chart canvas container ────────────────────────────────────── */}
+          {/* WHY pl-7: offset chart canvas past the 28px drawing palette */}
           <div
             ref={containerRef}
-            className={`w-full ${isFullscreen ? "flex-1" : ""}`}
+            className={`w-full pl-7 ${isFullscreen ? "flex-1" : ""}`}
           />
+
+          {/* ── SVG drawing annotation overlay ────────────────────────────── */}
+          {/* WHY rendered over the chart container (not the palette): the DrawingCanvas
+              covers only the chart canvas area (left offset by paletteWidth). Drawing
+              on the palette area would intercept palette button clicks. */}
+          <DrawingCanvas
+            activeTool={activeTool}
+            annotations={annotations}
+            onAnnotationAdd={handleAnnotationAdd}
+            onAnnotationDelete={handleAnnotationDelete}
+            converters={converters}
+            chartHeight={isFullscreen ? window.innerHeight - 60 : CHART_HEIGHT}
+            paletteWidth={PALETTE_WIDTH}
+          />
+
+          {/* ── Volume Profile right-side SVG overlay ─────────────────────── */}
+          {/* WHY conditional on showVolProfile: the buckets array may be populated
+              but we should only render the overlay when the user has enabled it.
+              Rendering with an empty array is safe but wastes a DOM node. */}
+          {showVolProfile && (
+            <VolumeProfileOverlay
+              buckets={volumeProfileBuckets}
+              converters={converters}
+              chartHeight={isFullscreen ? window.innerHeight - 60 : CHART_HEIGHT}
+              profileWidth={60}
+            />
+          )}
+
+          {/* ── Skeleton loading overlay ───────────────────────────────────── */}
           {isLoading && !data && (
             <Skeleton
               className="pointer-events-none absolute inset-0 w-full"
               style={{ height: CHART_HEIGHT }}
             />
           )}
+
+          {/* ── Refreshing indicator ───────────────────────────────────────── */}
           {isLoading && data && (
             <span
               role="status"
