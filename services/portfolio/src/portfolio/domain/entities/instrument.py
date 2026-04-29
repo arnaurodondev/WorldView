@@ -23,6 +23,10 @@ class InstrumentRef:
     source_event_id: UUID
     name: str | None = None
     currency: str | None = None
+    # PLAN-0053 T-D-4-02: now non-null at the DB layer (server_default='unknown'
+    # via migration 0016). The domain remains ``str | None`` so adapters that
+    # don't know the class can pass ``None`` — the repository normalises that
+    # to ``'unknown'`` on save (see InstrumentRepository.save).
     asset_class: str | None = None
     entity_id: UUID | None = None
     id: UUID = field(default_factory=new_uuid)

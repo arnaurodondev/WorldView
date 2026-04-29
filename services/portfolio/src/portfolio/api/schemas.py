@@ -184,6 +184,11 @@ class TransactionListItem(BaseModel):
     # isn't yet present in the local instruments cache.
     ticker: str | None = None
     name: str | None = None
+    # PLAN-0053 T-D-4-02: asset_class threaded through ListTransactionsUseCase
+    # so the frontend can render a coloured badge between Type and Ticker.
+    # Nullable for historical rows where the instrument hasn't synced yet
+    # (the joined instruments lookup returns None for unknown ids).
+    asset_class: str | None = None
     executed_at: datetime
     external_ref: str | None = None
     created_at: datetime

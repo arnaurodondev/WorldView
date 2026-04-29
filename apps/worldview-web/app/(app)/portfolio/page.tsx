@@ -56,6 +56,11 @@ import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
 import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
 import { SectorAllocationPanel } from "@/components/portfolio/SectorAllocationPanel";
 import { TransactionsTable } from "@/components/portfolio/TransactionsTable";
+// PLAN-0053 Wave B + D — new widget mounts on the Holdings tab.
+import { CashManagementCard } from "@/components/portfolio/CashManagementCard";
+import { RecentActivityFeed } from "@/components/portfolio/RecentActivityFeed";
+import { DividendIncomeTimeline } from "@/components/portfolio/DividendIncomeTimeline";
+import { RealizedPnLChart } from "@/components/portfolio/RealizedPnLChart";
 import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
 // PLAN-0046 Wave 5 / T-46-5-07 — analytics section (equity curve + exposure +
 // risk metrics) rendered below the holdings table inside the Holdings tab.
@@ -1454,6 +1459,18 @@ export default function PortfolioPage() {
             </div>
           ) : (
             <div className="p-2">
+              {/* PLAN-0053 T-B-2-04: Cash management card just below the KPI
+                  strip — at-a-glance dry-powder + cash drag awareness. */}
+              <CashManagementCard portfolioId={activePortfolioId} />
+
+              {/* PLAN-0053 T-D-4-03: Realized P&L chart with period toggle and
+                  per-instrument breakdown table. WHY above the holdings table:
+                  realised P&L is a "look-back" cashflow signal — the user
+                  digest order is "what did I close?" → "what's open now?". */}
+              <div className="mt-2">
+                <RealizedPnLChart portfolioId={activePortfolioId} />
+              </div>
+
               {/* WHY enrichedHoldings: raw holdings have empty ticker/name (S1 doesn't
                   store them). enrichedHoldings merges ticker/name/entity_id from company
                   overviews so the TICKER and NAME columns render correctly. */}
@@ -1488,6 +1505,24 @@ export default function PortfolioPage() {
                 bySector={bySector}
                 byType={byType}
               />
+
+              {/* PLAN-0053 T-B-2-05: Recent activity feed — transactions +
+                  broker-sync events merged by timestamp. WHY here (not the
+                  Transactions tab): the Holdings tab is the "morning glance"
+                  surface; users want to see what happened on their account
+                  without leaving this view. */}
+              <div className="mt-3">
+                <RecentActivityFeed portfolioId={activePortfolioId} />
+              </div>
+
+              {/* PLAN-0053 T-B-2-06: Dividend income YTD timeline with
+                  per-ticker breakdown. WHY at the bottom: dividend cashflow
+                  is a "deeper dive" answer — once the user has scanned
+                  positions and recent activity, they may want to know "how
+                  is my income running this year?". */}
+              <div className="mt-3">
+                <DividendIncomeTimeline portfolioId={activePortfolioId} />
+              </div>
 
               {/* PLAN-0046 Wave 5 / T-46-5-07 — analytics section.
                   WHY conditional on activePortfolioId: the analytics queries
