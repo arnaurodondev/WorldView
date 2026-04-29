@@ -133,31 +133,49 @@ def _compose_alert_title(
     alert_type: AlertType,
     is_signal_label_fallback: bool,
 ) -> str:
-    """Compose a user-friendly alert subject (PLAN-0049 T-A-1-03, F-D-006).
+    """Compose a user-friendly alert subject.
 
-    Priority chain:
-      1. ``"<entity_name>: <signal_label>"``    when both available + label not bare-severity
-      2. ``"<ticker>: <signal_label>"``         when ticker available + label not bare-severity
-      3. ``signal_label``                       when label is meaningful but no entity/ticker
-      4. humanised alert_type (``"Graph Change Alert"``)  on full fallback
+    PLAN-0053 T-A-1-06 — per-type templates ensure no alert ever shows the bare
+    ``"<EnumName> alert"`` (e.g. "Graph Change alert"). Each AlertType has an
+    explicit template so users always see actionable text.
 
-    NEVER emit a bare ``"<SEVERITY> signal"`` string — that is what surfaced
-    on the dashboard as the unhelpful "LOW signal" labels (F-D-006 / F-X-201).
+    Priority by alert_type:
+      SIGNAL:
+        1. ``"<subject>: <signal_label>"`` when label is meaningful and subject exists
+        2. ``signal_label`` alone when no subject available
+        3. ``"<subject>: Signal"`` fallback when label is bare-severity but subject exists
+        4. ``"Signal detected"`` final fallback
+      GRAPH_CHANGE:
+        - ``"<subject>: Graph pattern change"`` or ``"Graph pattern change"``
+      CONTRADICTION:
+        - ``"<subject>: Conflicting signals"`` or ``"Conflicting signals"``
+
+    Earlier versions degraded to ``f"{alert_type.title()} alert"`` for non-SIGNAL
+    types, producing the user-reported "Graph Change alert" / "Contradiction alert"
+    titles. Those types lack ``claim_type``/``polarity`` payload (NLP-only fields)
+    so the signal_label lookup always missed; the new templates ignore signal_label
+    entirely for graph/contradiction events.
     """
-    if not is_signal_label_fallback:
-        if entity_name:
-            return f"{entity_name}: {signal_label}"
-        if ticker:
-            return f"{ticker}: {signal_label}"
-        return signal_label
-    # Fallback path — never expose the raw "LOW signal" string. Use entity / ticker
-    # context if we have it, otherwise humanise the alert_type enum value.
-    if entity_name:
-        return entity_name
-    if ticker:
-        return ticker
-    raw = str(alert_type).replace("_", " ").strip()
-    return f"{raw.title()} alert" if raw else "Alert"
+    subject = ticker or entity_name
+
+    if alert_type == AlertType.SIGNAL:
+        if not is_signal_label_fallback:
+            if subject:
+                return f"{subject}: {signal_label}"
+            return signal_label
+        # Severity-only fallback — keep it short and contextual.
+        return f"{subject}: Signal" if subject else "Signal detected"
+
+    if alert_type == AlertType.GRAPH_CHANGE:
+        template = "Graph pattern change"
+        return f"{subject}: {template}" if subject else template
+
+    if alert_type == AlertType.CONTRADICTION:
+        template = "Conflicting signals"
+        return f"{subject}: {template}" if subject else template
+
+    # Defensive: enum extension safety net. Should be unreachable in current code.
+    return f"{subject}: Alert" if subject else "Alert"
 
 
 def _find_schema_path(schema_name: str) -> Path:

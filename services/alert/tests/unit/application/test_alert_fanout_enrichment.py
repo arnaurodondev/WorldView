@@ -28,7 +28,11 @@ from alert.domain.enums import AlertSeverity, AlertType
 
 @pytest.mark.unit
 class TestComposeAlertTitle:
-    def test_uses_entity_name_and_signal_label_when_both_present(self) -> None:
+    def test_uses_ticker_and_signal_label_when_both_present(self) -> None:
+        # PLAN-0053 T-A-1-06: ticker takes priority over entity_name in the
+        # subject resolver. Rationale: in a finance terminal context "AAPL:
+        # Bullish guidance" matches Bloomberg convention; full company names
+        # are reserved for tooltips and detail panels.
         title = _compose_alert_title(
             signal_label="Bullish guidance",
             entity_name="Apple Inc.",
@@ -36,7 +40,7 @@ class TestComposeAlertTitle:
             alert_type=AlertType.SIGNAL,
             is_signal_label_fallback=False,
         )
-        assert title == "Apple Inc.: Bullish guidance"
+        assert title == "AAPL: Bullish guidance"
 
     def test_falls_back_to_ticker_when_entity_name_missing(self) -> None:
         title = _compose_alert_title(
@@ -58,8 +62,12 @@ class TestComposeAlertTitle:
         )
         assert title == "Bullish guidance"
 
-    def test_humanises_alert_type_when_signal_label_is_fallback(self) -> None:
-        # Fallback path with no entity / ticker — must NOT emit "LOW signal" form.
+    # PLAN-0053 T-A-1-06: per-AlertType templates replace the old humanise
+    # fallback. GRAPH_CHANGE / CONTRADICTION never had NLP context (claim_type/
+    # polarity) so the old code emitted "Graph Change alert" — meaningless to
+    # users. New behavior: explicit per-type templates.
+
+    def test_graph_change_no_subject_uses_template(self) -> None:
         title = _compose_alert_title(
             signal_label="LOW signal",
             entity_name=None,
@@ -67,12 +75,42 @@ class TestComposeAlertTitle:
             alert_type=AlertType.GRAPH_CHANGE,
             is_signal_label_fallback=True,
         )
-        # Humanised AlertType — never bare severity. Both "Graph Change Alert" and
-        # "graph_change Alert" are acceptable depending on enum string form.
-        assert title.endswith("alert")
-        assert "signal" not in title.lower()
+        assert title == "Graph pattern change"
+        assert "alert" not in title.lower()
 
-    def test_uses_entity_name_alone_when_fallback_label(self) -> None:
+    def test_graph_change_with_ticker(self) -> None:
+        title = _compose_alert_title(
+            signal_label="LOW signal",
+            entity_name=None,
+            ticker="SPY",
+            alert_type=AlertType.GRAPH_CHANGE,
+            is_signal_label_fallback=True,
+        )
+        assert title == "SPY: Graph pattern change"
+
+    def test_contradiction_with_entity_name(self) -> None:
+        title = _compose_alert_title(
+            signal_label="HIGH signal",
+            entity_name="Apple Inc.",
+            ticker=None,
+            alert_type=AlertType.CONTRADICTION,
+            is_signal_label_fallback=True,
+        )
+        assert title == "Apple Inc.: Conflicting signals"
+
+    def test_contradiction_no_subject(self) -> None:
+        title = _compose_alert_title(
+            signal_label="LOW signal",
+            entity_name=None,
+            ticker=None,
+            alert_type=AlertType.CONTRADICTION,
+            is_signal_label_fallback=True,
+        )
+        assert title == "Conflicting signals"
+
+    def test_signal_fallback_with_entity_uses_signal_template(self) -> None:
+        # SIGNAL with no claim_type/polarity but entity available — emit
+        # "<subject>: Signal" instead of bare entity name (new template).
         title = _compose_alert_title(
             signal_label="HIGH signal",
             entity_name="Apple Inc.",
@@ -80,10 +118,10 @@ class TestComposeAlertTitle:
             alert_type=AlertType.SIGNAL,
             is_signal_label_fallback=True,
         )
-        # Entity name is preferred over ticker; signal_label is suppressed (fallback case).
-        assert title == "Apple Inc."
+        # ticker takes priority over entity_name in the new subject resolver.
+        assert title == "AAPL: Signal"
 
-    def test_uses_ticker_alone_when_fallback_and_no_entity(self) -> None:
+    def test_signal_fallback_with_ticker_only(self) -> None:
         title = _compose_alert_title(
             signal_label="HIGH signal",
             entity_name=None,
@@ -91,7 +129,17 @@ class TestComposeAlertTitle:
             alert_type=AlertType.SIGNAL,
             is_signal_label_fallback=True,
         )
-        assert title == "AAPL"
+        assert title == "AAPL: Signal"
+
+    def test_signal_fallback_no_subject(self) -> None:
+        title = _compose_alert_title(
+            signal_label="LOW signal",
+            entity_name=None,
+            ticker=None,
+            alert_type=AlertType.SIGNAL,
+            is_signal_label_fallback=True,
+        )
+        assert title == "Signal detected"
 
     @pytest.mark.parametrize("severity", ["LOW", "MEDIUM", "HIGH", "CRITICAL"])
     def test_never_outputs_bare_severity_signal_string(self, severity: str) -> None:
@@ -209,7 +257,9 @@ class TestAlertFanoutPopulatesEnrichmentFields:
         assert alert.signal_label == "Bullish guidance"
         assert alert.ticker == "AAPL"
         assert alert.entity_name == "Apple Inc."
-        assert alert.title == "Apple Inc.: Bullish guidance"
+        # PLAN-0053 T-A-1-06: ticker-first subject ordering — see
+        # test_uses_ticker_and_signal_label_when_both_present.
+        assert alert.title == "AAPL: Bullish guidance"
 
     async def test_logs_warning_when_signal_label_falls_back(self, capsys: pytest.CaptureFixture[str]) -> None:
         # Event missing claim_type → fallback path + warning log expected.

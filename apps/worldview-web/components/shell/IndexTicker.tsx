@@ -29,6 +29,18 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { formatPrice, formatPercentDirect, priceChangeClass } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChevronDown } from "lucide-react";
+
+// PLAN-0053 T-A-1-09 — typed quote shape for the per-cell renderer.
+// `stale_reason` accepts null because the gateway returns Quote with that
+// nullability and we re-use the same object directly.
+type IndexQuote = {
+  price?: number;
+  change_pct?: number | null;
+  freshness_status?: string;
+  stale_reason?: string | null;
+};
 
 // WHY these 4 symbols: SPY (US equities), QQQ (tech/growth), VIX (volatility/fear gauge),
 // BTC (crypto sentiment). Together they give an instant macro read in 4 numbers.
@@ -105,71 +117,79 @@ export function IndexTicker() {
   // A missing index ticker is not a critical error — user can see prices in instruments.
   const quotes = data?.quotes ?? {};
 
+  // PLAN-0053 T-A-1-09: extract ticker render into a cell component so we can
+  // reuse it both inline (large viewports) and inside the Popover (narrow).
+  // Typography: symbol bold-white (`font-bold text-foreground`), price+change
+  // colored only by daily return — answers the user feedback that the previous
+  // muted-symbol/colored-price ordering was inverted vs Bloomberg convention.
+  const renderCell = (ticker: { id: string; label: string }) => {
+    const instrumentId = tickerToId?.[ticker.id];
+    const quote: IndexQuote | undefined = instrumentId ? quotes[instrumentId] : undefined;
+    const isStale =
+      !!quote?.freshness_status &&
+      ["delayed", "stale", "unavailable"].includes(quote.freshness_status);
+    const colorClass = !quote || isStale
+      ? "text-muted-foreground"
+      : priceChangeClass(quote.change_pct ?? null);
+    return (
+      <div key={ticker.id} className="flex items-center gap-1">
+        <span className="text-xs font-bold text-foreground">{ticker.label}</span>
+        <span
+          className={`font-mono text-xs tabular-nums ${colorClass}`}
+          title={isStale ? (quote?.stale_reason ?? "Delayed data") : undefined}
+        >
+          {quote ? formatPrice(quote.price) : "—"}
+        </span>
+        {quote && !isStale && (
+          <span className={`font-mono text-xs tabular-nums ${priceChangeClass(quote.change_pct ?? null)}`}>
+            {formatPercentDirect(quote.change_pct ?? null)}
+          </span>
+        )}
+        {quote && isStale && (
+          <span className="text-[10px] text-muted-foreground" title={quote.stale_reason ?? "Delayed"}>
+            ·
+          </span>
+        )}
+        {isError && <span className="text-xs text-muted-foreground">—</span>}
+      </div>
+    );
+  };
+
+  // Pinned ticker (SPY) is always visible inline; the rest collapse into a
+  // Popover below `lg:` (1024px) so the strip never overflows the TopBar.
+  const [pinned, ...overflow] = INDEX_TICKERS;
+
   return (
-    // WHY gap-2 (was gap-4): tighter spacing keeps the 4-ticker strip compact in
-    // the 44px TopBar chrome. gap-4 (16px) added unnecessary width on wide monitors.
     <div className="flex items-center gap-2">
-      {INDEX_TICKERS.map((ticker) => {
-        // WHY lookup via tickerToId: batch quotes are keyed by instrument_id UUID,
-        // not ticker symbol. Map back: ticker → instrument_id → quote.
-        const instrumentId = tickerToId?.[ticker.id];
-        const quote = instrumentId ? quotes[instrumentId] : undefined;
+      {/* Always-visible pinned ticker (SPY). */}
+      {renderCell(pinned)}
 
-        // WHY: stale/delayed prices should not show live change-direction coloring.
-        // The price may have moved since it was recorded — green/red would be misleading.
-        // A delayed SPY price might show +1.2% from yesterday's close, but SPY is
-        // actually down -0.5% right now. Muted color prevents misreading.
-        const isStale =
-          !!quote?.freshness_status &&
-          ["delayed", "stale", "unavailable"].includes(quote.freshness_status);
+      {/* lg+ viewports: render the rest inline (current behavior). */}
+      <div className="hidden lg:flex items-center gap-2">
+        {overflow.map(renderCell)}
+      </div>
 
-        return (
-          <div key={ticker.id} className="flex items-center gap-1">
-            {/* Label — small, muted, uppercase for terminal aesthetic */}
-            <span className="text-xs font-medium text-muted-foreground">{ticker.label}</span>
-
-            {/* Price — monospace for alignment, colored by change direction.
-                WHY muted when stale: the price is not current, so directional coloring
-                (green = up, red = down) would be misleading. Muted signals "old data". */}
-            <span
-              className={`font-mono text-xs tabular-nums ${
-                !quote
-                  ? "text-muted-foreground"
-                  : isStale
-                    ? "text-muted-foreground" // WHY muted: stale price is not current
-                    : priceChangeClass(quote.change_pct ?? null)
-              }`}
-              title={isStale ? (quote?.stale_reason ?? "Delayed data") : undefined}
-            >
-              {quote ? formatPrice(quote.price) : "—"}
-            </span>
-
-            {/* Only show % change when price is live — stale % is misleading
-                because the reference point (previous close) may also be stale. */}
-            {quote && !isStale && (
-              <span
-                className={`font-mono text-xs tabular-nums ${priceChangeClass(quote.change_pct ?? null)}`}
-              >
-                {formatPercentDirect(quote.change_pct ?? null)}
-              </span>
-            )}
-            {/* Show a subtle dot for stale prices instead of % change.
-                WHY dot: signals "there is a price but it may be old" without
-                cluttering the TopBar with a full badge for every index. */}
-            {quote && isStale && (
-              <span
-                className="text-[10px] text-muted-foreground"
-                title={quote.stale_reason ?? "Delayed"}
-              >
-                ·
-              </span>
-            )}
-
-            {/* Error fallback */}
-            {isError && <span className="text-xs text-muted-foreground">—</span>}
-          </div>
-        );
-      })}
+      {/* <lg viewports: collapse the rest into a Popover trigger. */}
+      <div className="lg:hidden">
+        <Popover>
+          <PopoverTrigger
+            className="flex h-6 items-center gap-0.5 rounded-[2px] border border-border bg-card px-1.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/50"
+            aria-label={`Show ${overflow.length} more index tickers`}
+          >
+            <span>+{overflow.length}</span>
+            <ChevronDown className="h-3 w-3" />
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            sideOffset={4}
+            className="w-auto min-w-[180px] p-2"
+          >
+            <div className="flex flex-col gap-1.5">
+              {overflow.map(renderCell)}
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
     </div>
   );
 }

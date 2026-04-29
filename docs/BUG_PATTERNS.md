@@ -7664,3 +7664,36 @@ None required. The exception is emitted once per consumer-group bootstrap from a
 **Prevention**:
 - If the noise is undesirable in CI logs, set `group.instance.id` on the consumer for static membership — the broker then trusts the client's identity across restarts and skips the initial empty-ID JoinGroup.
 - Do NOT alarm on this log line in `alertmanager` rules; reserve rebalance alerts for *repeated* `RebalanceInProgressException` or sustained `consumer_lag` growth.
+
+## BP-291 — `h-full` Loading Skeleton in `min-h-*` Parent Produces Black Overlay
+
+**Category**: Frontend / Loading-state CSS
+**Severity**: HIGH (visual defect on every page load)
+**Affected areas**: any React component rendered inside a parent that applies `min-h-[X] bg-card` and uses `h-full` on its loading skeleton wrapper
+**First seen**: 2026-04-29 (PLAN-0053 T-A-1-02 — user-reported "black widget on Holdings tab top")
+
+**Symptoms**:
+- During initial data load, a tall dark panel appears at the top of the page that "occupies half the viewport".
+- Once data arrives the panel reflows to its proper height; scrolling down looks correct.
+- Looks like a z-index/stacking-context bug but isn't.
+
+**Root Cause**:
+Pattern in the parent (correct, intentional): `<div className="min-h-[200px] bg-card ...">` reserves a 200px floor so the loaded card's height is stable across data states.
+
+Pattern in the child loading branch (wrong): `if (isLoading) return <div className="flex flex-col gap-2 h-full">{skeletons}</div>`. The `h-full` makes the skeleton container fill the parent's enforced 200px. The skeleton items themselves sum to ~30-40px, leaving ~160px of empty `bg-card` (dark) space — the visible "black panel".
+
+**Fix**:
+Remove `h-full` from the loading-state wrapper. Let the skeleton items stack to natural height. The parent's `min-h-[200px]` still enforces the floor for the loaded card.
+
+```tsx
+// BEFORE (wrong)
+if (isLoading) return <div className="flex flex-col gap-2 h-full">{skeletons}</div>
+
+// AFTER (correct)
+if (isLoading) return <div className="flex flex-col gap-2">{skeletons}</div>
+```
+
+**Prevention**:
+- When the parent uses `min-h-*`, the child's loading skeleton should NOT use `h-full`. Only the loaded data branch (where content fills the panel intentionally) should use `h-full`.
+- During code review, flag any `if (isLoading) return <div className="... h-full">` inside a component whose parent uses `min-h-*`.
+- Snapshot tests at scroll position 0 during loading are the cheapest catch.
