@@ -252,3 +252,38 @@ class TestPredictionMarketFetchResult:
         raw_none.pop("slug", None)
         result = PredictionMarketFetchResult.from_gamma_response(raw_none, _utc_now())
         assert result.market_slug == ""
+
+    # ── F-DP1-06 regression: category extraction ──────────────────────────────
+    # Polymarket Gamma API surfaces category via either a top-level "category"
+    # string or via a "tags" list (strings or {"label": "..."} dicts).  The
+    # adapter must canonicalise to lower-case and fall back across the variants.
+
+    def test_from_gamma_response_category_top_level_string(self) -> None:
+        """Top-level "category" field is canonicalised to lower-case."""
+        raw = self._gamma_raw(category="Politics")
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "politics"
+
+    def test_from_gamma_response_category_falls_back_to_tag_string(self) -> None:
+        """When ``category`` is absent, the first non-empty ``tags`` string is used."""
+        raw = self._gamma_raw()
+        raw.pop("category", None)
+        raw["tags"] = ["", "Crypto", "AI"]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "crypto"
+
+    def test_from_gamma_response_category_falls_back_to_tag_dict(self) -> None:
+        """``tags`` list of {"label": "..."} dicts also works."""
+        raw = self._gamma_raw()
+        raw.pop("category", None)
+        raw["tags"] = [{"label": "Sports"}, {"label": "Olympics"}]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "sports"
+
+    def test_from_gamma_response_category_absent(self) -> None:
+        """No category and no tags → category is None (preserves DB on consumer side)."""
+        raw = self._gamma_raw()
+        raw.pop("category", None)
+        raw.pop("tags", None)
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category is None
