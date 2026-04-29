@@ -20,11 +20,13 @@ from rag_chat.api.schemas import (
     PaginatedThreadsResponse,
     ThreadDetailResponse,
     ThreadSummaryResponse,
+    UpdateThreadRequest,
 )
 from rag_chat.application.use_cases.create_thread import CreateThreadUseCase
 from rag_chat.application.use_cases.delete_thread import DeleteThreadUseCase
 from rag_chat.application.use_cases.get_thread import GetThreadUseCase
 from rag_chat.application.use_cases.list_threads import ListThreadsUseCase
+from rag_chat.application.use_cases.update_thread import UpdateThreadUseCase
 from rag_chat.domain.errors import ThreadNotFoundError
 
 if TYPE_CHECKING:
@@ -150,3 +152,40 @@ async def delete_thread(
     except ThreadNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return DeleteThreadResponse(thread_id=thread_id, archived_at=archived_at)
+
+
+@router.patch("/{thread_id}", response_model=ThreadDetailResponse)
+async def update_thread(
+    thread_id: UUID,
+    body: UpdateThreadRequest,
+    uow: UoWDep,
+    auth: AuthContextDep,
+) -> ThreadDetailResponse:
+    """Patch mutable thread fields — currently only ``title``.
+
+    PLAN-0051 Wave E / T-E-5-06: lets the chat UI rename a thread when the
+    user double-clicks the sidebar title and edits inline. Returns the full
+    ThreadDetailResponse so the frontend can swap the cached entry without
+    a follow-up GET.
+
+    Auth: ownership enforced atomically inside ``update_title`` (single
+    UPDATE filtered by user_id + tenant_id).
+    """
+    tenant_id, user_id = auth
+    uc = UpdateThreadUseCase()
+    try:
+        thread = await uc.execute(
+            uow,
+            thread_id=thread_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            title=body.title,
+        )
+    except ThreadNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ThreadDetailResponse(
+        thread_id=thread.thread_id,
+        title=thread.title,
+        created_at=thread.created_at,
+        messages=[_msg_to_response(m) for m in thread.messages],
+    )

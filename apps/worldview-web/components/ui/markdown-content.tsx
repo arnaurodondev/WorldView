@@ -23,12 +23,16 @@
  * ReactMarkdown call sites should migrate to this.
  */
 
-// WHY no "use client": pure presentational. ReactMarkdown is a client-safe
-// React component that does not touch browser APIs at the module top level.
+// WHY "use client": code-block copy buttons (PLAN-0051 T-E-5-02) call
+// navigator.clipboard.writeText which is browser-only. Adding the directive
+// here keeps the rendering tree client-side throughout — no SSR mismatch.
+
+"use client";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -153,11 +157,11 @@ export function MarkdownContent({
               </code>
             );
           },
-          pre: ({ children: c }) => (
-            <pre className="my-2 overflow-x-auto rounded-[2px] border border-border/40 bg-muted/30 p-2">
-              {c}
-            </pre>
-          ),
+          // WHY a custom <pre>: PLAN-0051 T-E-5-02 — code blocks need a "Copy"
+          // affordance in the top-right corner. Wrapping the markdown <pre>
+          // in a relative container lets us absolutely-position the button
+          // without disturbing existing layout.
+          pre: ({ children: c }) => <CopyableCodeBlock>{c}</CopyableCodeBlock>,
           // ── Blockquote — left-rule, muted text ─────────────────────────────
           blockquote: ({ children: c }) => (
             <blockquote className="my-2 border-l-2 border-primary/40 pl-2 italic text-muted-foreground">
@@ -168,6 +172,95 @@ export function MarkdownContent({
       >
         {children}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+// ── Copyable code block ──────────────────────────────────────────────────────
+
+/**
+ * CopyableCodeBlock — `<pre>` wrapper with a "Copy" icon-button overlay.
+ *
+ * WHY THIS EXISTS (PLAN-0051 T-E-5-02): LLMs frequently emit code/JSON
+ * snippets the trader wants to paste somewhere else (a query, a script,
+ * a Slack message). A built-in copy button removes the manual select-all
+ * + Cmd-C friction.
+ *
+ * WHY extract from the inline component map: ReactMarkdown's component
+ * overrides cannot easily own React state. Lifting this into its own small
+ * component lets us useState for the copied/idle toggle.
+ *
+ * WHY innerText (not the raw markdown source): ReactMarkdown renders the
+ * content into DOM children, and traversing that subtree gives us the exact
+ * string the user sees. Reading from the DOM also handles syntax-highlighted
+ * variants if a future plugin adds them.
+ */
+function CopyableCodeBlock({ children }: { children: ReactNode }) {
+  // WHY state: the button morphs from "Copy" to "Copied" for ~1.5s after a
+  // successful click. A boolean flag is the simplest model.
+  const [copied, setCopied] = useState(false);
+
+  /**
+   * onCopyClick — read the rendered code string and write to the clipboard.
+   *
+   * WHY data-* selector + closest(): the click bubbles from the button up
+   * through the wrapper. We find the wrapping <pre> via the data-attribute
+   * to read its plain-text contents. This avoids prop-drilling the source
+   * string and keeps the API simple.
+   *
+   * WHY swallow the error: clipboard writes can fail in older browsers /
+   * insecure contexts. We do not want to throw inside a render tree —
+   * silently leave the button unchanged so the user can fall back to manual
+   * copy.
+   */
+  function onCopyClick(e: React.MouseEvent<HTMLButtonElement>) {
+    const wrapper = (e.currentTarget.closest("[data-md-codeblock]") ?? null) as HTMLElement | null;
+    const text = wrapper?.querySelector("pre")?.innerText ?? "";
+    if (!text) return;
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      // WHY 1500ms: long enough to register the success, short enough that
+      // the button is back to "Copy" before the user reaches for it again.
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    // WHY data-md-codeblock: scoped selector for the click handler above.
+    <div data-md-codeblock className="relative my-2">
+      <pre
+        // WHY rounded-[2px]: design-system 2px radius rule.
+        // WHY pr-10: leave room for the absolutely-positioned Copy button.
+        className="overflow-x-auto rounded-[2px] border border-border/40 bg-muted/30 p-2 pr-10"
+      >
+        {children}
+      </pre>
+      <button
+        type="button"
+        onClick={onCopyClick}
+        // WHY top-1 right-1: hugs the corner of the code block without
+        // overlapping content thanks to pr-10 above.
+        className={cn(
+          "absolute right-1 top-1",
+          "inline-flex items-center gap-1 rounded-[2px] border border-border/60 bg-card",
+          "px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em]",
+          "text-muted-foreground hover:bg-muted hover:text-foreground",
+          "focus:outline-none focus:ring-1 focus:ring-primary",
+        )}
+        aria-label="Copy code"
+      >
+        {copied ? (
+          <>
+            <Check className="h-3 w-3" />
+            Copied
+          </>
+        ) : (
+          <>
+            <Copy className="h-3 w-3" />
+            Copy
+          </>
+        )}
+      </button>
     </div>
   );
 }

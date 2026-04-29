@@ -1798,6 +1798,25 @@ export function createGateway(token?: string | null) {
     },
 
     /**
+     * updateThread — patch mutable thread fields (currently only `title`)
+     *
+     * WHY PATCH (not PUT): a PUT would imply replacing the whole resource
+     * including its messages, which is wrong — messages are append-only on
+     * the rag-chat side. PATCH semantics let us send just the fields the
+     * user changed, and the server merges into the row. PLAN-0051 Wave E /
+     * T-E-5-06.
+     *
+     * Accepts `{ title }` for now; the typing leaves room for future fields
+     * (e.g. `is_pinned`) without changing call sites.
+     */
+    updateThread(threadId: string, patch: { title?: string }): Promise<Thread> {
+      return apiFetch<Thread>(
+        `/v1/threads/${encodeURIComponent(threadId)}`,
+        { method: "PATCH", body: patch, token: t },
+      );
+    },
+
+    /**
      * streamChat — POST SSE streaming chat response
      *
      * WHY fetch() not EventSource: EventSource is GET-only and can't send

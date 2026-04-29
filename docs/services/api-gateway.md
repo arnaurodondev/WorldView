@@ -71,6 +71,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | POST | `/v1/threads` | Create conversation thread | Yes |
 | GET | `/v1/threads` | List threads | Yes |
 | GET | `/v1/threads/{thread_id}` | Get thread by ID | Yes |
+| PATCH | `/v1/threads/{thread_id}` | Patch mutable thread fields (currently only `title`). Body `{title?: string}`. PLAN-0051 T-E-5-06. Used by chat sidebar inline rename. | Yes |
 | DELETE | `/v1/threads/{thread_id}` | Delete thread | Yes |
 
 ### Market Data Endpoints (→ S3 Market Data)
