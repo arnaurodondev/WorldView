@@ -140,7 +140,7 @@ apps/worldview-web/
 | `/(app)/dashboard` | Dashboard | Yes | Briefings, portfolio, alerts, movers, heatmap |
 | `/(app)/workspace` | Workspace | Yes | User-configurable multi-panel grid |
 | `/(app)/instruments/[entityId]` | Instrument Detail | Yes | OHLCV, fundamentals, graph, news |
-| `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` |
+| `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` (PLAN-0051 Wave B: collapsible Valuation/Profitability/Growth/Leverage/Technical/News sections; "X of Y match" header; Load More pagination accumulator; client-side fallback for technical filters; metric names per `docs/services/market-data.md`; gaps documented in `docs/audits/2026-04-29-screener-metric-gap.md`) |
 | `/(app)/portfolio` | Portfolio | Yes | Portfolios, holdings, transactions |
 | `/(app)/alerts` | Alerts & News | Yes | Pending alerts + top news |
 | `/(app)/chat` | Chat | Yes | SSE `/v1/chat/stream` |
