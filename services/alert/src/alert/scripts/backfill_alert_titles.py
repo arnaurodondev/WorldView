@@ -44,7 +44,7 @@ Usage
 ::
 
     export ALERT_DB_URL="postgres://alert:alertpw@localhost:5443/alert_db"
-    python services/alert/scripts/backfill_alert_titles.py
+    python -m alert.scripts.backfill_alert_titles
 
 Add ``--dry-run`` to count the unbackfilled rows without mutating anything.
 """

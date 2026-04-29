@@ -838,6 +838,10 @@ export interface PredictionMarket {
   // Enables constructing canonical Polymarket URLs (polymarket.com/event/{slug})
   // instead of a title-search fallback. Nullable because older rows lack the slug.
   market_slug: string | null;
+  // PLAN-0049 T-C-3-03: server-side category filter (?category=politics).
+  // Optional — adapter populates it from Polymarket Gamma `tags` on a future
+  // wave; existing rows surface as null until backfilled.
+  category?: string | null;
   updated_at: string;
 }
 

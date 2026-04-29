@@ -293,15 +293,21 @@ test.describe("PLAN-0049 stabilization — SnapTrade v4 callback parity", () => 
       page.getByText(/connected successfully/i),
     ).toBeVisible({ timeout: 10000 });
 
-    // F-QAC-04 fix: positively verify the page did call the callback
-    // endpoint with the v4-shaped query string. ``connection_id`` must be
-    // present (forwarded) and ``authorizationId``/``userId``/``sessionId``
-    // must be absent (since they were absent in the inbound URL).
+    // F-QAC-04 fix (corrected in iter-2): the callback page DELIBERATELY
+    // renames v4's `connection_id` query param to v3's `authorizationId`
+    // before sending to S9 — see callback/page.tsx:67-74,119-126 and
+    // lib/gateway.ts. So the OUTBOUND URL is always v3-shaped:
+    //   /v1/brokerage-connections/{id}/callback?authorizationId=...
+    // The point of the test is to confirm the inbound v4 query (only
+    // connection_id present, no authorizationId/userId/sessionId in the
+    // URL) is correctly translated to the v3 outbound shape and reaches
+    // the upstream — not that the v4 names survive the proxy.
     expect(callbackHit).toBe(true);
-    expect(callbackUrl).toContain("connection_id=snap-auth-xyz");
-    expect(callbackUrl).not.toContain("authorizationId=");
-    expect(callbackUrl).not.toContain("userId=");
-    expect(callbackUrl).not.toContain("sessionId=");
+    expect(callbackUrl).toContain("authorizationId=snap-auth-xyz");
+    // userId / sessionId were absent inbound and the page does not
+    // synthesise values for them, so they must be absent outbound too.
+    expect(callbackUrl).not.toMatch(/[?&]userId=[^&]/);
+    expect(callbackUrl).not.toMatch(/[?&]sessionId=[^&]/);
   });
 });
 

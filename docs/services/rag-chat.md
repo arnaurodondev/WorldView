@@ -103,7 +103,7 @@ fields of `BriefingResponse`:
 
 | Surface | Reads | Renders via |
 |---------|-------|-------------|
-| `<MorningBriefCard>` (dashboard, expanded) | `headline` + `summary` + `sections[]` + `citations[]` if `sections.length > 0`; otherwise `narrative` | structured 3-row layout *or* `<MarkdownContent>` fallback |
+| `<MorningBriefCard>` (dashboard, expanded) | `summary` + `sections[]` + `citations[]` if `sections.length > 0`; otherwise `narrative` | structured 3-row layout *or* `<MarkdownContent>` fallback |
 | `<InstrumentAISubheader>` (instrument page header) | `narrative` only | `<MarkdownContent size="compact">` |
 | `<IntelligenceTab>` brief block (instrument page) | `narrative` only | `<MarkdownContent size="comfortable">` |
 
