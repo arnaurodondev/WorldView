@@ -63,6 +63,47 @@ LLM provider fallback, streaming response delivery, citation injection, response
 }
 ```
 
+### BriefingResponse / PublicBriefingResponse (PLAN-0049 T-A-1-04)
+
+`POST /internal/v1/briefings` (consumed by S10 email scheduler) and
+`GET /api/v1/briefings/{morning,instrument/{entity_id}}` (proxied via S9)
+return a structured AI brief.  The schema is **forward-compatible across rollouts**:
+older callers only read `narrative` while newer surfaces render the
+`headline` + `sections` shape.
+
+```python
+# BriefingResponse (POST /internal/v1/briefings)
+{
+    "narrative": str,              # Full markdown — always present
+    "risk_summary": dict,          # Per-position risk telemetry
+    "citations": list[dict],       # [{ref, id, title, url, ...}]
+    "generated_at": str,           # ISO-8601 UTC
+    "summary": str | None,         # PLAN-0048 — 1–2 sentence headline (collapsed view)
+    "headline": str | None,        # PLAN-0049 T-A-1-04 — top-card title (≤240 chars)
+    "sections": list[BriefSection] # PLAN-0049 T-A-1-04 — see below
+}
+
+# PublicBriefingResponse (GET /api/v1/briefings/...)
+# Adds two fields on top of BriefingResponse:
+{
+    ...,
+    "cached": bool,                # Cache-hit indicator
+    "entity_id": str | None        # Set on instrument briefings only
+}
+
+# BriefSection — one heading + bullet list
+{
+    "title": str,                  # ≤120 chars (heading)
+    "bullets": list[str]           # 1–8 entries
+}
+```
+
+**Render contract (frontend):** when `sections` is non-empty the UI renders
+`headline` + structured cards (`<MorningBriefCard>`, `<InstrumentAISubheader>`).
+When `sections == []` it falls back to rendering `narrative` through
+`<MarkdownContent>` — graceful degradation so older cached briefs keep working
+unchanged (R11: never break wire format).
+
 ### SSE Streaming Events (POST /api/v1/chat/stream)
 
 | Event | Payload |

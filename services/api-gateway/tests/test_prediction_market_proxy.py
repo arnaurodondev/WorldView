@@ -90,3 +90,46 @@ async def test_jwt_required(app, mock_clients) -> None:
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_proxy_forwards_category_param(authed_app, authed_mock_clients) -> None:
+    """PLAN-0049 T-C-3-03: ``?category=politics`` is forwarded verbatim to S3."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"items": []}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets",
+            params={"status": "open", "category": "politics"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    call_kwargs = authed_mock_clients.market_data.get.call_args[1]
+    # Both params must reach the upstream — gateway must not strip either.
+    assert call_kwargs["params"].get("category") == "politics"
+    assert call_kwargs["params"].get("status") == "open"
+
+
+@pytest.mark.asyncio
+async def test_list_proxy_omits_category_when_absent(authed_app, authed_mock_clients) -> None:
+    """No category param → upstream ``params`` dict has no ``category`` key.
+
+    Guards against a regression where the explicit FastAPI param signature
+    might inject ``category=None`` into the forwarded dict and confuse the
+    upstream's NULL-vs-absent semantics.
+    """
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"items": []}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/signals/prediction-markets",
+            params={"status": "open"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    call_kwargs = authed_mock_clients.market_data.get.call_args[1]
+    assert "category" not in call_kwargs["params"]

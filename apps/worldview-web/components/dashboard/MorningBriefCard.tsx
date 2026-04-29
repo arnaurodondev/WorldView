@@ -340,9 +340,18 @@ export function MorningBriefCard() {
             // When the backend's section parser succeeded we render polished
             // section cards instead of raw markdown — gives the brief a
             // Bloomberg-grade typographic hierarchy (heading + bullets).
+            // WHY data-testid="brief-section" (PLAN-0049 T-D-4-06): the
+            // stabilization E2E spec asserts that EITHER ≥1 brief-section OR
+            // a brief-narrative is rendered after expansion. The marker
+            // disambiguates the two branches without coupling the test to
+            // class names (which churn) or section copy (LLM-dependent).
             <div className="flex flex-col gap-2">
               {brief.sections.map((sec, i) => (
-                <section key={`${sec.title}-${i}`} className="border-l-2 border-primary/40 pl-2">
+                <section
+                  key={`${sec.title}-${i}`}
+                  className="border-l-2 border-primary/40 pl-2"
+                  data-testid="brief-section"
+                >
                   <h3 className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                     {sec.title}
                   </h3>
@@ -363,18 +372,22 @@ export function MorningBriefCard() {
             // ── Expanded view (fallback): brief.narrative as raw markdown ──
             // Used when sections[] is empty (parser couldn't structure the
             // narrative) — same look as before PLAN-0049.
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: ({ href, children }) => (
-                  <Link href={href ?? "#"} className="text-primary hover:underline">
-                    {children}
-                  </Link>
-                ),
-              }}
-            >
-              {narrativeWithLinks}
-            </ReactMarkdown>
+            // WHY data-testid="brief-narrative" (T-D-4-06): see the section
+            // marker above for the rationale.
+            <div data-testid="brief-narrative">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children }) => (
+                    <Link href={href ?? "#"} className="text-primary hover:underline">
+                      {children}
+                    </Link>
+                  ),
+                }}
+              >
+                {narrativeWithLinks}
+              </ReactMarkdown>
+            </div>
           )}
 
           {/* ── Top Stories chip strip ─────────────────────────────────────

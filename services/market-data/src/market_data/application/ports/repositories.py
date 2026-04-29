@@ -516,11 +516,16 @@ class PredictionMarketRepository(ABC):
         query: str | None,
         limit: int,
         offset: int,
+        category: str | None = None,
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return a paginated list of ``(market, latest_volume_24h)`` pairs and total.
 
         ``status``: filter by ``resolution_status`` (exact match); ``None`` = all.
         ``query``: filter by ``question ILIKE '%query%'``; ``None`` = all.
+        ``category``: filter by ``LOWER(category) = LOWER(:category)`` exact
+            match (PLAN-0049 T-C-3-03); ``None`` = all.  Free-form string —
+            backend never validates the enum so new Polymarket tags roll out
+            without a code change.  NULL-category rows never match.
 
         ``latest_volume_24h``: ``volume_24h`` from the most recent snapshot
         (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``

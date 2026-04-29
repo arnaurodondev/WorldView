@@ -49,6 +49,11 @@ class PredictionMarketModel(TimestampMixin, Base):
     last_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # WHY nullable: existing rows have no slug; backfilled on next consumer poll (migration 009).
     market_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0049 T-C-3-03 / migration 010 — high-level category tag
+    # (``macro`` | ``politics`` | ``sports`` | ``crypto`` | ``general``).
+    # Backfilled by the polymarket adapter when it learns the field; until
+    # then NULL means "uncategorised" and is excluded by category filters.
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 class PredictionMarketSnapshotModel(Base):

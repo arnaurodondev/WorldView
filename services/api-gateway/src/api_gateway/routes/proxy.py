@@ -396,19 +396,46 @@ async def acknowledge_alert(alert_id: str, request: Request) -> Any:
 
 
 @router.get("/signals/prediction-markets")
-async def list_prediction_markets(request: Request) -> Any:
+async def list_prediction_markets(
+    request: Request,
+    # PLAN-0049 T-C-3-03 — declared explicitly (rather than left as a generic
+    # ``request.query_params`` pass-through) so the OpenAPI spec advertises
+    # it to frontend type-generators.  The ``description`` lists the
+    # non-binding suggested values; backend does case-insensitive equality
+    # so any future Polymarket tag works without a code change.
+    category: str | None = Query(
+        default=None,
+        max_length=50,
+        description=(
+            "Optional category filter. Suggested values: macro, politics, "
+            "sports, crypto, general (non-binding — backend does case-"
+            "insensitive equality, never validates the enum)."
+        ),
+    ),
+) -> Any:
     """Proxy GET /api/v1/prediction-markets → S3 Market Data.
 
-    Requires authentication. Forwards query params (status, limit, offset)
-    and auth headers derived from the JWT payload.
+    Requires authentication. Forwards query params (status, limit, offset,
+    category) and auth headers derived from the JWT payload.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
+    # WHY copy request.query_params then overlay ``category``: passing
+    # ``params={"category": ..., **dict(request.query_params)}`` would let
+    # an unsanitised duplicate ``category=`` from the client clobber the
+    # parsed value. Build the dict explicitly so the FastAPI-validated
+    # ``category`` argument is the canonical source of truth.
+    forwarded: dict[str, Any] = dict(request.query_params)
+    if category is not None:
+        forwarded["category"] = category
+    else:
+        # Strip if present-but-blank so upstream sees a clean param set.
+        forwarded.pop("category", None)
     resp = await clients.market_data.get(
         "/api/v1/prediction-markets",
-        params=dict(request.query_params),
+        params=forwarded,
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

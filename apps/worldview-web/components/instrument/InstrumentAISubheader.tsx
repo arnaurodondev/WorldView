@@ -34,6 +34,16 @@ import { ChevronRight, ChevronDown } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// WHY MarkdownContent (PLAN-0049 T-D-4-02): the expanded subheader previously
+// rendered ``brief.narrative`` as plain text inside a <p> — markdown structures
+// emitted by the LLM (headers, lists, bold, links) rendered as raw "##" prefixes
+// instead of styled prose. The shared <MarkdownContent size="compact"> is the
+// canonical worldview renderer (used by MorningBriefCard expanded view + the
+// IntelligenceTab brief block) so all three AI brief surfaces look identical.
+// The collapsed preview row keeps the plain-text slice — markdown formatting
+// inside a 120-char preview would expand vertical chrome that the h-9 band
+// cannot accommodate.
+import { MarkdownContent } from "@/components/ui/markdown-content";
 import type { BriefingResponse } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -185,10 +195,14 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
-          <p className="px-2 py-2 text-[13px] text-foreground leading-relaxed">
-            {/* WHY .narrative: BriefingResponse.narrative is the S8 API field name */}
-            {brief!.narrative}
-          </p>
+          {/* WHY MarkdownContent (T-D-4-02): renders S8's markdown brief with
+              the same typography as MorningBriefCard expanded view +
+              IntelligenceTab brief block. Plain <p> rendering left raw "##"
+              and "*" characters visible in the UI. The "compact" size variant
+              uses 10px base font, matching the dense subheader band. */}
+          <div className="px-2 py-2">
+            <MarkdownContent size="compact">{brief!.narrative}</MarkdownContent>
+          </div>
         </div>
       </div>
     </div>

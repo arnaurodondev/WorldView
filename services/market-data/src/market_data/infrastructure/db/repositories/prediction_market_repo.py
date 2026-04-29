@@ -24,7 +24,12 @@ if TYPE_CHECKING:
 
 
 def _row_to_market(row: Any) -> PredictionMarket:
-    """Map a raw DB row to a ``PredictionMarket`` domain entity."""
+    """Map a raw DB row to a ``PredictionMarket`` domain entity.
+
+    ``category`` (PLAN-0049 T-C-3-03) is read with ``getattr`` and a None
+    default so this mapper still works on tests that fabricate row mocks
+    without the new column — keeps the migration roll-out forward-compat.
+    """
     return PredictionMarket(
         id=str(row.id),
         market_id=row.market_id,
@@ -36,6 +41,7 @@ def _row_to_market(row: Any) -> PredictionMarket:
         resolution_status=row.resolution_status,
         resolved_answer=row.resolved_answer,
         market_slug=row.market_slug,
+        category=getattr(row, "category", None),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -120,6 +126,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
             text(
                 "SELECT id, market_id, source, question, description, outcomes, "
                 "close_time, resolution_status, resolved_answer, market_slug, "
+                "category, "
                 "created_at, updated_at "
                 "FROM prediction_markets WHERE market_id = :market_id LIMIT 1"
             ).bindparams(market_id=market_id)
@@ -134,6 +141,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         query: str | None,
         limit: int,
         offset: int,
+        category: str | None = None,
     ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
         """Return paginated ``(market, latest_volume_24h)`` pairs and total count.
 
@@ -161,6 +169,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         base = (
             "SELECT m.id, m.market_id, m.source, m.question, m.description, m.outcomes, "
             "m.close_time, m.resolution_status, m.resolved_answer, m.market_slug, "
+            "m.category, "
             "m.created_at, m.updated_at, latest.volume_24h AS latest_volume_24h, "
             "COUNT(*) OVER() AS total "
             "FROM prediction_markets m "
@@ -177,6 +186,13 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         if status is not None:
             predicates.append("m.resolution_status = :status")
             params["status"] = status
+
+        # PLAN-0049 T-C-3-03: optional category filter. Lower-cased on bind so
+        # callers don't have to worry about Polymarket's mixed casing — the
+        # adapter writes lowercase tags. NULL category rows never match.
+        if category is not None:
+            predicates.append("LOWER(m.category) = :category")
+            params["category"] = category.lower()
 
         if query is not None:
             # Escape ILIKE metacharacters before building the pattern (M-002).
