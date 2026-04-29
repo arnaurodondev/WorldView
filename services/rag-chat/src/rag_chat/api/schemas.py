@@ -16,6 +16,17 @@ class CreateThreadRequest(BaseModel):
     entity_ids: list[UUID] = Field(default=[], max_length=5)
 
 
+class UpdateThreadRequest(BaseModel):
+    """Patch a thread's mutable fields (PLAN-0051 T-E-5-06).
+
+    Only ``title`` is currently patchable.  Field is optional so callers
+    can submit an empty PATCH (no-op) without triggering 422.  Length is
+    capped at 200 to match ``CreateThreadRequest`` for symmetry.
+    """
+
+    title: str | None = Field(default=None, max_length=200)
+
+
 class ChatRequestSchema(BaseModel):
     """Request body for POST /api/v1/chat and POST /api/v1/chat/stream."""
 

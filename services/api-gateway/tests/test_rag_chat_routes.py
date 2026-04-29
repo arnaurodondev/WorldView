@@ -179,3 +179,40 @@ async def test_s9_thread_delete_proxied(app, mock_clients) -> None:
     assert resp.status_code == 200
     mock_clients.rag_chat.delete.assert_called_once()
     assert thread_id in mock_clients.rag_chat.delete.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_s9_thread_patch_proxied(app, mock_clients) -> None:
+    """PATCH /v1/threads/{id} → proxied to S8 /api/v1/threads/{id}.
+
+    PLAN-0051 Wave E / T-E-5-06: gateway exposes a PATCH endpoint that
+    forwards the body unchanged so future patchable fields (besides title)
+    don't require gateway-side changes.
+    """
+    thread_id = "01900000-0000-7000-8000-000000000002"
+    mock_clients.rag_chat.patch = AsyncMock(
+        return_value=_mock_response(
+            200,
+            {"thread_id": thread_id, "title": "New title", "messages": []},
+        ),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch(
+            f"/v1/threads/{thread_id}",
+            json={"title": "New title"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    mock_clients.rag_chat.patch.assert_called_once()
+    # The downstream PATCH path must include the thread_id and target the S8 prefix.
+    call_path = mock_clients.rag_chat.patch.call_args[0][0]
+    assert "/api/v1/threads/" in call_path
+    assert thread_id in call_path
+    # Body forwarded as bytes (read via request.body() in the handler).
+    forwarded_content = mock_clients.rag_chat.patch.call_args.kwargs.get("content")
+    assert forwarded_content is not None
+    assert b'"title"' in forwarded_content
+    assert b"New title" in forwarded_content

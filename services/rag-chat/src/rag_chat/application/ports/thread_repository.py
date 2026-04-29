@@ -53,3 +53,21 @@ class ThreadRepository(ABC):
         and the write.  Raises ``ThreadNotFoundError`` when the thread is not
         found or does not belong to the caller.
         """
+
+    @abstractmethod
+    async def update_title(
+        self,
+        thread_id: UUID,
+        user_id: UUID,
+        tenant_id: UUID,
+        title: str | None,
+    ) -> ConversationThread:
+        """Update the thread title; return the updated thread (with messages).
+
+        Filters by user_id AND tenant_id so ownership check and write are a
+        single atomic operation (no TOCTOU window). Raises
+        ``ThreadNotFoundError`` when the thread is missing or owned by another
+        user/tenant.
+
+        PLAN-0051 Wave E / T-E-5-06: required by PATCH /api/v1/threads/{id}.
+        """

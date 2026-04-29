@@ -27,29 +27,49 @@
  * immediately without a round-trip to create the thread first. The first POST
  * /chat/stream creates the thread server-side if it doesn't exist.
  *
+ * PLAN-0051 WAVE E (T-E-5-01..07) ADDS:
+ *   - Slash commands (/quote, /portfolio, /news, /watchlist, /alerts, /screener)
+ *     with autocomplete popover and inline structured cards.
+ *   - MarkdownContent rendering for assistant messages (tables, code copy).
+ *   - Thread search box above the sidebar list (200ms debounced).
+ *   - Citation bar (red/yellow/green) with hover tooltip and anchor scroll.
+ *   - Context-aware starter questions when ?entity_id= present.
+ *   - Inline rename (double-click sidebar title) — PATCH /v1/threads/{id}.
+ *   - Markdown export of the conversation (download .md file).
+ *
  * WHO USES IT: Authenticated users at /chat
  * DATA SOURCES:
- *   GET  /api/v1/threads          — thread list
- *   GET  /api/v1/threads/:id      — thread with full message history
- *   POST /api/v1/chat/stream      — SSE streaming response
+ *   GET   /api/v1/threads          — thread list
+ *   GET   /api/v1/threads/:id      — thread with full message history
+ *   PATCH /api/v1/threads/:id      — rename (PLAN-0051 T-E-5-06)
+ *   POST  /api/v1/chat/stream      — SSE streaming response
  * DESIGN REFERENCE: PRD-0028 §6.5 Chat page (layout §6.3, spec §6.5.9)
  */
 
 "use client";
 // WHY "use client": Heavy interactive state — streaming SSE via fetch + ReadableStream,
 // message list with auto-scroll, thread selection, keyboard shortcuts (Enter to send,
-// Shift+Enter for newline). All of these require browser APIs unavailable in Server
-// Components. Rendering happens on the client to keep the streaming state local.
+// Shift+Enter for newline), inline rename input, debounced search. All require browser
+// APIs unavailable in Server Components.
 
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
-import { MessageSquare, Plus, Send, Trash2, Bot } from "lucide-react";
+import {
+  Bot,
+  Download,
+  MessageSquare,
+  Plus,
+  Search,
+  Send,
+  Trash2,
+} from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -57,6 +77,12 @@ import { safeExternalUrl, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { MarkdownContent } from "@/components/ui/markdown-content";
+import { SlashCommandCard } from "@/components/chat/SlashCommandCard";
+import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
+import { CitationBar } from "@/components/chat/CitationBar";
+import { parseInput, type ParsedCommand } from "@/lib/chat/slash-commands";
+import { downloadThread } from "@/lib/chat/export-thread";
 import type { Thread, Message, Citation } from "@/types/api";
 
 // ── Local types ───────────────────────────────────────────────────────────────
@@ -73,6 +99,25 @@ interface StreamingMessage {
   active: boolean;
 }
 
+/**
+ * SlashTurn — a slash-command "turn" rendered inline in the chat log.
+ *
+ * WHY it lives alongside Message: the conversation log is a mixed list of
+ * regular Message objects and slash-command results. Both implement a
+ * common shape ({id, role, content?}) so the render loop can branch on
+ * `kind` to decide which renderer to call.
+ */
+interface SlashTurn {
+  kind: "slash";
+  message_id: string;
+  command: ParsedCommand;
+  /** Echo of the user's typed input, shown as a user bubble above the card. */
+  input: string;
+  created_at: string;
+}
+
+type LogEntry = Message | SlashTurn;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /**
@@ -82,12 +127,11 @@ interface StreamingMessage {
 const PLACEHOLDER_THREAD_TITLE = "New conversation";
 
 /**
- * STARTER_QUESTIONS — pre-filled question cards shown when a thread has no messages.
+ * STARTER_QUESTIONS — generic fallbacks shown when no entity context is set.
  *
- * WHY starter questions: empty-thread state is a common UX dead zone — users
+ * WHY pre-seeded cards: empty-thread state is a common UX dead zone — users
  * don't know what to ask first. Pre-seeded cards reduce blank-page anxiety and
- * guide traders toward high-value research questions. [TICKER] is replaced at
- * render time with the entity ticker from the URL param (if available).
+ * guide traders toward high-value research questions.
  */
 const STARTER_QUESTIONS = [
   "What are the key risks for [TICKER] next quarter?",
@@ -98,6 +142,21 @@ const STARTER_QUESTIONS = [
   "Search SEC filings for 'supply chain' risk exposure",
 ] as const;
 
+/**
+ * entityStarters — context-aware starter questions when ?entity_id= is set.
+ *
+ * WHY a function (not a constant): we substitute the ticker into the strings.
+ * PLAN-0051 T-E-5-05.
+ */
+function entityStarters(ticker: string): readonly string[] {
+  return [
+    `What's the latest news on ${ticker}?`,
+    `Why did ${ticker} move today?`,
+    `What are the bull and bear cases for ${ticker}?`,
+    `How does ${ticker} compare to its peers?`,
+  ];
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 /**
@@ -106,13 +165,11 @@ const STARTER_QUESTIONS = [
  */
 function TypingIndicator() {
   return (
-    // WHY bg-muted: assistant messages use muted background (user messages use primary/10)
     <div className="flex max-w-[70%] items-end gap-2 self-start">
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
         <Bot className="h-3.5 w-3.5 text-primary" />
       </div>
       <div className="rounded-[2px] bg-muted px-4 py-3">
-        {/* Three animated dots — the staggered animation conveys "thinking" */}
         <div className="flex gap-1" aria-label="AI is generating a response">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
@@ -125,51 +182,38 @@ function TypingIndicator() {
 
 /**
  * CITATION_ICONS — maps citation source type to a display icon.
- *
- * WHY source type icons: visual icons let traders instantly recognise the
- * nature of a citation (SEC filing vs news vs earnings call) without reading
- * the source string. This is especially useful when 3–5 citations appear
- * below an assistant message and the trader scans for the most authoritative one.
  */
 const CITATION_ICONS: Record<string, string> = {
-  sec: "📄",
-  news: "📰",
-  earnings: "📊",
-  knowledge_graph: "🕸",
+  sec: "[SEC]",
+  news: "[NEWS]",
+  earnings: "[EARN]",
+  knowledge_graph: "[KG]",
 };
 
-/**
- * getCitationIcon — infer a citation icon from source or title heuristics.
- * WHY heuristics: Citation.source is a human-readable string like "Reuters",
- * not a structured type enum. We fall back to title-keyword matching when
- * source doesn't match a known key.
- */
 function getCitationIcon(cite: Citation): string {
   const src = cite.source.toLowerCase();
   if (src.includes("sec") || src.includes("edgar") || src.includes("filing")) {
-    return CITATION_ICONS.sec ?? "📄";
+    return CITATION_ICONS.sec;
   }
   if (src.includes("earning") || src.includes("transcript")) {
-    return CITATION_ICONS.earnings ?? "📊";
+    return CITATION_ICONS.earnings;
   }
   if (src.includes("knowledge") || src.includes("graph")) {
-    return CITATION_ICONS.knowledge_graph ?? "🕸";
+    return CITATION_ICONS.knowledge_graph;
   }
-  // Title heuristics for news citations
   const title = (cite.title ?? "").toLowerCase();
   if (title.includes("10-k") || title.includes("10-q") || title.includes("8-k")) {
-    return CITATION_ICONS.sec ?? "📄";
+    return CITATION_ICONS.sec;
   }
-  return CITATION_ICONS.news ?? "📰";
+  return CITATION_ICONS.news;
 }
 
 /**
- * CitationList — renders source citations below assistant messages.
- * WHY show citations: RAG responses cite the exact articles the LLM used for
- * its answer. Analysts can click through to verify the primary source — critical
- * for finance where accuracy of sourcing matters legally.
+ * CitationList — clickable citation pills below assistant messages.
  *
- * Wave 7 enhancement: each citation now shows a type icon + source + title + match%.
+ * Wave E: the inline pill list is now complemented by the CitationBar (see
+ * MessageBubble below). Pills remain because traders frequently click through
+ * to source URLs.
  */
 function CitationList({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
@@ -178,26 +222,17 @@ function CitationList({ citations }: { citations: Citation[] }) {
     <div className="mt-2 flex flex-wrap gap-1.5">
       {citations.map((cite, i) => (
         <a
-          key={cite.article_id}
+          key={`${cite.article_id}-${i}`}
           href={safeExternalUrl(cite.url)}
           target="_blank"
           rel="noopener noreferrer"
-          // WHY primary/10 border primary/30: subtle but distinguishable citation pills.
-          // hover:bg-primary/20 on dark bg gives clear affordance without aggressive color.
           className="inline-flex items-center gap-1 rounded-[2px] border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20"
           title={`${cite.source} — relevance: ${(cite.relevance_score * 100).toFixed(0)}%`}
         >
-          {/* WHY superscript index: matches academic citation convention analysts recognise */}
           <sup className="font-mono text-[9px]">[{i + 1}]</sup>
-          {/* Type icon — communicates SEC/news/earnings source at a glance */}
-          <span aria-hidden="true">{getCitationIcon(cite)}</span>
-          {/* Source name — abbreviated to fit pill width */}
+          <span className="font-mono text-[9px]" aria-hidden="true">{getCitationIcon(cite)}</span>
           <span className="font-mono text-[9px] text-primary/70">{cite.source}</span>
-          {/* Title — truncated */}
           <span className="max-w-[140px] truncate">{cite.title}</span>
-          {/* Match % — how relevant the citation was to the question */}
-          {/* WHY show match%: traders care about source reliability; a 90% match
-              means the LLM used this article heavily vs a 20% tangential reference */}
           <span className="font-mono text-[9px] text-primary/60">
             {(cite.relevance_score * 100).toFixed(0)}%
           </span>
@@ -209,22 +244,27 @@ function CitationList({ citations }: { citations: Citation[] }) {
 
 /**
  * MessageBubble — renders a single chat message with role-specific styling.
- * user messages: right-aligned, bg-primary/10
- * assistant messages: left-aligned, bg-muted + optional citations
+ *
+ * WAVE E CHANGES (T-E-5-02 + T-E-5-04):
+ *   - Assistant messages now render via <MarkdownContent> (tables, code,
+ *     copy buttons). User messages remain plain (they typed the text).
+ *   - A CitationBar (segmented red/yellow/green confidence strip) sits
+ *     below assistant messages, complementing the existing pill list.
  */
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
+  // WHY anchor prefix: CitationBar segments link to #{prefix}-N anchors that
+  // we inject into the rendered message via `id` attributes. Use the
+  // message_id to namespace anchors per message.
+  const anchorPrefix = `cite-${message.message_id}`;
 
   return (
     <div
-      // WHY flex-col + items-end/start: aligns the entire bubble (text + citations)
-      // to the correct side before aligning the inner row horizontally.
       className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}
     >
       <div
         className={`flex max-w-[70%] items-end gap-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}
       >
-        {/* Avatar icon — bot icon for assistant, hidden for user to save space */}
         {!isUser && (
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
             <Bot className="h-3.5 w-3.5 text-primary" />
@@ -232,27 +272,28 @@ function MessageBubble({ message }: { message: Message }) {
         )}
 
         <div
-          // WHY rounded-[2px]: terminal design uses uniform 2px radius; no consumer-app
-          // asymmetric corner overrides (rounded-br-sm/rounded-bl-sm were dropped — at
-          // the 2px scale, the distinction is imperceptible and adds visual complexity).
           className={`rounded-[2px] px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? // User bubble: right-aligned, amber tint
-                "bg-primary/10 text-foreground"
-              : // Assistant bubble: left-aligned, muted background
-                "bg-muted text-foreground"
+              ? "bg-primary/10 text-foreground"
+              : "bg-muted text-foreground"
           }`}
         >
           {/*
-           * WHY <pre> not a Markdown library:
-           * The MVP requirement says "render as <pre> wrapped text".
-           * Adding react-markdown adds 38 KB to the bundle — deferred to a later wave.
-           * pre + whitespace-pre-wrap: preserves newlines and indentation from the LLM
-           * output without needing full Markdown parsing.
+           * User vs assistant rendering split:
+           *  - User: plain <pre> preserves their literal whitespace (a question
+           *    like "compare:\n- AAPL\n- MSFT" reads as written). Markdown
+           *    rendering on user input would mangle "*" wildcards etc.
+           *  - Assistant: MarkdownContent renders tables/lists/code blocks
+           *    consistent with the rest of the app (PLAN-0051 T-E-5-02).
            */}
-          <pre className="whitespace-pre-wrap font-sans text-sm">{message.content}</pre>
+          {isUser ? (
+            <pre className="whitespace-pre-wrap font-sans text-sm">{message.content}</pre>
+          ) : (
+            <div id={anchorPrefix}>
+              <MarkdownContent size="comfortable">{message.content}</MarkdownContent>
+            </div>
+          )}
 
-          {/* WHY font-mono on timestamp: timestamps are data, not prose */}
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">
             {new Date(message.created_at).toLocaleTimeString([], {
               hour: "2-digit",
@@ -262,9 +303,13 @@ function MessageBubble({ message }: { message: Message }) {
         </div>
       </div>
 
-      {/* Citations appear below assistant bubbles only */}
+      {/* Citation bar + pill list — assistant messages only */}
       {!isUser && (message.citations?.length ?? 0) > 0 && (
-        <div className={`max-w-[70%] ${!isUser ? "ml-9" : ""}`}>
+        <div className="ml-9 max-w-[70%]">
+          {/* WHY both bar AND pills: the bar gives at-a-glance gestalt
+              (mostly green = trust this answer); the pills give the
+              actual click-through link. Different jobs, both useful. */}
+          <CitationBar citations={message.citations} anchorPrefix={anchorPrefix} />
           <CitationList citations={message.citations} />
         </div>
       )}
@@ -273,10 +318,42 @@ function MessageBubble({ message }: { message: Message }) {
 }
 
 /**
+ * SlashTurnBlock — render the user's slash-command "turn" in the log.
+ *
+ * Shows the typed input as a small user bubble and the structured card
+ * as if it were the assistant's reply. Visually identical placement so
+ * the conversation reads naturally.
+ */
+function SlashTurnBlock({ turn }: { turn: SlashTurn }) {
+  return (
+    <>
+      {/* User echo of the typed input — matches the regular user-message style */}
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex max-w-[70%] items-end gap-2 flex-row-reverse">
+          <div className="rounded-[2px] bg-primary/10 px-4 py-3 text-sm">
+            <pre className="whitespace-pre-wrap font-sans text-sm">{turn.input}</pre>
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {new Date(turn.created_at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </p>
+          </div>
+        </div>
+      </div>
+      {/* The card itself — fetched on render via TanStack Query */}
+      <SlashCommandCard command={turn.command} />
+    </>
+  );
+}
+
+/**
  * StreamingBubble — the in-flight assistant bubble shown while SSE tokens arrive.
- * Displays the accumulated text and a blinking cursor while `active` is true.
- * WHY separate from MessageBubble: streaming text is not yet a Message (no message_id,
- * no created_at, no citations). We avoid mutating the messages array mid-stream.
+ *
+ * WHY MarkdownContent here too: the streaming text often contains markdown
+ * partials. Rendering through MarkdownContent gives consistent typography
+ * with the final message. Trade-off: partial markdown sometimes flickers
+ * (e.g. "**bo" before "**bold**" closes), which is acceptable.
  */
 function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
   return (
@@ -286,8 +363,7 @@ function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
           <Bot className="h-3.5 w-3.5 text-primary" />
         </div>
         <div className="rounded-[2px] bg-muted px-4 py-3 text-sm leading-relaxed">
-          <pre className="whitespace-pre-wrap font-sans text-sm">{streaming.text}</pre>
-          {/* Blinking cursor: visible while stream is active, hidden once done */}
+          <MarkdownContent size="comfortable">{streaming.text}</MarkdownContent>
           {streaming.active && (
             <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" />
           )}
@@ -297,70 +373,185 @@ function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
   );
 }
 
+// ── Thread sidebar item (with rename) ────────────────────────────────────────
+
+/**
+ * ThreadItem — sidebar row for a single thread.
+ *
+ * WHY split out: the rename UX (double-click → input → Enter / Esc) added
+ * enough state that inlining it inside the page render would clutter the
+ * main component. Keep the parent list rendering small and readable.
+ *
+ * PLAN-0051 T-E-5-06: optimistic title update with rollback on PATCH error.
+ */
+function ThreadItem({
+  thread,
+  isActive,
+  onSelect,
+  onDelete,
+  onRename,
+}: {
+  thread: Thread;
+  isActive: boolean;
+  onSelect: (id: string) => void;
+  onDelete: (id: string, e: React.MouseEvent) => void;
+  onRename: (id: string, newTitle: string) => Promise<void>;
+}) {
+  // WHY local edit state: the row owns its own draft title while the input
+  // is shown, then propagates to the parent via onRename on commit.
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(thread.title ?? "");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Re-sync the draft when the underlying thread title changes (e.g. after
+  // a successful PATCH the parent's optimistic update flows down).
+  useEffect(() => {
+    setDraft(thread.title ?? "");
+  }, [thread.title]);
+
+  // Auto-focus the input when entering edit mode.
+  useEffect(() => {
+    if (isEditing) inputRef.current?.focus();
+  }, [isEditing]);
+
+  /**
+   * commit — try to PATCH the new title; revert local state on error.
+   */
+  async function commit() {
+    const trimmed = draft.trim();
+    setIsEditing(false);
+    // Empty titles are rejected; revert to current value.
+    if (!trimmed || trimmed === (thread.title ?? "")) {
+      setDraft(thread.title ?? "");
+      return;
+    }
+    try {
+      await onRename(thread.thread_id, trimmed);
+    } catch {
+      // Rollback the draft on error so the user can retry.
+      setDraft(thread.title ?? "");
+    }
+  }
+
+  function cancel() {
+    setDraft(thread.title ?? "");
+    setIsEditing(false);
+  }
+
+  return (
+    <div
+      className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-3 py-2.5 transition-colors hover:bg-muted"
+      style={isActive ? { backgroundColor: "rgba(232,163,23,0.08)" } : undefined}
+      onClick={() => !isEditing && onSelect(thread.thread_id)}
+      role="button"
+      aria-pressed={isActive}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (isEditing) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(thread.thread_id);
+        }
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onBlur={() => void commit()}
+            onKeyDown={(e) => {
+              // WHY stopPropagation: prevent the parent's onKeyDown from
+              // re-selecting the thread on Enter while we're editing.
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void commit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancel();
+              }
+            }}
+            className={cn(
+              "w-full rounded-[2px] border border-primary/40 bg-card",
+              "px-1.5 py-0.5 text-sm text-foreground",
+              "focus:outline-none focus:ring-1 focus:ring-primary",
+            )}
+            aria-label="Edit thread title"
+            maxLength={200}
+          />
+        ) : (
+          <p
+            className={`truncate text-sm ${
+              isActive ? "font-medium text-primary" : "text-foreground"
+            }`}
+            // WHY double-click to rename: matches Slack/Notion convention.
+            // Keeps single-click for "select thread", double-click for edit.
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setIsEditing(true);
+            }}
+            title="Double-click to rename"
+          >
+            {thread.title ?? PLACEHOLDER_THREAD_TITLE}
+          </p>
+        )}
+        <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+          {new Date(thread.updated_at).toLocaleDateString([], {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      </div>
+
+      <button
+        className="hidden shrink-0 rounded-[2px] p-0.5 text-muted-foreground hover:text-destructive group-hover:flex"
+        onClick={(e) => onDelete(thread.thread_id, e)}
+        aria-label={`Delete thread: ${thread.title ?? PLACEHOLDER_THREAD_TITLE}`}
+        tabIndex={-1}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 // ── Main page component ───────────────────────────────────────────────────────
 
 export default function ChatPage() {
   const { accessToken } = useAuth();
+  const queryClient = useQueryClient();
 
   // ── Entity context from URL param ─────────────────────────────────────────
-  // WHY useSearchParams: the instrument detail page navigates to /chat?entity_id=XXX
-  // to pre-load AI context so questions auto-focus on the selected entity.
   const searchParams = useSearchParams();
   const entityIdFromUrl = searchParams.get("entity_id");
-
-  // WHY entityTicker: we use the entity_id as-is for the context badge since
-  // a gateway lookup for ticker would require additional async complexity.
-  // A future wave can enrich this with a getEntity() call.
   const [entityTicker] = useState<string | null>(entityIdFromUrl);
 
   // ── Thread list state ──────────────────────────────────────────────────────
-
-  /** Currently selected thread_id. null = no thread selected yet. */
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-
-  /**
-   * Locally accumulated messages for the active thread.
-   * WHY local state (not just TanStack Query cache): streaming tokens arrive
-   * one-by-one and need to update the UI at ~50 ms granularity. Mutating the
-   * TanStack Query cache at that rate would cause excessive re-renders. We load
-   * the initial history from the query cache, then track new messages locally.
-   */
-  const [localMessages, setLocalMessages] = useState<Message[]>([]);
-
-  /** Transient streaming state for the in-flight SSE bubble */
+  const [localMessages, setLocalMessages] = useState<LogEntry[]>([]);
   const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
-
-  /** Input textarea value */
   const [input, setInput] = useState("");
-
-  /** Error message displayed in the chat area */
   const [chatError, setChatError] = useState<string | null>(null);
 
+  // ── Thread search (T-E-5-03) ──────────────────────────────────────────────
+  // WHY two states: `searchInput` reacts immediately to typing (controlled
+  // input); `searchQuery` is the debounced value that drives filtering. This
+  // is the textbook pattern — avoids re-rendering the list on every keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+
   // ── Refs ───────────────────────────────────────────────────────────────────
-
-  /**
-   * WHY useRef for the AbortController: SSE reading is async imperative work.
-   * Storing the controller in a ref lets us call abort() from the Cancel button
-   * without triggering re-renders on each stream chunk.
-   */
   const abortRef = useRef<AbortController | null>(null);
-
-  /**
-   * WHY useRef for scroll target: We imperatively scroll to the bottom when
-   * new messages arrive. Storing the DOM node in a ref is the correct pattern
-   * for imperative DOM operations in React (not state).
-   */
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
-  /**
-   * Thread list query — fetches all threads for the sidebar.
-   * WHY staleTime 30s: thread titles change rarely; avoid hammering S9 while
-   * the user is actively chatting.
-   */
   const {
     data: threads,
     isLoading: threadsLoading,
@@ -373,10 +564,6 @@ export default function ChatPage() {
     staleTime: 30_000,
   });
 
-  /**
-   * Active thread query — loads the message history when a thread is selected.
-   * WHY disabled when no activeThreadId: prevents a useless request on initial load.
-   */
   const {
     data: activeThread,
     isLoading: threadLoading,
@@ -384,48 +571,64 @@ export default function ChatPage() {
     queryKey: ["thread", activeThreadId, accessToken],
     queryFn: () => createGateway(accessToken).getThread(activeThreadId!),
     enabled: !!accessToken && !!activeThreadId,
-    staleTime: 0, // WHY staleTime 0: always fresh — new messages may have arrived
+    staleTime: 0,
   });
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
-  /**
-   * Sync activeThread messages into localMessages when the thread query succeeds.
-   * WHY conditional: only update if the thread is the one we're displaying AND
-   * we are not mid-stream (to avoid overwriting streaming tokens with stale data).
-   */
+  // Sync activeThread messages into localMessages when the thread query succeeds.
   useEffect(() => {
     if (activeThread && activeThread.thread_id === activeThreadId && !streaming) {
       setLocalMessages(activeThread.messages);
     }
   }, [activeThread, activeThreadId, streaming]);
 
-  /**
-   * Scroll to bottom whenever messages update or a streaming token arrives.
-   * WHY scrollIntoView (not scrollTop): works regardless of container nesting depth.
-   */
+  // Auto-scroll to bottom on new tokens / messages.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localMessages, streaming?.text]);
 
-  // Cleanup: abort any in-flight stream when the component unmounts
+  // Cancel any in-flight stream on unmount.
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
     };
   }, []);
 
-  // ── Handlers ───────────────────────────────────────────────────────────────
+  // Debounce searchInput → searchQuery (200ms per task spec).
+  useEffect(() => {
+    const handle = setTimeout(() => setSearchQuery(searchInput), 200);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
+
+  // ── Derived: filtered threads ─────────────────────────────────────────────
 
   /**
-   * handleNewChat — creates a new conversation thread.
+   * filteredThreads — apply the search filter (case-insensitive substring
+   * match against title + last assistant message snippet).
    *
-   * WHY crypto.randomUUID() (not POST /v1/threads first):
-   * We assign the thread_id client-side so streaming can begin immediately
-   * without waiting for a round-trip. S9 creates the thread lazily on the
-   * first POST /chat/stream if the thread_id doesn't exist yet.
-   * This reduces perceived latency — the user can type immediately.
+   * WHY include the last message: users frequently remember a phrase from
+   * the answer ("...that NVDA report on Hopper...") even when they don't
+   * remember what they titled the thread.
    */
+  const filteredThreads = useMemo(() => {
+    if (!threads) return undefined;
+    if (!searchQuery.trim()) return threads;
+    const needle = searchQuery.trim().toLowerCase();
+    return threads.filter((t) => {
+      const title = (t.title ?? "").toLowerCase();
+      // WHY check messages[]: the API may return summary message text via
+      // last_msg_at and we can also peek at the messages tuple when present.
+      const msgText = t.messages
+        ?.map((m) => m.content)
+        .join(" ")
+        .toLowerCase() ?? "";
+      return title.includes(needle) || msgText.includes(needle);
+    });
+  }, [threads, searchQuery]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
+
   const handleNewChat = useCallback(() => {
     const newId = crypto.randomUUID();
     setActiveThreadId(newId);
@@ -433,16 +636,10 @@ export default function ChatPage() {
     setStreaming(null);
     setChatError(null);
     setInput("");
-    // Focus textarea so the user can type immediately
     setTimeout(() => textareaRef.current?.focus(), 50);
   }, []);
 
-  /**
-   * handleSelectThread — load an existing thread.
-   * Aborts any ongoing stream for the previous thread first.
-   */
   const handleSelectThread = useCallback((threadId: string) => {
-    // Cancel any in-flight stream for the previous thread
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
@@ -453,13 +650,8 @@ export default function ChatPage() {
     setInput("");
   }, []);
 
-  /**
-   * handleDeleteThread — delete a thread and deselect it if active.
-   */
   const handleDeleteThread = useCallback(
     async (threadId: string, e: React.MouseEvent) => {
-      // WHY stopPropagation: clicking Delete inside the thread list item should
-      // not also trigger the "select thread" click handler on the parent div.
       e.stopPropagation();
       try {
         await createGateway(accessToken).deleteThread(threadId);
@@ -468,7 +660,6 @@ export default function ChatPage() {
           setLocalMessages([]);
           setStreaming(null);
         }
-        // Refetch thread list to reflect deletion
         void refetchThreads();
       } catch {
         // Silently fail — the thread may already be gone
@@ -478,30 +669,116 @@ export default function ChatPage() {
   );
 
   /**
+   * handleRenameThread — optimistic title update + rollback on PATCH error.
+   *
+   * PLAN-0051 T-E-5-06.
+   *
+   * WHY optimistic via setQueryData: TanStack Query's cache for the threads
+   * list is the single source of truth for the sidebar. Patching the cache
+   * directly avoids a flicker between "old title" and "new title via
+   * refetch". On error we restore the previous snapshot.
+   */
+  const handleRenameThread = useCallback(
+    async (threadId: string, newTitle: string) => {
+      const prev = queryClient.getQueryData<Thread[]>(["threads", accessToken]);
+      // Optimistic: patch the cache.
+      if (prev) {
+        queryClient.setQueryData<Thread[]>(
+          ["threads", accessToken],
+          prev.map((t) =>
+            t.thread_id === threadId ? { ...t, title: newTitle } : t,
+          ),
+        );
+      }
+      try {
+        await createGateway(accessToken).updateThread(threadId, { title: newTitle });
+        // Refresh from authoritative server state once the PATCH resolves.
+        void refetchThreads();
+      } catch (err) {
+        // Rollback on failure.
+        if (prev) {
+          queryClient.setQueryData(["threads", accessToken], prev);
+        }
+        throw err;
+      }
+    },
+    [accessToken, queryClient, refetchThreads],
+  );
+
+  /**
+   * handleExport — download the active thread as a markdown file.
+   *
+   * PLAN-0051 T-E-5-07.
+   *
+   * WHY assemble from current state (not a re-fetch): the user just saw
+   * the messages in localMessages — exporting exactly what they see is the
+   * principle of least surprise. We filter out SlashTurn entries because
+   * they aren't real Messages on the server side (their cards are
+   * client-rendered). For the export, the user's typed slash command is
+   * preserved as a "User" message; the card is omitted (re-rendering it
+   * server-side has no value in a markdown file).
+   */
+  const handleExport = useCallback(() => {
+    if (!activeThread) return;
+    const messageList: Message[] = localMessages.flatMap((entry): Message[] => {
+      if ("kind" in entry && entry.kind === "slash") {
+        // Convert the slash echo into a synthetic User Message for the export.
+        return [
+          {
+            message_id: entry.message_id,
+            thread_id: activeThread.thread_id,
+            role: "user",
+            content: entry.input,
+            created_at: entry.created_at,
+            citations: [],
+          },
+        ];
+      }
+      return [entry as Message];
+    });
+    downloadThread(activeThread, messageList);
+  }, [activeThread, localMessages]);
+
+  /**
    * handleSend — POST to /v1/chat/stream and consume the SSE response.
    *
-   * STATE MACHINE:
-   *   idle → sending (user submits) → streaming (SSE data arrives) → idle ([DONE])
-   *
-   * ERROR PATHS:
-   *   - Fetch fails (network error, S9 down): setChatError + reset to idle
-   *   - Stream interrupted (reader done=true without [DONE]): show partial + note
-   *   - 401/403: shows auth error (re-login needed)
+   * PLAN-0051 T-E-5-01: BEFORE the LLM call, try parseInput. If it returns
+   * a ParsedCommand, render an inline SlashCommandCard turn and skip the
+   * round-trip to the LLM entirely.
    */
   const handleSend = useCallback(async () => {
     const question = input.trim();
     if (!question || streaming || !accessToken) return;
 
-    // Auto-create a thread if none is selected
+    // ── Slash command short-circuit ───────────────────────────────────────
+    const parsed = parseInput(question);
+    if (parsed) {
+      // Append a slash turn to the local log; don't call the LLM.
+      let threadId = activeThreadId;
+      if (!threadId) {
+        threadId = crypto.randomUUID();
+        setActiveThreadId(threadId);
+      }
+      const turn: SlashTurn = {
+        kind: "slash",
+        message_id: crypto.randomUUID(),
+        command: parsed,
+        input: question,
+        created_at: new Date().toISOString(),
+      };
+      setLocalMessages((prev) => [...prev, turn]);
+      setInput("");
+      setChatError(null);
+      return;
+    }
+
+    // ── Standard LLM path ─────────────────────────────────────────────────
     let threadId = activeThreadId;
     if (!threadId) {
       threadId = crypto.randomUUID();
       setActiveThreadId(threadId);
     }
 
-    // Optimistically add the user message to the local message list.
-    // WHY optimistic: The user's question is certain — no need to wait for
-    // S9 to echo it back. Creates a snappier feel.
     const userMessage: Message = {
       message_id: crypto.randomUUID(),
       thread_id: threadId,
@@ -512,14 +789,11 @@ export default function ChatPage() {
     };
 
     setLocalMessages((prev) => [...prev, userMessage]);
-    setInput(""); // Clear input immediately — good UX, user can compose follow-up
+    setInput("");
     setChatError(null);
 
-    // Create AbortController so the Cancel button can stop the stream
     const controller = new AbortController();
     abortRef.current = controller;
-
-    // Show the typing indicator immediately
     setStreaming({ text: "", active: true });
 
     try {
@@ -527,16 +801,9 @@ export default function ChatPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // WHY Authorization header (not URL param): tokens in URLs appear in
-          // server logs, proxy logs, browser history. Bearer header is never logged.
           "Authorization": `Bearer ${accessToken}`,
         },
-        // WHY `message` not `question`: S8 ChatRequestSchema expects `message` field.
-        // (AI-005 fix: field name mismatch caused 422 validation error)
-        body: JSON.stringify({ message: question, thread_id: threadId } satisfies {
-          message: string;
-          thread_id: string;
-        }),
+        body: JSON.stringify({ message: question, thread_id: threadId }),
         signal: controller.signal,
       });
 
@@ -550,36 +817,22 @@ export default function ChatPage() {
       }
 
       const decoder = new TextDecoder();
-      /**
-       * WHY buffer: SSE chunks don't always align with newlines. A single
-       * reader.read() call may return half a "data: ..." line or multiple lines.
-       * The buffer accumulates bytes until we have a complete newline-terminated line.
-       */
       let buffer = "";
       let finalContent = "";
 
       while (true) {
         const { done, value } = await reader.read();
-
-        if (done) {
-          // Stream ended without [DONE] sentinel — treat accumulated text as final
-          break;
-        }
+        if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-
-        // Process all complete lines in the buffer
         const lines = buffer.split("\n");
-        // Keep the last (possibly incomplete) line in the buffer for the next chunk
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (!line.startsWith("data: ")) continue; // WHY: skip SSE comment/event-type lines
-
-          const payload = line.slice(6); // strip "data: " prefix (6 chars)
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
 
           if (payload === "[DONE]") {
-            // Stream complete — move accumulated text to the messages array
             setStreaming(null);
             if (finalContent) {
               const assistantMessage: Message = {
@@ -588,26 +841,19 @@ export default function ChatPage() {
                 role: "assistant",
                 content: finalContent,
                 created_at: new Date().toISOString(),
-                // WHY empty citations: Citations come from the thread history endpoint,
-                // not the stream. After [DONE], a background refetch populates citations.
                 citations: [],
               };
               setLocalMessages((prev) => [...prev, assistantMessage]);
             }
-            // Refetch thread list to update the thread title (S9 sets it after first turn)
             void refetchThreads();
             return;
           }
 
-          // Parse the JSON token payload
           try {
-            const parsed = JSON.parse(payload) as { text?: string; token?: string };
-            // WHY text ?? token: S8 SSE emitter sends {"text": ...} (AI-006 fix)
-            const chunk = parsed.text ?? parsed.token;
+            const parsedToken = JSON.parse(payload) as { text?: string; token?: string };
+            const chunk = parsedToken.text ?? parsedToken.token;
             if (chunk) {
               finalContent += chunk;
-              // WHY functional update: guarantees we always append to the latest state
-              // even if React batches multiple setState calls before rendering.
               setStreaming((prev) =>
                 prev ? { ...prev, text: prev.text + chunk } : prev,
               );
@@ -618,7 +864,6 @@ export default function ChatPage() {
         }
       }
 
-      // Stream ended (done=true) without [DONE] — show what we have
       setStreaming(null);
       if (finalContent) {
         const assistantMessage: Message = {
@@ -632,8 +877,6 @@ export default function ChatPage() {
         setLocalMessages((prev) => [...prev, assistantMessage]);
       }
     } catch (err) {
-      // WHY check AbortError: when the user clicks Cancel, the fetch throws
-      // an AbortError. That's expected — not a real error to display.
       if (err instanceof Error && err.name === "AbortError") {
         setStreaming(null);
         return;
@@ -647,11 +890,6 @@ export default function ChatPage() {
     }
   }, [input, streaming, accessToken, activeThreadId, refetchThreads]);
 
-  /**
-   * handleCancelStream — abort the current SSE stream.
-   * WHY expose: LLM responses can be very long. Giving the user a Cancel button
-   * respects their time — they can stop reading at any point without waiting.
-   */
   const handleCancelStream = useCallback(() => {
     if (abortRef.current) {
       abortRef.current.abort();
@@ -660,11 +898,6 @@ export default function ChatPage() {
     setStreaming(null);
   }, []);
 
-  /**
-   * handleKeyDown — Enter sends, Shift+Enter inserts newline.
-   * WHY this pattern: Standard chat UX (Slack, Teams, Claude.ai).
-   * Analysts frequently write multi-line questions ("Compare:\n- NVDA Q4\n- AMD Q4").
-   */
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -676,20 +909,13 @@ export default function ChatPage() {
 
   const isStreaming = streaming !== null;
   const isSendDisabled = !input.trim() || isStreaming || !accessToken;
+  const showAutocomplete = input.trimStart().startsWith("/") && !input.includes("\n");
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    // WHY h-full overflow-hidden: The page sits inside the (app) layout's
-    // <main className="flex-1 overflow-y-auto">. We want the chat to fill
-    // that area without double-scrolling — the inner ScrollArea handles scroll.
     <div className="flex h-full overflow-hidden">
-
-      {/* ════════════════════════════════════════════════════════════════════
-          LEFT PANEL — Thread List (w-[280px])
-          WHY fixed width (not flex): thread titles are variable length but
-          the sidebar should never push the chat area below a usable width.
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* ════════════════ LEFT PANEL — Thread List ════════════════ */}
       <aside
         className="flex w-[280px] shrink-0 flex-col border-r border-border bg-background"
         aria-label="Chat thread list"
@@ -700,10 +926,6 @@ export default function ChatPage() {
             <MessageSquare className="h-4 w-4 text-primary" />
             <span className="text-sm font-semibold text-foreground">Threads</span>
           </div>
-          {/*
-           * WHY "New chat" button: Prominent action that starts a fresh conversation.
-           * Placed at the top — natural starting point for a new research session.
-           */}
           <Button
             size="sm"
             variant="outline"
@@ -716,114 +938,75 @@ export default function ChatPage() {
           </Button>
         </div>
 
+        {/* Thread search box (T-E-5-03) — debounced 200ms via effect above */}
+        <div className="border-b border-border/40 p-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search threads…"
+              aria-label="Search threads"
+              className={cn(
+                "w-full rounded-[2px] border border-border bg-muted",
+                "pl-7 pr-2 py-1.5 text-xs text-foreground",
+                "placeholder:text-muted-foreground",
+                "focus:outline-none focus:ring-1 focus:ring-primary",
+              )}
+            />
+          </div>
+        </div>
+
         {/* Thread list body */}
         <ScrollArea className="flex-1">
           <div className="space-y-0.5 p-2">
-
-            {/* Loading skeleton — shows while threads query is in-flight */}
             {threadsLoading && (
               <div className="space-y-1.5 p-1" aria-label="Loading threads">
                 {[...Array(5)].map((_, i) => (
-                  // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule;
-                  // WHY h-8 (was h-12): compact thread skeleton matching thread row height
                   <Skeleton key={i} className="h-8 w-full rounded-[2px]" />
                 ))}
               </div>
             )}
 
-            {/* Error state */}
             {threadsError && !threadsLoading && (
               <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
                 Failed to load threads. Check your connection.
               </div>
             )}
 
-            {/* Empty state — first-time user or all threads deleted */}
-            {/* WHY compact inline (was py-8 centered icon): terminal style */}
             {!threadsLoading && !threadsError && (!threads || threads.length === 0) && (
               <p className="px-3 py-3 text-xs text-muted-foreground">
                 No conversations yet. Click &ldquo;New chat&rdquo; to begin.
               </p>
             )}
 
-            {/* Thread items */}
-            {threads?.map((thread) => {
-              const isActive = thread.thread_id === activeThreadId;
-              return (
-                <div
-                  key={thread.thread_id}
-                  // WHY group: allows hover:visible on the delete button inside
-                  // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
-                  className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-3 py-2.5 transition-colors hover:bg-muted"
-                  // WHY bg-primary/10 on active: clear selection indicator using
-                  // the Bloomberg Dark primary (#E8A317) at low opacity — not overwhelming.
-                  // WHY inline style: Tailwind's dynamic class generation can't handle
-                  // runtime conditionals in className for active thread highlighting.
-                  // rgba(232,163,23,0.08) = Bloomberg Dark primary #E8A317 at 8% opacity.
-                  style={isActive ? { backgroundColor: "rgba(232,163,23,0.08)" } : undefined}
-                  onClick={() => handleSelectThread(thread.thread_id)}
-                  role="button"
-                  aria-pressed={isActive}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      handleSelectThread(thread.thread_id);
-                    }
-                  }}
-                >
-                  <div className="min-w-0 flex-1">
-                    {/* Thread title — null until S9 sets it after first turn */}
-                    <p
-                      className={`truncate text-sm ${
-                        isActive ? "font-medium text-primary" : "text-foreground"
-                      }`}
-                    >
-                      {thread.title ?? PLACEHOLDER_THREAD_TITLE}
-                    </p>
-                    {/* WHY font-mono on date: dates are data, not prose */}
-                    <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                      {new Date(thread.updated_at).toLocaleDateString([], {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  </div>
+            {/* WHY filteredThreads (was threads): the search box narrows the
+                list client-side. When search is empty filteredThreads === threads. */}
+            {filteredThreads?.length === 0 && threads && threads.length > 0 && (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                No threads match &ldquo;{searchQuery}&rdquo;.
+              </p>
+            )}
 
-                  {/*
-                   * Delete button — hidden until hover (group-hover:flex).
-                   * WHY hover-reveal (not always visible): avoids visual noise.
-                   * The user needs to hover over the specific thread to see/click Delete.
-                   */}
-                  <button
-                    className="hidden shrink-0 rounded-[2px] p-0.5 text-muted-foreground hover:text-destructive group-hover:flex"
-                    onClick={(e) => void handleDeleteThread(thread.thread_id, e)}
-                    aria-label={`Delete thread: ${thread.title ?? PLACEHOLDER_THREAD_TITLE}`}
-                    tabIndex={-1} // WHY -1: delete is secondary action, not in tab order
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              );
-            })}
+            {filteredThreads?.map((thread) => (
+              <ThreadItem
+                key={thread.thread_id}
+                thread={thread}
+                isActive={thread.thread_id === activeThreadId}
+                onSelect={handleSelectThread}
+                onDelete={handleDeleteThread}
+                onRename={handleRenameThread}
+              />
+            ))}
           </div>
         </ScrollArea>
       </aside>
 
-      {/* ════════════════════════════════════════════════════════════════════
-          RIGHT PANEL — Chat Area (flex-1)
-      ════════════════════════════════════════════════════════════════════ */}
+      {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
-
-        {/* ── No thread selected: welcome / empty state ── */}
-        {/* WHY compact (was large centered icon + text-lg + p-8):
-            Terminal chat empty states use compact inline messaging, not a marketing-style
-            welcome card. The panel is part of a split layout — excessive padding
-            creates a consumer-app feel. */}
+        {/* Welcome / empty state */}
         {!activeThreadId && (
-          // WHY p-4 (was p-6): tighter padding for terminal panel welcome state
           <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-background p-4 text-center">
             <p className="text-sm font-semibold text-foreground">Intelligence Chat</p>
             <p className="max-w-sm text-xs text-muted-foreground">
@@ -840,15 +1023,34 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* ── Thread selected: message area + input ── */}
         {activeThreadId && (
           <>
-            {/* Message list — scrollable, fills available height */}
-            <ScrollArea className="flex-1 bg-background">
-              {/* WHY p-4 gap-3 (was p-6 gap-4): tighter message spacing */}
-              <div className="flex flex-col gap-3 p-4">
+            {/* Thread header — title + Export button */}
+            {/* WHY a header strip (T-E-5-07): the export button needs a
+                conventional resting place; a dedicated row above the messages
+                also reinforces the active thread title at the top of the panel. */}
+            <div className="flex items-center justify-between border-b border-border px-4 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {activeThread?.title ?? PLACEHOLDER_THREAD_TITLE}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExport}
+                disabled={!activeThread || localMessages.length === 0}
+                className="h-7 gap-1 border-border px-2 text-xs"
+                aria-label="Export thread as Markdown"
+              >
+                <Download className="h-3 w-3" />
+                Export
+              </Button>
+            </div>
 
-                {/* Loading skeleton while thread history is fetching */}
+            {/* Message list */}
+            <ScrollArea className="flex-1 bg-background">
+              <div className="flex flex-col gap-3 p-4">
                 {threadLoading && (
                   <div className="space-y-4" aria-label="Loading messages">
                     {[...Array(3)].map((_, i) => (
@@ -862,79 +1064,74 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* ── Starter questions — shown when thread has no messages ────── */}
-                {/* WHY 2-col grid: 6 questions fit in a balanced 3-row × 2-col layout
-                    that fills the empty thread canvas without feeling sparse */}
+                {/* Starter questions — entity-aware (T-E-5-05) */}
                 {!threadLoading && localMessages.length === 0 && !streaming && (
-                  <div className="grid grid-cols-2 gap-2 p-3">
-                    {STARTER_QUESTIONS.map((q, i) => {
-                      // Replace [TICKER] placeholder with entity ticker from URL or leave as-is
-                      const displayQuestion = q.replace(
-                        "[TICKER]",
-                        entityTicker ?? "[TICKER]",
-                      );
-                      return (
-                        <button
-                          key={i}
-                          type="button"
-                          // WHY rounded-[2px]: design system 2px radius everywhere
-                          className={cn(
-                            "rounded-[2px] border border-border bg-card",
-                            "cursor-pointer p-3 text-left",
-                            "hover:border-primary/40 hover:bg-muted/40",
-                            "text-[12px] leading-relaxed text-foreground",
-                            "transition-colors duration-0",
-                          )}
-                          // WHY inject into input (not send directly): trader may want
-                          // to edit the question before sending — especially the
-                          // [TICKER] placeholder variants.
-                          onClick={() => setInput(displayQuestion)}
-                        >
-                          {displayQuestion}
-                        </button>
-                      );
-                    })}
+                  <div
+                    className={cn(
+                      "grid gap-2 p-3",
+                      // WHY 2 cols for 4 entity starters and 6 generic ones
+                      // alike: same visual rhythm regardless of count.
+                      "grid-cols-2",
+                    )}
+                  >
+                    {(entityTicker ? entityStarters(entityTicker) : STARTER_QUESTIONS).map(
+                      (q, i) => {
+                        // For generic starters we substitute [TICKER] with
+                        // the URL ticker if available (legacy behaviour
+                        // preserved). Entity starters already have the ticker
+                        // baked in.
+                        const display = entityTicker
+                          ? q
+                          : q.replace("[TICKER]", entityTicker ?? "[TICKER]");
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            className={cn(
+                              "rounded-[2px] border border-border bg-card",
+                              "cursor-pointer p-3 text-left",
+                              "hover:border-primary/40 hover:bg-muted/40",
+                              "text-[12px] leading-relaxed text-foreground",
+                              "transition-colors duration-0",
+                            )}
+                            onClick={() => setInput(display)}
+                          >
+                            {display}
+                          </button>
+                        );
+                      },
+                    )}
                   </div>
                 )}
 
-                {/* Render persisted messages */}
-                {localMessages.map((msg) => (
-                  <MessageBubble key={msg.message_id} message={msg} />
-                ))}
+                {/* Render messages + slash turns */}
+                {localMessages.map((entry) => {
+                  if ("kind" in entry && entry.kind === "slash") {
+                    return <SlashTurnBlock key={entry.message_id} turn={entry} />;
+                  }
+                  const msg = entry as Message;
+                  return <MessageBubble key={msg.message_id} message={msg} />;
+                })}
 
                 {/* In-flight SSE stream */}
                 {streaming && streaming.text ? (
-                  // WHY only show StreamingBubble when there's text: avoids a flash
-                  // of an empty bubble before the first token arrives.
                   <StreamingBubble streaming={streaming} />
                 ) : streaming ? (
-                  // Still waiting for first token — show animated typing indicator
                   <TypingIndicator />
                 ) : null}
 
-                {/* Error state — shown below the last message */}
                 {chatError && (
                   <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
                     {chatError}
                   </div>
                 )}
 
-                {/*
-                 * WHY an empty div as scroll anchor:
-                 * messagesEndRef.current.scrollIntoView() scrolls to this div,
-                 * which is always the last element — keeps the latest message visible.
-                 */}
                 <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
 
-            {/* ── Input area ─────────────────────────────────────────────────── */}
-            {/* WHY p-3 (was p-4): standard terminal panel padding */}
+            {/* ── Input area ─────────────────────────────────────────────── */}
             <div className="border-t border-border bg-background p-3">
-              {/* Entity context badge — shown when ?entity_id= param is set */}
-              {/* WHY above input: the badge tells the trader which entity their
-                  questions will be focused on. Placing it above the textarea
-                  keeps it in natural reading order (context → input). */}
               {entityIdFromUrl && (
                 <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
                   <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
@@ -946,7 +1143,6 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Cancel button — only visible while streaming */}
               {isStreaming && (
                 <div className="mb-2 flex justify-center">
                   <Button
@@ -960,23 +1156,30 @@ export default function ChatPage() {
                 </div>
               )}
 
+              {/* Slash command autocomplete — visible while typing /... */}
+              {showAutocomplete && (
+                <SlashCommandAutocomplete
+                  query={input}
+                  onPick={(cmd) => {
+                    // Fill the input with the verb and a trailing space so the
+                    // user can type args. For arg-less commands the trailing
+                    // space is harmless and Enter submits immediately.
+                    setInput(`/${cmd.name}${cmd.argSpec ? " " : ""}`);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              )}
+
               <div className="flex items-end gap-2">
-                {/*
-                 * WHY Textarea (not Input): Chat messages can be multi-line.
-                 * Analysts write structured questions with bullet points.
-                 * Auto-resize via row calculation keeps the box compact for short
-                 * messages but grows for longer ones.
-                 */}
                 <textarea
                   ref={textareaRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask about markets, companies, news… (Enter to send, Shift+Enter for newline)"
+                  placeholder="Ask about markets, companies, news…  Type / for commands. (Enter to send, Shift+Enter for newline)"
                   rows={2}
                   disabled={isStreaming}
-                  maxLength={2000} // WHY 2000: PRD-0028 §9.2 input validation limit
-                  // WHY rounded-[2px] (was rounded-lg): terminal 2px radius rule
+                  maxLength={2000}
                   className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label="Chat message input"
                 />
@@ -991,7 +1194,6 @@ export default function ChatPage() {
                 </Button>
               </div>
 
-              {/* Character count — visible when input is getting long */}
               {input.length > 1500 && (
                 <p className="mt-1 font-mono text-[10px] text-muted-foreground">
                   {input.length} / 2000

@@ -41,6 +41,8 @@ def _make_mock_uow() -> MagicMock:
     uow.threads.get = AsyncMock(return_value=None)
     uow.threads.list_active = AsyncMock(return_value=([], 0))
     uow.threads.soft_delete = AsyncMock(return_value=datetime(2026, 4, 6, 12, 0, 0, tzinfo=UTC))
+    # PLAN-0051 T-E-5-06: PATCH /threads/{id} -> update_title
+    uow.threads.update_title = AsyncMock(return_value=_make_thread())
     uow.commit = AsyncMock(return_value=None)
     return uow
 
@@ -208,6 +210,65 @@ class TestDeleteThreadEndpoint:
         transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.delete(f"/api/v1/threads/{_THREAD_ID}", headers=_AUTH_HEADERS)
+
+        assert resp.status_code == 404
+
+
+# ── PATCH /api/v1/threads/{thread_id} (PLAN-0051 T-E-5-06) ───────────────────
+
+
+class TestUpdateThreadEndpoint:
+    async def test_update_thread_endpoint_renames_title(self, app_with_mocks: object, mock_uow: MagicMock) -> None:
+        """PATCH /api/v1/threads/{id} with valid body -> 200 with new title."""
+        from rag_chat.domain.entities.conversation import ConversationThread
+
+        # Construct a thread reflecting the renamed state for the mock to return.
+        renamed = ConversationThread(
+            thread_id=_THREAD_ID,
+            tenant_id=_TENANT_ID,
+            user_id=_USER_ID,
+            created_at=datetime(2026, 4, 6, 10, 0, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 4, 6, 10, 0, 0, tzinfo=UTC),
+            title="Renamed analysis",
+            entity_ids=(),
+            messages=(),
+            archived_at=None,
+        )
+        mock_uow.threads.update_title = AsyncMock(return_value=renamed)
+
+        transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/threads/{_THREAD_ID}",
+                json={"title": "Renamed analysis"},
+                headers=_AUTH_HEADERS,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["thread_id"] == str(_THREAD_ID)
+        assert data["title"] == "Renamed analysis"
+        # Repository was invoked with the new title (ownership filters applied
+        # internally — verified by the kwargs).
+        kwargs = mock_uow.threads.update_title.call_args.kwargs
+        assert kwargs["title"] == "Renamed analysis"
+        assert kwargs["thread_id"] == _THREAD_ID
+
+    async def test_update_thread_not_found_returns_404(self, app_with_mocks: object, mock_uow: MagicMock) -> None:
+        """PATCH on a missing/foreign thread surfaces ThreadNotFoundError as 404."""
+        from rag_chat.domain.errors import ThreadNotFoundError
+
+        mock_uow.threads.update_title = AsyncMock(
+            side_effect=ThreadNotFoundError("not found"),
+        )
+
+        transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/threads/{_THREAD_ID}",
+                json={"title": "New"},
+                headers=_AUTH_HEADERS,
+            )
 
         assert resp.status_code == 404
 

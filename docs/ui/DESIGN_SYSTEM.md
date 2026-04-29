@@ -498,6 +498,33 @@ Implementation:
   - Hook `useSymbolLinking()` exposes the full API (`links`, `setLinkColor`,
     `setActiveSymbol`, `getSymbolForPanel`).
 
+### 6.14 Citation Confidence Bar Pattern (PLAN-0051 Wave E)
+
+A compact horizontal strip visualising per-citation relevance scores below
+RAG/Chat assistant messages. One segment per citation, coloured by score
+band:
+
+| Score band | Token | Visual |
+|------------|-------|--------|
+| `>= 0.7` | `bg-positive/70` | Green — high confidence |
+| `0.4 – 0.7` | `bg-warning/70` | Amber — medium confidence |
+| `< 0.4` | `bg-negative/70` | Red — low confidence |
+
+Rules:
+
+- Hover/focus a segment surfaces a tooltip via the native `title=` attribute
+  (`[N] Title — Source — score% (band)`); screen readers get the same info
+  via an `sr-only` span inside each segment.
+- Each segment is an `<a href="#prefix-N">` linking to the matching `[N]`
+  marker in the message body. Clicking smooth-scrolls the marker into view
+  via `Element.scrollIntoView({behavior: "smooth", block: "nearest"})`.
+- Component lives at `apps/worldview-web/components/chat/CitationBar.tsx`.
+  Helper `scoreBand(score)` returns `"high" | "medium" | "low"` for tests.
+- Pair the bar with the existing pill-style `CitationList` for click-through
+  source links — the bar gives at-a-glance gestalt, the pills give
+  navigation. Both rendered inside the assistant message bubble (PLAN-0051
+  T-E-5-04).
+
 ### 6.12 Keyboard Navigation (NEW)
 
 Global shortcut registration via `react-hotkeys-hook` in root layout:

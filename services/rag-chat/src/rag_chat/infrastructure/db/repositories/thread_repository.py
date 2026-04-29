@@ -184,6 +184,45 @@ class SqlAlchemyThreadRepository(ThreadRepository):
             raise ThreadNotFoundError(f"Thread {thread_id} not found or access denied")
         return now
 
+    async def update_title(
+        self,
+        thread_id: UUID,
+        user_id: UUID,
+        tenant_id: UUID,
+        title: str | None,
+    ) -> ConversationThread:
+        """Atomically update title; return the freshly-fetched thread.
+
+        PLAN-0051 Wave E / T-E-5-06.
+
+        WHY a separate fetch after UPDATE: SQLAlchemy's ``update().returning``
+        does not load the relationship-managed ``messages`` collection. We
+        UPDATE first (which atomically enforces ownership via the WHERE) and
+        then re-load via ``self.get`` so the API response includes the same
+        ThreadDetailResponse shape as GET. The two-step is safe because the
+        UPDATE itself is the ownership check — no TOCTOU window.
+        """
+        from rag_chat.domain.errors import ThreadNotFoundError
+
+        result = await self._session.execute(
+            update(ThreadModel)
+            .where(
+                ThreadModel.thread_id == thread_id,
+                ThreadModel.user_id == user_id,
+                ThreadModel.tenant_id == tenant_id,
+            )
+            .values(title=title)
+        )
+        await self._session.flush()
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            raise ThreadNotFoundError(f"Thread {thread_id} not found or access denied")
+        # Re-fetch with messages eagerly loaded so callers get a complete entity.
+        thread = await self.get(thread_id, user_id, tenant_id)
+        if thread is None:
+            # Defensive: should not happen since the UPDATE just succeeded.
+            raise ThreadNotFoundError(f"Thread {thread_id} not found after update")
+        return thread
+
 
 # ── Serialisation helpers ────────────────────────────────────────────────────
 
