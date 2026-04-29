@@ -118,6 +118,8 @@ def _build_transaction_response(
                 # F-205: enrichment fields (None when instrument not in local cache).
                 ticker=e.ticker,
                 name=e.name,
+                # PLAN-0053 T-D-4-02: asset_class for frontend badge.
+                asset_class=e.asset_class,
                 executed_at=e.transaction.executed_at,
                 external_ref=e.transaction.external_ref,
                 created_at=e.transaction.created_at,

@@ -186,7 +186,10 @@ describe("Wave F · F-P-003 · EquityCurveChart period hoist", () => {
 // F-P-014: Sector allocation bar a11y — aria-label per bar.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("Wave F · F-P-014 · Sector bar a11y label", () => {
-  it("renders aria-label='Sector X: Y%' on each allocation bar", () => {
+  it("renders aria-label='Sector X: Y%' on each allocation bar in BARS view", () => {
+    // PLAN-0053 T-D-4-04: SectorAllocationPanel now defaults to a Treemap
+    // view; the legacy bar a11y attribute lives on the BARS view. Click
+    // the toggle to switch view, then assert the original contract.
     render(
       <SectorAllocationPanel
         bySector={[
@@ -196,6 +199,7 @@ describe("Wave F · F-P-014 · Sector bar a11y label", () => {
         byType={[]}
       />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "bars" }));
     // role=img + aria-label exposes the percentage to assistive tech.
     expect(
       screen.getByLabelText("Sector Information Technology: 50.0%"),
@@ -351,6 +355,8 @@ describe("Wave F · F-P-028 · Zero-qty placeholder rows are de-emphasised", () 
       portfolio_id: "p1",
       instrument_id: "ins-x",
       ticker: "AAPL",
+      // PLAN-0053 T-D-4-02: asset_class is required on Transaction now.
+      asset_class: null,
       type: "BUY",
       quantity: 10,
       price: 100,

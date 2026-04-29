@@ -88,14 +88,19 @@ const VIRTUALISATION_THRESHOLD = 200;
  * The seven columns (Date | Type | Ticker | Qty | Price | Total | Fee) sum
  * to 100% — the header and each virtualised row use the SAME array.
  */
+// PLAN-0053 T-D-4-02: 8 columns now — added an asset-class badge between
+// Type and Ticker. The total still sums to 100% so percentage layout stays
+// correct on every viewport width. We trim Date/Total/Fee by 1-2pp each so
+// the new column borrows breathing room without forcing a horizontal scroll.
 const COLUMN_WIDTHS: readonly string[] = [
-  "16%", // Date — wide enough for "Apr 29, 2026  16:30"
+  "14%", // Date
   "8%", // Type badge
+  "8%", // Asset class badge (new)
   "10%", // Ticker
   "12%", // Qty
   "14%", // Price
-  "20%", // Total
-  "20%", // Fee
+  "18%", // Total
+  "16%", // Fee
 ];
 
 /**
@@ -136,6 +141,71 @@ function typeBadgeClass(type: Transaction["type"]): string {
       return "bg-primary/20 text-primary";
     default:
       return "text-muted-foreground";
+  }
+}
+
+/**
+ * assetClassBadgeClass — color for the asset-class badge (PLAN-0053 T-D-4-02).
+ *
+ * WHY a distinct palette per class: a trader scanning for option fills (red),
+ * crypto rows (cyan), or bonds (purple) gains a fast peripheral cue without
+ * having to read the badge text. Colours sourced from the design tokens —
+ * each at /20 opacity for the chip background and full-saturation for the
+ * text so the chip stays subtle but legible on the dark theme.
+ *
+ * WHY 'unknown' renders muted: the column should not yell "this row is
+ * misclassified" — most rows pre-PLAN-0053 will be 'unknown' on first sight.
+ * A muted chip says "we'll fill this in once your broker re-syncs" without
+ * looking like a bug.
+ */
+/**
+ * assetClassAbbrev — short label for the asset-class badge.
+ *
+ * WHY 2-3 char codes: a 36-44px column has room for ~3 chars at 10px text.
+ * Going wider would either truncate ugly or push the columns out of
+ * proportion. 'OPT', 'FUT', 'CRY' are unambiguous in a finance context.
+ */
+function assetClassAbbrev(cls: string | null | undefined): string {
+  switch ((cls ?? "").toLowerCase()) {
+    case "equity":
+      return "EQ";
+    case "etf":
+      return "ETF";
+    case "option":
+      return "OPT";
+    case "future":
+      return "FUT";
+    case "bond":
+      return "BND";
+    case "crypto":
+      return "CRY";
+    default:
+      return "—";
+  }
+}
+
+function assetClassBadgeClass(cls: string | null | undefined): string {
+  switch ((cls ?? "").toLowerCase()) {
+    case "equity":
+      return "bg-positive/15 text-positive border-positive/30";
+    case "etf":
+      return "bg-primary/15 text-primary border-primary/30";
+    case "option":
+      return "bg-negative/15 text-negative border-negative/30";
+    case "future":
+      return "bg-warning/15 text-warning border-warning/30";
+    case "bond":
+      // No "bond" semantic colour token — re-use muted-foreground for a
+      // dignified low-key visual that suits fixed-income.
+      return "bg-muted-foreground/10 text-muted-foreground border-muted-foreground/30";
+    case "crypto":
+      // No "crypto" semantic colour token — primary at higher opacity
+      // distinguishes it from ETF without adding a new palette entry.
+      return "bg-primary/25 text-primary border-primary/40";
+    default:
+      // 'unknown' or null — least-prominent badge so users skim past
+      // unclassified rows without false alarm.
+      return "bg-muted/40 text-muted-foreground border-border/40";
   }
 }
 
@@ -441,6 +511,24 @@ export function TransactionsTable({
           </span>
         </td>
 
+        {/* PLAN-0053 T-D-4-02: Asset-class badge.
+            WHY uppercase abbreviation: "EQUITY" reads as "EQ" in a 36px-wide
+            column without losing meaning to a trader. We render the full
+            class on the title so screen-reader users still hear the unabbreviated
+            form. */}
+        <td className="px-2">
+          <span
+            className={cn(
+              "inline-flex items-center px-1 rounded-[2px] border font-mono text-[10px] font-semibold uppercase tabular-nums",
+              assetClassBadgeClass(tx.asset_class),
+            )}
+            title={tx.asset_class ?? "Asset class unknown"}
+            data-testid={`tx-asset-class-${tx.transaction_id}`}
+          >
+            {assetClassAbbrev(tx.asset_class)}
+          </span>
+        </td>
+
         {/* Ticker */}
         <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
           {enrichedTicker || "—"}
@@ -663,6 +751,10 @@ export function TransactionsTable({
               <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
                 TYPE
               </th>
+              {/* PLAN-0053 T-D-4-02: asset class column header. */}
+              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
+                CLASS
+              </th>
               <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
                 TICKER
               </th>
@@ -690,7 +782,9 @@ export function TransactionsTable({
             <tbody className="divide-y divide-border/30">
               <tr>
                 <td
-                  colSpan={7}
+                  // PLAN-0053 T-D-4-02: column count went from 7 → 8 with the
+                  // asset-class column.
+                  colSpan={8}
                   className="px-2 py-3 text-center text-[11px] text-muted-foreground"
                 >
                   No {activeFilter === "ALL" ? "" : activeFilter} transactions match

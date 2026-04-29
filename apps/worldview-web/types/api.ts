@@ -570,6 +570,16 @@ export interface Transaction {
   portfolio_id: string;
   instrument_id: string;
   ticker: string;
+  /**
+   * PLAN-0053 T-D-4-02: instrument asset class — surfaced from
+   * ``instruments.asset_class`` via the ListTransactionsUseCase JOIN.
+   * One of ``equity | etf | option | future | bond | crypto | unknown``
+   * (the API does not enforce a closed enum so adapters can introduce new
+   * values without a breaking schema change). Nullable when the instrument
+   * row hasn't synced yet — the table renders a muted "—" badge in that
+   * case rather than a misleading default.
+   */
+  asset_class: string | null;
   type: "BUY" | "SELL" | "DIVIDEND";
   quantity: number;
   price: number;
