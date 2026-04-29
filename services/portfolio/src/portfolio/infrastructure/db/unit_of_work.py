@@ -11,13 +11,19 @@ from portfolio.infrastructure.db.repositories.alert_preference import (
     SqlAlchemyEntitySuppressionRepository,
 )
 from portfolio.infrastructure.db.repositories.auth_audit_log import SqlAlchemyAuthAuditLogRepository
+from portfolio.infrastructure.db.repositories.beta_enrollment import SqlAlchemyBetaEnrollmentRepo
 from portfolio.infrastructure.db.repositories.brokerage_connection import SqlAlchemyBrokerageConnectionRepository
 from portfolio.infrastructure.db.repositories.brokerage_sync_error import (
     SqlAlchemyBrokerageTransactionSyncErrorRepository,
 )
+from portfolio.infrastructure.db.repositories.feature_request import SqlAlchemyFeatureRequestRepo
+from portfolio.infrastructure.db.repositories.feature_vote import SqlAlchemyFeatureVoteRepo
+from portfolio.infrastructure.db.repositories.feedback_submission import SqlAlchemyFeedbackSubmissionRepo
 from portfolio.infrastructure.db.repositories.holding import SqlAlchemyHoldingRepository
 from portfolio.infrastructure.db.repositories.idempotency import SqlAlchemyIdempotencyRepository
 from portfolio.infrastructure.db.repositories.instrument import SqlAlchemyInstrumentRepository
+from portfolio.infrastructure.db.repositories.micro_survey_response import SqlAlchemyMicroSurveyRepo
+from portfolio.infrastructure.db.repositories.nps_score import SqlAlchemyNPSScoreRepo
 from portfolio.infrastructure.db.repositories.outbox import SqlAlchemyOutboxRepository
 from portfolio.infrastructure.db.repositories.portfolio import SqlAlchemyPortfolioRepository
 from portfolio.infrastructure.db.repositories.portfolio_value_snapshot import (
@@ -37,6 +43,14 @@ if TYPE_CHECKING:
     from cryptography.fernet import Fernet
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from portfolio.application.ports.feedback import (
+        BetaEnrollmentRepo,
+        FeatureRequestRepo,
+        FeatureVoteRepo,
+        FeedbackSubmissionRepo,
+        MicroSurveyRepo,
+        NPSScoreRepo,
+    )
     from portfolio.application.ports.repositories import (
         AlertPreferenceRepository,
         AuthAuditLogRepository,
@@ -89,6 +103,13 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
         self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
         self._portfolio_value_snapshots: SqlAlchemyPortfolioValueSnapshotRepository | None = None
+        # Feedback subsystem (PLAN-0052 Wave D)
+        self._feedback_submissions: SqlAlchemyFeedbackSubmissionRepo | None = None
+        self._nps_scores: SqlAlchemyNPSScoreRepo | None = None
+        self._feature_requests: SqlAlchemyFeatureRequestRepo | None = None
+        self._feature_votes: SqlAlchemyFeatureVoteRepo | None = None
+        self._micro_surveys: SqlAlchemyMicroSurveyRepo | None = None
+        self._beta_enrollments: SqlAlchemyBetaEnrollmentRepo | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -172,6 +193,38 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         assert self._portfolio_value_snapshots is not None, "ReadOnlyUnitOfWork not entered"
         return self._portfolio_value_snapshots
 
+    # Feedback subsystem (PLAN-0052 Wave D)
+
+    @property
+    def feedback_submissions(self) -> FeedbackSubmissionRepo:
+        assert self._feedback_submissions is not None, "ReadOnlyUnitOfWork not entered"
+        return self._feedback_submissions
+
+    @property
+    def nps_scores(self) -> NPSScoreRepo:
+        assert self._nps_scores is not None, "ReadOnlyUnitOfWork not entered"
+        return self._nps_scores
+
+    @property
+    def feature_requests(self) -> FeatureRequestRepo:
+        assert self._feature_requests is not None, "ReadOnlyUnitOfWork not entered"
+        return self._feature_requests
+
+    @property
+    def feature_votes(self) -> FeatureVoteRepo:
+        assert self._feature_votes is not None, "ReadOnlyUnitOfWork not entered"
+        return self._feature_votes
+
+    @property
+    def micro_surveys(self) -> MicroSurveyRepo:
+        assert self._micro_surveys is not None, "ReadOnlyUnitOfWork not entered"
+        return self._micro_surveys
+
+    @property
+    def beta_enrollments(self) -> BetaEnrollmentRepo:
+        assert self._beta_enrollments is not None, "ReadOnlyUnitOfWork not entered"
+        return self._beta_enrollments
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
@@ -196,6 +249,13 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
         self._portfolio_value_snapshots = SqlAlchemyPortfolioValueSnapshotRepository(self._session)
+        # Feedback subsystem (PLAN-0052 Wave D)
+        self._feedback_submissions = SqlAlchemyFeedbackSubmissionRepo(self._session)
+        self._nps_scores = SqlAlchemyNPSScoreRepo(self._session)
+        self._feature_requests = SqlAlchemyFeatureRequestRepo(self._session)
+        self._feature_votes = SqlAlchemyFeatureVoteRepo(self._session)
+        self._micro_surveys = SqlAlchemyMicroSurveyRepo(self._session)
+        self._beta_enrollments = SqlAlchemyBetaEnrollmentRepo(self._session)
         return self
 
     async def __aexit__(
@@ -245,6 +305,13 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._brokerage_sync_errors: SqlAlchemyBrokerageTransactionSyncErrorRepository | None = None
         self._auth_audit_log: SqlAlchemyAuthAuditLogRepository | None = None
         self._portfolio_value_snapshots: SqlAlchemyPortfolioValueSnapshotRepository | None = None
+        # Feedback subsystem (PLAN-0052 Wave D)
+        self._feedback_submissions: SqlAlchemyFeedbackSubmissionRepo | None = None
+        self._nps_scores: SqlAlchemyNPSScoreRepo | None = None
+        self._feature_requests: SqlAlchemyFeatureRequestRepo | None = None
+        self._feature_votes: SqlAlchemyFeatureVoteRepo | None = None
+        self._micro_surveys: SqlAlchemyMicroSurveyRepo | None = None
+        self._beta_enrollments: SqlAlchemyBetaEnrollmentRepo | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -267,6 +334,13 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._brokerage_sync_errors = SqlAlchemyBrokerageTransactionSyncErrorRepository(self._session)
         self._auth_audit_log = SqlAlchemyAuthAuditLogRepository(self._session)
         self._portfolio_value_snapshots = SqlAlchemyPortfolioValueSnapshotRepository(self._session)
+        # Feedback subsystem (PLAN-0052 Wave D)
+        self._feedback_submissions = SqlAlchemyFeedbackSubmissionRepo(self._session)
+        self._nps_scores = SqlAlchemyNPSScoreRepo(self._session)
+        self._feature_requests = SqlAlchemyFeatureRequestRepo(self._session)
+        self._feature_votes = SqlAlchemyFeatureVoteRepo(self._session)
+        self._micro_surveys = SqlAlchemyMicroSurveyRepo(self._session)
+        self._beta_enrollments = SqlAlchemyBetaEnrollmentRepo(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -370,6 +444,38 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def portfolio_value_snapshots(self) -> PortfolioValueSnapshotRepository:
         assert self._portfolio_value_snapshots is not None, "UnitOfWork not entered"
         return self._portfolio_value_snapshots
+
+    # Feedback subsystem (PLAN-0052 Wave D)
+
+    @property
+    def feedback_submissions(self) -> FeedbackSubmissionRepo:
+        assert self._feedback_submissions is not None, "UnitOfWork not entered"
+        return self._feedback_submissions
+
+    @property
+    def nps_scores(self) -> NPSScoreRepo:
+        assert self._nps_scores is not None, "UnitOfWork not entered"
+        return self._nps_scores
+
+    @property
+    def feature_requests(self) -> FeatureRequestRepo:
+        assert self._feature_requests is not None, "UnitOfWork not entered"
+        return self._feature_requests
+
+    @property
+    def feature_votes(self) -> FeatureVoteRepo:
+        assert self._feature_votes is not None, "UnitOfWork not entered"
+        return self._feature_votes
+
+    @property
+    def micro_surveys(self) -> MicroSurveyRepo:
+        assert self._micro_surveys is not None, "UnitOfWork not entered"
+        return self._micro_surveys
+
+    @property
+    def beta_enrollments(self) -> BetaEnrollmentRepo:
+        assert self._beta_enrollments is not None, "UnitOfWork not entered"
+        return self._beta_enrollments
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"

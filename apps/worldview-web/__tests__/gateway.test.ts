@@ -211,13 +211,15 @@ describe("createGateway() — error handling", () => {
 // ── HTTP methods ─────────────────────────────────────────────────────────
 
 describe("createGateway() — HTTP methods", () => {
-  it("uses DELETE method for acknowledgeAlert", async () => {
+  it("uses PATCH method for acknowledgeAlert", async () => {
+    // PLAN-0051 T-D-4-03: contract changed from DELETE /ack to
+    // PATCH /acknowledge so the row is preserved for the History tab.
     const spy = mockFetch(200, {});
     const gw = createGateway("token");
     await gw.acknowledgeAlert("alert-123");
 
     const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
-    expect(calledInit?.method).toBe("DELETE");
+    expect(calledInit?.method).toBe("PATCH");
   });
 
   it("uses DELETE method for deleteWatchlist", async () => {

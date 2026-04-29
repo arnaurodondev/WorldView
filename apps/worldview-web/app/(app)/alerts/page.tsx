@@ -39,7 +39,11 @@ import { BellRing, Newspaper, TrendingUp } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertsList } from "@/components/alerts/AlertsList";
-import { AlertRuleBuilder, getAlertRuleCount } from "@/components/alerts/AlertRuleBuilder";
+import { AlertHistoryTab } from "@/components/alerts/AlertHistoryTab";
+import { AlertRuleBuilder } from "@/components/alerts/AlertRuleBuilder";
+import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";
+import { NotificationPreferencesDialog } from "@/components/alerts/NotificationPreferencesDialog";
+import { countAlertRules } from "@/lib/alerts/rules";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -115,12 +119,12 @@ export default function AlertsPage() {
 
   // ── Rule count — read from localStorage for Manage Rules badge ────────────
   // WHY not state: rule count updates after AlertRuleBuilder saves; we re-read
-  // localStorage synchronously via getAlertRuleCount() on each render.
-  // This is safe — getAlertRuleCount() is cheap (one localStorage.getItem).
+  // localStorage synchronously via countAlertRules() on each render.
+  // This is safe — countAlertRules() is cheap (one localStorage.getItem).
   const [ruleCount, setRuleCount] = useState(() =>
     // WHY guard: localStorage is not available in SSR (server component context).
     // "use client" ensures this runs in the browser, but typeof check is belt-and-suspenders.
-    typeof window !== "undefined" ? getAlertRuleCount() : 0,
+    typeof window !== "undefined" ? countAlertRules() : 0,
   );
 
   return (
@@ -139,20 +143,30 @@ export default function AlertsPage() {
 
         {/* ── Rule management toolbar ─────────────────────────────────────── */}
         {/* WHY in page header: the + Create Rule and Manage Rules buttons affect
-            all tabs, not just the Alerts tab, so they belong at the page level */}
+            all tabs, not just the Alerts tab, so they belong at the page level.
+            PLAN-0051 T-D-4-06/07: Manage Rules now opens RuleManagerDialog with
+            full CRUD; a Preferences button opens the notification settings. */}
         <div className="flex items-center gap-2">
 
-          {/* Manage Rules — shows count from localStorage */}
-          <button
-            type="button"
-            className="rounded-[2px] border border-border/40 bg-muted/20 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-            aria-label={`Manage alert rules (${ruleCount} active)`}
-          >
-            ⚙ Rules ({ruleCount})
-          </button>
+          {/* Notification preferences — quiet hours + severity floor */}
+          <NotificationPreferencesDialog />
 
-          {/* Create Rule — opens AlertRuleBuilder dialog */}
-          <AlertRuleBuilder onRuleSaved={() => setRuleCount(getAlertRuleCount())} />
+          {/* Manage Rules — opens RuleManagerDialog (List + Edit tabs) */}
+          <RuleManagerDialog
+            onRulesChanged={() => setRuleCount(countAlertRules())}
+            trigger={
+              <button
+                type="button"
+                className="rounded-[2px] border border-border/40 bg-muted/20 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                aria-label={`Manage alert rules (${ruleCount} active)`}
+              >
+                ⚙ Rules ({ruleCount})
+              </button>
+            }
+          />
+
+          {/* Create Rule — opens AlertRuleBuilder dialog (legacy quick-add) */}
+          <AlertRuleBuilder onRuleSaved={() => setRuleCount(countAlertRules())} />
 
         </div>
       </div>
@@ -178,11 +192,43 @@ export default function AlertsPage() {
         </TabsList>
 
         {/* ── Alerts tab ────────────────────────────────────────────────────── */}
-        {/* WHY AlertsList (not inline): AlertsList owns its query + filter state
-            and is independently testable. Keeping it as a component also allows
-            WorkspaceAlertPanel (F-12) to reuse it without duplicating logic. */}
+        {/* PLAN-0051 T-D-4-04: nested status sub-tabs (Active / Snoozed /
+            Acknowledged / History). Active uses the existing AlertsList
+            (severity-grouped pending alerts); the rest hit /v1/alerts/history
+            with a fixed status filter via AlertHistoryTab. */}
         <TabsContent value="alerts">
-          <AlertsList selectedId={selectedAlertId} />
+          <Tabs defaultValue="active" className="w-full">
+            <TabsList className="mb-2 grid w-full grid-cols-4">
+              <TabsTrigger value="active" className="text-[11px]">
+                Active
+              </TabsTrigger>
+              <TabsTrigger value="snoozed" className="text-[11px]">
+                Snoozed
+              </TabsTrigger>
+              <TabsTrigger value="acknowledged" className="text-[11px]">
+                Acknowledged
+              </TabsTrigger>
+              <TabsTrigger value="history" className="text-[11px]">
+                History
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="active">
+              <AlertsList selectedId={selectedAlertId} />
+            </TabsContent>
+
+            <TabsContent value="snoozed">
+              <AlertHistoryTab fixedStatus="snoozed" />
+            </TabsContent>
+
+            <TabsContent value="acknowledged">
+              <AlertHistoryTab fixedStatus="acknowledged" />
+            </TabsContent>
+
+            <TabsContent value="history">
+              <AlertHistoryTab fixedStatus="all" />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
         {/* ── News Feed tab ─────────────────────────────────────────────────── */}

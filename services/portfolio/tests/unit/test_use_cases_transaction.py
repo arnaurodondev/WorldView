@@ -316,6 +316,32 @@ class FakeUoW(UnitOfWork):
     def portfolio_value_snapshots(self):
         return None
 
+    # PLAN-0052 Wave D — feedback subsystem repos (unused by transaction
+    # tests but required to satisfy the UnitOfWork ABC).
+    @property
+    def feedback_submissions(self):
+        return None
+
+    @property
+    def nps_scores(self):
+        return None
+
+    @property
+    def feature_requests(self):
+        return None
+
+    @property
+    def feature_votes(self):
+        return None
+
+    @property
+    def micro_surveys(self):
+        return None
+
+    @property
+    def beta_enrollments(self):
+        return None
+
     commit_count: int = 0
 
     async def commit(self) -> None:

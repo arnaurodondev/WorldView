@@ -161,6 +161,66 @@ All three return a `PaginatedResponse<T>`:
 
 ---
 
+## Feedback subsystem (PLAN-0052 Wave D)
+
+The portfolio service hosts the in-app feedback / NPS / public roadmap / micro-survey / beta-program backend. Decision D-3 in `docs/audits/2026-04-28-qa-frontend-design-roadmap.md` placed this in `portfolio_db` rather than spinning up a dedicated feedback service. The api-gateway proxies `/v1/feedback/*` → these routes (see `docs/services/api-gateway.md` → "Feedback Endpoints").
+
+### Tables (migration `0015_create_feedback_tables.py`)
+
+| Table | Purpose | PK |
+|-------|---------|----|
+| `feedback_submissions` | Bug / feature / UX / design free-text submissions | `id` (UUID v7) |
+| `nps_scores` | One NPS rating per (tenant, user) per 30 days (partial unique index) | `id` |
+| `feature_requests` | Public roadmap items (admin-curated) | `id` |
+| `feature_votes` | One upvote per (feature, user) | `(feature_request_id, user_id)` |
+| `micro_survey_responses` | Thumbs up/down keyed on `survey_key` (e.g. `docs:/instruments/overview`) | `id` |
+| `beta_enrollments` | User's opt-in state per beta program | `(tenant_id, user_id)` |
+
+All tables are tenant-scoped — every row has `tenant_id` and every repo query carries a `WHERE tenant_id = :tid` predicate.
+
+### Application layer
+
+Ports: `portfolio.application.ports.feedback` — six abstract repositories (`FeedbackSubmissionRepo`, `NPSScoreRepo`, `FeatureRequestRepo`, `FeatureVoteRepo`, `MicroSurveyRepo`, `BetaEnrollmentRepo`).
+
+Use cases (`portfolio.application.use_cases.feedback`):
+- `CreateFeedbackSubmissionUseCase` — applies PII redaction before persist
+- `ListFeedbackSubmissionsUseCase` (`mine=true` filters to caller; otherwise admin-only at the route layer)
+- `GetFeedbackSubmissionUseCase`, `UpdateFeedbackSubmissionUseCase` (admin), `DeleteFeedbackSubmissionUseCase` (admin)
+- `SubmitNPSScoreUseCase` — DB partial-unique-index conflict surfaces as `NPSRateLimitError` → 409
+- `GetNPSAggregateUseCase` — promoter/passive/detractor counts + NPS score over the last N days
+- `ListFeatureRequestsUseCase` (returns `(record, has_voted)` tuples), `CreateFeatureRequestUseCase`, `UpdateFeatureRequestUseCase` (admin)
+- `UpsertFeatureVoteUseCase` — idempotent (PK conflict → no-op), recomputes denorm `vote_count`
+- `SubmitMicroSurveyUseCase` — comment redacted before persist
+- `GetBetaEnrollmentUseCase` (returns synthetic `enrolled=false` row when no record exists), `UpsertBetaEnrollmentUseCase`
+
+### PII redaction guarantees
+
+`portfolio.security.pii_redaction.redact()` and `redact_json()` scrub these patterns from `feedback_submissions.description`, `feedback_submissions.console_logs`, `nps_scores.comment`, `micro_survey_responses.comment`, and `feature_requests.description` before they hit the database:
+
+| Pattern | Replacement marker |
+|---------|---------------------|
+| Bearer tokens (`Bearer abcdef...`) | `Bearer [REDACTED:JWT]` |
+| JWT-shaped strings (`eyJ...eyJ....`) | `[REDACTED:JWT]` |
+| API key assignments (`api_key=...` / `api-key: ...`) | `api_key=[REDACTED:API_KEY]` |
+| Header lines (`authorization: ...`, `x-api-key: ...`, `cookie: ...`) | `<header>: [REDACTED:HEADER]` |
+| Email addresses | `[REDACTED:EMAIL]` |
+| 16-digit credit-card-shaped strings | `[REDACTED:CC]` |
+| US SSN (`xxx-xx-xxxx`) | `[REDACTED:SSN]` |
+
+Redaction is idempotent (running it twice produces the same output). The dedicated `feedback_submissions.email` column is **not** scrubbed — that field is structured user-supplied contact info, not free text.
+
+### Configuration
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `PORTFOLIO_FEEDBACK_S3_BUCKET` | `worldview-feedback-screenshots` | Bucket for screenshot uploads (frontend pre-signed PUT) |
+| `PORTFOLIO_FEEDBACK_SCREENSHOT_TTL_DAYS` | `90` | Lifecycle policy applied by DevOps in worldview-gitops |
+| `PORTFOLIO_FEEDBACK_CONSOLE_LOGS_TTL_DAYS` | `7` | Console-log JSONB retention (cron purge — follow-up wave) |
+
+The S3 PUT itself is out of scope for Wave D — only the schema field `screenshot_url` is persisted.
+
+---
+
 ## Kafka Topics
 
 ### Produced

@@ -392,6 +392,81 @@ async def acknowledge_alert(alert_id: str, request: Request) -> Any:
 # directly to S10 (alert-delivery:8010) using a short-lived token from S9.
 
 
+# ── Alert ack/snooze/history proxies (PLAN-0051 T-D-4-02) ────────────────────
+#
+# Cache-Control: no-store on every response — these are user-specific, mutate
+# state (ack/snooze) or expose tenant-scoped lists (history). A shared CDN
+# must never cache them.
+
+
+@router.patch("/alerts/{alert_id}/acknowledge", status_code=200)
+async def acknowledge_alert_entity(alert_id: str, request: Request) -> Response:
+    """Proxy PATCH /api/v1/alerts/{alert_id}/acknowledge → S10.
+
+    Forwards the (optional) JSON body and X-Internal-JWT. ``Cache-Control:
+    no-store`` prevents any intermediary from caching the mutation response.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = {**_auth_headers(request)}
+    if body:
+        headers["Content-Type"] = "application/json"
+    clients = _clients(request)
+    resp = await clients.alert.patch(
+        f"/api/v1/alerts/{alert_id}/acknowledge",
+        content=body,
+        headers=headers,
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.patch("/alerts/{alert_id}/snooze", status_code=200)
+async def snooze_alert_entity(alert_id: str, request: Request) -> Response:
+    """Proxy PATCH /api/v1/alerts/{alert_id}/snooze → S10."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = {"Content-Type": "application/json", **_auth_headers(request)}
+    clients = _clients(request)
+    resp = await clients.alert.patch(
+        f"/api/v1/alerts/{alert_id}/snooze",
+        content=body,
+        headers=headers,
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/alerts/history")
+async def list_alert_history(request: Request) -> Response:
+    """Proxy GET /api/v1/alerts/history → S10 with query params forwarded verbatim."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.alert.get(
+        "/api/v1/alerts/history",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 # ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
 
 
@@ -2419,3 +2494,196 @@ async def ai_signals(request: Request) -> Any:
     except Exception:
         logger.warning("ai_signals_transform_failed", exc_info=True)
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Feedback subsystem (PLAN-0052 Wave D) ───────────────────────────────────
+# Thin proxy from /v1/feedback/* → S1 portfolio service /api/v1/feedback/*.
+# All routes forward the X-Internal-JWT issued by the gateway so backend
+# InternalJWTMiddleware can authenticate (and so role / tenant / user_id
+# arrive at the portfolio router via request.state).
+#
+# Public POST /submissions and POST /micro-survey work for unauthenticated
+# users (e.g. docs page) — the gateway issues a system JWT for those.
+
+
+@router.post("/feedback/submissions", status_code=201)
+async def feedback_create_submission(request: Request) -> Response:
+    """Anonymous-friendly: accepts unauthenticated requests when body has email."""
+    body = await request.body()
+    # When unauthenticated, attach a system JWT so backend InternalJWTMiddleware
+    # admits the request — the route then enforces the email-required rule.
+    headers = _portfolio_headers(request) if getattr(request.state, "user", None) else _system_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/feedback/submissions",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/feedback/submissions")
+async def feedback_list_submissions(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    qs = request.url.query
+    target = "/api/v1/feedback/submissions"
+    if qs:
+        target = f"{target}?{qs}"
+    resp = await clients.portfolio.get(target, headers=headers)
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/feedback/submissions/{submission_id}")
+async def feedback_get_submission(submission_id: str, request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/feedback/submissions/{submission_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.patch("/feedback/submissions/{submission_id}")
+async def feedback_update_submission(submission_id: str, request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        f"/api/v1/feedback/submissions/{submission_id}",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/feedback/submissions/{submission_id}", status_code=200)
+async def feedback_delete_submission(submission_id: str, request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.delete(
+        f"/api/v1/feedback/submissions/{submission_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/feedback/nps", status_code=201)
+async def feedback_post_nps(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/feedback/nps",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/feedback/nps/aggregate")
+async def feedback_nps_aggregate(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    qs = request.url.query
+    target = "/api/v1/feedback/nps/aggregate"
+    if qs:
+        target = f"{target}?{qs}"
+    resp = await clients.portfolio.get(target, headers=headers)
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/feedback/features")
+async def feedback_list_features(request: Request) -> Response:
+    """Public roadmap — works for unauthenticated viewers (no has_voted)."""
+    headers = _portfolio_headers(request) if getattr(request.state, "user", None) else _system_headers(request)
+    clients = _clients(request)
+    qs = request.url.query
+    target = "/api/v1/feedback/features"
+    if qs:
+        target = f"{target}?{qs}"
+    resp = await clients.portfolio.get(target, headers=headers)
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/feedback/features", status_code=201)
+async def feedback_create_feature(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/feedback/features",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/feedback/features/{feature_request_id}/vote")
+async def feedback_vote_feature(feature_request_id: str, request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        f"/api/v1/feedback/features/{feature_request_id}/vote",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/feedback/micro-survey", status_code=201)
+async def feedback_micro_survey(request: Request) -> Response:
+    """Anonymous-friendly — used by the docs feedback widget."""
+    body = await request.body()
+    headers = _portfolio_headers(request) if getattr(request.state, "user", None) else _system_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.post(
+        "/api/v1/feedback/micro-survey",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/feedback/beta-program/enrollment")
+async def feedback_get_beta_enrollment(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/feedback/beta-program/enrollment",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.patch("/feedback/beta-program/enrollment")
+async def feedback_patch_beta_enrollment(request: Request) -> Response:
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        "/api/v1/feedback/beta-program/enrollment",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

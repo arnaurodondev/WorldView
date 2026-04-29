@@ -98,6 +98,12 @@ apps/worldview-web/
 │   │   └── HeatCell.tsx                 # 7-step colored metric cells
 │   └── alerts/
 │       ├── AlertsList.tsx
+│       ├── AlertHistoryTab.tsx              # PLAN-0051 T-D-4-04 history tab
+│       ├── AlertDetailSheet.tsx             # Right-anchored panel + Suggested Actions (T-D-4-05)
+│       ├── AddToWatchlistDialog.tsx         # T-D-4-05 quick add to watchlist
+│       ├── AlertRuleBuilder.tsx             # Legacy quick-add form
+│       ├── RuleManagerDialog.tsx            # T-D-4-06 full CRUD + List/Edit tabs
+│       ├── NotificationPreferencesDialog.tsx # T-D-4-07 quiet hours + severity floor
 │       └── SeverityBadge.tsx
 ├── hooks/
 │   ├── useAuth.ts                       # Token + auth state
@@ -142,7 +148,7 @@ apps/worldview-web/
 | `/(app)/instruments/[entityId]` | Instrument Detail | Yes | OHLCV, fundamentals, graph, news |
 | `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` (PLAN-0051 Wave B: collapsible Valuation/Profitability/Growth/Leverage/Technical/News sections; "X of Y match" header; Load More pagination accumulator; client-side fallback for technical filters; metric names per `docs/services/market-data.md`; gaps documented in `docs/audits/2026-04-29-screener-metric-gap.md`. **Wave B Part 2:** Saved Screens dialog (localStorage CRUD via `lib/saved-screens.ts`); Column Settings popover (visibility + drag-reorder + Reset, persisted via `lib/screener-columns.ts`); Export menu (CSV via `lib/csv-export.ts` / Excel via `lib/xlsx-export.ts` write-excel-file 4.0.4 / PDF via `lib/pdf-export.ts` jspdf 4.2.1 + jspdf-autotable 5.0.7); inline 30-day SVG sparklines via `components/screener/MiniChart.tsx` powered by `hooks/useScreenerSparklines.ts` consuming `POST /v1/quotes/bars/batch` with 5-min `staleTime` and 50-id chunking) |
 | `/(app)/portfolio` | Portfolio | Yes | Portfolios, holdings, transactions |
-| `/(app)/alerts` | Alerts & News | Yes | Pending alerts + top news |
+| `/(app)/alerts` | Alerts & News | Yes | Pending alerts + top news. **PLAN-0051 Wave D:** nested status sub-tabs (Active / Snoozed / Acknowledged / History) — Active = severity-grouped pending list, Snoozed/Acknowledged/History = paginated `GET /v1/alerts/history` with severity + date range + entity filters and Load More pagination. ACK + Snooze are backend-synced via `PATCH /v1/alerts/{id}/acknowledge` and `PATCH /v1/alerts/{id}/snooze` (with localStorage fallback + "(local only)" badge on 404). The AlertDetailSheet adds a "Suggested Actions" strip (View Instrument, Add to Watchlist, Set Alert Rule, Open in Chat). The page header adds a "Preferences" button (`NotificationPreferencesDialog`, persisted via `lib/notification-prefs.ts`) and the "⚙ Rules" button now opens a full CRUD `RuleManagerDialog` (List/Edit tabs, localStorage-only — see `docs/audits/2026-04-29-alert-rule-crud-gap.md`). |
 | `/(app)/chat` | Chat | Yes | SSE `/v1/chat/stream` |
 | `/(app)/settings` | Settings | Yes | Email preferences |
 
@@ -163,7 +169,7 @@ All API calls go through this typed client. Base URL is `/api` (proxied by `next
 /api/v1/portfolios → API_GATEWAY_URL/v1/portfolios → S1 Portfolio
 ```
 
-**43 typed methods** covering: auth (4), instruments/market data (6 — adds `getBatchOhlcvBars` for screener sparklines, PLAN-0051 T-B-2-09), knowledge graph (2), news (3), screener (2), portfolio (5), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
+**45 typed methods** covering: auth (4), instruments/market data (6 — adds `getBatchOhlcvBars` for screener sparklines, PLAN-0051 T-B-2-09), knowledge graph (2), news (3), screener (2), portfolio (5), watchlists (6), alerts (4 — PLAN-0051 T-D-4-03/04 adds `acknowledgeAlert` (now `PATCH /acknowledge`), `snoozeAlert`, `getAlertHistory`), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
 
 #### Portfolio methods
 

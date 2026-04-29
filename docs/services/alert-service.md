@@ -71,7 +71,7 @@ User→entity subscription: `subscription_id`, `user_id`, `entity_id`, `watchlis
 
 6 tables — owned by S10, Alembic IS enabled:
 - `alert_subscriptions` — user watchlist subscriptions
-- `alerts` — materialized alerts with dedup_key UNIQUE
+- `alerts` — materialized alerts with dedup_key UNIQUE; columns include `acknowledged_at`/`acknowledged_by_user_id`/`snooze_until` (PLAN-0051 T-D-4-01) for tenant-level ack + snooze
 - `alert_deliveries` — per-user delivery tracking
 - `pending_alerts` — unacknowledged alerts queue
 - `outbox_events` — transactional outbox for Kafka
@@ -232,10 +232,60 @@ Returns paginated unacknowledged alerts for a user.
 **Response**: `{ alerts: PendingAlertResponse[], total, limit, offset }`
 
 ### DELETE /api/v1/alerts/{alert_id}/ack
-Marks an alert as acknowledged for a user.
+Marks a per-user pending-alert delivery row as acknowledged (`pending_alerts.delivered_at`).
 
 **Query params**: `user_id` (UUID, required)
 **Returns**: 200 `{"status": "acknowledged"}` on success; 404 when not found or wrong user (avoids user enumeration, per AD-11)
+
+### PATCH /api/v1/alerts/{alert_id}/acknowledge (PLAN-0051 T-D-4-02)
+Tenant-level alert acknowledgement — sets `alerts.acknowledged_at` and
+`alerts.acknowledged_by_user_id`. Distinct from `DELETE .../ack` (which acks
+a per-user *delivery* row, not the alert itself).
+
+**Auth**: requires JWT (tenant_id + user_id come from `request.state`, never headers).
+**Body** (optional): `{"note": string | null}` — currently informational; reserved for a future audit log.
+**Behaviour**:
+- **Idempotent** — re-acking returns the existing `acknowledged_at` and `acknowledged_by_user_id` unchanged (no overwrite).
+- 404 when the alert is missing OR belongs to another tenant (collapsed to avoid enumeration).
+**Response** (200): full `AlertResponse` including `acknowledged_at`, `acknowledged_by_user_id`, `snooze_until`.
+
+### PATCH /api/v1/alerts/{alert_id}/snooze (PLAN-0051 T-D-4-02)
+Sets `alerts.snooze_until` so the alert disappears from the active list
+until the supplied timestamp.
+
+**Auth**: requires JWT.
+**Body** (required): `{"until": "<ISO-8601 timezone-aware datetime>"}`
+**Validation**:
+- `until` MUST be timezone-aware.
+- `until > now` (past values are rejected with 422).
+- `until <= now + 30 days` (max snooze window — long-term silencing should use a rule-level mute).
+**Response** (200): full `AlertResponse` with the new `snooze_until` set.
+**Errors**: 422 invalid until; 404 missing/cross-tenant.
+
+### GET /api/v1/alerts/history (PLAN-0051 T-D-4-02)
+Paginated, tenant-scoped alert history. Read-only — uses `ReadOnlyUnitOfWork` (R27).
+
+**Query params**:
+| Param | Type | Description |
+|-------|------|-------------|
+| `severity` | `low\|medium\|high\|critical` | Optional severity filter |
+| `entity_id` | UUID | Optional entity filter |
+| `from` | datetime | Optional `created_at >=` lower bound |
+| `to` | datetime | Optional `created_at <=` upper bound |
+| `status` | `active\|acknowledged\|snoozed\|all` (default `all`) | Status bucket — see below |
+| `limit` | int (1–200, default 50) | Page size |
+| `offset` | int (default 0) | Pagination offset |
+
+**Status semantics**:
+- `active` — `acknowledged_at IS NULL AND (snooze_until IS NULL OR snooze_until < NOW())`
+- `acknowledged` — `acknowledged_at IS NOT NULL`
+- `snoozed` — `snooze_until IS NOT NULL AND snooze_until >= NOW() AND acknowledged_at IS NULL`
+- `all` — no status filter
+
+**Response** (200): `{ alerts: AlertResponse[], total, limit, offset, has_more }` where
+`has_more` is `len(alerts) == limit` (clients can use it to render "Load more").
+Tenant filter is enforced server-side from the JWT-derived `tenant_id` —
+clients cannot override.
 
 ### WebSocket /api/v1/alerts/stream
 Real-time alert stream pushed to connected users.

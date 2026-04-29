@@ -10,9 +10,12 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from alert.application.use_cases.acknowledge_alert import AcknowledgeAlertUseCase as AcknowledgeAlertEntityUseCase
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
 from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
+from alert.application.use_cases.list_alert_history import ListAlertHistoryUseCase
 from alert.application.use_cases.pending_alerts import AcknowledgeAlertUseCase, GetPendingAlertsUseCase
+from alert.application.use_cases.snooze_alert import SnoozeAlertUseCase
 
 # ── Current user (PRD-0025 §T-D-1-10) ────────────────────────────────────────
 
@@ -189,3 +192,50 @@ def get_ack_uc(
 
 
 AckUseCaseDep = Annotated[AcknowledgeAlertUseCase, Depends(get_ack_uc)]
+
+
+# ── Alert-entity ack/snooze/history use case factories (PLAN-0051 T-D-4-02) ──
+
+
+def get_ack_alert_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AcknowledgeAlertEntityUseCase:
+    """Build the alert-entity AcknowledgeAlertUseCase (writes ``alerts.acknowledged_at``).
+
+    NOTE: not to be confused with ``get_ack_uc`` which acks a *pending_alert*
+    row (per-user delivery acknowledgement). This use case acks the *alert*
+    itself (tenant-level) — used by PATCH /api/v1/alerts/{id}/acknowledge.
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return AcknowledgeAlertEntityUseCase(AlertRepository(session), session)  # type: ignore[arg-type]
+
+
+AckAlertUseCaseDep = Annotated[AcknowledgeAlertEntityUseCase, Depends(get_ack_alert_uc)]
+
+
+def get_snooze_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SnoozeAlertUseCase:
+    """Build a SnoozeAlertUseCase wired to the write session."""
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return SnoozeAlertUseCase(AlertRepository(session), session)  # type: ignore[arg-type]
+
+
+SnoozeUseCaseDep = Annotated[SnoozeAlertUseCase, Depends(get_snooze_uc)]
+
+
+def get_history_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> ListAlertHistoryUseCase:
+    """Build a ListAlertHistoryUseCase wired to the READ-replica session (R27).
+
+    Pure read use case — uses ``get_read_db_session`` because no writes occur.
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return ListAlertHistoryUseCase(AlertRepository(session))  # type: ignore[arg-type]
+
+
+HistoryUseCaseDep = Annotated[ListAlertHistoryUseCase, Depends(get_history_uc)]

@@ -50,6 +50,8 @@ import type {
   Watchlist,
   WatchlistInsights,
   WatchlistMember,
+  Alert,
+  AlertHistoryParams,
   AlertsResponse,
   Thread,
   ChatStreamRequest,
@@ -1679,12 +1681,79 @@ export function createGateway(token?: string | null) {
     },
 
     /**
-     * acknowledgeAlert — dismiss an alert
+     * acknowledgeAlert — mark alert as acknowledged via PATCH endpoint.
+     *
+     * PLAN-0051 Wave D update: previously this used DELETE /ack (legacy
+     * "remove from pending" semantics). The new contract is
+     * `PATCH /v1/alerts/{id}/acknowledge` with an optional note body — the row
+     * is preserved in the table so we can render the History tab. We pass the
+     * optional `note` so an analyst can attach context for the audit trail.
+     *
+     * WHY return Alert (not void): the parent updates its UI (move to acked
+     * group, add to history) using the canonical row from the backend
+     * (acknowledged_at, acknowledged_by, etc.). Returning the row keeps the
+     * client cache one round-trip away from drift.
+     *
+     * BACKEND CONTRACT: implemented by the parallel S10 agent. If the endpoint
+     * is not yet deployed, callers fall back to localStorage-only ACK and tag
+     * the alert with `_localOnly: true`.
      */
-    acknowledgeAlert(alertId: string): Promise<void> {
-      return apiFetch<void>(
-        `/v1/alerts/${encodeURIComponent(alertId)}/ack`,
-        { method: "DELETE", token: t },
+    acknowledgeAlert(alertId: string, note?: string | null): Promise<Alert> {
+      return apiFetch<Alert>(
+        `/v1/alerts/${encodeURIComponent(alertId)}/acknowledge`,
+        { method: "PATCH", body: { note: note ?? null }, token: t },
+      );
+    },
+
+    /**
+     * snoozeAlert — temporarily mute an alert until a given timestamp.
+     *
+     * PLAN-0051 Wave D new endpoint. Sends ISO-8601 UTC datetime as
+     * `snooze_until`. Snoozed alerts re-appear in the Active list once the
+     * timestamp is in the past. Returning the canonical row lets the UI
+     * paint the de-emphasised state immediately.
+     */
+    snoozeAlert(alertId: string, until: Date): Promise<Alert> {
+      return apiFetch<Alert>(
+        `/v1/alerts/${encodeURIComponent(alertId)}/snooze`,
+        {
+          method: "PATCH",
+          body: { snooze_until: until.toISOString() },
+          token: t,
+        },
+      );
+    },
+
+    /**
+     * getAlertHistory — paginated alert history (active + acked + snoozed).
+     *
+     * PLAN-0051 Wave D new endpoint. Powers the "History" tab on /alerts.
+     * Filters supported by the backend:
+     *   - status: "active" | "acknowledged" | "snoozed" | "all"
+     *   - severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+     *   - from / to: ISO-8601 UTC datetimes
+     *   - entity_id: filter to a single entity
+     *   - limit / offset: standard pagination
+     *
+     * WHY a builder over URLSearchParams: passing `undefined` filters as empty
+     * strings would over-constrain the query. We strip nullish values so an
+     * unset filter is truly "any".
+     */
+    getAlertHistory(params: AlertHistoryParams = {}): Promise<AlertsResponse> {
+      const entries: [string, string][] = [];
+      // WHY explicit list (not Object.entries spread): keeps the query-param
+      // shape stable & easy to grep when debugging which filters arrived.
+      if (params.status) entries.push(["status", params.status]);
+      if (params.severity) entries.push(["severity", params.severity]);
+      if (params.from) entries.push(["from", params.from]);
+      if (params.to) entries.push(["to", params.to]);
+      if (params.entity_id) entries.push(["entity_id", params.entity_id]);
+      if (params.limit !== undefined) entries.push(["limit", String(params.limit)]);
+      if (params.offset !== undefined) entries.push(["offset", String(params.offset)]);
+      const qs = new URLSearchParams(entries).toString();
+      return apiFetch<AlertsResponse>(
+        `/v1/alerts/history${qs ? `?${qs}` : ""}`,
+        { token: t },
       );
     },
 

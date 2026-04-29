@@ -259,6 +259,28 @@ class InstrumentResolutionTransientError(DomainError):
     error_code = "INSTRUMENT_RESOLUTION_TRANSIENT"
 
 
+# ── Feedback (PLAN-0052 Wave D) ────────────────────────────────────────────────
+
+
+class NPSRateLimitError(BusinessRuleViolationError):
+    """Raised when a user tries to submit a second NPS score within 30 days.
+
+    The DB enforces this via the partial unique index
+    ``uq_nps_scores_tenant_user_30d`` (migration 0015). Maps to HTTP 409
+    via ``BusinessRuleViolationError`` in ``error_mapping.py``.
+    """
+
+    error_code = "NPS_RATE_LIMITED"
+
+
+class FeedbackSubmissionNotFoundError(EntityNotFoundError):
+    error_code = "FEEDBACK_SUBMISSION_NOT_FOUND"
+
+
+class FeatureRequestNotFoundError(EntityNotFoundError):
+    error_code = "FEATURE_REQUEST_NOT_FOUND"
+
+
 # ── Auth / Provisioning ────────────────────────────────────────────────────────
 
 
