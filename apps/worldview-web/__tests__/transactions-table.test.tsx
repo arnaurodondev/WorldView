@@ -111,7 +111,10 @@ describe("TransactionsTable — base rendering", () => {
 
   it("shows InlineEmptyState when transactions is empty", () => {
     render(<TransactionsTable transactions={[]} />);
-    expect(screen.getByText("No transactions yet.")).toBeInTheDocument();
+    // F-P-016 (PLAN-0051 W6): the empty-state copy now includes a Body
+    // explanation alongside the Title, so we match the leading "No
+    // transactions yet." substring instead of the whole string.
+    expect(screen.getByText(/No transactions yet\./)).toBeInTheDocument();
   });
 });
 

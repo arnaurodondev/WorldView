@@ -25,6 +25,10 @@
 
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent } from "@/lib/utils";
+// F-P-012 (PLAN-0051 W6): the Day P&L tile uses Skeleton when the value is
+// genuinely unknown (no quote yet) so users don't read "$0.00" as "market
+// is flat" when in fact we just haven't received data yet.
+import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -80,6 +84,12 @@ export interface PortfolioKPIStripProps {
 interface KPITileProps {
   label: string;
   value: string;
+  /**
+   * F-P-012 (PLAN-0051 W6): optional ReactNode that overrides the string
+   * value. Used by tiles that need to render a Skeleton (or any other
+   * non-text element) when the value is unknown vs the genuine zero case.
+   */
+  valueNode?: React.ReactNode;
   /** Whether to color the value with text-positive (green) */
   positive?: boolean;
   /** Whether to color the value with text-negative (red) */
@@ -106,6 +116,7 @@ interface KPITileProps {
 function KPITile({
   label,
   value,
+  valueNode,
   positive,
   negative,
   hoverTitle,
@@ -113,6 +124,11 @@ function KPITile({
   dataTestId,
 }: KPITileProps) {
   return (
+    // F-P-017 (PLAN-0051 W6): consistent KPI tile padding.
+    // The 6 tiles share py-1.5 (vertical) + px-3 (horizontal). DO NOT
+    // diverge per-tile — the divide-x separators rely on identical tile
+    // widths, and tighter/looser padding on one tile would visibly shift
+    // the divider lines.
     <div
       className="flex flex-col px-3 py-1.5 flex-1 min-w-0"
       title={hoverTitle}
@@ -122,7 +138,10 @@ function KPITile({
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground truncate">
         {label}
       </span>
-      {/* Value: 14px mono — NOT text-primary for P&L (only tickers use text-primary) */}
+      {/* Value: 14px mono — NOT text-primary for P&L (only tickers use text-primary).
+          F-P-012: when ``valueNode`` is provided (e.g. Skeleton placeholder for
+          the Day P&L unknown state) we render that instead of the string. The
+          colour classes still apply but become a no-op for the Skeleton. */}
       <span
         className={cn(
           "font-mono text-[14px] tabular-nums font-medium truncate",
@@ -131,7 +150,7 @@ function KPITile({
           !positive && !negative && "text-foreground",
         )}
       >
-        {value}
+        {valueNode ?? value}
         {suffix && (
           // WHY ml-1 + smaller / muted: keep the headline number visually
           // dominant; the badge is metadata that shouldn't compete for
@@ -181,12 +200,32 @@ export function PortfolioKPIStrip({
         value={formatPrice(totalValue)}
       />
 
-      {/* Tile 2: Day P&L — colored positive/negative; "—" when quotes not yet available */}
+      {/* Tile 2: Day P&L
+          F-P-012 (PLAN-0051 W6): distinguish three states.
+            - dayPnl === null/undefined → quotes haven't arrived yet → render
+              a skeleton placeholder. Reading "$0.00" in this state previously
+              misled users into thinking "market is flat" when in fact we
+              just hadn't received data. The skeleton communicates "we're
+              still working on it".
+            - dayPnl === 0 → market is genuinely flat → render "$0.00" with
+              neutral foreground colour (no positive/negative tint).
+            - non-zero → coloured positive/negative.
+          The render uses a custom valueNode prop so we can drop in a
+          Skeleton element without coercing it to a string.
+       */}
       <KPITile
         label="Day P&L"
-        value={dayPnl == null ? "—" : formatPrice(dayPnl)}
+        value={dayPnl == null ? "" : formatPrice(dayPnl)}
+        valueNode={
+          dayPnl == null ? (
+            // WHY h-3 w-16: matches the ~14px font-medium height of the
+            // populated value so the tile doesn't shift when data arrives.
+            <Skeleton className="h-3 w-16" data-testid="kpi-day-pnl-skeleton" />
+          ) : undefined
+        }
         positive={dayPnl != null && dayPnl > 0}
         negative={dayPnl != null && dayPnl < 0}
+        dataTestId="kpi-day-pnl"
       />
 
       {/* Tile 3: Unrealised P&L — absolute amount + percentage */}

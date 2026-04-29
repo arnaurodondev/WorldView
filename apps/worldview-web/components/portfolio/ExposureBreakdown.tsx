@@ -72,10 +72,22 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
   }
 
   if (isError || !data) {
+    // F-P-002 (PLAN-0051 W6): empty/error state must vertically center
+    // inside the panel. Previously the message hugged the top so the
+    // panel looked half-empty; the data-state version of this panel uses
+    // ``h-full flex-col`` so the chrome height is fixed (parent grid
+    // ``min-h-[200px]``). Centering the message inside that same min-h
+    // keeps the panel feeling intentionally sized rather than collapsed
+    // around a single line of copy.
+    // WHY items-center justify-center on flex-1 sub-block: header stays
+    // pinned at the top (so the user still sees "EXPOSURE"), and only
+    // the empty-state copy centers in the remaining space.
     return (
-      <div className="flex flex-col gap-2 h-full">
+      <div className="flex flex-col gap-2 h-full min-h-[180px]">
         <Header />
-        <InlineEmptyState message="Failed to load exposure." />
+        <div className="flex flex-1 items-center justify-center">
+          <InlineEmptyState message="Failed to load exposure." />
+        </div>
       </div>
     );
   }
@@ -85,10 +97,15 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
 
   // Empty portfolio → show empty state, not a 0-width bar.
   if (total <= 0) {
+    // F-P-002: same vertical centering as the error branch — the empty
+    // panel must visually match the populated panel's height so the row
+    // doesn't shrink/jump when transitioning between states.
     return (
-      <div className="flex flex-col gap-2 h-full">
+      <div className="flex flex-col gap-2 h-full min-h-[180px]">
         <Header />
-        <InlineEmptyState message="No positions to measure." />
+        <div className="flex flex-1 items-center justify-center">
+          <InlineEmptyState message="No positions to measure." />
+        </div>
       </div>
     );
   }
@@ -140,21 +157,41 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
 
       {/* Horizontal stacked bar — same visual idiom as SectorAllocationPanel.
           WHY h-[6px] (was 8px): matches the BarChart row bars exactly so the
-          two panels read as one consistent allocation visual language. */}
+          two panels read as one consistent allocation visual language.
+          F-P-026 (PLAN-0051 W6): colour-blind-safe encoding.
+          Pre-fix the only difference between the Invested and Cash
+          segments was the colour (yellow vs muted grey). For users with
+          deuteranopia / protanopia / achromatopsia, both segments
+          rendered as similar greys and they couldn't tell which was
+          which. The fix adds a SOLID fill for "invested" and a
+          DIAGONAL-STRIPE fill for "cash" so the two read as different
+          shapes regardless of hue. The legend below now also uses the
+          same pattern on the swatch + an explicit text label so the
+          channel is fully redundant (colour, pattern, label). */}
       <div
         className="h-[6px] w-full rounded-[2px] overflow-hidden bg-border/40 flex"
         role="img"
         aria-label={`Invested ${investedPct.toFixed(1)}% / Cash ${cashPct.toFixed(1)}%`}
       >
-        {/* Invested segment — primary yellow at 60% opacity */}
+        {/* Invested segment — primary yellow at 60% opacity, SOLID fill.
+            Solid = "the active position" — visually heaviest. */}
         <div
           className="h-full bg-primary/60"
           style={{ width: `${investedPct}%` }}
         />
-        {/* Cash segment — muted (lower visual weight; cash is the "rest") */}
+        {/* Cash segment — muted base + diagonal-stripe overlay so the
+            shape differs from the invested segment for colour-blind users.
+            WHY backgroundImage (not a Tailwind class): we want a custom
+            stripe pattern at low opacity that stays inside the segment's
+            tonal range (no new colour tokens). repeating-linear-gradient
+            is the standard CSS pattern for this. */}
         <div
           className="h-full bg-muted-foreground/30"
-          style={{ width: `${cashPct}%` }}
+          style={{
+            width: `${cashPct}%`,
+            backgroundImage:
+              "repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.10) 2px, rgba(255,255,255,0.10) 3px)",
+          }}
         />
       </div>
 
@@ -162,16 +199,30 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
           WHY tabular-nums on the values: the dollar amounts often differ in
           digit count (e.g. $1,234 vs $123,456) — without tabular-nums the
           right edge would jitter as the prices refresh. */}
+      {/* F-P-026: legend swatches mirror the bar's encoding — solid for
+          invested, diagonal-stripe for cash. Combined with the explicit
+          text labels ("Invested" / "Cash") this gives users THREE
+          redundant cues: colour, pattern, label. */}
       <div className="flex items-center justify-between text-[10px]">
         <span className="text-muted-foreground inline-flex items-center">
-          <span className="inline-block w-2 h-2 mr-1 align-middle bg-primary/60 rounded-[1px]" />
+          <span
+            className="inline-block w-2 h-2 mr-1 align-middle bg-primary/60 rounded-[1px]"
+            aria-hidden="true"
+          />
           <span className="font-sans">Invested</span>
           <span className="ml-1 font-mono tabular-nums">
             {formatPrice(invested)}
           </span>
         </span>
         <span className="text-muted-foreground inline-flex items-center">
-          <span className="inline-block w-2 h-2 mr-1 align-middle bg-muted-foreground/30 rounded-[1px]" />
+          <span
+            className="inline-block w-2 h-2 mr-1 align-middle bg-muted-foreground/30 rounded-[1px]"
+            aria-hidden="true"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.10) 2px, rgba(255,255,255,0.10) 3px)",
+            }}
+          />
           <span className="font-sans">Cash</span>
           <span className="ml-1 font-mono tabular-nums">
             {formatPrice(cash)}

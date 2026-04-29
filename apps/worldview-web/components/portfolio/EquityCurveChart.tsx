@@ -34,6 +34,10 @@
 // period selector; useQuery for fetching snapshots.
 
 import { useMemo, useState } from "react";
+// F-P-003 (PLAN-0051 W6): the period state is OPTIONALLY controlled by the
+// parent page now so other panels (KPI strip, analytics) can react to the
+// same period the user picks here. We keep the local useState as a fallback
+// so existing call sites that don't lift state continue to work.
 import { useQuery } from "@tanstack/react-query";
 import {
   LineChart,
@@ -95,6 +99,21 @@ function formatNextSnapshotHint(iso: string): string {
 // F-212 (QA iter-2): re-added "1W" — iter-1 silently dropped it when adding
 // "All". 1W matches the rest of the dashboard's KPI lookback selector and
 // is a common short-horizon trader view.
+//
+// F-P-006 (PLAN-0051 W6): WHY no "1D" button here:
+// The equity curve plots cumulative portfolio value over time, sourced from
+// daily snapshots written by the snapshot worker exactly once per trading
+// day at 21:30 UTC (after US close). A "1D" view would show, at most, ONE
+// data point — there's no intraday curve to draw because we don't take
+// intraday snapshots. If/when we add an intraday snapshot stream (e.g. every
+// 15 min via S3 quotes), restore "1D" to this array AND update the worker
+// schedule. Until then the shortest informative window is 1W (~5 trading
+// days).
+//
+// F-P-022 (PLAN-0051 W6): Canonical period set is the array below.
+// DO NOT silently re-add removed periods (e.g. "1S" / "1M" subsets that
+// were considered and dropped) — every period must justify its slot in
+// the toggle row. Adding a period without removing one crowds the header.
 const PERIODS = [
   { label: "1W", days: 7 },
   { label: "1M", days: 30 },
@@ -104,13 +123,26 @@ const PERIODS = [
   { label: "All", days: null },
 ] as const;
 
-type PeriodLabel = (typeof PERIODS)[number]["label"];
+export type PeriodLabel = (typeof PERIODS)[number]["label"];
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface EquityCurveChartProps {
   /** Portfolio UUID (or ROOT id for the aggregate view). */
   portfolioId: string;
+  /**
+   * F-P-003 (PLAN-0051 W6): optional controlled period.
+   * When provided, the chart treats this as the source of truth and
+   * notifies the parent via ``onPeriodChange``. When omitted, the chart
+   * falls back to local state (preserves backward-compat with existing
+   * mount points that don't care about the period).
+   *
+   * WHY optional (not required): existing tests + non-portfolio callers
+   * mount this component without a controller, and it should still work.
+   * Lifting state is opt-in for the parent that wants cross-panel sync.
+   */
+  period?: PeriodLabel;
+  onPeriodChange?: (p: PeriodLabel) => void;
 }
 
 // ── Tooltip ──────────────────────────────────────────────────────────────────
@@ -159,10 +191,18 @@ function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
 
   return (
     <div
-      // WHY raw bg-card / border-border / text-foreground tokens: Midnight Pro
-      // palette is wired into Tailwind config — these CSS vars resolve to the
-      // correct colours in dark mode without us referencing hex.
-      className="bg-card border border-border rounded-[2px] px-2 py-1.5 shadow-md"
+      // WHY raw bg-popover / border-border / text-foreground tokens: Midnight
+      // Pro palette is wired into Tailwind config — these CSS vars resolve
+      // to the correct colours in dark mode without us referencing hex.
+      // F-P-021 (PLAN-0051 W6): switched bg-card → bg-popover.
+      // ``bg-card`` is the panel-level token (#111113) which is the same
+      // tone as the equity-curve panel BEHIND the tooltip — the tooltip
+      // disappeared into the panel in dark mode (gray-on-gray). The
+      // ``bg-popover`` token (#18181B) is one elevation step above
+      // bg-card so the tooltip floats clearly above the panel. The
+      // popover token is also what shadcn DropdownMenu / HoverCard use,
+      // so this matches the system's elevation hierarchy.
+      className="bg-popover border border-border rounded-[2px] px-2 py-1.5 shadow-md text-foreground"
     >
       <div className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground mb-1">
         {point.date}
@@ -215,12 +255,32 @@ function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
 
 // ── EquityCurveChart ─────────────────────────────────────────────────────────
 
-export function EquityCurveChart({ portfolioId }: EquityCurveChartProps) {
+export function EquityCurveChart({
+  portfolioId,
+  period: controlledPeriod,
+  onPeriodChange,
+}: EquityCurveChartProps) {
   const { accessToken } = useAuth();
 
   // Default 3M — matches the Bloomberg PORT default. Long enough to show
   // a meaningful trend without compressing recent moves.
-  const [period, setPeriod] = useState<PeriodLabel>("3M");
+  // F-P-003: dual-mode period state.
+  // - controlled: parent passes `period` + `onPeriodChange` → we never
+  //   call the local setter and always read from props.
+  // - uncontrolled: parent passes neither → we manage period locally.
+  // WHY this pattern (and not just "always controlled"): keeps the
+  // component a drop-in replacement for the old API. Tests like
+  // equity-curve-empty-state.test.tsx mount it with only `portfolioId`
+  // and never touch the period — they continue to work.
+  const [localPeriod, setLocalPeriod] = useState<PeriodLabel>("3M");
+  const period = controlledPeriod ?? localPeriod;
+  // setPeriod fans out: notify the parent (when controlled) AND update
+  // local state (so uncontrolled mounts keep working). When fully
+  // controlled, the local state still tracks but is unused.
+  const setPeriod = (p: PeriodLabel) => {
+    if (onPeriodChange) onPeriodChange(p);
+    if (controlledPeriod === undefined) setLocalPeriod(p);
+  };
 
   // F-202 (QA iter-2): switch the period selector to send ``days=N`` rather
   // than computing ``from`` client-side. The backend now accepts both, but

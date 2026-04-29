@@ -7556,3 +7556,51 @@ Add `t0 = time.perf_counter()` before every LLM API call. Read token usage from 
 **Prevention**:
 - Code review checklist: if a call to `usage_logger.log()` has literal `0` for any numeric field, it is wrong
 - Add a lint rule or test that asserts `tokens_in > 0` for non-embedding calls in the usage log
+
+---
+
+## BP-273 — `op.drop_constraint()` Fails on Bare UNIQUE INDEX
+
+**Category**: Alembic migrations / schema
+**Severity**: BLOCKING (migration fails to apply)
+**Affected areas**: Any Alembic migration that tries to drop a uniqueness constraint originally created with raw SQL `CREATE UNIQUE INDEX`
+**First seen**: 2026-04-29 (PLAN-0055 / revise-prd audit)
+
+**Symptoms**:
+- `alembic upgrade head` raises: `ProgrammingError: constraint "uq_xxx" of relation "table" does not exist`
+- The constraint name exists in the plan/code but not in the database
+
+**Root Cause**:
+`op.drop_constraint("name", table, type_="unique")` only works on named UNIQUE CONSTRAINTs created via `ADD CONSTRAINT`. A bare `CREATE UNIQUE INDEX idx_name ON table (cols)` creates an **index**, not a constraint. Postgres stores these differently: `pg_constraint` vs `pg_indexes`. Alembic's `drop_constraint` targets `pg_constraint`; a bare index is invisible to it.
+
+Example: migration 0009 uses raw SQL `CREATE UNIQUE INDEX idx_article_impact_windows_unique ON article_impact_windows (article_id, entity_id, window_type)`. A later migration that does `op.drop_constraint("idx_article_impact_windows_unique", ...)` will fail.
+
+**Fix**:
+Use `op.drop_index("idx_article_impact_windows_unique", table_name="article_impact_windows")` to drop a bare unique index, then create the replacement using `op.create_unique_constraint(...)` (which creates a named `pg_constraint` entry).
+
+**Prevention**:
+- When creating a new UNIQUE in a migration, always prefer `op.create_unique_constraint("name", table, cols)` over raw `CREATE UNIQUE INDEX`. The former creates a named constraint droppable via `op.drop_constraint()`; the latter does not.
+- Before writing `op.drop_constraint()`, run `SELECT conname FROM pg_constraint WHERE conrelid = 'table'::regclass AND contype = 'u'` to verify the constraint actually exists. If it doesn't appear, use `op.drop_index()` instead.
+
+---
+
+## BP-274 — Multi-Process Service: Scheduler State Not in API `app.state`
+
+**Category**: Architecture / multi-process (R22)
+**Severity**: MAJOR (runtime AttributeError at startup)
+**Affected areas**: Any service with independent scheduler/worker processes (S3 market-ingestion, S4 content-ingestion, S6 nlp-pipeline)
+**First seen**: 2026-04-29 (PLAN-0055 / revise-prd audit)
+
+**Symptoms**:
+- `AttributeError: 'State' object has no attribute 'routing_cache'` at service startup
+- A startup hook placed in the API lifespan (`app.py`) tries to access scheduler-owned state
+
+**Root Cause**:
+R22 mandates independent processes for schedulers and workers. In S3, the API process (`app.py`) stores only `write_session_factory`, `read_session_factory`, `metrics`, `settings`, and `_jwt_middleware` in `app.state`. The `ProviderRoutingCache` and UoW factory live in `SchedulerProcess.__init__` and are never exposed to the API process. A plan that assumes `app.state.routing_cache` exists will always fail.
+
+**Fix**:
+Orchestration logic that needs the routing cache or UoW factory belongs in the **scheduler process** (`scheduler_main.py` / `scheduler.py`), not the API lifespan. Add startup hooks to `SchedulerProcess.run()`, which already has `_write_factory` and `_read_factory`. Construct `ProviderRoutingCache` from `settings` locally.
+
+**Prevention**:
+- Before adding any startup hook to a service, read the service's `app.py` (or `main.py`) lifespan and list every attribute stored on `app.state`. Only reference attributes that actually exist.
+- In multi-process services (R22), never assume the API process has the same wired dependencies as the scheduler or worker processes.

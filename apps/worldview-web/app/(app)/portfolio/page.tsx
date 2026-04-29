@@ -60,6 +60,11 @@ import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
 // PLAN-0046 Wave 5 / T-46-5-07 — analytics section (equity curve + exposure +
 // risk metrics) rendered below the holdings table inside the Holdings tab.
 import { PortfolioAnalyticsSection } from "@/components/portfolio/PortfolioAnalyticsSection";
+// F-P-003 (PLAN-0051 W6): hoist the equity-curve period state to the page so
+// other panels can react to the same period. The type comes from
+// EquityCurveChart so we only have to maintain the canonical period set
+// in one place.
+import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 
 // ── Brokerage components ──────────────────────────────────────────────────────
 // WHY import the existing ConnectBrokerageModal + ConnectedBrokeragesList:
@@ -602,6 +607,15 @@ export default function PortfolioPage() {
   // rest of the terminal UI. Tracks pending state for an in-flight delete.
   const [deletePortfolioOpen, setDeletePortfolioOpen] = useState(false);
 
+  // ── F-P-003: Hoisted equity-curve period state ───────────────────────────
+  // WHY at page level (not inside the chart): when the period changes here,
+  // future panels (KPI strip lookback, risk-metric lookback, performance
+  // strip) can subscribe to the same value so the whole Holdings tab reads
+  // as one synchronised "I'm looking at the last 3 months" view.
+  // WHY 3M default: matches Bloomberg PORT default — long enough to show a
+  // meaningful trend without compressing the most recent moves.
+  const [equityPeriod, setEquityPeriod] = useState<PeriodLabel>("3M");
+
   // ── Query 1: portfolio list ──────────────────────────────────────────────
   const {
     data: portfolios,
@@ -1079,9 +1093,15 @@ export default function PortfolioPage() {
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-7 w-36" />
         </div>
-        {/* KPI strip skeleton (6 tiles) */}
-        <div className="flex gap-0 border-b border-border">
-          {Array.from({ length: 6 }).map((_, i) => (
+        {/* F-P-020 (PLAN-0051 W6): KPI strip skeleton must mirror the
+            populated strip's shape exactly — same 7 tiles (was 6 here,
+            but the populated version renders 7 with Realized P&L), same
+            ``divide-x`` separator, same px-3 / py-1.5 padding. WHY: any
+            mismatch causes a layout shift when the data resolves
+            (skeleton is 6-wide, real strip is 7-wide → tiles re-flow
+            and the header above slides). Aligning here pins the layout. */}
+        <div className="flex divide-x divide-border border-b border-border">
+          {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="flex-1 px-3 py-1.5">
               <Skeleton className="h-3 w-16 mb-1" />
               <Skeleton className="h-4 w-20" />
@@ -1090,7 +1110,11 @@ export default function PortfolioPage() {
         </div>
         {/* Tab skeleton */}
         <Skeleton className="h-9 w-80" />
-        {/* Table rows skeleton */}
+        {/* F-P-020: table-row skeleton uses ``h-[22px]`` to match the
+            real holdings row exactly (same height token used in
+            SemanticHoldingsTable's <tr>). When the data lands the
+            skeleton rows fade out and the real rows occupy identical
+            vertical space — no jump. */}
         <div className="space-y-px">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-[22px] w-full" />
@@ -1124,7 +1148,17 @@ export default function PortfolioPage() {
     // darker than panels so the 1px borders + tonal step give each card its
     // own silhouette. Matches the dashboard, instrument-detail, and screener
     // pages, which all sit on bg-background.
-    <div className="flex flex-col h-full min-h-0 bg-background">
+    // F-P-019 (PLAN-0051 W6): mobile safe-area insets.
+    // iOS Safari + Android Chrome render system chrome (status bar,
+    // home indicator, gesture pill) over the viewport's edges. Without
+    // ``env(safe-area-inset-*)`` the page header collides with the
+    // notch and the brokerage CTA at the bottom is clipped behind the
+    // home indicator on iPhones with Face ID.
+    // WHY ``pt-[env(safe-area-inset-top)]`` + ``pb-[env(safe-area-inset-bottom)]``:
+    // these CSS env() values are 0 on desktop (no chrome), and 44px /
+    // 34px (or whatever the device reports) on mobile. They flex
+    // automatically without us having to UA-sniff.
+    <div className="flex flex-col h-full min-h-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
 
       {/* ── Page header ─────────────────────────────────────────────────── */}
       {/* WHY h-9 shrink-0: 36px header is the terminal standard. shrink-0 prevents
@@ -1463,7 +1497,14 @@ export default function PortfolioPage() {
                   reuse the same gate here so the section appears when there
                   is meaningful data to show. */}
               {activePortfolioId && (
-                <PortfolioAnalyticsSection portfolioId={activePortfolioId} />
+                // F-P-003: thread the hoisted period state down so the
+                // chart toggles update page-level state. Other panels can
+                // subscribe to ``equityPeriod`` to mirror the user's choice.
+                <PortfolioAnalyticsSection
+                  portfolioId={activePortfolioId}
+                  period={equityPeriod}
+                  onPeriodChange={setEquityPeriod}
+                />
               )}
             </div>
           )}
