@@ -270,7 +270,11 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
               brief block 12px text and looser spacing appropriate for the
               full-width Intelligence tab. brief.narrative is the canonical
               field name from S8's PublicBriefingResponse schema. */}
-          <MarkdownContent size="comfortable">{brief.narrative}</MarkdownContent>
+          {/* PLAN-0053 T-E-5-04 / I-09: align with dashboard MorningBriefCard
+              and InstrumentAISubheader by using ``size="compact"``. The other
+              two surfaces are the canonical layout; "comfortable" here was
+              the only outlier and produced a visual mismatch. */}
+          <MarkdownContent size="compact">{brief.narrative}</MarkdownContent>
 
           {/* WHY generated_at timestamp: traders need to know how fresh the
               intelligence is — a brief from yesterday may be stale after
