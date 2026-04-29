@@ -223,8 +223,17 @@ export function TransactionsTable({
   }, [transactions, tickerByInstrumentId]);
 
   // ── Empty state guard ─────────────────────────────────────────────────────
+  // F-P-016 (PLAN-0051 W6): empty-state copy guide — Title + Body explanation.
+  // - Title (short, descriptive): "No transactions yet."
+  // - Body (WHY the user might see this): "Connect a brokerage to import
+  //   activity, or use Add Position to record a trade manually."
+  // The single-line InlineEmptyState renders the combined sentence so the
+  // user understands their next step rather than just learning that the
+  // table is empty.
   if (transactions.length === 0) {
-    return <InlineEmptyState message="No transactions yet." />;
+    return (
+      <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
+    );
   }
 
   // ── Sort + filter pipeline ────────────────────────────────────────────────

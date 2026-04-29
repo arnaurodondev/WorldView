@@ -525,6 +525,35 @@ Rules:
   navigation. Both rendered inside the assistant message bubble (PLAN-0051
   T-E-5-04).
 
+### 6.11b Colour-blind Safe Encoding (PLAN-0051 Wave F)
+
+Any visual that distinguishes categories purely by **colour** must add a redundant non-colour cue. The repo standard is:
+
+1. **Pattern overlay** — apply a `repeating-linear-gradient` over the lower-priority segment so it reads as "striped" regardless of hue.
+2. **Aria label** — `role="img"` + `aria-label="<name>: <value>"` so screen readers announce the proportion.
+3. **Explicit text label** — render the category name + value next to the visual; never assume the swatch alone is enough.
+
+```tsx
+{/* Solid fill = primary (high-attention) segment */}
+<div className="h-full bg-primary/60" style={{ width: `${pct}%` }} />
+
+{/* Diagonal-stripe overlay = secondary segment — distinguishable by pattern */}
+<div
+  className="h-full bg-muted-foreground/30"
+  style={{
+    width: `${100 - pct}%`,
+    backgroundImage:
+      "repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.10) 2px, rgba(255,255,255,0.10) 3px)",
+  }}
+/>
+```
+
+Live examples:
+- `components/portfolio/ExposureBreakdown.tsx` — Cash (striped) vs Invested (solid).
+- `components/portfolio/SectorAllocationPanel.tsx` — sector bars carry both an `aria-label` and a faint diagonal pattern over the primary fill so the bar reads as "data marker" even in greyscale.
+
+WHY this matters: ~8% of male users have a form of colour-vision deficiency (deuteranopia / protanopia / achromatopsia). A finance terminal that hides positions behind colour alone is hostile to those users. The pattern + label approach is also robust against future theme switches and printing (greyscale).
+
 ### 6.12 Keyboard Navigation (NEW)
 
 Global shortcut registration via `react-hotkeys-hook` in root layout:

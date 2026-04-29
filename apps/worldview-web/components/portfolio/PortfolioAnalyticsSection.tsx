@@ -38,7 +38,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
-import { EquityCurveChart } from "./EquityCurveChart";
+import { EquityCurveChart, type PeriodLabel } from "./EquityCurveChart";
 import { ExposureBreakdown } from "./ExposureBreakdown";
 import { RiskMetricsStrip } from "./RiskMetricsStrip";
 
@@ -47,12 +47,23 @@ import { RiskMetricsStrip } from "./RiskMetricsStrip";
 export interface PortfolioAnalyticsSectionProps {
   /** Active portfolio UUID (or ROOT id for the aggregate view). */
   portfolioId: string;
+  /**
+   * F-P-003 (PLAN-0051 W6): optional controlled period for the embedded
+   * EquityCurveChart. When the parent page lifts state (so the KPI strip
+   * / risk metrics can react to the same period) it threads the period
+   * down through this section. When undefined, the chart manages its own
+   * state — preserves backward-compat with isolated mounts.
+   */
+  period?: PeriodLabel;
+  onPeriodChange?: (p: PeriodLabel) => void;
 }
 
 // ── PortfolioAnalyticsSection ─────────────────────────────────────────────────
 
 export function PortfolioAnalyticsSection({
   portfolioId,
+  period,
+  onPeriodChange,
 }: PortfolioAnalyticsSectionProps) {
   // WHY duplicate the EquityCurveChart query here: we need to know whether
   // there are any snapshot points BEFORE rendering the outer panel wrapper.
@@ -130,7 +141,14 @@ export function PortfolioAnalyticsSection({
           </div>
         ) : (
           <div className="col-span-12 lg:col-span-8 min-h-[200px] bg-card border border-border rounded-[2px] p-2">
-            <EquityCurveChart portfolioId={portfolioId} />
+            {/* F-P-003: thread the optional controlled period down. When
+                the parent page lifted state, this synchronises the chart
+                with whatever else is reading the period upstream. */}
+            <EquityCurveChart
+              portfolioId={portfolioId}
+              period={period}
+              onPeriodChange={onPeriodChange}
+            />
           </div>
         )}
 

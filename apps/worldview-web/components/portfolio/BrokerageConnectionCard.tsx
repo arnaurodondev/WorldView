@@ -187,7 +187,12 @@ export function BrokerageConnectionCard({
 
         {/* ── Sync error list (expanded) ──────────────────────────────── */}
         {errorsExpanded && (
-          <div className="border-t border-border pt-2 space-y-1">
+          // F-P-023 (PLAN-0051 W6): use ``border-border/60`` for soft
+          // intra-card section dividers — full opacity ``border-border``
+          // is reserved for between-panel separators (where strong
+          // visual divisions are needed). Inside one card the softer
+          // 60% alpha reads as "separator within the same surface".
+          <div className="border-t border-border/60 pt-2 space-y-1">
             {syncErrorsLoading ? (
               <p className="text-[10px] text-muted-foreground">Loading errors…</p>
             ) : errorCount === 0 ? (

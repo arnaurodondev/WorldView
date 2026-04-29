@@ -30,8 +30,8 @@
 "use client";
 // WHY "use client": uses useRouter().push() for row-click navigation + useState for sort.
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
@@ -125,13 +125,71 @@ export function SemanticHoldingsTable({
   totalValue,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
+  // F-P-025 (PLAN-0051 W6): persist sort to the URL so the user can
+  // share a link like /portfolio?sort=pnl&dir=desc and the recipient
+  // sees the same view. URL persistence also survives tab switches —
+  // previously the Holdings sort reset to value/desc whenever the user
+  // visited Transactions or Watchlist and came back. URL-backed state
+  // is preferred over sessionStorage because it's shareable AND
+  // survives reloads.
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
+  // Read initial sort from URL params; fall back to the trader-friendly
+  // default (largest positions first by VALUE). WHY parse once at
+  // mount + then use as initial state: URL params are the source-of-truth
+  // for the SHARED view, but interactive sort clicks need useState so
+  // the table re-renders without a full route navigation.
+  const initialSort: SortState = (() => {
+    const col = searchParams?.get("sort") as SortCol | null;
+    const dir = searchParams?.get("dir") as SortDir | null;
+    const validCols: SortCol[] = [
+      "qty",
+      "dayChange",
+      "dayChangePct",
+      "pnl",
+      "pnlPct",
+      "value",
+      "weight",
+    ];
+    if (col && validCols.includes(col) && (dir === "asc" || dir === "desc")) {
+      return { col, dir };
+    }
+    return { col: "value", dir: "desc" };
+  })();
 
   // WHY default sort DESC by value: traders most care about their largest positions.
   // Showing the biggest positions first matches Bloomberg's default PORT view.
-  const [sortState, setSortState] = useState<SortState>({ col: "value", dir: "desc" });
+  const [sortState, setSortState] = useState<SortState>(initialSort);
 
+  // F-P-025: write sort changes back to the URL via router.replace
+  // (NOT push — we don't want a back-button entry for every sort click).
+  // ``replace`` swaps the current history entry in place. We only run
+  // this when sortState actually changes, and we only update when the
+  // current URL doesn't already reflect the state (avoids redundant
+  // history writes).
+  useEffect(() => {
+    if (!searchParams || !pathname) return;
+    const currentCol = searchParams.get("sort");
+    const currentDir = searchParams.get("dir");
+    if (currentCol === sortState.col && currentDir === sortState.dir) return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("sort", sortState.col);
+    next.set("dir", sortState.dir);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [sortState, searchParams, pathname, router]);
+
+  // F-P-016 (PLAN-0051 W6): empty-state copy follows the Title + Body
+  // pattern — "No holdings yet" tells the user WHAT, the trailing clause
+  // tells them WHY they might see this and what to do next. WHY include
+  // both options (manual + brokerage): some users will paper-trade by
+  // clicking Add Position; others will connect SnapTrade. Both paths
+  // start at this surface, so both should be discoverable from the
+  // empty state.
   if (holdings.length === 0) {
-    return <InlineEmptyState message="No holdings yet." />;
+    return (
+      <InlineEmptyState message="No holdings yet. Connect a brokerage or use Add Position to start tracking your book." />
+    );
   }
 
   // F-208 (QA iter-2): when every position reads quantity=0 the broker has
@@ -237,6 +295,12 @@ export function SemanticHoldingsTable({
           in the shell layout above).
         */}
         <thead className="sticky top-0 z-10">
+          {/* F-P-015 (PLAN-0051 W6): sticky header padding MUST equal body
+              cell padding. Both <th> and <td> use ``px-2`` — DO NOT change
+              one without the other. Asymmetric padding would cause a 4-8px
+              horizontal slide of the header text when the user scrolls
+              the body cells under the sticky thead, which is a classic
+              "header doesn't track the column" bug. */}
           <tr className="h-[22px] border-b border-border bg-card">
             {/* Non-sortable columns: TICKER, NAME, AVG COST, CURRENT */}
             <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
@@ -268,6 +332,13 @@ export function SemanticHoldingsTable({
         {/* ── Data rows ─────────────────────────────────────────────────── */}
         <tbody className="divide-y divide-border/30">
           {sortedRows.map(({ h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChangeValue, dayChangePct }) => (
+            // F-P-013 (PLAN-0051 W6): row key is ``holding_id`` (a stable
+            // UUIDv7), NOT the array index. WHY: when the table re-sorts on
+            // a column click, index-based keys force React to re-render
+            // every row (it sees "row 0 changed", "row 1 changed", …) and
+            // the WEIGHT bars briefly flicker as their widths re-animate.
+            // Using the holding_id keeps row identity stable across sorts
+            // so React only moves rows in the DOM rather than re-mounting.
             <tr
               key={h.holding_id}
               className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors"

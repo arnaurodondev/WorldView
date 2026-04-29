@@ -111,7 +111,9 @@ Activate the four "pre-alpha" pages (Screener, Workspace, Alerts, Chat) to funct
 
 ---
 
-## Wave F — Portfolio MINOR Sweep (~16h)
+## Wave F — Portfolio MINOR Sweep (~16h) — STATUS: DONE 2026-04-29
+
+All 21 polish items shipped. See `apps/worldview-web/__tests__/portfolio-wave-f-polish.test.tsx` (14 new tests) for the regression suite. Behaviour-changing fixes: F-P-002, F-P-003 (period hoist), F-P-004 (responsive), F-P-012 (Skeleton vs $0), F-P-013 (stable keys), F-P-014 (sector a11y), F-P-016 (copy guide), F-P-019 (safe-area), F-P-020 (skeleton 7-tile), F-P-021 (bg-popover tooltip), F-P-024 (debounce comment), F-P-025 (URL sort), F-P-026 (pattern encoding), F-P-027 (60s timeout escalation), F-P-028 (placeholder verification). Pure-CSS or comment-only fixes: F-P-005, F-P-006, F-P-015, F-P-017, F-P-022, F-P-023.
 
 Bulk-close 18 MINOR/NIT portfolio findings.
 

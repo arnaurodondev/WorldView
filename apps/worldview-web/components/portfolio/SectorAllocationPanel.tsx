@@ -75,15 +75,29 @@ function BarChart({
       {items.length === 0 ? (
         <InlineEmptyState message="Sector data loading from fundamentals..." />
       ) : (
-        // WHY space-y-0.5 (was 1.5): each row is now ~18px tall (h-[18px] +
-        // 2px gap) — matches the 22px data-row height the rest of the
-        // terminal uses, minus the table border, so 12 sectors fit in
-        // ~220px instead of ~330px. Density wins.
-        <div className="space-y-0.5">
+        // F-P-005 (PLAN-0051 W6): row height now matches the holdings
+        // table exactly (22px). Pre-fix the allocation rows were h-[18px]
+        // while the holdings table used h-[22px], producing a subtle
+        // misalignment when the user scrolled from one panel to the next.
+        // Picking 22px keeps the visual rhythm consistent across the
+        // whole Holdings tab — same 22px row everywhere is the easier
+        // pattern for the eye to scan.
+        // WHY space-y-px (was 0.5): with the taller row we tighten the
+        // gap so 12 sectors still fit in roughly the same footprint.
+        <div className="space-y-px">
           {items.map((item) => (
-            // WHY h-[18px]: aligns with the ALLOCATION row rhythm; tall
-            // enough that the 4px bar centers cleanly without crowding.
-            <div key={item.label} className="flex items-center gap-1.5 h-[18px]">
+            // F-P-005: h-[22px] matches the holdings table row height so
+            // panels read as one unified rhythm. The 4px bar still
+            // centers cleanly inside the taller row.
+            //
+            // F-P-013 (PLAN-0051 W6): React key is the bucket LABEL
+            // (e.g. "Information Technology"), NOT the array index. WHY:
+            // when allocations re-sort (largest first) on quote refresh,
+            // index keys would force React to re-render every row and
+            // the bars would briefly flicker as their widths re-animate.
+            // Label is the natural stable identifier — a sector either
+            // exists in the bucket list or it doesn't; its slot is fixed.
+            <div key={item.label} className="flex items-center gap-1.5 h-[22px]">
               {/* Label — truncated to prevent overflow.
                   WHY w-28 (was w-32): saves 16px on the left so the bar
                   stretches further. Sector names like "Information
@@ -95,14 +109,37 @@ function BarChart({
               {/* Bar track + fill.
                   WHY h-[4px] (was 6px): thinner bar reads as "data marker"
                   not "panel chrome" — same visual weight as the holdings
-                  table's WEIGHT column bars (h-[3px]). */}
-              <div className="flex-1 h-[4px] bg-border/40 rounded-[1px] overflow-hidden">
+                  table's WEIGHT column bars (h-[3px]).
+                  F-P-014 (PLAN-0051 W6): a11y. The bar by itself communicates
+                  proportion via length only; assistive tech reading the row
+                  needs an explicit label. ``role="img"`` + ``aria-label``
+                  surfaces the bucket name and percentage to screen readers.
+                  WHY also a CSS pattern fill on the inner bar: users with
+                  colour-vision deficiency (deuteranopia ≈ 8% of men) struggle
+                  to discriminate the primary/40 yellow tint against the muted
+                  track. The diagonal-stripe pattern provides a non-colour
+                  cue (pattern-vs-solid) that still reads correctly in
+                  greyscale or under any hue rotation. */}
+              <div
+                className="flex-1 h-[4px] bg-border/40 rounded-[1px] overflow-hidden"
+                role="img"
+                aria-label={`Sector ${item.label}: ${item.pct.toFixed(1)}%`}
+              >
                 {/* WHY bg-primary/40: use semantic primary at 40% opacity —
                     bars represent capital allocation (not loss/gain), so neutral
-                    but still branded. bg-primary would imply interactivity. */}
+                    but still branded. bg-primary would imply interactivity.
+                    F-P-014: the inline ``backgroundImage`` adds a subtle
+                    diagonal-stripe overlay so the bar is recognisable by
+                    PATTERN as well as colour. The rgba is computed from the
+                    primary token at low opacity so it composes cleanly on
+                    the bg-primary/40 base. */}
                 <div
                   className="h-full bg-primary/40 rounded-[1px]"
-                  style={{ width: `${Math.min(item.pct, 100)}%` }}
+                  style={{
+                    width: `${Math.min(item.pct, 100)}%`,
+                    backgroundImage:
+                      "repeating-linear-gradient(45deg, transparent 0px, transparent 3px, rgba(255,255,255,0.08) 3px, rgba(255,255,255,0.08) 4px)",
+                  }}
                 />
               </div>
 
@@ -141,7 +178,12 @@ export function SectorAllocationPanel({
     // 8px padding inside is enough breathing room without the section
     // feeling like a separate card. Matches the rhythm of the rest of the
     // page where every gap is 8/12px, never 24px.
-    <div className="border-t border-border pt-2 mt-2">
+    // F-P-023 (PLAN-0051 W6): ``border-border/60`` — soft intra-tab
+    // divider; the holdings table and the allocation panel sit inside
+    // the same Holdings tab so the divider should be subtle, not the
+    // hard between-panel ``border-border`` line we use above the KPI
+    // strip.
+    <div className="border-t border-border/60 pt-2 mt-2">
       {/* Section label.
           WHY mb-2 (was mb-3): tighter so the two BarCharts start closer to
           their parent label — the visual hierarchy still reads clearly

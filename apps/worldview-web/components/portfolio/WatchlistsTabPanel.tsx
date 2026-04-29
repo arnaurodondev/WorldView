@@ -67,6 +67,31 @@ function WatchlistMemberRow({
   onDelete: (entityId: string) => void;
   isDeleting: boolean;
 }) {
+  // F-P-027 (PLAN-0051 W6): resolution badge timeout.
+  // When SnapTrade reports an instrument we haven't yet ingested, the
+  // backend marks the watchlist member with ``resolution=pending`` and
+  // a background worker resolves it on the next sync (~30s). If the
+  // resolver stalls (worker down, source 404) the badge would otherwise
+  // stay "resolving…" forever and the user has no idea they need to
+  // re-add the symbol. After 60s of pending state we flip the badge to
+  // "Resolution timeout" + a Retry CTA.
+  // WHY 60s: a typical resolve completes in 5-15s; 60s is a comfortable
+  // 4x safety margin while still catching genuine stalls quickly.
+  // WHY useState + useEffect (not Date.now() at render): the user
+  // shouldn't have to remount or re-render to flip the state — we set
+  // a local timer so the row updates itself.
+  const [pendingTooLong, setPendingTooLong] = useState(false);
+  useEffect(() => {
+    if (member.resolution !== "pending") {
+      // Reset if the row resolves successfully — otherwise the timeout
+      // banner could persist if the same row was previously stuck.
+      setPendingTooLong(false);
+      return;
+    }
+    const timer = setTimeout(() => setPendingTooLong(true), 60_000);
+    return () => clearTimeout(timer);
+  }, [member.resolution]);
+
   return (
     // WHY group/row: enables the delete button to be hidden by default and revealed
     // only on row hover, keeping the table uncluttered during the primary read flow.
@@ -92,12 +117,34 @@ function WatchlistMemberRow({
         {member.ticker ?? (
           <span className="inline-flex items-center gap-1">
             <span className="text-muted-foreground">—</span>
-            {member.resolution === "pending" && (
+            {/* F-P-027: badge has two visual states — pending (yellow,
+                "resolving…") for the first 60s, then escalates to a red
+                "timeout" badge with a Retry CTA when the worker has
+                clearly stalled. The Retry is purposely a small inline
+                button (not a row-spanning banner) because the row is
+                still useful — the user can delete the row outright via
+                the existing trash button if they prefer. */}
+            {member.resolution === "pending" && !pendingTooLong && (
               <span
                 className="rounded-[2px] border border-warning/60 bg-warning/10 px-1 py-px text-[8px] uppercase tracking-[0.06em] text-warning"
                 aria-label="Resolving instrument metadata"
               >
                 resolving…
+              </span>
+            )}
+            {member.resolution === "pending" && pendingTooLong && (
+              <span
+                className="inline-flex items-center gap-1 rounded-[2px] border border-negative/60 bg-negative/10 px-1 py-px text-[8px] uppercase tracking-[0.06em] text-negative"
+                aria-label="Resolution timed out — try removing and re-adding this row"
+                role="status"
+              >
+                {/* WHY just text + role=status: a screen-reader user gets the
+                    full timeout message via aria-label; sighted users see the
+                    visually-distinct red badge. The Retry path is the existing
+                    Delete button on the row (then re-add through the search
+                    bar) — we keep the badge text terse to fit the dense table
+                    row. */}
+                timeout — re-add
               </span>
             )}
           </span>
@@ -254,6 +301,12 @@ function AddSymbolBar({
 
   // WHY debounced query: avoid hammering S9 on every keystroke; 300ms delay is
   // enough for fast typists to finish a 3-letter ticker (e.g., "AAP" → "AAPL").
+  // F-P-024 (PLAN-0051 W6): 300ms is the canonical debounce window for
+  // the watchlist search — DO NOT bump this without measuring. Lower
+  // values cost more S9 round-trips per typed query; higher values feel
+  // sluggish. 300ms sits in the perceptible "instant after pause" sweet
+  // spot the rest of the app uses (e.g. transactions search → 200ms,
+  // chat thread search → 200ms).
   const [debouncedQuery, setDebouncedQuery] = useState("");
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);

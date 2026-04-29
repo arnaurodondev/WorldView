@@ -151,7 +151,16 @@ export function RiskMetricsStrip({
   // ── Loading skeleton — 5 tile-shaped placeholders so layout doesn't jump
   if (isLoading) {
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-x divide-border">
+      <div className=// F-P-004 (PLAN-0051 W6): mobile responsive — at < 640px the strip
+// collapses to a 1-col stack (each tile a full-width row), avoiding the
+// horizontal overflow that the 2/3/5-col grid produced on iPhone-class
+// viewports. The divider switches from ``divide-x`` (vertical) to
+// ``divide-y`` (horizontal) at the same breakpoint so the visual rhythm
+// stays consistent. WHY 1-col stack (and not horizontal scroll): keeps
+// each metric label + value at full readable width — a 5-tile horizontal
+// scroll would force the user to swipe past the metric name to reach
+// the value, which is hostile UX on a small screen.
+"grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-y sm:divide-y-0 sm:divide-x divide-border">
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="px-3 py-1.5 flex flex-col gap-1">
             <Skeleton className="h-2 w-16" />
@@ -250,7 +259,16 @@ export function RiskMetricsStrip({
           // F-023: use the project's divider convention ``divide-x divide-border``
           // identical to PortfolioKPIStrip — replaces the manual per-tile
           // ``border-r border-border last:border-r-0`` pattern in Tile.
-          "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-x divide-border",
+          // F-P-004 (PLAN-0051 W6): mobile responsive — at < 640px the strip
+// collapses to a 1-col stack (each tile a full-width row), avoiding the
+// horizontal overflow that the 2/3/5-col grid produced on iPhone-class
+// viewports. The divider switches from ``divide-x`` (vertical) to
+// ``divide-y`` (horizontal) at the same breakpoint so the visual rhythm
+// stays consistent. WHY 1-col stack (and not horizontal scroll): keeps
+// each metric label + value at full readable width — a 5-tile horizontal
+// scroll would force the user to swipe past the metric name to reach
+// the value, which is hostile UX on a small screen.
+"grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 border border-border rounded-[2px] divide-y sm:divide-y-0 sm:divide-x divide-border",
           // Grey out tiles when there's no usable data so the user reads
           // them as "absent on purpose" not "still loading". Same treatment
           // for the data-anomaly state (F-209) since every metric is null.
