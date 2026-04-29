@@ -554,6 +554,153 @@ async def test_dev_mode_rejects_jwt_without_sub(rsa_keypair) -> None:
     )
 
 
+# ── F-Q2-01: OIDC role propagation ─────────────────────────────────────────────
+
+
+def test_extract_role_zitadel_admin() -> None:
+    """F-Q2-01: a Zitadel-shaped admin claim resolves to role='admin'."""
+    from api_gateway.middleware import _extract_role
+
+    payload = {
+        "sub": "u-1",
+        "urn:zitadel:iam:org:project:roles": {
+            "admin": {"project-1": "org-1"},
+        },
+    }
+    assert _extract_role(payload) == "admin"
+
+
+def test_extract_role_zitadel_user_only() -> None:
+    """F-Q2-01: a Zitadel claim without 'admin' resolves to role='user'."""
+    from api_gateway.middleware import _extract_role
+
+    payload = {
+        "sub": "u-1",
+        "urn:zitadel:iam:org:project:roles": {
+            "trader": {"project-1": "org-1"},
+        },
+    }
+    assert _extract_role(payload) == "user"
+
+
+def test_extract_role_roles_array() -> None:
+    """F-Q2-01: a generic ``roles`` array claim is honoured."""
+    from api_gateway.middleware import _extract_role
+
+    assert _extract_role({"sub": "u", "roles": ["admin", "trader"]}) == "admin"
+    assert _extract_role({"sub": "u", "roles": ["trader"]}) == "user"
+
+
+def test_extract_role_role_string() -> None:
+    """F-Q2-01: legacy single ``role`` string claim is honoured."""
+    from api_gateway.middleware import _extract_role
+
+    assert _extract_role({"sub": "u", "role": "admin"}) == "admin"
+    assert _extract_role({"sub": "u", "role": "viewer"}) == "user"
+
+
+def test_extract_role_no_claim_defaults_user() -> None:
+    """F-Q2-01: missing role claim defaults to ``user``."""
+    from api_gateway.middleware import _extract_role
+
+    assert _extract_role({"sub": "u"}) == "user"
+
+
+@pytest.mark.asyncio
+async def test_oidc_admin_role_propagates_to_internal_jwt(rsa_keypair) -> None:
+    """F-Q2-01 end-to-end: an OIDC admin payload yields role=admin in the issued internal JWT.
+
+    Wires OIDCAuthMiddleware + InternalJWTIssuerMiddleware together so we can
+    assert that the X-Internal-JWT header carried into the route has role=admin
+    when the inbound Zitadel token contains the Zitadel-shaped admin claim.
+    """
+    from datetime import datetime
+
+    import jwt as pyjwt
+    from api_gateway.domain import OIDCProviderConfig
+    from api_gateway.middleware import InternalJWTIssuerMiddleware, OIDCAuthMiddleware
+    from api_gateway.oidc import rsa_key_id
+
+    private_key, public_key = rsa_keypair
+    kid = rsa_key_id(public_key)
+
+    now = int(time.time())
+    # Zitadel-shaped OIDC payload with admin role
+    payload = {
+        "iss": "https://example.zitadel.cloud",
+        "sub": "zitadel-admin-1",
+        "aud": "client-id",
+        "exp": now + 300,
+        "iat": now,
+        "email": "admin@example.com",
+        "email_verified": True,
+        "user_id": "u-admin",
+        "tenant_id": "t-1",
+        "urn:zitadel:iam:org:project:roles": {"admin": {"p-1": "o-1"}},
+    }
+    token = pyjwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})
+
+    class FakeSettings:
+        oidc_audience = "client-id"
+
+    oidc_config = OIDCProviderConfig(
+        issuer="https://example.zitadel.cloud",
+        authorization_endpoint="https://example.zitadel.cloud/oauth/v2/authorize",
+        token_endpoint="https://example.zitadel.cloud/oauth/v2/token",
+        end_session_endpoint="https://example.zitadel.cloud/oidc/v1/end_session",
+        jwks_uri="https://example.zitadel.cloud/oauth/v2/keys",
+        public_keys={kid: public_key},
+        last_refreshed_at=datetime.now(tz=UTC),
+    )
+
+    captured_jwt: list[str | None] = []
+    captured_user: list[dict | None] = []
+
+    app = FastAPI()
+    app.state.settings = FakeSettings()
+    app.state.oidc_config = oidc_config
+    app.state.valkey = None
+    app.state.rsa_private_key = private_key
+    app.state.rsa_public_key = public_key
+    app.state.rsa_kid = kid
+
+    @app.get("/probe")
+    async def probe(request: Request):
+        captured_user.append(request.state.user)
+        captured_jwt.append(request.headers.get("X-Internal-JWT"))
+        return {"ok": True}
+
+    # Order matters: starlette runs middleware in reverse-add order, so the
+    # last-added middleware runs first. Add InternalJWTIssuerMiddleware first
+    # so OIDCAuthMiddleware (added next) runs first and populates state.user
+    # before InternalJWTIssuerMiddleware reads it.
+    app.add_middleware(InternalJWTIssuerMiddleware)
+    app.add_middleware(OIDCAuthMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/probe", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    assert captured_user[0] is not None
+    assert (
+        captured_user[0]["role"] == "admin"
+    ), f"OIDCAuthMiddleware did not extract admin role; got {captured_user[0]!r}"
+    assert captured_jwt[0] is not None
+    # Decode the issued internal JWT and verify the role claim
+    decoded = pyjwt.decode(
+        captured_jwt[0],
+        public_key,
+        algorithms=["RS256"],
+        options={"verify_aud": False},
+        issuer="worldview-gateway",
+    )
+    assert decoded["role"] == "admin", (
+        f"InternalJWTIssuerMiddleware issued JWT with role={decoded.get('role')!r} "
+        "instead of forwarding the OIDC admin role"
+    )
+
+
 # ── T-4-04: add_cors — wildcard guard ─────────────────────────────────────────
 
 

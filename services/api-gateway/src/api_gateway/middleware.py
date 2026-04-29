@@ -37,6 +37,42 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
 )
 
 
+def _extract_role(payload: dict[str, Any]) -> str:
+    """Resolve the role claim from a Zitadel-shaped OIDC access token.
+
+    F-Q2-01: Zitadel emits role assignments in three possible shapes. We
+    accept all three so the gateway is forgiving across action-script
+    customisations and the standard OIDC ``role``/``roles`` claims:
+
+      1. ``urn:zitadel:iam:org:project:roles`` — Zitadel default, a dict
+         keyed by role-name: ``{"admin": {"<projectId>": "<orgId>"}}``.
+         The presence of an "admin" key signals the user holds the role.
+      2. ``roles`` — a JSON array of role-name strings (e.g. mapped via
+         a token-customisation action). Membership of "admin" wins.
+      3. ``role`` — a single string claim (legacy / custom IdP).
+
+    Priority: Zitadel-namespaced claim > ``roles`` array > ``role`` string.
+    Resolves to ``"admin"`` if any shape indicates admin, otherwise
+    ``"user"``. The default ``"user"`` matches issue_user_jwt's default.
+    """
+    # 1. Zitadel canonical role claim
+    zitadel_roles = payload.get("urn:zitadel:iam:org:project:roles")
+    if isinstance(zitadel_roles, dict) and "admin" in zitadel_roles:
+        return "admin"
+
+    # 2. Generic ``roles`` array claim
+    roles = payload.get("roles")
+    if isinstance(roles, list) and any(isinstance(r, str) and r.lower() == "admin" for r in roles):
+        return "admin"
+
+    # 3. Single ``role`` string claim
+    role = payload.get("role")
+    if isinstance(role, str) and role.lower() == "admin":
+        return "admin"
+
+    return "user"
+
+
 # ── OIDC Auth ─────────────────────────────────────────────
 
 
@@ -91,6 +127,11 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                                     "email": "",
                                     "email_verified": False,
                                 }
+                            # F-Q2-01: ensure dev-mode users still carry a role
+                            # claim so admin endpoints work after a Valkey miss.
+                            # Internal JWTs encode the role directly (issued by
+                            # dev-login or the gateway), so we trust that value.
+                            user_data.setdefault("role", payload.get("role", "user"))
                             request.state.user = user_data
                     except (jwt.InvalidTokenError, Exception):  # noqa: S110
                         pass  # Not a valid internal JWT — leave user as None
@@ -139,6 +180,13 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             )
 
             sub = payload.get("sub")
+            # F-Q2-01: extract the role from the Zitadel access token. The
+            # Zitadel token is the only authoritative source for role on the
+            # real-OIDC path — the Valkey cache may be stale or missing. We
+            # always recompute from the live token claims and let the cached
+            # entry fill in user_id / tenant_id / email.
+            oidc_role = _extract_role(payload)
+
             # Try Valkey cache for full user profile
             valkey = getattr(request.app.state, "valkey", None)
             user_data_oidc: dict[str, Any] | None = None
@@ -162,6 +210,10 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                     "tenant_id": payload.get("tenant_id", ""),
                 }
 
+            # Authoritative role from the OIDC token always wins over any
+            # stale cached value — admins get downgraded if they lose the role
+            # at the IdP and we must reflect that immediately.
+            user_data_oidc["role"] = oidc_role
             request.state.user = user_data_oidc
 
         except (jwt.InvalidTokenError, Exception):
@@ -189,12 +241,19 @@ class InternalJWTIssuerMiddleware(BaseHTTPMiddleware):
                 try:
                     from api_gateway.jwt_utils import issue_user_jwt
 
+                    # F-Q2-05: forward the role claim resolved by
+                    # OIDCAuthMiddleware (or seeded from the dev-login JWT
+                    # payload). Without this, the middleware-stamped header
+                    # always carries role="user" and any backend route that
+                    # reads it (instead of relying on the per-route
+                    # ``_auth_headers()`` re-issue) would 403 admin endpoints.
                     token = issue_user_jwt(
                         user_id=user.get("user_id", ""),
                         tenant_id=user.get("tenant_id", ""),
                         oidc_sub=user.get("sub", ""),
                         private_key=private_key,
                         kid=kid,
+                        role=user.get("role") or "user",
                     )
                     # Mutate the existing headers list IN PLACE so that the
                     # cached request._headers (Headers._list) sees the change.

@@ -273,6 +273,14 @@ async def callback(
     email: str = claims.get("email", "")
     email_verified: bool = bool(claims.get("email_verified", False))
     preferred_username: str = claims.get("preferred_username", "")
+    # F-Q2-01: resolve the OIDC role claim once at callback time so we can
+    # cache it alongside user_id/tenant_id. OIDCAuthMiddleware also resolves
+    # role on every request, but caching it here means /v1/auth/me and any
+    # downstream lookup that hits the cache before the next OIDC validation
+    # already see the right role.
+    from api_gateway.middleware import _extract_role
+
+    oidc_role = _extract_role(claims)
 
     # 7. Issue system JWT and call S1 provision endpoint
     private_key = getattr(request.app.state, "rsa_private_key", None)
@@ -324,7 +332,11 @@ async def callback(
 
         await valkey.set(
             f"auth:user:{sub}",
-            json.dumps({"user_id": user_id, "tenant_id": tenant_id}),
+            # F-Q2-01: cache the role alongside the user identifiers so
+            # OIDCAuthMiddleware can read it back on a Valkey hit (the
+            # middleware also re-resolves it from the token, but caching
+            # keeps /v1/auth/me consistent without re-decoding the JWT).
+            json.dumps({"user_id": user_id, "tenant_id": tenant_id, "role": oidc_role}),
             ttl=3600,
         )
     except Exception:  # noqa: S110 — fail-open: cache miss handled on next request
@@ -689,7 +701,11 @@ async def dev_login(request: Request) -> Response:
 
             await valkey.set(
                 f"auth:user:{_DEV_SUB}",
-                json.dumps({"user_id": _DEV_USER_ID, "tenant_id": _DEV_TENANT_ID}),
+                # F-Q2-01: cache role so a second call (e.g. /v1/auth/me) sees
+                # the same role the dev-login flow just minted into the JWT.
+                json.dumps(
+                    {"user_id": _DEV_USER_ID, "tenant_id": _DEV_TENANT_ID, "role": role},
+                ),
                 ttl=86400,  # 24 h — generous for local dev
             )
         except Exception:  # noqa: S110 — fail-open: cache miss handled on next request
