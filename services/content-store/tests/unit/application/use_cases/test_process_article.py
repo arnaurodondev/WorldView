@@ -14,6 +14,7 @@ from content_store.application.use_cases.process_article import (
 )
 from content_store.domain.entities import CanonicalDocument, DeduplicationDecision
 from content_store.domain.enums import DedupOutcome, DocumentStatus
+from content_store.domain.errors import BronzeObjectNotFoundError
 
 pytestmark = pytest.mark.unit
 
@@ -279,6 +280,43 @@ class TestProcessArticleUseCase:
         assert "doc_id" in payload
         assert "content_hash" in payload
         assert "minio_silver_key" in payload
+
+    async def test_bronze_object_missing_raises_domain_error(self) -> None:
+        """F-DP2-05 (PLAN-deep-qa-iter2): missing bronze key → BronzeObjectNotFoundError.
+
+        When the storage adapter raises ObjectNotFoundError (or NoSuchKey /
+        FileNotFoundError), the use case must translate to the domain-level
+        BronzeObjectNotFoundError so the consumer can skip the message
+        gracefully instead of producing an unhandled traceback.
+        """
+
+        # Stub bronze store that raises a class named ObjectNotFoundError
+        # (we simulate without importing libs/storage to keep the domain test isolated).
+        class FakeObjectNotFoundError(Exception):
+            """Mimics storage.exceptions.ObjectNotFoundError by name match."""
+
+        # Rename the class to match what the use case pattern-matches on.
+        FakeObjectNotFoundError.__name__ = "ObjectNotFoundError"
+
+        store = AsyncMock()
+        store.get_bytes.side_effect = FakeObjectNotFoundError("key gone")
+
+        uc = _make_use_case(bronze_store=store)
+
+        with pytest.raises(BronzeObjectNotFoundError):
+            await uc.execute(_make_article(), prefetched_bytes=None)
+
+    async def test_bronze_other_error_propagates(self) -> None:
+        """Non-NotFound storage errors must still propagate (e.g. permission, server)."""
+        store = AsyncMock()
+        store.get_bytes.side_effect = RuntimeError("connection refused")
+
+        uc = _make_use_case(bronze_store=store)
+
+        # RuntimeError is not in the {ObjectNotFoundError, NoSuchKey, FileNotFoundError}
+        # whitelist → re-raised as-is, not converted to BronzeObjectNotFoundError.
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await uc.execute(_make_article(), prefetched_bytes=None)
 
 
 class TestGuessContentType:

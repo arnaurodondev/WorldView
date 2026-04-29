@@ -23,6 +23,7 @@ from content_store.application.use_cases.process_article import (
     ProcessingSummary,
     RawArticleEvent,
 )
+from content_store.domain.errors import BronzeObjectNotFoundError
 from content_store.infrastructure.db.repositories.dedup import DedupHashRepository
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
@@ -304,7 +305,16 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             num_perm=self._app_config.num_perm,
         )
         # R24: pass pre-fetched bytes (fetched before session opened in _handle_message)
-        self._current_summary = await use_case.execute(article, prefetched_bytes=self._prefetched_bytes)
+        # F-DP2-05 (PLAN-deep-qa-iter2): when the bronze object is missing, the use
+        # case raises BronzeObjectNotFoundError after logging a structured warning.
+        # We swallow it here and leave _current_summary as None so the base consumer
+        # commits the offset (no retry, no DLQ traceback) — bronze corruption is
+        # operational and retrying the same missing key won't help.
+        try:
+            self._current_summary = await use_case.execute(article, prefetched_bytes=self._prefetched_bytes)
+        except BronzeObjectNotFoundError:
+            self._current_summary = None
+            return
 
     # ── CR-3: post-commit LSH indexing ────────────────────────────────────────
 
@@ -328,6 +338,13 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
         # R24: Pre-fetch bronze bytes BEFORE the DB session opens.
         # We deserialize the message here (the base class will deserialize again;
         # the overhead is negligible compared to avoiding a held DB conn during I/O).
+        #
+        # F-DP2-05 (PLAN-deep-qa-iter2): if prefetch fails because the bronze
+        # object is missing (NoSuchKey / ObjectNotFoundError), short-circuit
+        # message processing entirely instead of falling through to the in-session
+        # fetch (which would just hit the same NoSuchKey and raise an unhandled
+        # traceback).  We log a structured warning and return so the base consumer
+        # commits the offset cleanly.
         try:
             raw = msg.value()
             schema_path = self.get_schema_path(msg.topic())
@@ -338,6 +355,20 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             )
             logger.debug("bronze_prefetched", key=article.minio_bronze_key)
         except Exception as exc:
+            # Bucket / key missing — skip cleanly, don't even attempt in-session fallback.
+            exc_name = type(exc).__name__
+            if exc_name in {"ObjectNotFoundError", "NoSuchKey", "FileNotFoundError"}:
+                logger.warning(
+                    "bronze_object_missing_skipping",
+                    bronze_key=getattr(locals().get("article"), "minio_bronze_key", None),
+                    error=str(exc),
+                )
+                # Mark the message processed via the base consumer's normal flow
+                # by deferring to it — but the use case will short-circuit again
+                # on the same missing key inside process_message().  To avoid the
+                # extra session, just return early here: the base run loop will
+                # commit the next message's offset on its next poll.
+                return
             logger.warning(
                 "bronze_prefetch_failed_falling_back_to_in_session_fetch",
                 error=str(exc),
