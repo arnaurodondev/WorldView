@@ -537,6 +537,30 @@ async def list_prediction_markets(
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/signals/prediction-markets/categories")
+async def get_prediction_market_categories(request: Request) -> Any:
+    """Proxy GET /api/v1/prediction-markets/categories → S3 Market Data.
+
+    PLAN-0053 T-C-3-05. Registered BEFORE the ``/{market_id}`` route so the
+    literal "categories" path matches first (FastAPI evaluates routes in
+    registration order; if /{market_id} were declared first it would shadow
+    this and treat "categories" as a market_id).
+
+    Returns ``[{category, count}, ...]`` and a top-level ``total`` for all
+    currently-open markets.  Used by PredictionMarketsWidget to render
+    filter pill counts and the empty-state explainer.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/prediction-markets/categories",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/signals/prediction-markets/{market_id}")
 async def get_prediction_market(market_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.

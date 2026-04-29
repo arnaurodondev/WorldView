@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from market_data.application.use_cases.query_prediction_markets import (
+    CountPredictionMarketCategoriesUseCase,
     GetPredictionMarketHistoryUseCase,
     GetPredictionMarketUseCase,
     ListPredictionMarketsUseCase,
@@ -318,3 +319,49 @@ def test_outcome_price_assembly() -> None:
     assert no.price == 0.28
     assert undecided.price == 0.0  # fallback for missing outcome
     assert yes.token_id == "t1"  # noqa: S105
+
+
+# ── PLAN-0053 T-C-3-05: count_open_by_category ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_count_categories_returns_repo_data() -> None:
+    """The use case is a thin pass-through over the repo's count_open_by_category."""
+    uow = MagicMock()
+    repo = MagicMock()
+    repo.count_open_by_category = AsyncMock(return_value=[("macro", 12), ("politics", 8), ("crypto", 41)])
+    uow.prediction_markets_read = repo
+
+    use_case = CountPredictionMarketCategoriesUseCase(uow)
+    result = await use_case.execute()
+
+    assert result == [("macro", 12), ("politics", 8), ("crypto", 41)]
+    repo.count_open_by_category.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_count_categories_handles_null_category() -> None:
+    """A NULL category bucket flows through unchanged (frontend handles rendering)."""
+    uow = MagicMock()
+    repo = MagicMock()
+    repo.count_open_by_category = AsyncMock(return_value=[("macro", 5), (None, 3)])
+    uow.prediction_markets_read = repo
+
+    use_case = CountPredictionMarketCategoriesUseCase(uow)
+    result = await use_case.execute()
+
+    assert result == [("macro", 5), (None, 3)]
+
+
+@pytest.mark.asyncio
+async def test_count_categories_empty() -> None:
+    """No open markets → empty list (NOT an error)."""
+    uow = MagicMock()
+    repo = MagicMock()
+    repo.count_open_by_category = AsyncMock(return_value=[])
+    uow.prediction_markets_read = repo
+
+    use_case = CountPredictionMarketCategoriesUseCase(uow)
+    result = await use_case.execute()
+
+    assert result == []

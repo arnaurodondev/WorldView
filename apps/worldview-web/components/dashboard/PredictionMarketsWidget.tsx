@@ -18,6 +18,7 @@
 "use client";
 // WHY "use client": uses useQuery, useAuth, useQueries, and useState for ECON filter toggle.
 
+import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
@@ -210,15 +211,38 @@ export function PredictionMarketsWidget() {
   // null = "All" (no filter); a non-null value keeps only that category.
   const [categoryFilter, setCategoryFilter] = useState<Category | null>(null);
 
+  // PLAN-0053 T-C-3-04: dynamic limit. The previous hard-coded ``limit=8`` left
+  // most filtered category buckets empty (Polymarket's Gamma API exposes only
+  // ~300 markets total; after a category filter, 8 markets often yields 0–2
+  // matches). We bump the default to 25 (still fits in a single API page) and
+  // expand to 50 when a category filter is active so the bucket is full enough
+  // to populate the 3 visible rows even on rare categories like "macro".
+  // WHY include categoryFilter in queryKey: TanStack Query refetches when the
+  // key changes; switching from "all" to "macro" must trigger a new request
+  // with the higher limit, otherwise the cache returns the smaller list.
+  const effectiveLimit = categoryFilter ? 50 : 25;
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["dashboard-prediction-markets"],
+    queryKey: ["dashboard-prediction-markets", categoryFilter, effectiveLimit],
     queryFn: () =>
-      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: 8 }),
+      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: effectiveLimit }),
     enabled: !!accessToken,
     // WHY 60_000: prediction market prices update continuously; 1-min refresh
     // keeps the probabilities reasonably fresh for dashboard context.
     staleTime: 60_000,
     refetchInterval: 60_000,
+  });
+
+  // PLAN-0053 T-C-3-05: per-category counts for filter pills.
+  // WHY separate query (and not derived from `data` above): the list query is
+  // paginated AND filtered — once a category filter is active, `data` only has
+  // markets in that bucket, so the other pill counts would be wrong. The
+  // /categories endpoint counts the FULL open universe in one cheap GROUP BY
+  // query.  staleTime 5min: counts shift slowly (markets resolve over hours).
+  const { data: categoryCounts } = useQuery({
+    queryKey: ["dashboard-prediction-market-categories"],
+    queryFn: () => createGateway(accessToken).getPredictionMarketCategories(),
+    enabled: !!accessToken,
+    staleTime: 5 * 60_000,
   });
 
   // PLAN-0050 T-F-6-01: filter by selected category (null = no filter).
@@ -291,6 +315,13 @@ export function PredictionMarketsWidget() {
             // null = "all" sentinel — keeps the state model boolean-like for filtering.
             const value: Category | null = label === "all" ? null : (label as Category);
             const active = categoryFilter === value;
+            // PLAN-0053 T-C-3-05: render count next to the label (e.g. "MACRO 12").
+            // Counts come from the /categories endpoint above.  When the count
+            // is 0 (or unknown) we still render the pill but suppress the count
+            // suffix — keeping the row stable while the data loads.
+            const pillCount = label === "all"
+              ? categoryCounts?.total
+              : categoryCounts?.items.find((c) => c.category === value)?.count;
             return (
               <button
                 key={label}
@@ -305,6 +336,12 @@ export function PredictionMarketsWidget() {
                 )}
               >
                 {label}
+                {/* WHY conditional: show count only when non-zero (zero count =
+                    no markets in this bucket; the user will see this in the
+                    empty state if they click). Loading shows just the label. */}
+                {pillCount != null && pillCount > 0 ? (
+                  <span className="ml-1 opacity-70">{pillCount}</span>
+                ) : null}
               </button>
             );
           })}
@@ -323,10 +360,34 @@ export function PredictionMarketsWidget() {
         </div>
       )}
 
-      {/* ── Error / empty state ────────────────────────────────────────────── */}
+      {/* ── Error / empty state ──────────────────────────────────────────────
+          PLAN-0053 T-C-3-05: when a category filter yields 0 results, surface
+          the bucket size so the user understands WHY (Polymarket simply has
+          few markets in that bucket today — it's not a bug). When no filter is
+          active and we still have 0 results, we keep the original "loading…"
+          text since that's typically a fetch race rather than an empty universe. */}
       {(isError || (!isLoading && topMarkets.length === 0)) && (
         <div className="flex-1 px-2">
-          <InlineEmptyState message="Prediction market data loading…" />
+          {!isError && categoryFilter ? (
+            (() => {
+              // Look up the count for the active category — null when the
+              // counts query hasn't returned yet.
+              const bucketCount = categoryCounts?.items.find(
+                (c) => c.category === categoryFilter,
+              )?.count ?? 0;
+              return (
+                <InlineEmptyState
+                  message={
+                    bucketCount > 0
+                      ? `No markets in this category right now (only ${bucketCount} ${categoryFilter} markets available). Try 'All' or another filter.`
+                      : `No ${categoryFilter} markets are open right now. Try 'All' or another filter.`
+                  }
+                />
+              );
+            })()
+          ) : (
+            <InlineEmptyState message="Prediction market data loading…" />
+          )}
         </div>
       )}
 
@@ -526,14 +587,22 @@ export function PredictionMarketsWidget() {
         </div>
       )}
 
-      {/* ── Footer: View all link if more markets exist ───────────────────── */}
+      {/* ── Footer: View all link if more markets exist ─────────────────────
+          PLAN-0053 T-C-3-05: wrap the previously-static text in a real
+          ``<Link>`` to the dedicated /prediction-markets page so the trader
+          can drill into the full universe. The page is a stub today (route
+          owner is the parent merge) but the link is present as a forward-
+          compatible affordance — Next.js renders it as a normal anchor and
+          the page exists when the parent merge brings in the route file. */}
       {!isLoading && totalMarkets > 3 && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
-          {/* WHY text-primary: the "View all" link is the only interactive element —
-              primary color distinguishes it from the muted footer note pattern */}
-          <span className="font-mono text-[10px] tabular-nums text-primary/70">
+          <Link
+            href="/prediction-markets"
+            className="font-mono text-[10px] tabular-nums text-primary/70 hover:text-primary"
+            aria-label={`View all ${totalMarkets} prediction markets`}
+          >
             → View all ({totalMarkets})
-          </span>
+          </Link>
         </div>
       )}
 

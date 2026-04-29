@@ -65,3 +65,27 @@ class PredictionMarketHistoryResponse(BaseModel):
 
     market_id: str
     snapshots: list[SnapshotPointResponse]
+
+
+class CategoryCountResponse(BaseModel):
+    """One row of the per-category counts response (PLAN-0053 T-C-3-05).
+
+    ``category`` may be ``None`` for rows that have no category in the DB
+    (legacy ingestions, providers other than Polymarket). Frontends typically
+    bucket NULL into "uncategorized" or hide it.
+    """
+
+    category: str | None
+    count: int
+
+
+class PredictionMarketCategoriesResponse(BaseModel):
+    """Top-level response for ``GET /v1/prediction-markets/categories``.
+
+    Returns ``items`` (per-category counts, sorted desc by count) plus a
+    convenience ``total`` over all open markets so the frontend can render
+    "All N" without summing the per-category counts client-side.
+    """
+
+    items: list[CategoryCountResponse]
+    total: int
