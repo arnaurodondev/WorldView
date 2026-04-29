@@ -185,6 +185,7 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
             # WHY or None: Avro field is ["null","string"] so absent field → None;
             # empty string "" from older events → coerce to None for DB consistency.
             market_slug=value.get("market_slug") or None,
+            category=value.get("category") or None,
         )
 
         outcomes_prices: dict[str, float] = {
